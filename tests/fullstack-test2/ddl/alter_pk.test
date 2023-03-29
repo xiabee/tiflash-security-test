@@ -1,0 +1,112 @@
+# Copyright 2022 PingCAP, Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+mysql> drop table if exists test.t
+mysql> create table test.t(a int, b int, c int, d int, e int, f int)
+mysql> alter table test.t set tiflash replica 1 location labels 'rack', 'host', 'abc'
+
+func> wait_table test t
+
+mysql> insert into test.t values (1, 1, 1, 1, 1, 1);
+mysql> insert into test.t values (1, 2, 3, NULL, NULL, 1);
+mysql> alter table test.t add primary key new_pk(a,b,c) USING RTREE;
+
+mysql> select /*+ read_from_storage(tiflash[t]) */ * from test.t;
++---+---+---+------+------+------+
+| a | b | c | d    | e    | f    |
++---+---+---+------+------+------+
+| 1 | 1 | 1 |    1 |    1 |    1 |
+| 1 | 2 | 3 | NULL | NULL |    1 |
++---+---+---+------+------+------+
+
+>> DBGInvoke __refresh_schemas()
+
+>> DBGInvoke query_mapped('desc \$d.\$t', test, t)
+┌─name────────┬─type────────────┬─default_type─┬─default_expression─┐
+│ a           │ Int32           │              │                    │
+│ b           │ Int32           │              │                    │
+│ c           │ Int32           │              │                    │
+│ d           │ Nullable(Int32) │              │                    │
+│ e           │ Nullable(Int32) │              │                    │
+│ f           │ Nullable(Int32) │              │                    │
+│ _tidb_rowid │ Int64           │              │                    │
+└─────────────┴─────────────────┴──────────────┴────────────────────┘
+
+mysql> alter table test.t drop primary key;
+
+>> DBGInvoke __refresh_schemas()
+
+>> DBGInvoke query_mapped('desc \$d.\$t', test, t)
+┌─name────────┬─type────────────┬─default_type─┬─default_expression─┐
+│ a           │ Int32           │              │                    │
+│ b           │ Int32           │              │                    │
+│ c           │ Int32           │              │                    │
+│ d           │ Nullable(Int32) │              │                    │
+│ e           │ Nullable(Int32) │              │                    │
+│ f           │ Nullable(Int32) │              │                    │
+│ _tidb_rowid │ Int64           │              │                    │
+└─────────────┴─────────────────┴──────────────┴────────────────────┘
+
+# issue 5859, case 1
+mysql> drop table if exists test.t_case;
+## create table with source is nullable
+## insert some data and left source to be empty
+mysql> create table test.t_case (case_no varchar(32) not null,source varchar(20) default null,p varchar(12) DEFAULT NULL,primary key (case_no));
+mysql> insert into test.t_case(case_no) values ("1"), ("2"), ("3"), ("4");
+
+## drop the primary key, fill the source to be non-empty
+## add new primary key with case_no and source
+mysql> alter table test.t_case drop primary key;
+mysql> update test.t_case set source = '' where source is NULL;
+mysql> alter table test.t_case add primary key (case_no, source);
+
+## send the snapshot data to tiflash
+mysql> alter table test.t_case set tiflash replica 1;
+func> wait_table test t_case
+mysql> select case_no,p,source from test.t_case;
++---------+------+--------+
+| case_no | p    | source |
++---------+------+--------+
+| 1       | NULL |        |
+| 2       | NULL |        |
+| 3       | NULL |        |
+| 4       | NULL |        |
++---------+------+--------+
+
+
+# issue 5859, case 2
+mysql> drop table if exists test.t_case;
+## create table with case_no
+mysql> create table test.t_case (case_no varchar(32) not null,p varchar(12) DEFAULT NULL,primary key (case_no));
+mysql> insert into test.t_case(case_no) values ("1"), ("2"), ("3"), ("4");
+
+mysql> alter table test.t_case add column source varchar(20) not null;
+## drop the primary key, add new primary key with case_no and source
+mysql> alter table test.t_case drop primary key;
+mysql> alter table test.t_case add primary key (case_no, source);
+
+## send the snapshot data to tiflash
+mysql> alter table test.t_case set tiflash replica 1;
+func> wait_table test t_case
+mysql> select case_no,p,source from test.t_case;
++---------+------+--------+
+| case_no | p    | source |
++---------+------+--------+
+| 1       | NULL |        |
+| 2       | NULL |        |
+| 3       | NULL |        |
+| 4       | NULL |        |
++---------+------+--------+
+
+mysql> drop table if exists test.t_case;
