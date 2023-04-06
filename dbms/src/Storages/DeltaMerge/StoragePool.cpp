@@ -55,7 +55,7 @@ enum class StorageType
     Meta = 3,
 };
 
-PageStorage::Config extractConfig(const Settings & settings, StorageType subtype)
+PageStorageConfig extractConfig(const Settings & settings, StorageType subtype)
 {
 #define SET_CONFIG(NAME)                                                            \
     config.num_write_slots = settings.dt_storage_pool_##NAME##_write_slots;         \
@@ -65,7 +65,7 @@ PageStorage::Config extractConfig(const Settings & settings, StorageType subtype
     config.gc_max_valid_rate = settings.dt_storage_pool_##NAME##_gc_max_valid_rate; \
     config.blob_heavy_gc_valid_rate = settings.dt_page_gc_threshold;
 
-    PageStorage::Config config = getConfigFromSettings(settings);
+    PageStorageConfig config = getConfigFromSettings(settings);
 
     switch (subtype)
     {
@@ -112,11 +112,7 @@ GlobalStoragePool::GlobalStoragePool(const PathPool & path_pool, Context & globa
 
 GlobalStoragePool::~GlobalStoragePool()
 {
-    if (gc_handle)
-    {
-        global_context.getBackgroundPool().removeTask(gc_handle);
-        gc_handle = nullptr;
-    }
+    shutdown();
 }
 
 void GlobalStoragePool::restore()
@@ -132,6 +128,15 @@ void GlobalStoragePool::restore()
         false);
 }
 
+void GlobalStoragePool::shutdown()
+{
+    if (gc_handle)
+    {
+        global_context.getBackgroundPool().removeTask(gc_handle);
+        gc_handle = {};
+    }
+}
+
 FileUsageStatistics GlobalStoragePool::getLogFileUsage() const
 {
     return log_storage->getFileUsageStatistics();
@@ -139,7 +144,7 @@ FileUsageStatistics GlobalStoragePool::getLogFileUsage() const
 
 bool GlobalStoragePool::gc()
 {
-    return gc(global_context.getSettingsRef(), true, DELTA_MERGE_GC_PERIOD);
+    return gc(global_context.getSettingsRef(), /*immediately=*/true, DELTA_MERGE_GC_PERIOD);
 }
 
 bool GlobalStoragePool::gc(const Settings & settings, bool immediately, const Seconds & try_gc_period)
@@ -172,10 +177,11 @@ bool GlobalStoragePool::gc(const Settings & settings, bool immediately, const Se
     return done_anything;
 }
 
-StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPool & storage_path_pool, const String & name)
-    : logger(Logger::get("StoragePool", !name.empty() ? name : DB::toString(ns_id_)))
+StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPool & storage_path_pool_, const String & name)
+    : logger(Logger::get(!name.empty() ? name : DB::toString(ns_id_)))
     , run_mode(global_ctx.getPageStorageRunMode())
     , ns_id(ns_id_)
+    , storage_path_pool(storage_path_pool_)
     , global_context(global_ctx)
     , storage_pool_metrics(CurrentMetrics::StoragePoolV3Only, 0)
 {
@@ -231,21 +237,45 @@ StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPo
         data_storage_v3 = global_storage_pool->data_storage;
         meta_storage_v3 = global_storage_pool->meta_storage;
 
-        log_storage_v2 = PageStorage::create(name + ".log",
-                                             storage_path_pool.getPSDiskDelegatorMulti("log"),
-                                             extractConfig(global_context.getSettingsRef(), StorageType::Log),
-                                             global_context.getFileProvider(),
-                                             global_context);
-        data_storage_v2 = PageStorage::create(name + ".data",
-                                              storage_path_pool.getPSDiskDelegatorMulti("data"),
-                                              extractConfig(global_context.getSettingsRef(), StorageType::Data),
-                                              global_context.getFileProvider(),
-                                              global_context);
-        meta_storage_v2 = PageStorage::create(name + ".meta",
-                                              storage_path_pool.getPSDiskDelegatorMulti("meta"),
-                                              extractConfig(global_context.getSettingsRef(), StorageType::Meta),
-                                              global_context.getFileProvider(),
-                                              global_context);
+        if (storage_path_pool.isPSV2Deleted())
+        {
+            LOG_INFO(logger, "PageStorage V2 is already mark deleted. Current pagestorage change from {} to {} [ns_id={}]", //
+                     static_cast<UInt8>(PageStorageRunMode::MIX_MODE), //
+                     static_cast<UInt8>(PageStorageRunMode::ONLY_V3), //
+                     ns_id);
+            log_storage_v2 = nullptr;
+            data_storage_v2 = nullptr;
+            meta_storage_v2 = nullptr;
+            run_mode = PageStorageRunMode::ONLY_V3;
+            storage_path_pool.clearPSV2ObsoleteData();
+        }
+        else
+        {
+            // Although there is no more write to ps v2 in mixed mode, the ps instances will keep running if there is some data in log storage when restart,
+            // so we keep its original config here.
+            // And we rely on the mechanism that writing file will be rotated if no valid pages in non writing files to reduce the disk space usage of these ps instances.
+            log_storage_v2 = PageStorage::create(name + ".log",
+                                                 storage_path_pool.getPSDiskDelegatorMulti("log"),
+                                                 extractConfig(global_context.getSettingsRef(), StorageType::Log),
+                                                 global_context.getFileProvider(),
+                                                 global_context,
+                                                 /* use_v3 */ false,
+                                                 /* no_more_write_to_v2 */ true);
+            data_storage_v2 = PageStorage::create(name + ".data",
+                                                  storage_path_pool.getPSDiskDelegatorMulti("data"),
+                                                  extractConfig(global_context.getSettingsRef(), StorageType::Data),
+                                                  global_context.getFileProvider(),
+                                                  global_context,
+                                                  /* use_v3 */ false,
+                                                  /* no_more_write_to_v2 */ true);
+            meta_storage_v2 = PageStorage::create(name + ".meta",
+                                                  storage_path_pool.getPSDiskDelegatorMulti("meta"),
+                                                  extractConfig(global_context.getSettingsRef(), StorageType::Meta),
+                                                  global_context.getFileProvider(),
+                                                  global_context,
+                                                  /* use_v3 */ false,
+                                                  /* no_more_write_to_v2 */ true);
+        }
 
         log_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, log_storage_v2, log_storage_v3, nullptr);
         data_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, data_storage_v2, data_storage_v3, nullptr);
@@ -287,7 +317,7 @@ void StoragePool::forceTransformMetaV2toV3()
         const auto & page_transform_entry = meta_transform_storage_reader->getPageEntry(page_transform.page_id);
         if (!page_transform_entry.field_offsets.empty())
         {
-            throw Exception(fmt::format("Can't transfrom meta from V2 to V3, [page_id={}] {}", //
+            throw Exception(fmt::format("Can't transform meta from V2 to V3, [page_id={}] {}", //
                                         page_transform.page_id,
                                         page_transform_entry.toDebugString()),
                             ErrorCodes::LOGICAL_ERROR);
@@ -419,45 +449,50 @@ PageStorageRunMode StoragePool::restore()
         // However, the pages on meta V2 can not be deleted. As the pages in meta are small, we perform a forceTransformMetaV2toV3 to convert pages before all.
         if (const auto & meta_remain_pages = meta_storage_v2->getNumberOfPages(); meta_remain_pages != 0)
         {
-            LOG_FMT_INFO(logger, "Current pool.meta transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, meta_remain_pages);
+            LOG_INFO(logger, "Current pool.meta transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, meta_remain_pages);
             forceTransformMetaV2toV3();
             const auto & meta_remain_pages_after_transform = meta_storage_v2->getNumberOfPages();
-            LOG_FMT_INFO(logger, "Current pool.meta transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
-                         ns_id,
-                         meta_remain_pages_after_transform == 0,
-                         meta_remain_pages,
-                         meta_remain_pages_after_transform);
+            LOG_INFO(logger, "Current pool.meta transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
+                     ns_id,
+                     meta_remain_pages_after_transform == 0,
+                     meta_remain_pages,
+                     meta_remain_pages_after_transform);
         }
         else
         {
-            LOG_FMT_INFO(logger, "Current pool.meta translate already done before restored [ns_id={}] ", ns_id);
+            LOG_INFO(logger, "Current pool.meta transform already done before restored [ns_id={}] ", ns_id);
         }
 
         if (const auto & data_remain_pages = data_storage_v2->getNumberOfPages(); data_remain_pages != 0)
         {
-            LOG_FMT_INFO(logger, "Current pool.data transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, data_remain_pages);
+            LOG_INFO(logger, "Current pool.data transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, data_remain_pages);
             forceTransformDataV2toV3();
             const auto & data_remain_pages_after_transform = data_storage_v2->getNumberOfPages();
-            LOG_FMT_INFO(logger, "Current pool.data transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
-                         ns_id,
-                         data_remain_pages_after_transform == 0,
-                         data_remain_pages,
-                         data_remain_pages_after_transform);
+            LOG_INFO(logger, "Current pool.data transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
+                     ns_id,
+                     data_remain_pages_after_transform == 0,
+                     data_remain_pages,
+                     data_remain_pages_after_transform);
         }
         else
         {
-            LOG_FMT_INFO(logger, "Current pool.data translate already done before restored [ns_id={}] ", ns_id);
+            LOG_INFO(logger, "Current pool.data transform already done before restored [ns_id={}]", ns_id);
         }
 
         // Check number of valid pages in v2
         // If V2 already have no any data in disk, Then change run_mode to ONLY_V3
         if (log_storage_v2->getNumberOfPages() == 0 && data_storage_v2->getNumberOfPages() == 0 && meta_storage_v2->getNumberOfPages() == 0)
         {
-            // TODO: Need drop V2 in disk and check.
-            LOG_FMT_INFO(logger, "Current pagestorage change from {} to {}", //
-                         static_cast<UInt8>(PageStorageRunMode::MIX_MODE),
-                         static_cast<UInt8>(PageStorageRunMode::ONLY_V3));
-
+            LOG_INFO(logger, "Current pagestorage change from {} to {} [ns_id={}]", //
+                     static_cast<UInt8>(PageStorageRunMode::MIX_MODE),
+                     static_cast<UInt8>(PageStorageRunMode::ONLY_V3),
+                     ns_id);
+            if (storage_path_pool.createPSV2DeleteMarkFile())
+            {
+                log_storage_v2->drop();
+                data_storage_v2->drop();
+                meta_storage_v2->drop();
+            }
             log_storage_v2 = nullptr;
             data_storage_v2 = nullptr;
             meta_storage_v2 = nullptr;
@@ -490,13 +525,13 @@ PageStorageRunMode StoragePool::restore()
     default:
         throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
-    LOG_FMT_TRACE(logger, "Finished StoragePool restore. [current_run_mode={}] [ns_id={}]"
-                          " [max_log_page_id={}] [max_data_page_id={}] [max_meta_page_id={}]",
-                  static_cast<UInt8>(run_mode),
-                  ns_id,
-                  max_log_page_id,
-                  max_data_page_id,
-                  max_meta_page_id);
+    LOG_TRACE(logger, "Finished StoragePool restore. [current_run_mode={}] [ns_id={}]"
+                      " [max_log_page_id={}] [max_data_page_id={}] [max_meta_page_id={}]",
+              static_cast<UInt8>(run_mode),
+              ns_id,
+              max_log_page_id,
+              max_data_page_id,
+              max_meta_page_id);
     return run_mode;
 }
 
@@ -505,34 +540,31 @@ StoragePool::~StoragePool()
     shutdown();
 }
 
-void StoragePool::enableGC()
-{
-    // The data in V3 will be GCed by `GlobalStoragePool::gc`, only register gc task under only v2/mix mode
-    if (run_mode == PageStorageRunMode::ONLY_V2 || run_mode == PageStorageRunMode::MIX_MODE)
-    {
-        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
-    }
-}
-
-void StoragePool::dataRegisterExternalPagesCallbacks(const ExternalPageCallbacks & callbacks)
+void StoragePool::startup(ExternalPageCallbacks && callbacks)
 {
     switch (run_mode)
     {
     case PageStorageRunMode::ONLY_V2:
     {
+        // For V2, we need a per physical table gc handle to perform the gc of its PageStorage instances.
         data_storage_v2->registerExternalPagesCallbacks(callbacks);
+        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
         break;
     }
     case PageStorageRunMode::ONLY_V3:
     {
+        // For V3, the GC is handled by `GlobalStoragePool::gc`, just register callbacks is OK.
         data_storage_v3->registerExternalPagesCallbacks(callbacks);
         break;
     }
     case PageStorageRunMode::MIX_MODE:
     {
-        // We have transformed all pages from V2 to V3 in `restore`, so
-        // only need to register callbacks for V3.
+        // For V3, the GC is handled by `GlobalStoragePool::gc`.
+        // Since we have transformed all external pages from V2 to V3 in `StoragePool::restore`,
+        // just register callbacks to V3 is OK
         data_storage_v3->registerExternalPagesCallbacks(callbacks);
+        // we still need a gc_handle to reclaim the V2 disk space.
+        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
         break;
     }
     default:
@@ -540,12 +572,22 @@ void StoragePool::dataRegisterExternalPagesCallbacks(const ExternalPageCallbacks
     }
 }
 
-void StoragePool::dataUnregisterExternalPagesCallbacks(NamespaceId ns_id)
+void StoragePool::shutdown()
 {
+    // Note: Should reset the gc_handle before unregistering the pages callbacks
+    if (gc_handle)
+    {
+        global_context.getBackgroundPool().removeTask(gc_handle);
+        gc_handle = nullptr;
+    }
+
     switch (run_mode)
     {
     case PageStorageRunMode::ONLY_V2:
     {
+        meta_storage_v2->shutdown();
+        log_storage_v2->shutdown();
+        data_storage_v2->shutdown();
         data_storage_v2->unregisterExternalPagesCallbacks(ns_id);
         break;
     }
@@ -556,7 +598,11 @@ void StoragePool::dataUnregisterExternalPagesCallbacks(NamespaceId ns_id)
     }
     case PageStorageRunMode::MIX_MODE:
     {
-        // no need unregister callback in V2.
+        meta_storage_v2->shutdown();
+        log_storage_v2->shutdown();
+        data_storage_v2->shutdown();
+        // We have transformed all external pages from V2 to V3 in `restore`, so
+        // only need to unregister callbacks for V3.
         data_storage_v3->unregisterExternalPagesCallbacks(ns_id);
         break;
     }
@@ -564,7 +610,6 @@ void StoragePool::dataUnregisterExternalPagesCallbacks(NamespaceId ns_id)
         throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 }
-
 
 bool StoragePool::doV2Gc(const Settings & settings)
 {
@@ -606,21 +651,6 @@ bool StoragePool::gc(const Settings & settings, const Seconds & try_gc_period)
     return doV2Gc(settings);
 }
 
-void StoragePool::shutdown()
-{
-    if (gc_handle)
-    {
-        global_context.getBackgroundPool().removeTask(gc_handle);
-        gc_handle = nullptr;
-    }
-    if (run_mode != PageStorageRunMode::ONLY_V3)
-    {
-        meta_storage_v2->shutdown();
-        log_storage_v2->shutdown();
-        data_storage_v2->shutdown();
-    }
-}
-
 void StoragePool::drop()
 {
     shutdown();
@@ -645,8 +675,8 @@ PageId StoragePool::newDataPageIdForDTFile(StableDiskDelegator & delegator, cons
 
         auto existed_path = delegator.getDTFilePath(dtfile_id, /*throw_on_not_exist=*/false);
         fiu_do_on(FailPoints::force_set_dtfile_exist_when_acquire_id, {
-            static size_t fail_point_called = 0;
-            if (existed_path.empty() && fail_point_called % 10 == 0)
+            static std::atomic<UInt64> fail_point_called(0);
+            if (existed_path.empty() && fail_point_called.load() % 10 == 0)
             {
                 existed_path = "<mock for existed path>";
             }
@@ -657,11 +687,11 @@ PageId StoragePool::newDataPageIdForDTFile(StableDiskDelegator & delegator, cons
             break;
         }
         // else there is a DTFile with that id, continue to acquire a new ID.
-        LOG_FMT_WARNING(logger,
-                        "The DTFile is already exists, continute to acquire another ID. [call={}][path={}] [id={}]",
-                        who,
-                        existed_path,
-                        dtfile_id);
+        LOG_WARNING(logger,
+                    "The DTFile is already exists, continute to acquire another ID. [call={}][path={}] [id={}]",
+                    who,
+                    existed_path,
+                    dtfile_id);
     } while (true);
     return dtfile_id;
 }

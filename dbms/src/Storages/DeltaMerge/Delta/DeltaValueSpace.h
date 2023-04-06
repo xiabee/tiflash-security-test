@@ -60,7 +60,7 @@ class DeltaValueSpace
     , private boost::noncopyable
 {
 public:
-    using Lock = std::unique_lock<std::mutex>;
+    using Lock = std::unique_lock<std::recursive_mutex>;
 
 private:
     /// column files in `persisted_file_set` are all persisted in disks and can be restored after restart.
@@ -77,6 +77,11 @@ private:
     /// Note that those things can not be done at the same time.
     std::atomic_bool is_updating = false;
 
+    /// Note that it's safe to do multiple flush concurrently but only one of them can succeed,
+    /// and other thread's work is just a waste of resource.
+    /// So we only allow one flush task running at any time to aviod waste resource.
+    std::atomic_bool is_flushing = false;
+
     std::atomic<size_t> last_try_flush_rows = 0;
     std::atomic<size_t> last_try_flush_bytes = 0;
     std::atomic<size_t> last_try_compact_column_files = 0;
@@ -89,9 +94,10 @@ private:
     DeltaIndexPtr delta_index;
 
     // Protects the operations in this instance.
-    mutable std::mutex mutex;
+    // It is a recursive_mutex because the lock may be also used by the parent segment as its update lock.
+    mutable std::recursive_mutex mutex;
 
-    Poco::Logger * log;
+    LoggerPtr log;
 
 public:
     explicit DeltaValueSpace(PageId id_, const ColumnFilePersisteds & persisted_files = {}, const ColumnFiles & in_memory_files = {});
@@ -102,23 +108,34 @@ public:
     /// Only called after reboot.
     static DeltaValueSpacePtr restore(DMContext & context, const RowKeyRange & segment_range, PageId id);
 
+    /**
+     * Resets the logger by using the one from the segment.
+     * Segment_log is not available when constructing, because usually
+     * at that time the segment has not been constructed yet.
+     */
+    void resetLogger(const LoggerPtr & segment_log)
+    {
+        log = segment_log;
+        mem_table_set->resetLogger(segment_log);
+        persisted_file_set->resetLogger(segment_log);
+    }
+
     /// The following two methods are just for test purposes
     MemTableSetPtr getMemTableSet() const { return mem_table_set; }
     ColumnFilePersistedSetPtr getPersistedFileSet() const { return persisted_file_set; }
 
-    String simpleInfo() const { return "Delta [" + DB::toString(persisted_file_set->getId()) + "]"; }
+    String simpleInfo() const { return "<delta_id=" + DB::toString(persisted_file_set->getId()) + ">"; }
     String info() const
     {
         return fmt::format("{}. {}", mem_table_set->info(), persisted_file_set->info());
     }
 
-    bool getLock(Lock & lock) const
+    std::optional<Lock> getLock() const
     {
         Lock my_lock(mutex);
         if (abandoned)
-            return false;
-        lock = std::move(my_lock);
-        return true;
+            return std::nullopt;
+        return my_lock;
     }
 
     /// Abandon this instance.
@@ -130,14 +147,25 @@ public:
 
     void recordRemoveColumnFilesPages(WriteBatches & wbs) const;
 
-    /// First check whether 'head_column_files' is exactly the head of column files in this instance.
-    ///   If yes, then clone the tail of column files, using ref pages.
-    ///   Otherwise, throw an exception.
-    ///
-    /// Note that this method is expected to be called by some one who already have lock on this instance.
-    /// And the `head_column_files` must just reside in `persisted_file_set`.
-    std::pair<ColumnFilePersisteds, ColumnFiles>
-    checkHeadAndCloneTail(DMContext & context, const RowKeyRange & target_range, const ColumnFiles & head_column_files, WriteBatches & wbs) const;
+    /**
+     * Clone these newly appended column files since `update_snapshot` was created.
+     * The clone is implemented by creating ref pages.
+     *
+     * Exceptions will be thrown if:
+     * - The `update_snapshot` is not SnapshotForUpdate.
+     * - Some column files in the `update_snapshot` is missing in the current instance.
+     */
+    std::pair<ColumnFiles, ColumnFilePersisteds> cloneNewlyAppendedColumnFiles(
+        const Lock & lock,
+        DMContext & context,
+        const RowKeyRange & target_range,
+        const DeltaValueSnapshot & update_snapshot,
+        WriteBatches & wbs) const;
+    std::pair<ColumnFiles, ColumnFilePersisteds> cloneAllColumnFiles(
+        const Lock & lock,
+        DMContext & context,
+        const RowKeyRange & target_range,
+        WriteBatches & wbs) const;
 
     PageId getId() const { return persisted_file_set->getId(); }
 
@@ -159,6 +187,8 @@ public:
     size_t getTotalCacheBytes() const;
     size_t getValidCacheRows() const;
 
+    bool isFlushing() const { return is_flushing; }
+
     bool isUpdating() const { return is_updating; }
 
     bool tryLockUpdating()
@@ -167,7 +197,7 @@ public:
         // Other thread is doing structure update, just return.
         if (!is_updating.compare_exchange_strong(v, true))
         {
-            LOG_FMT_DEBUG(log, "{} Stop create snapshot because updating", simpleInfo());
+            LOG_DEBUG(log, "Cannot get update lock because DeltaValueSpace is updating. Current update operation will be discarded, delta={}", simpleInfo());
             return false;
         }
         return true;
@@ -178,7 +208,7 @@ public:
         bool v = true;
         if (!is_updating.compare_exchange_strong(v, false))
         {
-            LOG_FMT_ERROR(log, "!!!=========================delta [{}] is expected to be updating=========================!!!", getId());
+            LOG_ERROR(log, "!!!========================= delta={} is expected to be updating=========================!!!", simpleInfo());
             return false;
         }
         else
@@ -239,9 +269,27 @@ public:
     /// a.k.a. minor compaction.
     bool compact(DMContext & context);
 
-    /// Create a constant snapshot for read.
-    /// Returns empty if this instance is abandoned, you should try again.
-    /// for_update: true means this snapshot is created for Segment split/merge, delta merge, or flush.
+    /**
+     * Create a snapshot for read. The snapshot always contains memtable, persisted delta and stable.
+     *
+     * WARN: Although it is named as "snapshot", the content may be mutable. See doc of `for_update` for details.
+     *
+     * @param for_update: Specify `true` if you want to make structural updates based on the content of this snapshot,
+     *                    like flush, split, merge, delta merge, etc. SnapshotForUpdate is exclusive: you can only
+     *                    create one at a time. When there is an alive SnapshotForUpdate, you can still create
+     *                    snapshots not for update.
+     *
+     *                    When `for_update == false`, the memtable of this snapshot may be mutable. For example, there
+     *                    may be concurrent writes when you hold this snapshot, causing the memtable to be changed.
+     *                    However it is guaranteed that only new data will be appended. No data will be lost when you
+     *                    are holding this snapshot.
+     *
+     *                    When `for_update == true`, it is guaranteed that the content of this snapshot will never
+     *                    change.
+     *
+     * @returns empty if this instance is abandoned. In this case you may want to try again with a new instance.
+     * @returns empty if `for_update == true` is specified and there is another alive for_update snapshot.
+     */
     DeltaSnapshotPtr createSnapshot(const DMContext & context, bool for_update, CurrentMetrics::Metric type);
 };
 
@@ -269,8 +317,8 @@ private:
 public:
     DeltaSnapshotPtr clone()
     {
-        if (unlikely(is_update))
-            throw Exception("Should not call this method when is_update is true", ErrorCodes::LOGICAL_ERROR);
+        // We only allow one for_update snapshots to exist, so it cannot be cloned.
+        RUNTIME_CHECK(!is_update);
 
         auto c = std::make_shared<DeltaValueSnapshot>(type);
         c->is_update = is_update;
@@ -296,23 +344,13 @@ public:
         CurrentMetrics::sub(type);
     }
 
-    // Only used when `is_update` is true
-    ColumnFiles & getColumnFilesInSnapshot() const
-    {
-        if (unlikely(!is_update))
-            throw Exception("Should not call this method when is_update is true", ErrorCodes::LOGICAL_ERROR);
-        /// when `is_update` is true, we just create snapshot for saved files,
-        /// so `mem_table_snap` must be nullptr.
-        return persisted_files_snap->getColumnFiles();
-    }
-
     ColumnFileSetSnapshotPtr getMemTableSetSnapshot() const { return mem_table_snap; }
     ColumnFileSetSnapshotPtr getPersistedFileSetSnapshot() const { return persisted_files_snap; }
 
-    size_t getColumnFileCount() const { return (mem_table_snap ? mem_table_snap->getColumnFileCount() : 0) + persisted_files_snap->getColumnFileCount(); }
-    size_t getRows() const { return (mem_table_snap ? mem_table_snap->getRows() : 0) + persisted_files_snap->getRows(); }
-    size_t getBytes() const { return (mem_table_snap ? mem_table_snap->getBytes() : 0) + persisted_files_snap->getBytes(); }
-    size_t getDeletes() const { return (mem_table_snap ? mem_table_snap->getDeletes() : 0) + persisted_files_snap->getDeletes(); }
+    size_t getColumnFileCount() const { return mem_table_snap->getColumnFileCount() + persisted_files_snap->getColumnFileCount(); }
+    size_t getRows() const { return mem_table_snap->getRows() + persisted_files_snap->getRows(); }
+    size_t getBytes() const { return mem_table_snap->getBytes() + persisted_files_snap->getBytes(); }
+    size_t getDeletes() const { return mem_table_snap->getDeletes() + persisted_files_snap->getDeletes(); }
 
     size_t getMemTableSetRowsOffset() const { return persisted_files_snap->getRows(); }
     size_t getMemTableSetDeletesOffset() const { return persisted_files_snap->getDeletes(); }
@@ -320,6 +358,8 @@ public:
     RowKeyRange getSquashDeleteRange() const;
 
     const auto & getSharedDeltaIndex() { return shared_delta_index; }
+
+    bool isForUpdate() const { return is_update; }
 };
 
 class DeltaValueReader

@@ -22,11 +22,20 @@ option(ENABLE_CLICKHOUSE_SERVER "Enable server" ${ENABLE_CLICKHOUSE_ALL})
 option(ENABLE_CLICKHOUSE_CLIENT "Enable client" ${ENABLE_CLICKHOUSE_ALL})
 option(ENABLE_TIFLASH_DTTOOL "Enable dttool: tools to manage dmfile" ${ENABLE_CLICKHOUSE_ALL})
 option(ENABLE_TIFLASH_DTWORKLOAD "Enable dtworkload: tools to test and stress DeltaTree" ${ENABLE_CLICKHOUSE_ALL})
+option(ENABLE_TIFLASH_PAGEWORKLOAD "Enable pageworkload: tools to test and stress PageStorage" ${ENABLE_CLICKHOUSE_ALL})
+option(ENABLE_TIFLASH_PAGECTL "Enable pagectl: tools to debug page storage" ${ENABLE_CLICKHOUSE_ALL})
 
 configure_file (config_tools.h.in ${CMAKE_CURRENT_BINARY_DIR}/config_tools.h)
 
+add_library(server_for_test
+    FlashGrpcServerHolder.cpp
+)
+
+target_link_libraries (server_for_test PUBLIC clickhouse_common_io clickhouse_storages_system)
+
 add_library (clickhouse-server-lib
     HTTPHandler.cpp
+    FlashGrpcServerHolder.cpp
     MetricsTransmitter.cpp
     MetricsPrometheus.cpp
     NotFoundHandler.cpp
@@ -60,12 +69,18 @@ target_include_directories(tiflash-dttool-entry-object PUBLIC ${TiFlash_SOURCE_D
 add_executable (tiflash main.cpp)
 
 if (USE_INTERNAL_TIFLASH_PROXY)
-    set(PROXY_LIBRARY_DIR "${TiFlash_SOURCE_DIR}/contrib/tiflash-proxy/target/release")
+    get_target_property(TIFLASH_PROXY_LIB_PATH ${TIFLASH_PROXY_LIBRARY} IMPORTED_LOCATION)
+    cmake_path(GET TIFLASH_PROXY_LIB_PATH PARENT_PATH TIFLASH_PROXY_LIB_DIR)
 else()
-    set(PROXY_LIBRARY_DIR "${PREBUILT_LIBS_ROOT}")
+    set(TIFLASH_PROXY_LIB_DIR "${PREBUILT_LIBS_ROOT}")
 endif()
 
-if (ARCH_LINUX)
+cmake_path(
+    RELATIVE_PATH TIFLASH_PROXY_LIB_DIR
+    BASE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    OUTPUT_VARIABLE TIFLASH_PROXY_LIB_RPATH)
+
+if (OS_LINUX)
     if (ARCH_AARCH64)
         set(TIFLASH_ARCH_NAME "aarch64")
     elseif(ARCH_AMD64)
@@ -83,8 +98,8 @@ if (ARCH_LINUX)
         set(TIFLASH_DEPENDENCY_DIRECTORIES "")
     endif()
 
-    # set build rpaths, so that executables are be directly called in build tree (easy to debug)
-    set_target_properties(tiflash PROPERTIES BUILD_RPATH "${PROXY_LIBRARY_DIR};${TIFLASH_DEPENDENCY_DIR_HINT}")
+    # set build rpaths, so that executables can be directly called in build tree (easy to debug)
+    set_target_properties(tiflash PROPERTIES BUILD_RPATH "$ORIGIN/;$ORIGIN/${TIFLASH_PROXY_LIB_RPATH}/;${TIFLASH_DEPENDENCY_DIR_HINT}")
     set_target_properties(tiflash PROPERTIES INSTALL_RPATH "$ORIGIN/")
     install (TARGETS tiflash
             COMPONENT tiflash-release
@@ -104,11 +119,16 @@ if (ARCH_LINUX)
                 "ld-linux-aarch64.*"
                 "libpthread.*"# exclude libc dependencies
             DIRECTORIES ${TIFLASH_DEPENDENCY_DIRECTORIES})
+    if (USE_GM_SSL)
+        install (TARGETS gmssl
+                COMPONENT tiflash-release
+                DESTINATION ".")
+    endif()
 
     install (SCRIPT ${TiFlash_SOURCE_DIR}/cmake/tiflash_linux_post_install.cmake COMPONENT tiflash-release)
 elseif(APPLE)
-    # set build rpaths, so that executables are be directly called in build tree (easy to debug)
-    set_target_properties(tiflash PROPERTIES BUILD_RPATH "${PROXY_LIBRARY_DIR}")
+    # set build rpaths, so that executables can be directly called in build tree (easy to debug)
+    set_target_properties(tiflash PROPERTIES BUILD_RPATH "@executable_path/;@executable_path/${TIFLASH_PROXY_LIB_RPATH}/")
     set_target_properties(tiflash PROPERTIES INSTALL_RPATH "@executable_path/")
     install (TARGETS tiflash
             COMPONENT tiflash-release
@@ -119,6 +139,9 @@ elseif(APPLE)
             DESTINATION "."
             PRE_INCLUDE_REGEXES ".*proxy.*")
 endif ()
+
+include(CMakePrintHelpers)
+cmake_print_properties(TARGETS tiflash PROPERTIES BUILD_RPATH INSTALL_RPATH)
 
 target_link_libraries (tiflash clickhouse_common_io)
 target_include_directories (tiflash BEFORE PRIVATE ${COMMON_INCLUDE_DIR})
@@ -135,6 +158,12 @@ if (ENABLE_TIFLASH_DTTOOL)
 endif ()
 if (ENABLE_TIFLASH_DTWORKLOAD)
     target_link_libraries(tiflash dt-workload-lib)
+endif ()
+if (ENABLE_TIFLASH_PAGEWORKLOAD)
+    target_link_libraries(tiflash page-workload-lib)
+endif()
+if (ENABLE_TIFLASH_PAGECTL)
+    target_link_libraries(tiflash page-ctl-lib)
 endif ()
 
 # install always because depian package want this files:

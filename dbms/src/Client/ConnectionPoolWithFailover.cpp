@@ -20,13 +20,6 @@
 #include <Poco/Net/DNS.h>
 #include <Poco/Net/NetException.h>
 
-
-namespace ProfileEvents
-{
-extern const Event DistributedConnectionMissingTable;
-extern const Event DistributedConnectionStaleReplica;
-} // namespace ProfileEvents
-
 namespace DB
 {
 namespace ErrorCodes
@@ -50,7 +43,7 @@ ConnectionPoolWithFailover::ConnectionPoolWithFailover(
     hostname_differences.resize(nested_pools.size());
     for (size_t i = 0; i < nested_pools.size(); ++i)
     {
-        ConnectionPool & connection_pool = dynamic_cast<ConnectionPool &>(*nested_pools[i]);
+        auto & connection_pool = dynamic_cast<ConnectionPool &>(*nested_pools[i]);
         hostname_differences[i] = getHostNameDifference(local_hostname, connection_pool.getHost());
     }
 }
@@ -187,7 +180,6 @@ ConnectionPoolWithFailover::tryGetEntry(
             fail_message = "There is no table " + table_to_check->database + "." + table_to_check->table
                 + " on server: " + result.entry->getDescription();
             LOG_WARNING(log, fail_message);
-            ProfileEvents::increment(ProfileEvents::DistributedConnectionMissingTable);
 
             return result;
         }
@@ -210,14 +202,13 @@ ConnectionPoolWithFailover::tryGetEntry(
             result.is_up_to_date = false;
             result.staleness = delay;
 
-            LOG_FMT_TRACE(
+            LOG_TRACE(
                 log,
                 "Server {} has unacceptable replica delay for table {}.{}: {}",
                 result.entry->getDescription(),
                 table_to_check->database,
                 table_to_check->table,
                 delay);
-            ProfileEvents::increment(ProfileEvents::DistributedConnectionStaleReplica);
         }
     }
     catch (const Exception & e)

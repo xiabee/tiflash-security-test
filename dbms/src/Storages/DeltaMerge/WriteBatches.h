@@ -41,7 +41,7 @@ struct WriteBatches : private boost::noncopyable
 
     WriteLimiterPtr write_limiter;
 
-    WriteBatches(StoragePool & storage_pool_, const WriteLimiterPtr & write_limiter_ = nullptr)
+    explicit WriteBatches(StoragePool & storage_pool_, const WriteLimiterPtr & write_limiter_ = nullptr)
         : ns_id(storage_pool_.getNamespaceId())
         , log(ns_id)
         , data(ns_id)
@@ -58,15 +58,14 @@ struct WriteBatches : private boost::noncopyable
     {
         if constexpr (DM_RUN_CHECK)
         {
-            Poco::Logger * logger = &Poco::Logger::get("WriteBatches");
             auto check_empty = [&](const WriteBatch & wb, const String & name) {
                 if (!wb.empty())
                 {
                     StackTrace trace;
-                    LOG_FMT_ERROR(logger,
-                                  "!!!=========================Modifications in {} haven't persisted=========================!!! Stack trace: {}",
-                                  name,
-                                  trace.toString());
+                    LOG_ERROR(Logger::get(),
+                              "!!!=========================Modifications in {} haven't persisted=========================!!! Stack trace: {}",
+                              name,
+                              trace.toString());
                 }
             };
             check_empty(log, "log");
@@ -91,20 +90,19 @@ struct WriteBatches : private boost::noncopyable
 
         if constexpr (DM_RUN_CHECK)
         {
-            Poco::Logger * logger = &Poco::Logger::get("WriteBatches");
-            auto check = [](const WriteBatch & wb, const String & what, Poco::Logger * logger) {
+            auto check = [](const WriteBatch & wb, const String & what) {
                 if (wb.empty())
                     return;
                 for (const auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type == WriteBatch::WriteType::DEL))
+                    if (unlikely(w.type == WriteBatchWriteType::DEL))
                         throw Exception("Unexpected deletes in " + what);
                 }
-                LOG_FMT_TRACE(logger, "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
             };
 
-            check(log, "log", logger);
-            check(data, "data", logger);
+            check(log, "log");
+            check(data, "data");
         }
 
         for (auto & w : log.getWrites())
@@ -135,21 +133,19 @@ struct WriteBatches : private boost::noncopyable
 
         if constexpr (DM_RUN_CHECK)
         {
-            Poco::Logger * logger = &Poco::Logger::get("WriteBatches");
-
-            auto check = [](const WriteBatch & wb, const String & what, Poco::Logger * logger) {
+            auto check = [](const WriteBatch & wb, const String & what) {
                 if (wb.empty())
                     return;
                 for (const auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatch::WriteType::DEL))
+                    if (unlikely(w.type != WriteBatchWriteType::DEL))
                         throw Exception("Expected deletes in " + what);
                 }
-                LOG_FMT_TRACE(logger, "Rollback remove from {} : {}", what, wb.toString());
+                LOG_TRACE(Logger::get(), "Rollback remove from {} : {}", what, wb.toString());
             };
 
-            check(log_wb, "log_wb", logger);
-            check(data_wb, "data_wb", logger);
+            check(log_wb, "log_wb");
+            check(data_wb, "data_wb");
         }
 
         storage_pool.logWriter()->write(std::move(log_wb), write_limiter);
@@ -163,20 +159,18 @@ struct WriteBatches : private boost::noncopyable
     {
         if constexpr (DM_RUN_CHECK)
         {
-            Poco::Logger * logger = &Poco::Logger::get("WriteBatches");
-
-            auto check = [](const WriteBatch & wb, const String & what, Poco::Logger * logger) {
+            auto check = [](const WriteBatch & wb, const String & what) {
                 if (wb.empty())
                     return;
                 for (const auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatch::WriteType::PUT))
+                    if (unlikely(w.type != WriteBatchWriteType::PUT))
                         throw Exception("Expected puts in " + what);
                 }
-                LOG_FMT_TRACE(logger, "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
             };
 
-            check(meta, "meta", logger);
+            check(meta, "meta");
         }
 
         storage_pool.metaWriter()->write(std::move(meta), write_limiter);
@@ -187,22 +181,20 @@ struct WriteBatches : private boost::noncopyable
     {
         if constexpr (DM_RUN_CHECK)
         {
-            Poco::Logger * logger = &Poco::Logger::get("WriteBatches");
-
-            auto check = [](const WriteBatch & wb, const String & what, Poco::Logger * logger) {
+            auto check = [](const WriteBatch & wb, const String & what) {
                 if (wb.empty())
                     return;
                 for (const auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatch::WriteType::DEL))
+                    if (unlikely(w.type != WriteBatchWriteType::DEL))
                         throw Exception("Expected deletes in " + what);
                 }
-                LOG_FMT_TRACE(logger, "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
             };
 
-            check(removed_log, "removed_log", logger);
-            check(removed_data, "removed_data", logger);
-            check(removed_meta, "removed_meta", logger);
+            check(removed_log, "removed_log");
+            check(removed_data, "removed_data");
+            check(removed_meta, "removed_meta");
         }
 
         storage_pool.logWriter()->write(std::move(removed_log), write_limiter);

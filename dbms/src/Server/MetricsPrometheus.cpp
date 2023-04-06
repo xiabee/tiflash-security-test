@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,22 +40,22 @@ namespace DB
 class MetricHandler : public Poco::Net::HTTPRequestHandler
 {
 public:
-    MetricHandler(const std::weak_ptr<prometheus::Collectable> & collectable_)
+    explicit MetricHandler(const std::weak_ptr<prometheus::Collectable> & collectable_)
         : collectable(collectable_)
     {}
 
-    ~MetricHandler() {}
+    ~MetricHandler() override = default;
 
     void handleRequest(Poco::Net::HTTPServerRequest &, Poco::Net::HTTPServerResponse & response) override
     {
-        auto metrics = CollectMetrics();
+        auto metrics = collectMetrics();
         auto serializer = std::unique_ptr<prometheus::Serializer>{new prometheus::TextSerializer()};
         String body = serializer->Serialize(metrics);
         response.sendBuffer(body.data(), body.size());
     }
 
 private:
-    std::vector<prometheus::MetricFamily> CollectMetrics() const
+    std::vector<prometheus::MetricFamily> collectMetrics() const
     {
         auto collected_metrics = std::vector<prometheus::MetricFamily>{};
 
@@ -77,15 +77,15 @@ private:
 class MetricHandlerFactory : public Poco::Net::HTTPRequestHandlerFactory
 {
 public:
-    MetricHandlerFactory(const std::weak_ptr<prometheus::Collectable> & collectable_)
+    explicit MetricHandlerFactory(const std::weak_ptr<prometheus::Collectable> & collectable_)
         : collectable(collectable_)
     {}
 
-    ~MetricHandlerFactory() {}
+    ~MetricHandlerFactory() override = default;
 
     Poco::Net::HTTPRequestHandler * createRequestHandler(const Poco::Net::HTTPServerRequest & request) override
     {
-        String uri = request.getURI();
+        const String & uri = request.getURI();
         if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_GET || request.getMethod() == Poco::Net::HTTPRequest::HTTP_HEAD)
         {
             if (uri == "/metrics")
@@ -103,7 +103,7 @@ private:
 std::shared_ptr<Poco::Net::HTTPServer> getHTTPServer(
     const TiFlashSecurityConfig & security_config,
     const std::weak_ptr<prometheus::Collectable> & collectable,
-    const String & metrics_port)
+    const String & address)
 {
     Poco::Net::Context::Ptr context = new Poco::Net::Context(
         Poco::Net::Context::TLSV1_2_SERVER_USE,
@@ -125,16 +125,26 @@ std::shared_ptr<Poco::Net::HTTPServer> getHTTPServer(
     Poco::Net::SecureServerSocket socket(context);
 
     Poco::Net::HTTPServerParams::Ptr http_params = new Poco::Net::HTTPServerParams;
-
-    Poco::Net::SocketAddress addr("0.0.0.0", std::stoi(metrics_port));
+    Poco::Net::SocketAddress addr = Poco::Net::SocketAddress(address);
     socket.bind(addr, true);
     socket.listen();
     auto server = std::make_shared<Poco::Net::HTTPServer>(new MetricHandlerFactory(collectable), socket, http_params);
     return server;
 }
 
-constexpr long MILLISECOND = 1000;
-constexpr long INIT_DELAY = 5;
+constexpr Int64 MILLISECOND = 1000;
+constexpr Int64 INIT_DELAY = 5;
+
+namespace
+{
+inline bool isIPv6(const String & input_address)
+{
+    if (input_address.empty())
+        return false;
+    char str[INET6_ADDRSTRLEN];
+    return inet_pton(AF_INET6, input_address.c_str(), str) == 1;
+}
+} // namespace
 
 MetricsPrometheus::MetricsPrometheus(
     Context & context,
@@ -152,20 +162,20 @@ MetricsPrometheus::MetricsPrometheus(
     metrics_interval = conf.getInt(status_metrics_interval, 15);
     if (metrics_interval < 5)
     {
-        LOG_FMT_WARNING(log, "Config Error: {} should >= 5", status_metrics_interval);
+        LOG_WARNING(log, "Config Error: {} should >= 5", status_metrics_interval);
         metrics_interval = 5;
     }
     if (metrics_interval > 120)
     {
-        LOG_FMT_WARNING(log, "Config Error: {} should <= 120", status_metrics_interval);
+        LOG_WARNING(log, "Config Error: {} should <= 120", status_metrics_interval);
         metrics_interval = 120;
     }
-    LOG_FMT_INFO(log, "Config: {} = {}", status_metrics_interval, metrics_interval);
+    LOG_INFO(log, "Config: {} = {}", status_metrics_interval, metrics_interval);
 
     // Usually TiFlash disable prometheus push mode when deployed by TiUP/TiDB-Operator
     if (!conf.hasOption(status_metrics_addr))
     {
-        LOG_FMT_INFO(log, "Disable prometheus push mode, cause {} is not set!", status_metrics_addr);
+        LOG_INFO(log, "Disable prometheus push mode, cause {} is not set!", status_metrics_addr);
     }
     else
     {
@@ -174,7 +184,7 @@ MetricsPrometheus::MetricsPrometheus(
         auto pos = metrics_addr.find(':', 0);
         if (pos == std::string::npos)
         {
-            LOG_FMT_ERROR(log, "Format error: {} = {}", status_metrics_addr, metrics_addr);
+            LOG_ERROR(log, "Format error: {} = {}", status_metrics_addr, metrics_addr);
         }
         else
         {
@@ -193,7 +203,7 @@ MetricsPrometheus::MetricsPrometheus(
             gateway = std::make_shared<prometheus::Gateway>(host, port, job_name, prometheus::Gateway::GetInstanceLabel(hostname));
             gateway->RegisterCollectable(tiflash_metrics.registry);
 
-            LOG_FMT_INFO(log, "Enable prometheus push mode; interval ={}; addr = {}", metrics_interval, metrics_addr);
+            LOG_INFO(log, "Enable prometheus push mode; interval ={}; addr = {}", metrics_interval, metrics_addr);
         }
     }
 
@@ -202,26 +212,32 @@ MetricsPrometheus::MetricsPrometheus(
     if (conf.hasOption(status_metrics_port) || !conf.hasOption(status_metrics_addr))
     {
         auto metrics_port = conf.getString(status_metrics_port, DB::toString(DEFAULT_METRICS_PORT));
+        auto listen_host = conf.getString("listen_host", "0.0.0.0");
+        String addr;
+        if (isIPv6(listen_host))
+            addr = "[" + listen_host + "]:" + metrics_port;
+        else
+            addr = listen_host + ":" + metrics_port;
         if (security_config.has_tls_config)
         {
-            server = getHTTPServer(security_config, tiflash_metrics.registry, metrics_port);
+            server = getHTTPServer(security_config, tiflash_metrics.registry, addr);
             server->start();
-            LOG_FMT_INFO(log, "Enable prometheus secure pull mode; Metrics Port = {}", metrics_port);
+            LOG_INFO(log, "Enable prometheus secure pull mode; Listen Host = {}, Metrics Port = {}", listen_host, metrics_port);
         }
         else
         {
-            exposer = std::make_shared<prometheus::Exposer>(metrics_port);
+            exposer = std::make_shared<prometheus::Exposer>(addr);
             exposer->RegisterCollectable(tiflash_metrics.registry);
-            LOG_FMT_INFO(log, "Enable prometheus pull mode; Metrics Port = {}", metrics_port);
+            LOG_INFO(log, "Enable prometheus pull mode; Listen Host = {}, Metrics Port = {}", listen_host, metrics_port);
         }
     }
     else
     {
-        LOG_FMT_INFO(log, "Disable prometheus pull mode");
+        LOG_INFO(log, "Disable prometheus pull mode");
     }
 
     timer.scheduleAtFixedRate(
-        FunctionTimerTask::create(std::bind(&MetricsPrometheus::run, this)),
+        FunctionTimerTask::create([this] { run(); }),
         INIT_DELAY * MILLISECOND,
         metrics_interval * MILLISECOND);
 }
@@ -271,7 +287,7 @@ void MetricsPrometheus::run()
     {
         if (auto return_code = gateway->Push(); return_code != 200)
         {
-            LOG_FMT_WARNING(log, "Failed to push metrics to gateway, return code is {}", return_code);
+            LOG_WARNING(log, "Failed to push metrics to gateway, return code is {}", return_code);
         }
     }
 }

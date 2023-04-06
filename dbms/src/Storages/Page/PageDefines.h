@@ -41,8 +41,7 @@ static_assert(PAGE_SIZE_STEP >= ((1 << 10) * 16), "PAGE_SIZE_STEP should be at l
 static_assert((PAGE_SIZE_STEP & (PAGE_SIZE_STEP - 1)) == 0, "PAGE_SIZE_STEP should be power of 2");
 
 // PageStorage V3 define
-static constexpr UInt64 BLOBFILE_LIMIT_SIZE = 512 * MB;
-static constexpr UInt64 BLOBSTORE_CACHED_FD_SIZE = 100;
+static constexpr UInt64 BLOBFILE_LIMIT_SIZE = 256 * MB;
 static constexpr UInt64 PAGE_META_ROLL_SIZE = 2 * MB;
 static constexpr UInt64 MAX_PERSISTED_LOG_FILES = 4;
 
@@ -60,6 +59,12 @@ static constexpr PageId INVALID_PAGE_ID = 0;
 
 using PageIdV3Internal = UInt128;
 using PageIdV3Internals = std::vector<PageIdV3Internal>;
+
+inline PageIdV3Internal buildV3Id(NamespaceId n_id, PageId p_id)
+{
+    // low bits first
+    return PageIdV3Internal(p_id, n_id);
+}
 
 using PageFieldOffset = UInt64;
 using PageFieldOffsets = std::vector<PageFieldOffset>;
@@ -116,12 +121,36 @@ struct fmt::formatter<DB::PageIdV3Internal>
 {
     static constexpr auto parse(format_parse_context & ctx) -> decltype(ctx.begin())
     {
-        return ctx.begin();
+        const auto * it = ctx.begin();
+        const auto * end = ctx.end();
+        /// Only support {}.
+        if (it != end && *it != '}')
+            throw format_error("invalid format");
+        return it;
     }
 
     template <typename FormatContext>
     auto format(const DB::PageIdV3Internal & value, FormatContext & ctx) const -> decltype(ctx.out())
     {
         return format_to(ctx.out(), "{}.{}", value.high, value.low);
+    }
+};
+template <>
+struct fmt::formatter<DB::PageFileIdAndLevel>
+{
+    static constexpr auto parse(format_parse_context & ctx) -> decltype(ctx.begin())
+    {
+        const auto * it = ctx.begin();
+        const auto * end = ctx.end();
+        /// Only support {}.
+        if (it != end && *it != '}')
+            throw format_error("invalid format");
+        return it;
+    }
+
+    template <typename FormatContext>
+    auto format(const DB::PageFileIdAndLevel & id_lvl, FormatContext & ctx) const -> decltype(ctx.out())
+    {
+        return format_to(ctx.out(), "{}_{}", id_lvl.first, id_lvl.second);
     }
 };

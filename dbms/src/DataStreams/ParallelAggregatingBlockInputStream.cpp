@@ -12,30 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/ClickHouseRevision.h>
+#include <Common/FmtUtils.h>
+#include <DataStreams/IBlockOutputStream.h>
+#include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/MergingAggregatedMemoryEfficientBlockInputStream.h>
-#include <DataStreams/NativeBlockInputStream.h>
 #include <DataStreams/ParallelAggregatingBlockInputStream.h>
-
-
-namespace ProfileEvents
-{
-extern const Event ExternalAggregationMerge;
-}
-
 
 namespace DB
 {
 ParallelAggregatingBlockInputStream::ParallelAggregatingBlockInputStream(
     const BlockInputStreams & inputs,
-    const BlockInputStreamPtr & additional_input_at_end,
+    const BlockInputStreams & additional_inputs_at_end,
     const Aggregator::Params & params_,
     const FileProviderPtr & file_provider_,
     bool final_,
     size_t max_threads_,
     size_t temporary_data_merge_threads_,
     const String & req_id)
-    : log(Logger::get(NAME, req_id))
+    : log(Logger::get(req_id))
     , params(params_)
     , aggregator(params, req_id)
     , file_provider(file_provider_)
@@ -45,11 +39,10 @@ ParallelAggregatingBlockInputStream::ParallelAggregatingBlockInputStream(
     , keys_size(params.keys_size)
     , aggregates_size(params.aggregates_size)
     , handler(*this)
-    , processor(inputs, additional_input_at_end, max_threads, handler, log)
+    , processor(inputs, additional_inputs_at_end, max_threads, handler, log)
 {
     children = inputs;
-    if (additional_input_at_end)
-        children.push_back(additional_input_at_end);
+    children.insert(children.end(), additional_inputs_at_end.begin(), additional_inputs_at_end.end());
 }
 
 
@@ -98,8 +91,6 @@ Block ParallelAggregatingBlockInputStream::readImpl()
                 *  then read and merge them, spending the minimum amount of memory.
                 */
 
-            ProfileEvents::increment(ProfileEvents::ExternalAggregationMerge);
-
             const auto & files = aggregator.getTemporaryFiles();
             BlockInputStreams input_streams;
             for (const auto & file : files.files)
@@ -108,7 +99,7 @@ Block ParallelAggregatingBlockInputStream::readImpl()
                 input_streams.emplace_back(temporary_inputs.back()->block_in);
             }
 
-            LOG_FMT_TRACE(
+            LOG_TRACE(
                 log,
                 "Will merge {} temporary files of size {:.2f} MiB compressed, {:.2f} MiB uncompressed.",
                 files.files.size(),
@@ -132,21 +123,6 @@ Block ParallelAggregatingBlockInputStream::readImpl()
         return res;
 
     return impl->read();
-}
-
-
-ParallelAggregatingBlockInputStream::TemporaryFileStream::TemporaryFileStream(
-    const std::string & path,
-    const FileProviderPtr & file_provider_)
-    : file_provider(file_provider_)
-    , file_in(file_provider, path, EncryptionPath(path, ""))
-    , compressed_in(file_in)
-    , block_in(std::make_shared<NativeBlockInputStream>(compressed_in, ClickHouseRevision::get()))
-{}
-
-ParallelAggregatingBlockInputStream::TemporaryFileStream::~TemporaryFileStream()
-{
-    file_provider->deleteRegularFile(file_in.getFileName(), EncryptionPath(file_in.getFileName(), ""));
 }
 
 void ParallelAggregatingBlockInputStream::Handler::onBlock(Block & block, size_t thread_num)
@@ -203,8 +179,8 @@ void ParallelAggregatingBlockInputStream::Handler::onException(std::exception_pt
     parent.first_exception_index.compare_exchange_strong(old_value, static_cast<Int32>(thread_num), std::memory_order_seq_cst, std::memory_order_relaxed);
 
     if (!parent.executed)
-        /// kill the processor so ExchangeReceiver will be closed
-        parent.cancel(true);
+        /// use cancel instead of kill to avoid too many useless error message
+        parent.cancel(false);
 }
 
 
@@ -216,7 +192,7 @@ void ParallelAggregatingBlockInputStream::execute()
     for (size_t i = 0; i < max_threads; ++i)
         threads_data.emplace_back(keys_size, aggregates_size);
 
-    LOG_FMT_TRACE(log, "Aggregating");
+    LOG_TRACE(log, "Aggregating");
 
     Stopwatch watch;
 
@@ -239,7 +215,7 @@ void ParallelAggregatingBlockInputStream::execute()
     for (size_t i = 0; i < max_threads; ++i)
     {
         size_t rows = many_data[i]->size();
-        LOG_FMT_TRACE(
+        LOG_TRACE(
             log,
             "Aggregated. {} to {} rows (from {:.3f} MiB) in {:.3f} sec. ({:.3f} rows/sec., {:.3f} MiB/sec.)",
             threads_data[i].src_rows,
@@ -252,7 +228,7 @@ void ParallelAggregatingBlockInputStream::execute()
         total_src_rows += threads_data[i].src_rows;
         total_src_bytes += threads_data[i].src_bytes;
     }
-    LOG_FMT_TRACE(
+    LOG_TRACE(
         log,
         "Total aggregated. {} rows (from {:.3f} MiB) in {:.3f} sec. ({:.3f} rows/sec., {:.3f} MiB/sec.)",
         total_src_rows,
@@ -272,6 +248,11 @@ void ParallelAggregatingBlockInputStream::execute()
             threads_data[0].aggregate_columns,
             threads_data[0].local_delta_memory,
             no_more_keys);
+}
+
+void ParallelAggregatingBlockInputStream::appendInfo(FmtBuffer & buffer) const
+{
+    buffer.fmtAppend(", max_threads: {}, final: {}", max_threads, final ? "true" : "false");
 }
 
 } // namespace DB

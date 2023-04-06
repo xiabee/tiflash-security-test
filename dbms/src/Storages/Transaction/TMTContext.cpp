@@ -22,10 +22,12 @@
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/RegionExecutionResult.h>
 #include <Storages/Transaction/RegionRangeKeys.h>
-#include <Storages/Transaction/SchemaSyncer.h>
 #include <Storages/Transaction/TMTContext.h>
-#include <Storages/Transaction/TiDBSchemaSyncer.h>
+#include <TiDB/Schema/SchemaSyncer.h>
+#include <TiDB/Schema/TiDBSchemaSyncer.h>
 #include <pingcap/pd/MockPDClient.h>
+
+#include <memory>
 
 namespace DB
 {
@@ -36,6 +38,30 @@ extern const uint64_t DEFAULT_WAIT_INDEX_TIMEOUT_MS = 5 * 60 * 1000;
 
 const int64_t DEFAULT_WAIT_REGION_READY_TIMEOUT_SEC = 20 * 60;
 
+const int64_t DEFAULT_READ_INDEX_WORKER_TICK_MS = 10;
+
+static SchemaSyncerPtr createSchemaSyncer(bool exist_pd_addr, bool for_unit_test, const KVClusterPtr & cluster)
+{
+    if (exist_pd_addr)
+    {
+        // product env
+        // Get DBInfo/TableInfo from TiKV, and create table with names `t_${table_id}`
+        return std::static_pointer_cast<SchemaSyncer>(
+            std::make_shared<TiDBSchemaSyncer</*mock_getter*/ false, /*mock_mapper*/ false>>(cluster));
+    }
+    else if (!for_unit_test)
+    {
+        // mock test
+        // Get DBInfo/TableInfo from MockTiDB, and create table with its display names
+        return std::static_pointer_cast<SchemaSyncer>(
+            std::make_shared<TiDBSchemaSyncer</*mock_getter*/ true, /*mock_mapper*/ true>>(cluster));
+    }
+    // unit test.
+    // Get DBInfo/TableInfo from MockTiDB, but create table with names `t_${table_id}`
+    return std::static_pointer_cast<SchemaSyncer>(
+        std::make_shared<TiDBSchemaSyncer</*mock_getter*/ true, /*mock_mapper*/ false>>(cluster));
+}
+
 TMTContext::TMTContext(Context & context_, const TiFlashRaftConfig & raft_config, const pingcap::ClusterConfig & cluster_config)
     : context(context_)
     , kvstore(std::make_shared<KVStore>(context, raft_config.snapshot_apply_method))
@@ -45,22 +71,23 @@ TMTContext::TMTContext(Context & context_, const TiFlashRaftConfig & raft_config
     , cluster(raft_config.pd_addrs.empty() ? std::make_shared<pingcap::kv::Cluster>()
                                            : std::make_shared<pingcap::kv::Cluster>(raft_config.pd_addrs, cluster_config))
     , ignore_databases(raft_config.ignore_databases)
-    , schema_syncer(raft_config.pd_addrs.empty()
-                        ? std::static_pointer_cast<SchemaSyncer>(std::make_shared<TiDBSchemaSyncer</*mock*/ true>>(cluster))
-                        : std::static_pointer_cast<SchemaSyncer>(std::make_shared<TiDBSchemaSyncer</*mock*/ false>>(cluster)))
+    , schema_syncer(createSchemaSyncer(!raft_config.pd_addrs.empty(), raft_config.for_unit_test, cluster))
     , mpp_task_manager(std::make_shared<MPPTaskManager>(
           std::make_unique<MinTSOScheduler>(
               context.getSettingsRef().task_scheduler_thread_soft_limit,
-              context.getSettingsRef().task_scheduler_thread_hard_limit)))
+              context.getSettingsRef().task_scheduler_thread_hard_limit,
+              context.getSettingsRef().task_scheduler_active_set_soft_limit)))
     , engine(raft_config.engine)
     , replica_read_max_thread(1)
     , batch_read_index_timeout_ms(DEFAULT_BATCH_READ_INDEX_TIMEOUT_MS)
+    , wait_index_timeout_ms(DEFAULT_WAIT_INDEX_TIMEOUT_MS)
+    , read_index_worker_tick_ms(DEFAULT_READ_INDEX_WORKER_TICK_MS)
     , wait_region_ready_timeout_sec(DEFAULT_WAIT_REGION_READY_TIMEOUT_SEC)
 {}
 
-void TMTContext::restore(const TiFlashRaftProxyHelper * proxy_helper)
+void TMTContext::restore(PathPool & path_pool, const TiFlashRaftProxyHelper * proxy_helper)
 {
-    kvstore->restore(proxy_helper);
+    kvstore->restore(path_pool, proxy_helper);
     region_table.restore();
     store_status = StoreStatus::Ready;
 
@@ -147,12 +174,6 @@ SchemaSyncerPtr TMTContext::getSchemaSyncer() const
     return schema_syncer;
 }
 
-void TMTContext::setSchemaSyncer(SchemaSyncerPtr rhs)
-{
-    std::lock_guard lock(mutex);
-    schema_syncer = rhs;
-}
-
 pingcap::pd::ClientPtr TMTContext::getPDClient() const
 {
     return cluster->pd_client;
@@ -192,10 +213,10 @@ void TMTContext::reloadConfig(const Poco::Util::AbstractConfiguration & config)
             t = t >= 0 ? t : std::numeric_limits<int64_t>::max(); // set -1 to wait infinitely
             t;
         });
-        read_index_worker_tick_ms = config.getUInt64(READ_INDEX_WORKER_TICK_MS, 10 /*10ms*/);
+        read_index_worker_tick_ms = config.getUInt64(READ_INDEX_WORKER_TICK_MS, DEFAULT_READ_INDEX_WORKER_TICK_MS);
     }
     {
-        LOG_FMT_INFO(
+        LOG_INFO(
             &Poco::Logger::root(),
             "read-index max thread num: {}, timeout: {}ms; wait-index timeout: {}ms; wait-region-ready timeout: {}s; read-index-worker-tick: {}ms",
             replicaReadMaxThread(),

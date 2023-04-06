@@ -42,7 +42,6 @@ inline static pid_t getTid()
 
 namespace CurrentMetrics
 {
-extern const Metric BackgroundPoolTask;
 extern const Metric MemoryTrackingInBackgroundProcessingPool;
 } // namespace CurrentMetrics
 
@@ -88,7 +87,7 @@ BackgroundProcessingPool::BackgroundProcessingPool(int size_, std::string thread
     , thread_prefix(thread_prefix_)
     , thread_ids_counter(size_)
 {
-    LOG_FMT_INFO(&Poco::Logger::get("BackgroundProcessingPool"), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
+    LOG_INFO(Logger::get(), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
 
     threads.resize(size);
     for (size_t i = 0; i < size; ++i)
@@ -155,9 +154,10 @@ void BackgroundProcessingPool::threadFunction(size_t thread_idx)
         addThreadId(getTid());
     }
 
-    MemoryTracker memory_tracker;
-    memory_tracker.setMetric(CurrentMetrics::MemoryTrackingInBackgroundProcessingPool);
-    current_memory_tracker = &memory_tracker;
+    auto memory_tracker = MemoryTracker::create();
+    memory_tracker->setNext(root_of_non_query_mem_trackers.get());
+    memory_tracker->setMetric(CurrentMetrics::MemoryTrackingInBackgroundProcessingPool);
+    current_memory_tracker = memory_tracker.get();
 
     pcg64 rng(randomSeed());
     std::this_thread::sleep_for(std::chrono::duration<double>(std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
@@ -217,8 +217,6 @@ void BackgroundProcessingPool::threadFunction(size_t thread_idx)
                 continue;
 
             {
-                CurrentMetrics::Increment metric_increment{CurrentMetrics::BackgroundPoolTask};
-
                 bool done_work = false;
                 if (!task->multi)
                 {
@@ -286,7 +284,7 @@ std::vector<pid_t> BackgroundProcessingPool::getThreadIds()
     std::lock_guard lock(thread_ids_mtx);
     if (thread_ids.size() != size)
     {
-        LOG_FMT_ERROR(&Poco::Logger::get("BackgroundProcessingPool"), "thread_ids.size is {}, but {} is required", thread_ids.size(), size);
+        LOG_ERROR(Logger::get(), "thread_ids.size is {}, but {} is required", thread_ids.size(), size);
         throw Exception("Background threads' number not match");
     }
     return thread_ids;

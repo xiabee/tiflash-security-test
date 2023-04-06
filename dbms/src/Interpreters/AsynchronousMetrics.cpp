@@ -31,16 +31,6 @@
 
 #include <chrono>
 
-#if USE_TCMALLOC
-#include <gperftools/malloc_extension.h>
-
-/// Initializing malloc extension in global constructor as required.
-struct MallocExtensionInitializer
-{
-    MallocExtensionInitializer() { MallocExtension::Initialize(); }
-} malloc_extension_initializer;
-#endif
-
 #if USE_JEMALLOC
 #include <jemalloc/jemalloc.h>
 #endif
@@ -143,9 +133,9 @@ FileUsageStatistics AsynchronousMetrics::getPageStorageFileUsage()
         const auto meta_usage = global_storage_pool->meta_storage->getFileUsageStatistics();
         const auto data_usage = global_storage_pool->data_storage->getFileUsageStatistics();
 
-        usage.total_file_num += log_usage.total_file_num + meta_usage.total_file_num + data_usage.total_file_num;
-        usage.total_disk_size += log_usage.total_disk_size + meta_usage.total_disk_size + data_usage.total_disk_size;
-        usage.total_valid_size += log_usage.total_valid_size + meta_usage.total_valid_size + data_usage.total_valid_size;
+        usage.merge(log_usage)
+            .merge(meta_usage)
+            .merge(data_usage);
     }
     return usage;
 }
@@ -187,11 +177,14 @@ void AsynchronousMetrics::update()
 
                 if (auto dt_storage = std::dynamic_pointer_cast<StorageDeltaMerge>(table); dt_storage)
                 {
-                    auto stat = dt_storage->getStore()->getStat();
-                    calculateMax(max_dt_stable_oldest_snapshot_lifetime, stat.storage_stable_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_delta_oldest_snapshot_lifetime, stat.storage_delta_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_meta_oldest_snapshot_lifetime, stat.storage_meta_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_background_tasks_length, stat.background_tasks_length);
+                    if (auto store = dt_storage->getStoreIfInited(); store)
+                    {
+                        auto stat = store->getStoreStats();
+                        calculateMax(max_dt_stable_oldest_snapshot_lifetime, stat.storage_stable_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_delta_oldest_snapshot_lifetime, stat.storage_delta_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_meta_oldest_snapshot_lifetime, stat.storage_meta_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_background_tasks_length, stat.background_tasks_length);
+                    }
                 }
             }
         }
@@ -207,33 +200,10 @@ void AsynchronousMetrics::update()
         set("BlobFileNums", usage.total_file_num);
         set("BlobDiskBytes", usage.total_disk_size);
         set("BlobValidBytes", usage.total_valid_size);
+        set("LogNums", usage.total_log_file_num);
+        set("LogDiskBytes", usage.total_log_disk_size);
+        set("PagesInMem", usage.num_pages);
     }
-
-#if USE_TCMALLOC
-    {
-        /// tcmalloc related metrics. Remove if you switch to different allocator.
-
-        MallocExtension & malloc_extension = *MallocExtension::instance();
-
-        auto malloc_metrics = {
-            "generic.current_allocated_bytes",
-            "generic.heap_size",
-            "tcmalloc.current_total_thread_cache_bytes",
-            "tcmalloc.central_cache_free_bytes",
-            "tcmalloc.transfer_cache_free_bytes",
-            "tcmalloc.thread_cache_free_bytes",
-            "tcmalloc.pageheap_free_bytes",
-            "tcmalloc.pageheap_unmapped_bytes",
-        };
-
-        for (auto malloc_metric : malloc_metrics)
-        {
-            size_t value = 0;
-            if (malloc_extension.GetNumericProperty(malloc_metric, &value))
-                set(malloc_metric, value);
-        }
-    }
-#endif
 
 #if USE_MIMALLOC
 #define MI_STATS_SET(X) set("mimalloc." #X, X)

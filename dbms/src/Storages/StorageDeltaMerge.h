@@ -14,12 +14,13 @@
 
 #pragma once
 
+#include <Common/Logger.h>
 #include <Core/Defines.h>
 #include <Core/SortDescription.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
-#include <Storages/DeltaMerge/RowKeyRange.h>
+#include <Storages/DeltaMerge/Filter/RSOperator.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
 #include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
@@ -27,18 +28,17 @@
 
 #include <ext/shared_ptr_helper.h>
 
-namespace Poco
-{
-class Logger;
-} // namespace Poco
-
 namespace DB
 {
 namespace DM
 {
 struct RowKeyRange;
+struct RowKeyValue;
 class DeltaMergeStore;
 using DeltaMergeStorePtr = std::shared_ptr<DeltaMergeStore>;
+using RowKeyRanges = std::vector<RowKeyRange>;
+struct ExternalDTFileInfo;
+struct GCOptions;
 } // namespace DM
 
 class StorageDeltaMerge
@@ -66,6 +66,16 @@ public:
         size_t max_block_size,
         unsigned num_streams) override;
 
+    /// use scan_context to record the performance metrics during read.
+    BlockInputStreams read(
+        const Names & column_names,
+        const SelectQueryInfo & query_info,
+        const Context & context,
+        QueryProcessingStage::Enum & processed_stage,
+        size_t max_block_size,
+        unsigned num_streams,
+        const DM::ScanContextPtr & scan_context);
+
     BlockOutputStreamPtr write(const ASTPtr & query, const Settings & settings) override;
 
     /// Write from raft layer.
@@ -73,7 +83,7 @@ public:
 
     void flushCache(const Context & context) override;
 
-    void flushCache(const Context & context, const DM::RowKeyRange & range_to_flush) override;
+    bool flushCache(const Context & context, const DM::RowKeyRange & range_to_flush, bool try_until_succeed) override;
 
     /// Merge delta into the stable layer for all segments.
     ///
@@ -85,17 +95,17 @@ public:
     /// If there is no segment found by the start key, nullopt is returned.
     ///
     /// This function is called when using `ALTER TABLE [TABLE] COMPACT ...` from TiDB.
-    std::optional<DM::RowKeyRange> mergeDeltaBySegment(const Context & context, const DM::RowKeyValue & start_key, const DM::DeltaMergeStore::TaskRunThread run_thread);
+    std::optional<DM::RowKeyRange> mergeDeltaBySegment(const Context & context, const DM::RowKeyValue & start_key);
 
     void deleteRange(const DM::RowKeyRange & range_to_delete, const Settings & settings);
 
     void ingestFiles(
         const DM::RowKeyRange & range,
-        const std::vector<UInt64> & file_ids,
+        const std::vector<DM::ExternalDTFileInfo> & external_files,
         bool clear_data_in_range,
         const Settings & settings);
 
-    UInt64 onSyncGc(Int64) override;
+    UInt64 onSyncGc(Int64, const DM::GCOptions &) override;
 
     void rename(
         const String & new_path_to_db,
@@ -146,6 +156,8 @@ public:
     {
         return getAndMaybeInitStore();
     }
+
+    DM::DeltaMergeStorePtr getStoreIfInited();
 
     bool isCommonHandle() const override { return is_common_handle; }
 
@@ -201,6 +213,16 @@ private:
     bool dataDirExist();
     void shutdownImpl();
 
+    /// Get Rough set filter from query
+    DM::RSOperatorPtr parseRoughSetFilter(const SelectQueryInfo & query_info,
+                                          const DM::ColumnDefines & columns_to_read,
+                                          const Context & context,
+                                          const LoggerPtr & tracing_logger);
+
+    DM::RowKeyRanges parseMvccQueryInfo(const DB::MvccQueryInfo & mvcc_query_info,
+                                        unsigned num_streams,
+                                        const Context & context,
+                                        const LoggerPtr & tracing_logger);
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #endif

@@ -15,10 +15,11 @@
 #pragma once
 
 #include <Common/UnaryCallback.h>
+#include <Common/grpcpp.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
 #include <Flash/Mpp/MPPTaskManager.h>
 #include <common/types.h>
-#include <grpc++/grpc++.h>
+#include <grpcpp/completion_queue.h>
 #include <kvproto/mpp.pb.h>
 #include <pingcap/kv/Cluster.h>
 #include <tipb/executor.pb.h>
@@ -28,15 +29,16 @@
 namespace DB
 {
 using MPPDataPacket = mpp::MPPDataPacket;
-using MPPDataPacketPtr = std::shared_ptr<MPPDataPacket>;
-using MPPDataPacketPtrs = std::vector<MPPDataPacketPtr>;
+using TrackedMppDataPacketPtr = std::shared_ptr<DB::TrackedMppDataPacket>;
+using TrackedMPPDataPacketPtrs = std::vector<TrackedMppDataPacketPtr>;
 
 class ExchangePacketReader
 {
 public:
     virtual ~ExchangePacketReader() = default;
-    virtual bool read(MPPDataPacketPtr & packet) = 0;
-    virtual ::grpc::Status finish() = 0;
+    virtual bool read(TrackedMppDataPacketPtr & packet) = 0;
+    virtual grpc::Status finish() = 0;
+    virtual void cancel(const String & reason) = 0;
 };
 using ExchangePacketReaderPtr = std::shared_ptr<ExchangePacketReader>;
 
@@ -45,7 +47,7 @@ class AsyncExchangePacketReader
 public:
     virtual ~AsyncExchangePacketReader() = default;
     virtual void init(UnaryCallback<bool> * callback) = 0;
-    virtual void read(MPPDataPacketPtr & packet, UnaryCallback<bool> * callback) = 0;
+    virtual void read(TrackedMppDataPacketPtr & packet, UnaryCallback<bool> * callback) = 0;
     virtual void finish(::grpc::Status & status, UnaryCallback<bool> * callback) = 0;
 };
 using AsyncExchangePacketReaderPtr = std::shared_ptr<AsyncExchangePacketReader>;
@@ -53,7 +55,7 @@ using AsyncExchangePacketReaderPtr = std::shared_ptr<AsyncExchangePacketReader>;
 struct ExchangeRecvRequest
 {
     Int64 source_index = -1;
-    Int64 send_task_id = -2; //Do not use -1 as default, since -1 has special meaning to show it's the root sender from the TiDB.
+    Int64 send_task_id = -2; // Do not use -1 as default, since -1 has special meaning to show it's the root sender from the TiDB.
     Int64 recv_task_id = -2;
     std::shared_ptr<mpp::EstablishMPPConnectionRequest> req;
     bool is_local = false;
@@ -64,7 +66,7 @@ struct ExchangeRecvRequest
 class GRPCReceiverContext
 {
 public:
-    using Status = ::grpc::Status;
+    using Status = grpc::Status;
     using Request = ExchangeRecvRequest;
     using Reader = ExchangePacketReader;
     using AsyncReader = AsyncExchangePacketReader;
@@ -86,11 +88,12 @@ public:
     void makeAsyncReader(
         const ExchangeRecvRequest & request,
         AsyncExchangePacketReaderPtr & reader,
+        grpc::CompletionQueue * cq,
         UnaryCallback<bool> * callback) const;
 
     static Status getStatusOK()
     {
-        return ::grpc::Status::OK;
+        return grpc::Status::OK;
     }
 
     void fillSchema(DAGSchema & schema) const;

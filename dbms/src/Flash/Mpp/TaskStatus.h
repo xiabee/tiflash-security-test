@@ -24,7 +24,6 @@ enum TaskStatus
     RUNNING,
     FINISHED,
     CANCELLED,
+    FAILED,
 };
-
-StringRef taskStatusToString(const TaskStatus & status);
 } // namespace DB

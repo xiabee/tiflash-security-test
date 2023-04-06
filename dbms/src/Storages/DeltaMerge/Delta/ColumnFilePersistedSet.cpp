@@ -64,28 +64,30 @@ void ColumnFilePersistedSet::checkColumnFiles(const ColumnFilePersisteds & new_c
         new_deletes += file->isDeleteRange();
     }
 
-    if (unlikely(new_rows != rows || new_deletes != deletes))
-    {
-        LOG_FMT_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Current column files: {}, new column files: {}.", //
+    RUNTIME_CHECK_MSG(new_rows == rows && new_deletes == deletes,
+                      "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Current column files: {}, new column files: {}.", //
                       new_rows,
                       new_deletes,
                       rows.load(),
                       deletes.load(),
                       columnFilesToString(persisted_files),
                       columnFilesToString(new_column_files));
-        throw Exception("Rows and deletes check failed.", ErrorCodes::LOGICAL_ERROR);
-    }
 }
 
-ColumnFilePersistedSet::ColumnFilePersistedSet(PageId metadata_id_, const ColumnFilePersisteds & persisted_column_files)
+ColumnFilePersistedSet::ColumnFilePersistedSet( //
+    PageId metadata_id_,
+    const ColumnFilePersisteds & persisted_column_files)
     : metadata_id(metadata_id_)
     , persisted_files(persisted_column_files)
-    , log(&Poco::Logger::get("ColumnFilePersistedSet"))
+    , log(Logger::get())
 {
     updateColumnFileStats();
 }
 
-ColumnFilePersistedSetPtr ColumnFilePersistedSet::restore(DMContext & context, const RowKeyRange & segment_range, PageId id)
+ColumnFilePersistedSetPtr ColumnFilePersistedSet::restore( //
+    DMContext & context,
+    const RowKeyRange & segment_range,
+    PageId id)
 {
     Page page = context.storage_pool.metaReader()->read(id);
     ReadBufferFromMemory buf(page.data.begin(), page.data.size());
@@ -115,19 +117,30 @@ BlockPtr ColumnFilePersistedSet::getLastSchema()
 }
 
 
-ColumnFilePersisteds ColumnFilePersistedSet::checkHeadAndCloneTail(DMContext & context,
-                                                                   const RowKeyRange & target_range,
-                                                                   const ColumnFiles & head_column_files,
-                                                                   WriteBatches & wbs) const
+ColumnFilePersisteds ColumnFilePersistedSet::diffColumnFiles(const ColumnFiles & previous_column_files) const
 {
-    auto it_1 = head_column_files.begin();
+    // It should not be not possible that files in the snapshots are removed when calling this
+    // function. So we simply expect there are more column files now.
+    // Major compaction and minor compaction are segment updates, which should be blocked by
+    // the for_update snapshot.
+    // TODO: We'd better enforce user to specify a for_update snapshot in the args, to ensure
+    //       that this function is called under a for_update snapshot context.
+    RUNTIME_CHECK(previous_column_files.size() <= getColumnFileCount());
+
+    auto it_1 = previous_column_files.begin();
     auto it_2 = persisted_files.begin();
     bool check_success = true;
-    if (likely(head_column_files.size() <= persisted_files_count.load()))
+    if (likely(previous_column_files.size() <= persisted_files_count.load()))
     {
-        while (it_1 != head_column_files.end() && it_2 != persisted_files.end())
+        while (it_1 != previous_column_files.end() && it_2 != persisted_files.end())
         {
-            if ((*it_1)->getId() != (*it_2)->getId() || (*it_1)->getRows() != (*it_2)->getRows())
+            // We allow passing unflushed memtable files to `previous_column_files`, these heads will be skipped anyway.
+            if (!(*it_2)->mayBeFlushedFrom(&(**it_1)) && !(*it_2)->isSame(&(**it_1)))
+            {
+                check_success = false;
+                break;
+            }
+            if ((*it_1)->getRows() != (*it_2)->getRows() || (*it_1)->getBytes() != (*it_2)->getBytes())
             {
                 check_success = false;
                 break;
@@ -143,54 +156,19 @@ ColumnFilePersisteds ColumnFilePersistedSet::checkHeadAndCloneTail(DMContext & c
 
     if (unlikely(!check_success))
     {
-        LOG_FMT_ERROR(log, "{}, Delta Check head failed, unexpected size. head column files: {}, persisted column files: {}", info(), columnFilesToString(head_column_files), detailInfo());
+        LOG_ERROR(log, "{}, Delta Check head failed, unexpected size. head column files: {}, persisted column files: {}", info(), columnFilesToString(previous_column_files), detailInfo());
         throw Exception("Check head failed, unexpected size", ErrorCodes::LOGICAL_ERROR);
     }
 
-    ColumnFilePersisteds cloned_tail;
+    ColumnFilePersisteds tail;
     while (it_2 != persisted_files.end())
     {
         const auto & column_file = *it_2;
-        if (auto * d_file = column_file->tryToDeleteRange(); d_file)
-        {
-            auto new_dr = d_file->getDeleteRange().shrink(target_range);
-            if (!new_dr.none())
-            {
-                // Only use the available delete_range column file.
-                cloned_tail.push_back(d_file->cloneWith(new_dr));
-            }
-        }
-        else if (auto * t_file = column_file->tryToTinyFile(); t_file)
-        {
-            // Use a newly created page_id to reference the data page_id of current column file.
-            PageId new_data_page_id = context.storage_pool.newLogPageId();
-            wbs.log.putRefPage(new_data_page_id, t_file->getDataPageId());
-            auto new_column_file = t_file->cloneWith(new_data_page_id);
-            cloned_tail.push_back(new_column_file);
-        }
-        else if (auto * b_file = column_file->tryToBigFile(); b_file)
-        {
-            auto delegator = context.path_pool.getStableDiskDelegator();
-            auto new_page_id = context.storage_pool.newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
-            // Note that the file id may has already been mark as deleted. We must
-            // create a reference to the page id itself instead of create a reference
-            // to the file id.
-            wbs.data.putRefPage(new_page_id, b_file->getDataPageId());
-            auto file_id = b_file->getFile()->fileId();
-            auto file_parent_path = delegator.getDTFilePath(file_id);
-            auto new_file = DMFile::restore(context.db_context.getFileProvider(), file_id, /* page_id= */ new_page_id, file_parent_path, DMFile::ReadMetaMode::all());
-
-            auto new_big_file = b_file->cloneWith(context, new_file, target_range);
-            cloned_tail.push_back(new_big_file);
-        }
-        else
-        {
-            throw Exception("Meet unknown type of column file", ErrorCodes::LOGICAL_ERROR);
-        }
+        tail.push_back(column_file);
         it_2++;
     }
 
-    return cloned_tail;
+    return tail;
 }
 
 size_t ColumnFilePersistedSet::getTotalCacheRows() const
@@ -239,7 +217,7 @@ bool ColumnFilePersistedSet::checkAndIncreaseFlushVersion(size_t task_flush_vers
 {
     if (task_flush_version != flush_version)
     {
-        LOG_FMT_DEBUG(log, "{} Stop flush because structure got updated", simpleInfo());
+        LOG_DEBUG(log, "{} Stop flush because structure got updated", simpleInfo());
         return false;
     }
     flush_version += 1;
@@ -264,7 +242,7 @@ bool ColumnFilePersistedSet::appendPersistedColumnFiles(const ColumnFilePersiste
     /// Commit updates in memory.
     persisted_files.swap(new_persisted_files);
     updateColumnFileStats();
-    LOG_FMT_DEBUG(log, "{}, after append {} column files, persisted column files: {}", info(), column_files.size(), detailInfo());
+    LOG_DEBUG(log, "{}, after append {} column files, persisted column files: {}", info(), column_files.size(), detailInfo());
 
     return true;
 }
@@ -325,11 +303,11 @@ bool ColumnFilePersistedSet::installCompactionResults(const MinorCompactionPtr &
 {
     if (compaction->getCompactionVersion() != minor_compaction_version)
     {
-        LOG_FMT_WARNING(log, "Structure has been updated during compact");
+        LOG_WARNING(log, "Structure has been updated during compact");
         return false;
     }
     minor_compaction_version += 1;
-    LOG_FMT_DEBUG(log, "{}, before commit compaction, persisted column files: {}", info(), detailInfo());
+    LOG_DEBUG(log, "{}, before commit compaction, persisted column files: {}", info(), detailInfo());
     ColumnFilePersisteds new_persisted_files;
     for (const auto & task : compaction->getTasks())
     {
@@ -367,7 +345,7 @@ bool ColumnFilePersistedSet::installCompactionResults(const MinorCompactionPtr &
     /// Commit updates in memory.
     persisted_files.swap(new_persisted_files);
     updateColumnFileStats();
-    LOG_FMT_DEBUG(log, "{}, after commit compaction, persisted column files: {}", info(), detailInfo());
+    LOG_DEBUG(log, "{}, after commit compaction, persisted column files: {}", info(), detailInfo());
 
     return true;
 }
@@ -399,7 +377,7 @@ ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const StorageSna
 
     if (unlikely(total_rows != rows || total_deletes != deletes))
     {
-        LOG_FMT_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}].", total_rows, total_deletes, rows.load(), deletes.load());
+        LOG_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}].", total_rows, total_deletes, rows.load(), deletes.load());
         throw Exception("Rows and deletes check failed.", ErrorCodes::LOGICAL_ERROR);
     }
 

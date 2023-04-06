@@ -24,9 +24,6 @@ target_link_libraries (sip_hash_perf clickhouse_common_io)
 add_executable (auto_array auto_array.cpp)
 target_link_libraries (auto_array clickhouse_common_io)
 
-add_executable (lru_cache lru_cache.cpp)
-target_link_libraries (lru_cache clickhouse_common_io)
-
 add_executable (hash_table hash_table.cpp)
 target_link_libraries (hash_table clickhouse_common_io)
 
@@ -98,6 +95,6 @@ add_executable (allocator_perf allocator_perf.cpp)
 target_link_libraries (allocator_perf clickhouse_common_io)
 
 add_executable(bench_common
-    bench_unified_log_formatter.cpp
+    bench_logger.cpp
 )
 target_link_libraries(bench_common benchmark::benchmark_main clickhouse_common_io)

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/Exception.h>
+#include <Core/ColumnsWithTypeAndName.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileBig.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
@@ -23,9 +25,12 @@
 #include <Storages/DeltaMerge/File/DMFileWriter.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
+#include <Storages/Transaction/Types.h>
 #include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/FunctionTestUtils.h>
+#include <TestUtils/TiFlashTestBasic.h>
 
+#include <ext/scope_guard.h>
 #include <vector>
 
 namespace DB
@@ -54,7 +59,6 @@ public:
             *db_context,
             *path_pool,
             *storage_pool,
-            0,
             /*min_version_*/ 0,
             settings.not_compress_columns,
             false,
@@ -77,6 +81,92 @@ protected:
     String parent_path;
     ColumnCachePtr column_cache;
 };
+
+TEST_F(ColumnFileTest, ColumnFileBigRead)
+try
+{
+    auto table_columns = DMTestEnv::getDefaultColumns();
+    auto dm_file = DMFile::create(1, parent_path, false, std::make_optional<DMChecksumConfig>());
+    const size_t num_rows_write_per_batch = 8192;
+    const size_t batch_num = 3;
+    const UInt64 tso_value = 100;
+    {
+        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *table_columns);
+        stream->writePrefix();
+        for (size_t i = 0; i < batch_num; i += 1)
+        {
+            Block block = DMTestEnv::prepareSimpleWriteBlock(num_rows_write_per_batch * i, num_rows_write_per_batch * (i + 1), false, 100);
+            stream->write(block, {});
+        }
+        stream->writeSuffix();
+    }
+
+    // test read
+    ColumnFileBig column_file_big(dmContext(), dm_file, RowKeyRange::newAll(false, 1));
+    ColumnDefinesPtr column_defines = std::make_shared<ColumnDefines>();
+    column_defines->emplace_back(getExtraHandleColumnDefine(/*is_common_handle=*/false));
+    column_defines->emplace_back(getVersionColumnDefine());
+    auto column_file_big_reader = column_file_big.getReader(dmContext(), /*storage_snap*/ nullptr, column_defines);
+    {
+        size_t num_rows_read = 0;
+        while (Block in = column_file_big_reader->readNextBlock())
+        {
+            ASSERT_EQ(in.columns(), column_defines->size());
+            ASSERT_TRUE(in.has(EXTRA_HANDLE_COLUMN_NAME));
+            ASSERT_TRUE(in.has(VERSION_COLUMN_NAME));
+            auto & pk_column = in.getByName(EXTRA_HANDLE_COLUMN_NAME).column;
+            for (size_t i = 0; i < pk_column->size(); i++)
+            {
+                ASSERT_EQ(pk_column->getInt(i), num_rows_read + i);
+            }
+            auto & version_column = in.getByName(VERSION_COLUMN_NAME).column;
+            for (size_t i = 0; i < version_column->size(); i++)
+            {
+                ASSERT_EQ(version_column->getInt(i), tso_value);
+            }
+            num_rows_read += in.rows();
+        }
+        ASSERT_EQ(num_rows_read, num_rows_write_per_batch * batch_num);
+    }
+
+    {
+        ColumnDefinesPtr column_defines_pk_and_del = std::make_shared<ColumnDefines>();
+        column_defines_pk_and_del->emplace_back(getExtraHandleColumnDefine(/*is_common_handle=*/false));
+        column_defines_pk_and_del->emplace_back(getTagColumnDefine());
+        auto column_file_big_reader2 = column_file_big_reader->createNewReader(column_defines_pk_and_del);
+        size_t num_rows_read = 0;
+        while (Block in = column_file_big_reader2->readNextBlock())
+        {
+            ASSERT_EQ(in.columns(), column_defines_pk_and_del->size());
+            ASSERT_TRUE(in.has(EXTRA_HANDLE_COLUMN_NAME));
+            ASSERT_TRUE(in.has(TAG_COLUMN_NAME));
+            auto & pk_column = in.getByName(EXTRA_HANDLE_COLUMN_NAME).column;
+            for (size_t i = 0; i < pk_column->size(); i++)
+            {
+                ASSERT_EQ(pk_column->getInt(i), num_rows_read + i);
+            }
+            auto & del_column = in.getByName(TAG_COLUMN_NAME).column;
+            for (size_t i = 0; i < del_column->size(); i++)
+            {
+                ASSERT_EQ(del_column->getInt(i), 0);
+            }
+            num_rows_read += in.rows();
+        }
+        ASSERT_EQ(num_rows_read, num_rows_write_per_batch * batch_num);
+    }
+
+    {
+        auto column_file_big_reader3 = column_file_big_reader->createNewReader(table_columns);
+        size_t num_rows_read = 0;
+        while (Block in = column_file_big_reader3->readNextBlock())
+        {
+            ASSERT_EQ(in.columns(), table_columns->size());
+            num_rows_read += in.rows();
+        }
+        ASSERT_EQ(num_rows_read, num_rows_write_per_batch * batch_num);
+    }
+}
+CATCH
 
 TEST_F(ColumnFileTest, SerializeColumnFilePersisted)
 try
@@ -102,6 +192,53 @@ try
         ASSERT_EQ(column_file_persisteds.size(), 5);
         ASSERT_EQ(column_file_persisteds[0]->tryToTinyFile()->getSchema(), column_file_persisteds[2]->tryToTinyFile()->getSchema());
         ASSERT_EQ(column_file_persisteds[2]->tryToTinyFile()->getSchema(), column_file_persisteds[4]->tryToTinyFile()->getSchema());
+    }
+}
+CATCH
+
+TEST_F(ColumnFileTest, SerializeEmptyBlock)
+try
+{
+    size_t num_rows_write = 0;
+    Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
+    WriteBatches wbs(dmContext().storage_pool);
+    EXPECT_THROW(ColumnFileTiny::writeColumnFile(dmContext(), block, 0, num_rows_write, wbs), DB::Exception);
+}
+CATCH
+
+TEST_F(ColumnFileTest, ReadColumns)
+try
+{
+    size_t num_rows_write = 10;
+    Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
+    ColumnFileTinyPtr cf;
+    {
+        WriteBatches wbs(dmContext().storage_pool);
+        cf = ColumnFileTiny::writeColumnFile(dmContext(), block, 0, num_rows_write, wbs);
+        wbs.writeAll();
+    }
+    auto storage_snap = std::make_shared<StorageSnapshot>(dmContext().storage_pool, nullptr, "", true);
+
+    {
+        // Read columns exactly the same as we have written
+        auto columns_to_read = std::make_shared<ColumnDefines>(getColumnDefinesFromBlock(block));
+        auto reader = cf->getReader(dmContext(), storage_snap, columns_to_read);
+        auto block_read = reader->readNextBlock();
+        ASSERT_BLOCK_EQ(block_read, block);
+    }
+
+    {
+        // Only read with a column that is not exist in ColumnFileTiny
+        ColumnID added_colid = 100;
+        String added_colname = "added_col";
+        auto columns_to_read = std::make_shared<ColumnDefines>(ColumnDefines{ColumnDefine(added_colid, added_colname, typeFromString("Int64"))});
+        auto reader = cf->getReader(dmContext(), storage_snap, columns_to_read);
+        auto block_read = reader->readNextBlock();
+        ASSERT_COLUMNS_EQ_R(
+            ColumnsWithTypeAndName({
+                createColumn<Int64>(std::vector<Int64>(num_rows_write, 0)),
+            }),
+            block_read.getColumnsWithTypeAndName());
     }
 }
 CATCH

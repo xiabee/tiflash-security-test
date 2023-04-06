@@ -19,13 +19,6 @@
 #include <IO/CompressedWriteBuffer.h>
 #include <IO/WriteBufferFromFile.h>
 
-
-namespace ProfileEvents
-{
-extern const Event ExternalSortWritePart;
-extern const Event ExternalSortMerge;
-} // namespace ProfileEvents
-
 namespace DB
 {
 /** Remove constant columns from block.
@@ -77,7 +70,7 @@ static void enrichBlockWithConstants(Block & block, const Block & header)
 
 MergeSortingBlockInputStream::MergeSortingBlockInputStream(
     const BlockInputStreamPtr & input,
-    SortDescription & description_,
+    const SortDescription & description_,
     size_t max_merged_block_size_,
     size_t limit_,
     size_t max_bytes_before_external_sort_,
@@ -88,7 +81,7 @@ MergeSortingBlockInputStream::MergeSortingBlockInputStream(
     , limit(limit_)
     , max_bytes_before_external_sort(max_bytes_before_external_sort_)
     , tmp_path(tmp_path_)
-    , log(Logger::get(NAME, req_id))
+    , log(Logger::get(req_id))
 {
     children.push_back(input);
     header = children.at(0)->getHeader();
@@ -135,10 +128,9 @@ Block MergeSortingBlockInputStream::readImpl()
                 NativeBlockOutputStream block_out(compressed_buf, 0, header_without_constants);
                 MergeSortingBlocksBlockInputStream block_in(blocks, description, log->identifier(), max_merged_block_size, limit);
 
-                LOG_FMT_INFO(log, "Sorting and writing part of data into temporary file {}", path);
-                ProfileEvents::increment(ProfileEvents::ExternalSortWritePart);
+                LOG_INFO(log, "Sorting and writing part of data into temporary file {}", path);
                 copyData(block_in, block_out, &is_cancelled); /// NOTE. Possibly limit disk usage.
-                LOG_FMT_INFO(log, "Done writing part of data into temporary file {}", path);
+                LOG_INFO(log, "Done writing part of data into temporary file {}", path);
 
                 blocks.clear();
                 sum_bytes_in_blocks = 0;
@@ -155,9 +147,8 @@ Block MergeSortingBlockInputStream::readImpl()
         else
         {
             /// If there was temporary files.
-            ProfileEvents::increment(ProfileEvents::ExternalSortMerge);
 
-            LOG_FMT_INFO(log, "There are {} temporary sorted parts to merge.", temporary_files.size());
+            LOG_INFO(log, "There are {} temporary sorted parts to merge.", temporary_files.size());
 
             /// Create sorted streams to merge.
             for (const auto & file : temporary_files)
@@ -198,7 +189,7 @@ MergeSortingBlocksBlockInputStream::MergeSortingBlocksBlockInputStream(
     , description(description_)
     , max_merged_block_size(max_merged_block_size_)
     , limit(limit_)
-    , log(Logger::get(NAME, req_id))
+    , log(Logger::get(req_id))
 {
     Blocks nonempty_blocks;
     for (const auto & block : blocks)
@@ -287,5 +278,9 @@ Block MergeSortingBlocksBlockInputStream::mergeImpl(std::priority_queue<TSortCur
     return blocks[0].cloneWithColumns(std::move(merged_columns));
 }
 
+void MergeSortingBlockInputStream::appendInfo(FmtBuffer & buffer) const
+{
+    buffer.fmtAppend(", limit = {}", limit);
+}
 
 } // namespace DB

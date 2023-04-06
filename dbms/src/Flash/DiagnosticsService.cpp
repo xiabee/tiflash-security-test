@@ -38,7 +38,7 @@ using diagnosticspb::SearchLogResponse;
     ::diagnosticspb::ServerInfoResponse * response)
 try
 {
-    const TiFlashRaftProxyHelper * helper = server.context().getTMTContext().getKVStore()->getProxyHelper();
+    const TiFlashRaftProxyHelper * helper = context.getTMTContext().getKVStore()->getProxyHelper();
     if (helper)
     {
         std::string req = request->SerializeAsString();
@@ -46,7 +46,7 @@ try
     }
     else
     {
-        LOG_FMT_ERROR(log, "TiFlashRaftProxyHelper is null, `DiagnosticsService::server_info` is useless");
+        LOG_ERROR(log, "TiFlashRaftProxyHelper is null, `DiagnosticsService::server_info` is useless");
         return ::grpc::Status(::grpc::StatusCode::INTERNAL, "TiFlashRaftProxyHelper is null");
     }
     return ::grpc::Status::OK;
@@ -63,25 +63,25 @@ catch (const std::exception & e)
 }
 
 // get & filter(ts of last record < start-time) all files in same log directory.
-std::list<std::string> getFilesToSearch(IServer & server, Poco::Logger * log, const int64_t start_time)
+std::list<std::string> getFilesToSearch(Poco::Util::LayeredConfiguration & config, Poco::Logger * log, const int64_t start_time)
 {
     std::list<std::string> files_to_search;
 
     std::string log_dir; // log directory
-    auto error_log_file_prefix = server.config().getString("logger.errorlog", "*");
-    auto tracing_log_file_prefix = server.config().getString("logger.tracing_log", "*");
+    auto error_log_file_prefix = config.getString("logger.errorlog", "*");
+    auto tracing_log_file_prefix = config.getString("logger.tracing_log", "*");
     // ignore tiflash error log and mpp task tracing log
     std::vector<String> ignore_log_file_prefixes = {error_log_file_prefix, tracing_log_file_prefix};
 
     {
-        auto log_file_prefix = server.config().getString("logger.log");
+        auto log_file_prefix = config.getString("logger.log");
         if (auto it = log_file_prefix.rfind('/'); it != std::string::npos)
         {
             log_dir = std::string(log_file_prefix.begin(), log_file_prefix.begin() + it);
         }
     }
 
-    LOG_FMT_DEBUG(log, "got log directory {}", log_dir);
+    LOG_DEBUG(log, "got log directory {}", log_dir);
 
     if (log_dir.empty())
         return files_to_search;
@@ -97,7 +97,7 @@ std::list<std::string> getFilesToSearch(IServer & server, Poco::Logger * log, co
         }
     }
 
-    LOG_FMT_DEBUG(log, "got log files to search {}", files_to_search);
+    LOG_DEBUG(log, "got log files to search {}", files_to_search);
 
     return files_to_search;
 }
@@ -128,7 +128,7 @@ grpc::Status searchLog(Poco::Logger * log, ::grpc::ServerWriter<::diagnosticspb:
 
         if (!stream->Write(resp))
         {
-            LOG_FMT_DEBUG(log, "Write response failed for unknown reason.");
+            LOG_DEBUG(log, "Write response failed for unknown reason.");
             return grpc::Status(grpc::StatusCode::UNKNOWN, "Write response failed for unknown reason.");
         }
     }
@@ -158,16 +158,16 @@ grpc::Status searchLog(Poco::Logger * log, ::grpc::ServerWriter<::diagnosticspb:
         patterns.push_back(pattern);
     }
 
-    LOG_FMT_DEBUG(log, "Handling SearchLog: {}", request->DebugString());
+    LOG_DEBUG(log, "Handling SearchLog: {}", request->DebugString());
     SCOPE_EXIT({
-        LOG_FMT_DEBUG(log, "Handling SearchLog done: {}", request->DebugString());
+        LOG_DEBUG(log, "Handling SearchLog done: {}", request->DebugString());
     });
 
-    auto files_to_search = getFilesToSearch(server, log, start_time);
+    auto files_to_search = getFilesToSearch(config, log, start_time);
 
     for (const auto & path : files_to_search)
     {
-        LOG_FMT_DEBUG(log, "start to search file {}", path);
+        LOG_DEBUG(log, "start to search file {}", path);
         auto status = grpc::Status::OK;
         ReadLogFile(path, [&](std::istream & istr) {
             LogIterator log_itr(start_time, end_time, levels, patterns, istr);

@@ -14,14 +14,13 @@
 
 #pragma once
 
-#include <Columns/ColumnArray.h>
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnFixedString.h>
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnString.h>
-#include <Columns/ColumnTuple.h>
 #include <Columns/ColumnsCommon.h>
 #include <Common/FieldVisitors.h>
+#include <Common/MyDuration.h>
 #include <Common/MyTime.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDate.h>
@@ -1306,7 +1305,7 @@ public:
         size_t result,
         bool,
         const tipb::FieldType &,
-        const Context & context)
+        const Context &)
     {
         size_t size = block.getByPosition(arguments[0]).column->size();
         auto col_to = ColumnUInt64::create(size, 0);
@@ -1346,7 +1345,7 @@ public:
                 StringRef string_ref(&(*chars)[current_offset], string_size);
                 String string_value = string_ref.toString();
 
-                Field packed_uint_value = parseMyDateTime(string_value, to_fsp);
+                Field packed_uint_value = parseMyDateTime(string_value, to_fsp, checkTimeValidAllowMonthAndDayZero);
 
                 if (packed_uint_value.isNull())
                 {
@@ -1430,7 +1429,7 @@ public:
             for (size_t i = 0; i < size; ++i)
             {
                 MyDateTime datetime(0, 0, 0, 0, 0, 0, 0);
-                bool is_null = numberToDateTime(vec_from[i], datetime, context.getDAGContext());
+                bool is_null = numberToDateTime(vec_from[i], datetime, false);
 
                 if (is_null)
                 {
@@ -1467,34 +1466,26 @@ public:
                 // Convert to string and then parse to time
                 String value_str = toString(value);
 
-                if (value_str == "0")
+                Field packed_uint_value = parseMyDateTimeFromFloat(value_str, to_fsp, noNeedCheckTime);
+
+                if (packed_uint_value.isNull())
                 {
+                    // Fill NULL if cannot parse
                     (*vec_null_map_to)[i] = 1;
                     vec_to[i] = 0;
+                    continue;
+                }
+
+                UInt64 packed_uint = packed_uint_value.template safeGet<UInt64>();
+                MyDateTime datetime(packed_uint);
+                if constexpr (std::is_same_v<ToDataType, DataTypeMyDate>)
+                {
+                    MyDate date(datetime.year, datetime.month, datetime.day);
+                    vec_to[i] = date.toPackedUInt();
                 }
                 else
                 {
-                    Field packed_uint_value = parseMyDateTime(value_str, to_fsp);
-
-                    if (packed_uint_value.isNull())
-                    {
-                        // Fill NULL if cannot parse
-                        (*vec_null_map_to)[i] = 1;
-                        vec_to[i] = 0;
-                        continue;
-                    }
-
-                    UInt64 packed_uint = packed_uint_value.template safeGet<UInt64>();
-                    MyDateTime datetime(packed_uint);
-                    if constexpr (std::is_same_v<ToDataType, DataTypeMyDate>)
-                    {
-                        MyDate date(datetime.year, datetime.month, datetime.day);
-                        vec_to[i] = date.toPackedUInt();
-                    }
-                    else
-                    {
-                        vec_to[i] = packed_uint;
-                    }
+                    vec_to[i] = packed_uint;
                 }
             }
         }
@@ -1507,7 +1498,8 @@ public:
             for (size_t i = 0; i < size; i++)
             {
                 String value_str = vec_from[i].toString(type.getScale());
-                Field value = parseMyDateTime(value_str, to_fsp);
+
+                Field value = parseMyDateTimeFromFloat(value_str, to_fsp, noNeedCheckTime);
 
                 if (value.getType() == Field::Types::Null)
                 {
@@ -1549,7 +1541,7 @@ private:
     }
 };
 
-/// cast duration as duration
+/// cast time/duration as duration
 /// TODO: support more types convert to duration
 template <typename FromDataType, typename ToDataType, bool return_nullable>
 struct TiDBConvertToDuration
@@ -1601,6 +1593,41 @@ struct TiDBConvertToDuration
                 block.getByPosition(result).column = std::move(to_col);
             }
         }
+        else if constexpr (std::is_same_v<FromDataType, DataTypeMyDate>)
+        {
+            // cast date as duration
+            const auto & to_type = checkAndGetDataType<DataTypeMyDuration>(removeNullable(block.getByPosition(result).type).get());
+            block.getByPosition(result).column = to_type->createColumnConst(size, toField(0)); // The DATE type is used for values with a date part but no time part. The value of Duration is always zero.
+        }
+        else if constexpr (std::is_same_v<FromDataType, DataTypeMyDateTime>)
+        {
+            // cast time as duration
+            const auto * col_from = checkAndGetColumn<ColumnUInt64>(block.getByPosition(arguments[0]).column.get());
+            const ColumnUInt64::Container & from_vec = col_from->getData();
+            const auto & from_type = checkAndGetDataType<DataTypeMyDateTime>(block.getByPosition(arguments[0]).type.get());
+            int from_fsp = from_type->getFraction();
+
+            auto to_col = ColumnVector<Int64>::create();
+            auto & vec_to = to_col->getData();
+            vec_to.resize(size);
+            const auto & to_type = checkAndGetDataType<DataTypeMyDuration>(removeNullable(block.getByPosition(result).type).get());
+            int to_fsp = to_type->getFsp();
+
+            for (size_t i = 0; i < size; ++i)
+            {
+                MyDateTime datetime(from_vec[i]);
+                MyDuration duration(1 /*neg*/, datetime.hour, datetime.minute, datetime.second, datetime.micro_second, from_fsp);
+                if (to_fsp < from_fsp)
+                {
+                    vec_to[i] = round(duration.nanoSecond(), (6 - to_fsp) + 3);
+                }
+                else
+                {
+                    vec_to[i] = duration.nanoSecond();
+                }
+            }
+            block.getByPosition(result).column = std::move(to_col);
+        }
         else
         {
             throw Exception(
@@ -1625,116 +1652,7 @@ struct TiDBConvertToDuration
     }
 };
 
-// Return true if the time is invalid.
-inline bool getDatetime(const Int64 & num, MyDateTime & result, DAGContext * ctx)
-{
-    UInt64 ymd = num / 1000000;
-    UInt64 hms = num - ymd * 1000000;
-
-    UInt64 year = ymd / 10000;
-    ymd %= 10000;
-    UInt64 month = ymd / 100;
-    UInt64 day = ymd % 100;
-
-    UInt64 hour = hms / 10000;
-    hms %= 10000;
-    UInt64 minute = hms / 100;
-    UInt64 second = hms % 100;
-
-    if (toCoreTimeChecked(year, month, day, hour, minute, second, 0, result))
-    {
-        return true;
-    }
-    if (ctx)
-    {
-        return !result.isValid(ctx->allowZeroInDate(), ctx->allowInvalidDate());
-    }
-    else
-    {
-        return !result.isValid(false, false);
-    }
-    return false;
-}
-
-// Convert a integer number to DateTime and return true if the result is NULL.
-// If number is invalid(according to SQL_MODE), return NULL and handle the error with DAGContext.
-// This function may throw exception.
-inline bool numberToDateTime(Int64 number, MyDateTime & result, DAGContext * ctx)
-{
-    MyDateTime datetime(0);
-    if (number == 0)
-    {
-        result = datetime;
-        return true;
-    }
-
-    // datetime type
-    if (number >= 10000101000000)
-    {
-        return getDatetime(number, result, ctx);
-    }
-
-    // check MMDD
-    if (number < 101)
-    {
-        return true;
-    }
-
-    // check YYMMDD: 2000-2069
-    if (number <= 69 * 10000 + 1231)
-    {
-        number = (number + 20000000) * 1000000;
-        return getDatetime(number, result, ctx);
-    }
-
-    if (number < 70 * 10000 + 101)
-    {
-        return true;
-    }
-
-    // check YYMMDD
-    if (number <= 991231)
-    {
-        number = (number + 19000000) * 1000000;
-        return getDatetime(number, result, ctx);
-    }
-
-    // check hour/min/second
-    if (number <= 99991231)
-    {
-        number *= 1000000;
-        return getDatetime(number, result, ctx);
-    }
-
-    // check MMDDHHMMSS
-    if (number < 101000000)
-    {
-        return true;
-    }
-
-    // check YYMMDDhhmmss: 2000-2069
-    if (number <= 69 * 10000000000 + 1231235959)
-    {
-        number += 20000000000000;
-        return getDatetime(number, result, ctx);
-    }
-
-    // check YYYYMMDDhhmmss
-    if (number < 70 * 10000000000 + 101000000)
-    {
-        return true;
-    }
-
-    // check YYMMDDHHMMSS
-    if (number <= 991231235959)
-    {
-        number += 19000000000000;
-        return getDatetime(number, result, ctx);
-    }
-
-    return getDatetime(number, result, ctx);
-}
-
+template <typename...>
 class ExecutableFunctionTiDBCast : public IExecutableFunction
 {
 public:
@@ -1774,13 +1692,15 @@ private:
     const Context & context;
 };
 
+using MonotonicityForRange = std::function<IFunctionBase::Monotonicity(const IDataType &, const Field &, const Field &)>;
+
 /// FunctionTiDBCast implements SQL cast function in TiDB
 /// The basic idea is to dispatch according to combinations of <From, To> parameter types
+template <typename...>
 class FunctionTiDBCast final : public IFunctionBase
 {
 public:
     using WrapperType = std::function<void(Block &, const ColumnNumbers &, size_t, bool, const tipb::FieldType &, const Context &)>;
-    using MonotonicityForRange = std::function<Monotonicity(const IDataType &, const Field &, const Field &)>;
 
     FunctionTiDBCast(const Context & context, const char * name, MonotonicityForRange && monotonicity_for_range, const DataTypes & argument_types, const DataTypePtr & return_type, bool in_union_, const tipb::FieldType & tidb_tp_)
         : context(context)
@@ -1797,7 +1717,7 @@ public:
 
     ExecutableFunctionPtr prepare(const Block & /*sample_block*/) const override
     {
-        return std::make_shared<ExecutableFunctionTiDBCast>(
+        return std::make_shared<ExecutableFunctionTiDBCast<>>(
             prepare(getArgumentTypes()[0], getReturnType()),
             name,
             in_union,
@@ -2333,8 +2253,6 @@ private:
 class FunctionBuilderTiDBCast : public IFunctionBuilder
 {
 public:
-    using MonotonicityForRange = FunctionTiDBCast::MonotonicityForRange;
-
     static constexpr auto name = "tidb_cast";
     static FunctionBuilderPtr create(const Context & context)
     {
@@ -2361,16 +2279,7 @@ protected:
     FunctionBasePtr buildImpl(
         const ColumnsWithTypeAndName & arguments,
         const DataTypePtr & return_type,
-        const TiDB::TiDBCollatorPtr &) const override
-    {
-        DataTypes data_types(arguments.size());
-
-        for (size_t i = 0; i < arguments.size(); ++i)
-            data_types[i] = arguments[i].type;
-
-        auto monotonicity = getMonotonicityInformation(arguments.front().type, return_type.get());
-        return std::make_shared<FunctionTiDBCast>(context, name, std::move(monotonicity), data_types, return_type, in_union, tidb_tp);
-    }
+        const TiDB::TiDBCollatorPtr &) const override;
 
     // use the last const string column's value as the return type name, in string representation like "Float64"
     DataTypePtr getReturnTypeImpl(const ColumnsWithTypeAndName & arguments) const override

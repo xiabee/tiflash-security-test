@@ -15,12 +15,19 @@
 #pragma once
 
 #include <Flash/Mpp/MPPTask.h>
-#include <Flash/Mpp/MPPTaskManager.h>
-#include <Storages/Transaction/TMTContext.h>
 #include <common/logger_useful.h>
 
 namespace DB
 {
+class MinTSOScheduler;
+using MPPTaskSchedulerPtr = std::unique_ptr<MinTSOScheduler>;
+
+class MPPTaskManager;
+using MPPTaskManagerPtr = std::shared_ptr<MPPTaskManager>;
+
+struct MPPQueryTaskSet;
+using MPPQueryTaskSetPtr = std::shared_ptr<MPPQueryTaskSet>;
+
 /// scheduling tasks in the set according to the tso order under the soft limit of threads, but allow the min_tso query to preempt threads under the hard limit of threads.
 /// The min_tso query avoids the deadlock resulted from threads competition among nodes.
 /// schedule tasks under the lock protection of the task manager.
@@ -28,11 +35,11 @@ namespace DB
 class MinTSOScheduler : private boost::noncopyable
 {
 public:
-    MinTSOScheduler(UInt64 soft_limit, UInt64 hard_limit);
+    MinTSOScheduler(UInt64 soft_limit, UInt64 hard_limit, UInt64 active_set_soft_limit_);
     ~MinTSOScheduler() = default;
     /// try to schedule this task if it is the min_tso query or there are enough threads, otherwise put it into the waiting set.
     /// NOTE: call tryToSchedule under the lock protection of MPPTaskManager
-    bool tryToSchedule(const MPPTaskPtr & task, MPPTaskManager & task_manager);
+    bool tryToSchedule(MPPTaskScheduleEntry & schedule_entry, MPPTaskManager & task_manager);
 
     /// delete this to-be cancelled/finished query from scheduler and update min_tso if needed, so that there aren't cancelled/finished queries in the scheduler.
     /// NOTE: call deleteQuery under the lock protection of MPPTaskManager
@@ -42,8 +49,8 @@ public:
     void releaseThreadsThenSchedule(const int needed_threads, MPPTaskManager & task_manager);
 
 private:
-    bool scheduleImp(const UInt64 tso, const MPPQueryTaskSetPtr & query_task_set, const MPPTaskPtr & task, const bool isWaiting, bool & has_error);
-    bool updateMinTSO(const UInt64 tso, const bool retired, const String msg);
+    bool scheduleImp(const UInt64 tso, const MPPQueryTaskSetPtr & query_task_set, MPPTaskScheduleEntry & schedule_entry, const bool isWaiting, bool & has_error);
+    bool updateMinTSO(const UInt64 tso, const bool retired, const String & msg);
     void scheduleWaitingQueries(MPPTaskManager & task_manager);
     bool isDisabled()
     {
@@ -57,7 +64,7 @@ private:
     UInt64 estimated_thread_usage;
     /// to prevent from too many queries just issue a part of tasks to occupy threads, in proportion to the hardware cores.
     size_t active_set_soft_limit;
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 } // namespace DB

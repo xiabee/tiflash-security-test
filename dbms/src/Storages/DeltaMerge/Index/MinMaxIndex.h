@@ -41,7 +41,10 @@ private:
     HasValueMarkPtr has_value_marks;
     MutableColumnPtr minmaxes;
 
+public:
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#endif
     MinMaxIndex(HasNullMarkPtr has_null_marks_, HasValueMarkPtr has_value_marks_, MutableColumnPtr && minmaxes_)
         : has_null_marks(has_null_marks_)
         , has_value_marks(has_value_marks_)
@@ -74,13 +77,15 @@ public:
 
     std::pair<UInt64, UInt64> getUInt64MinMax(size_t pack_index);
 
-    // TODO: Use has_null and value.isNull to check.
-
     RSResult checkEqual(size_t pack_index, const Field & value, const DataTypePtr & type);
     RSResult checkGreater(size_t pack_index, const Field & value, const DataTypePtr & type, int nan_direction);
     RSResult checkGreaterEqual(size_t pack_index, const Field & value, const DataTypePtr & type, int nan_direction);
+    RSResult checkIsNull(size_t pack_index);
 
     static String toString();
+    RSResult checkNullableEqual(size_t pack_index, const Field & value, const DataTypePtr & type);
+    RSResult checkNullableGreater(size_t pack_index, const Field & value, const DataTypePtr & type);
+    RSResult checkNullableGreaterEqual(size_t pack_index, const Field & value, const DataTypePtr & type);
 };
 
 
@@ -96,8 +101,8 @@ private:
     using Base = LRUCache<String, MinMaxIndex, std::hash<String>, MinMaxIndexWeightFunction>;
 
 public:
-    MinMaxIndexCache(size_t max_size_in_bytes, const Delay & expiration_delay)
-        : Base(max_size_in_bytes, expiration_delay)
+    explicit MinMaxIndexCache(size_t max_size_in_bytes)
+        : Base(max_size_in_bytes)
     {}
 
     template <typename LoadFunc>

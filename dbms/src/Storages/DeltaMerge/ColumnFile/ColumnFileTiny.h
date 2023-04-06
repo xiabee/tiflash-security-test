@@ -21,7 +21,7 @@ namespace DB
 namespace DM
 {
 class ColumnFileTiny;
-using ColumnTinyFilePtr = std::shared_ptr<ColumnFileTiny>;
+using ColumnFileTinyPtr = std::shared_ptr<ColumnFileTiny>;
 
 /// A column file which data is stored in PageStorage.
 /// It may be created in two ways:
@@ -88,7 +88,7 @@ public:
     /// Replace the schema with a new schema, and the new schema instance should be exactly the same as the previous one.
     void resetIdenticalSchema(BlockPtr schema_) { schema = schema_; }
 
-    ColumnTinyFilePtr cloneWith(PageId new_data_page_id)
+    ColumnFileTinyPtr cloneWith(PageId new_data_page_id)
     {
         auto new_tiny_file = std::make_shared<ColumnFileTiny>(*this);
         new_tiny_file->data_page_id = new_data_page_id;
@@ -109,11 +109,26 @@ public:
 
     Block readBlockForMinorCompaction(const PageReader & page_reader) const;
 
-    static ColumnTinyFilePtr writeColumnFile(DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs, const BlockPtr & schema = nullptr, const CachePtr & cache = nullptr);
+    static ColumnFileTinyPtr writeColumnFile(DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs, const BlockPtr & schema = nullptr, const CachePtr & cache = nullptr);
 
     static PageId writeColumnFileData(DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs);
 
     static std::tuple<ColumnFilePersistedPtr, BlockPtr> deserializeMetadata(ReadBuffer & buf, const BlockPtr & last_schema);
+
+    bool mayBeFlushedFrom(ColumnFile * from_file) const override
+    {
+        // The current ColumnFileTiny may come from a ColumnFileInMemory (which contains data in memory)
+        // or ColumnFileTiny (which contains data in PageStorage).
+
+        if (const auto * other_tiny = from_file->tryToTinyFile(); other_tiny)
+            return data_page_id == other_tiny->data_page_id;
+        else if (const auto * other_in_memory = from_file->tryToInMemoryFile(); other_in_memory)
+            // For ColumnFileInMemory, we just do a rough check, instead of checking byte by byte, which
+            // is too expensive.
+            return bytes == from_file->getBytes() && rows == from_file->getRows();
+        else
+            return false;
+    }
 
     String toString() const override
     {

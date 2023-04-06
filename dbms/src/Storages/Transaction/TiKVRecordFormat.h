@@ -30,7 +30,6 @@
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
@@ -38,7 +37,6 @@ extern const int LOGICAL_ERROR;
 
 namespace RecordKVFormat
 {
-
 enum CFModifyFlag : UInt8
 {
     PutFlag = 'P',
@@ -67,6 +65,9 @@ static const char ASYNC_COMMIT_PREFIX = 'a';
 static const char ROLLBACK_TS_PREFIX = 'r';
 static const char FLAG_OVERLAPPED_ROLLBACK = 'R';
 static const char GC_FENCE_PREFIX = 'F';
+static const char LAST_CHANGE_PREFIX = 'l';
+static const char TXN_SOURCE_PREFIX_FOR_WRITE = 'S';
+static const char TXN_SOURCE_PREFIX_FOR_LOCK = 's';
 
 static const size_t SHORT_VALUE_MAX_LEN = 64;
 
@@ -74,7 +75,6 @@ static const size_t RAW_KEY_NO_HANDLE_SIZE = 1 + 8 + 2;
 static const size_t RAW_KEY_SIZE = RAW_KEY_NO_HANDLE_SIZE + 8;
 
 // Key format is here:
-// https://docs.google.com/document/d/1J9Dsp8l5Sbvzjth77hK8yx3SzpEJ4SXaR_wIvswRhro/edit
 // https://github.com/tikv/tikv/blob/289ce2ddac505d7883ec616c078e184c00844d17/src/util/codec/bytes.rs#L33-L63
 inline TiKVKey encodeAsTiKVKey(const String & ori_str)
 {
@@ -421,6 +421,22 @@ inline DecodedWriteCFValue decodeWriteCfValue(const TiKVValue & value)
                  * rewriting record and there must be a complete row written to tikv, just ignore it in tiflash.
                  */
             return std::nullopt;
+        case RecordKVFormat::LAST_CHANGE_PREFIX:
+        {
+            // Used to accelerate TiKV MVCC scan, useless for TiFlash.
+            UInt64 last_change_ts = readUInt64(data, len);
+            UInt64 versions_to_last_change = readVarUInt(data, len);
+            UNUSED(last_change_ts);
+            UNUSED(versions_to_last_change);
+            break;
+        }
+        case RecordKVFormat::TXN_SOURCE_PREFIX_FOR_WRITE:
+        {
+            // Used for CDC, useless for TiFlash.
+            UInt64 txn_source_prefic = readVarUInt(data, len);
+            UNUSED(txn_source_prefic);
+            break;
+        }
         default:
             throw Exception("invalid flag " + std::to_string(flag) + " in write cf", ErrorCodes::LOGICAL_ERROR);
         }

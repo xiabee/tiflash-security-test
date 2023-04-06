@@ -34,24 +34,6 @@
 
 #include <ext/range.h>
 
-
-namespace ProfileEvents
-{
-extern const Event StorageBufferFlush;
-extern const Event StorageBufferErrorOnFlush;
-extern const Event StorageBufferPassedAllMinThresholds;
-extern const Event StorageBufferPassedTimeMaxThreshold;
-extern const Event StorageBufferPassedRowsMaxThreshold;
-extern const Event StorageBufferPassedBytesMaxThreshold;
-} // namespace ProfileEvents
-
-namespace CurrentMetrics
-{
-extern const Metric StorageBufferRows;
-extern const Metric StorageBufferBytes;
-} // namespace CurrentMetrics
-
-
 namespace DB
 {
 namespace ErrorCodes
@@ -170,10 +152,6 @@ static void appendBlock(const Block & from, Block & to)
     to.checkNumberOfRows();
 
     size_t rows = from.rows();
-    size_t bytes = from.bytes();
-
-    CurrentMetrics::add(CurrentMetrics::StorageBufferRows, rows);
-    CurrentMetrics::add(CurrentMetrics::StorageBufferBytes, bytes);
 
     size_t old_rows = to.rows();
 
@@ -263,7 +241,7 @@ public:
         {
             if (!storage.no_destination)
             {
-                LOG_FMT_TRACE(storage.log, "Writing block with {} rows, {} bytes directly.", rows, bytes);
+                LOG_TRACE(storage.log, "Writing block with {} rows, {} bytes directly.", rows, bytes);
                 storage.writeBlockToDestination(block, destination);
             }
             return;
@@ -362,7 +340,7 @@ void StorageBuffer::startup()
 {
     if (context.getSettingsRef().readonly)
     {
-        LOG_FMT_WARNING(log, "Storage {} is run with readonly settings, it will not be able to insert data. Set apropriate system_profile to fix this.", getName());
+        LOG_WARNING(log, "Storage {} is run with readonly settings, it will not be able to insert data. Set apropriate system_profile to fix this.", getName());
     }
 
     flush_thread = std::thread(&StorageBuffer::flushThread, this);
@@ -430,25 +408,21 @@ bool StorageBuffer::checkThresholdsImpl(size_t rows, size_t bytes, time_t time_p
 {
     if (time_passed > min_thresholds.time && rows > min_thresholds.rows && bytes > min_thresholds.bytes)
     {
-        ProfileEvents::increment(ProfileEvents::StorageBufferPassedAllMinThresholds);
         return true;
     }
 
     if (time_passed > max_thresholds.time)
     {
-        ProfileEvents::increment(ProfileEvents::StorageBufferPassedTimeMaxThreshold);
         return true;
     }
 
     if (rows > max_thresholds.rows)
     {
-        ProfileEvents::increment(ProfileEvents::StorageBufferPassedRowsMaxThreshold);
         return true;
     }
 
     if (bytes > max_thresholds.bytes)
     {
-        ProfileEvents::increment(ProfileEvents::StorageBufferPassedBytesMaxThreshold);
         return true;
     }
 
@@ -495,12 +469,7 @@ void StorageBuffer::flushBuffer(Buffer & buffer, bool check_thresholds)
     buffer.data.swap(block_to_write);
     buffer.first_write_time = 0;
 
-    CurrentMetrics::sub(CurrentMetrics::StorageBufferRows, block_to_write.rows());
-    CurrentMetrics::sub(CurrentMetrics::StorageBufferBytes, block_to_write.bytes());
-
-    ProfileEvents::increment(ProfileEvents::StorageBufferFlush);
-
-    LOG_FMT_TRACE(log, "Flushing buffer with {} rows, {} bytes, age {} seconds.", rows, bytes, time_passed);
+    LOG_TRACE(log, "Flushing buffer with {} rows, {} bytes, age {} seconds.", rows, bytes, time_passed);
 
     if (no_destination)
         return;
@@ -517,13 +486,7 @@ void StorageBuffer::flushBuffer(Buffer & buffer, bool check_thresholds)
     }
     catch (...)
     {
-        ProfileEvents::increment(ProfileEvents::StorageBufferErrorOnFlush);
-
         /// Return the block to its place in the buffer.
-
-        CurrentMetrics::add(CurrentMetrics::StorageBufferRows, block_to_write.rows());
-        CurrentMetrics::add(CurrentMetrics::StorageBufferBytes, block_to_write.bytes());
-
         buffer.data.swap(block_to_write);
 
         if (!buffer.first_write_time)
@@ -542,7 +505,7 @@ void StorageBuffer::writeBlockToDestination(const Block & block, StoragePtr tabl
 
     if (!table)
     {
-        LOG_FMT_ERROR(log, "Destination table {}.{} doesn't exist. Block of data is discarded.", destination_database, destination_table);
+        LOG_ERROR(log, "Destination table {}.{} doesn't exist. Block of data is discarded.", destination_database, destination_table);
         return;
     }
 
@@ -564,7 +527,7 @@ void StorageBuffer::writeBlockToDestination(const Block & block, StoragePtr tabl
         {
             if (!block.getByName(dst_col.name).type->equals(*dst_col.type))
             {
-                LOG_FMT_ERROR(log, "Destination table {}.{} have different type of column {} ({} != {}). Block of data is discarded.", destination_database, destination_table, dst_col.name, block.getByName(dst_col.name).type->getName(), dst_col.type->getName());
+                LOG_ERROR(log, "Destination table {}.{} have different type of column {} ({} != {}). Block of data is discarded.", destination_database, destination_table, dst_col.name, block.getByName(dst_col.name).type->getName(), dst_col.type->getName());
                 return;
             }
 
@@ -574,12 +537,12 @@ void StorageBuffer::writeBlockToDestination(const Block & block, StoragePtr tabl
 
     if (columns_intersection.empty())
     {
-        LOG_FMT_ERROR(log, "Destination table {}.{} have no common columns with block in buffer. Block of data is discarded.", destination_database, destination_table);
+        LOG_ERROR(log, "Destination table {}.{} have no common columns with block in buffer. Block of data is discarded.", destination_database, destination_table);
         return;
     }
 
     if (columns_intersection.size() != block.columns())
-        LOG_FMT_WARNING(log, "Not all columns from block in buffer exist in destination table {}.{}. Some columns are discarded.", destination_database, destination_table);
+        LOG_WARNING(log, "Not all columns from block in buffer exist in destination table {}.{}. Some columns are discarded.", destination_database, destination_table);
 
     auto list_of_columns = std::make_shared<ASTExpressionList>();
     insert->columns = list_of_columns;

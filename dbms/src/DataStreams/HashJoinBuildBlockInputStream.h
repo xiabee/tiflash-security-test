@@ -22,7 +22,7 @@ namespace DB
 {
 class HashJoinBuildBlockInputStream : public IProfilingBlockInputStream
 {
-    static constexpr auto NAME = "HashJoinBuildBlockInputStream";
+    static constexpr auto NAME = "HashJoinBuild";
 
 public:
     HashJoinBuildBlockInputStream(
@@ -31,7 +31,7 @@ public:
         size_t concurrency_build_index_,
         const String & req_id)
         : concurrency_build_index(concurrency_build_index_)
-        , log(Logger::get(NAME, req_id))
+        , log(Logger::get(req_id))
     {
         children.push_back(input);
         join = join_;
@@ -41,6 +41,7 @@ public:
 
 protected:
     Block readImpl() override;
+    void appendInfo(FmtBuffer & buffer) const override;
 
 private:
     JoinPtr join;

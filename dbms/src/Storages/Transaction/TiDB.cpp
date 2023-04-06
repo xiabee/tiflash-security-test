@@ -23,8 +23,10 @@
 #include <Poco/StringTokenizer.h>
 #include <Storages/MutableSupport.h>
 #include <Storages/Transaction/Collator.h>
-#include <Storages/Transaction/SchemaNameMapper.h>
+#include <Storages/Transaction/JsonBinary.h>
 #include <Storages/Transaction/TiDB.h>
+#include <TiDB/Schema/SchemaNameMapper.h>
+#include <common/logger_useful.h>
 
 #include <cmath>
 
@@ -61,19 +63,19 @@ Field GenDefaultField(const TiDB::ColumnInfo & col_info)
     case TiDB::CodecFlagCompactBytes:
         return Field(String());
     case TiDB::CodecFlagFloat:
-        return Field(Float64(0));
+        return Field(static_cast<Float64>(0));
     case TiDB::CodecFlagUInt:
-        return Field(UInt64(0));
+        return Field(static_cast<UInt64>(0));
     case TiDB::CodecFlagInt:
-        return Field(Int64(0));
+        return Field(static_cast<Int64>(0));
     case TiDB::CodecFlagVarInt:
-        return Field(Int64(0));
+        return Field(static_cast<Int64>(0));
     case TiDB::CodecFlagVarUInt:
-        return Field(UInt64(0));
+        return Field(static_cast<UInt64>(0));
     case TiDB::CodecFlagJson:
         return TiDB::genJsonNull();
     case TiDB::CodecFlagDuration:
-        return Field(Int64(0));
+        return Field(static_cast<Int64>(0));
     default:
         throw Exception("Not implemented codec flag: " + std::to_string(col_info.getCodecFlag()), ErrorCodes::LOGICAL_ERROR);
     }
@@ -245,7 +247,7 @@ Int64 ColumnInfo::getEnumIndex(const String & enum_id_or_text) const
         collator = ITiDBCollator::getCollator("binary");
     for (const auto & elem : elems)
     {
-        if (collator->compare(elem.first.data(), elem.first.size(), enum_id_or_text.data(), enum_id_or_text.size()) == 0)
+        if (collator->compareFastPath(elem.first.data(), elem.first.size(), enum_id_or_text.data(), enum_id_or_text.size()) == 0)
         {
             return elem.second;
         }
@@ -264,12 +266,12 @@ UInt64 ColumnInfo::getSetValue(const String & set_str) const
     Poco::StringTokenizer string_tokens(set_str, ",");
     std::set<String> marked;
     for (const auto & s : string_tokens)
-        marked.insert(collator->sortKey(s.data(), s.length(), sort_key_container).toString());
+        marked.insert(collator->sortKeyFastPath(s.data(), s.length(), sort_key_container).toString());
 
     UInt64 value = 0;
     for (size_t i = 0; i < elems.size(); i++)
     {
-        String key = collator->sortKey(elems.at(i).first.data(), elems.at(i).first.length(), sort_key_container).toString();
+        String key = collator->sortKeyFastPath(elems.at(i).first.data(), elems.at(i).first.length(), sort_key_container).toString();
         auto it = marked.find(key);
         if (it != marked.end())
         {
@@ -406,7 +408,7 @@ try
         size_t elems_size = elems_arr->size();
         for (size_t i = 1; i <= elems_size; i++)
         {
-            elems.push_back(std::make_pair(elems_arr->getElement<String>(i - 1), Int16(i)));
+            elems.push_back(std::make_pair(elems_arr->getElement<String>(i - 1), static_cast<Int16>(i)));
         }
     }
     /// need to do this check for forward compatibility
@@ -682,13 +684,13 @@ catch (const Poco::Exception & e)
 ///////////////////////
 
 IndexInfo::IndexInfo(Poco::JSON::Object::Ptr json)
-    : id()
-    , state()
-    , index_type()
-    , is_unique()
-    , is_primary()
-    , is_invisible()
-    , is_global()
+    : id(0)
+    , state(TiDB::SchemaState::StateNone)
+    , index_type(0)
+    , is_unique(true)
+    , is_primary(true)
+    , is_invisible(true)
+    , is_global(true)
 {
     deserialize(json);
 }
@@ -1096,7 +1098,7 @@ TableInfoPtr TableInfo::producePartitionTableInfo(TableID table_or_partition_id,
 String genJsonNull()
 {
     // null
-    const static String null({char(DB::TYPE_CODE_LITERAL), char(DB::LITERAL_NIL)});
+    const static String null({static_cast<char>(DB::JsonBinary::TYPE_CODE_LITERAL), static_cast<char>(DB::JsonBinary::LITERAL_NIL)});
     return null;
 }
 

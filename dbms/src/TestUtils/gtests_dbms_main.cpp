@@ -13,6 +13,9 @@
 // limitations under the License.
 
 #include <Common/FailPoint.h>
+#include <Storages/DeltaMerge/ReadThread/ColumnSharingCache.h>
+#include <Storages/DeltaMerge/ReadThread/SegmentReadTaskScheduler.h>
+#include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <gtest/gtest.h>
 #include <signal.h>
@@ -57,6 +60,11 @@ int main(int argc, char ** argv)
 
     DB::tests::TiFlashTestEnv::setupLogger();
     DB::tests::TiFlashTestEnv::initializeGlobalContext();
+    DB::ServerInfo server_info;
+    // `DMFileReaderPool` should be constructed before and destructed after `SegmentReaderPoolManager`.
+    DB::DM::DMFileReaderPool::instance();
+    DB::DM::SegmentReaderPoolManager::instance().init(server_info);
+    DB::DM::SegmentReadTaskScheduler::instance();
 
 #ifdef FIU_ENABLE
     fiu_init(0); // init failpoint
@@ -69,6 +77,10 @@ int main(int argc, char ** argv)
 
     auto ret = RUN_ALL_TESTS();
 
+    // `SegmentReader` threads may hold a segment and its delta-index for read.
+    // `TiFlashTestEnv::shutdown()` will destroy `DeltaIndexManager`.
+    // Stop threads explicitly before `TiFlashTestEnv::shutdown()`.
+    DB::DM::SegmentReaderPoolManager::instance().stop();
     DB::tests::TiFlashTestEnv::shutdown();
 
     return ret;

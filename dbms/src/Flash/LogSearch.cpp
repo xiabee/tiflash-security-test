@@ -15,8 +15,8 @@
 #include <Common/StringUtils/StringUtils.h>
 #include <Flash/LogSearch.h>
 #include <Poco/InflatingStream.h>
+#include <boost_wrapper/string.h>
 
-#include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
 namespace DB
@@ -354,7 +354,7 @@ LogIterator::~LogIterator()
 {
     if (err_info.has_value())
     {
-        LOG_FMT_DEBUG(log, "LogIterator search end with error {} at line {}.", err_info->second, err_info->first);
+        LOG_DEBUG(log, "LogIterator search end with error {} at line {}.", err_info->second, err_info->first);
     }
 }
 
@@ -374,7 +374,7 @@ int64_t readApproxiTimestamp(const char * start, const char * date_format)
         return -1;
     }
 
-    std::tm time;
+    std::tm time{};
     time.tm_year = year - 1900;
     time.tm_mon = month - 1;
     time.tm_mday = day;
@@ -410,8 +410,10 @@ bool FilterFileByDatetime(
     const int64_t start_time)
 {
     static const std::string date_format_example = "0000-00-00-00:00:00.000";
-    static const std::string raftstore_proxy_date_format_example = "0000-00-00-00:00:00.000000000";
     static const char * date_format = "%d-%d-%d-%d:%d:%d.%d";
+
+    static const std::string raftstore_proxy_date_format_example = "0000-00-00T00:00:00.000.log";
+    static const char * raftstore_proxy_date_format = "%d-%d-%dT%d-%d-%d.%d";
 
     for (const auto & ignore_log_file_prefix : ignore_log_file_prefixes)
     {
@@ -441,7 +443,7 @@ bool FilterFileByDatetime(
     else
     {
         // filter proxy log end datetime
-        return filterLogEndDatetime(path, raftstore_proxy_date_format_example, date_format, start_time);
+        return filterLogEndDatetime(path, raftstore_proxy_date_format_example, raftstore_proxy_date_format, start_time);
     }
 }
 

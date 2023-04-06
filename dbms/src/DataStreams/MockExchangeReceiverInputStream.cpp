@@ -21,12 +21,29 @@ MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(const tipb::Exc
     : output_index(0)
     , max_block_size(max_block_size)
     , rows(rows_)
+    , source_num(static_cast<size_t>(receiver.encoded_task_meta_size()))
 {
     for (int i = 0; i < receiver.field_types_size(); ++i)
     {
         columns.emplace_back(
             getDataTypeByColumnInfoForComputingLayer(TiDB::fieldTypeToColumnInfo(receiver.field_types(i))),
             fmt::format("exchange_receiver_{}", i));
+    }
+}
+
+MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(ColumnsWithTypeAndName columns, size_t max_block_size)
+    : columns(columns)
+    , output_index(0)
+    , max_block_size(max_block_size)
+{
+    rows = 0;
+    for (const auto & elem : columns)
+    {
+        if (elem.column)
+        {
+            assert(rows == 0 || rows == elem.column->size());
+            rows = elem.column->size();
+        }
     }
 }
 
