@@ -29,6 +29,11 @@
 
 #include "IServer.h"
 
+namespace CurrentMetrics
+{
+extern const Metric TCPConnection;
+}
+
 namespace Poco
 {
 class Logger;
@@ -125,6 +130,8 @@ private:
 
     /// At the moment, only one ongoing query in the connection is supported at a time.
     QueryState state;
+
+    CurrentMetrics::Increment metric_increment{CurrentMetrics::TCPConnection};
 
     /// It is the name of the server that will be sent to the client.
     String server_display_name;

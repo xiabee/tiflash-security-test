@@ -18,7 +18,6 @@
 #include <Encryption/FileProvider.h>
 #include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
 #include <IO/WriteHelpers.h>
-#include <Poco/DirectoryIterator.h>
 #include <Poco/File.h>
 #include <Storages/Page/V3/LogFile/LogFilename.h>
 #include <Storages/Page/V3/LogFile/LogFormat.h>
@@ -30,20 +29,13 @@
 
 namespace DB::PS::V3
 {
-struct LogFile
-{
-    String filename;
-    size_t bytes;
-};
-using LogFiles = std::vector<LogFile>;
-
 LogFilenameSet WALStoreReader::listAllFiles(
     const PSDiskDelegatorPtr & delegator,
     LoggerPtr logger)
 {
     // [<parent_path_0, [file0, file1, ...]>, <parent_path_1, [...]>, ...]
-    std::vector<std::pair<String, LogFiles>> all_filenames;
-    LogFiles filenames;
+    std::vector<std::pair<String, Strings>> all_filenames;
+    Strings filenames;
     for (const auto & parent_path : delegator->listPaths())
     {
         String wal_parent_path = parent_path + WALStore::wal_folder_prefix;
@@ -55,20 +47,17 @@ LogFilenameSet WALStoreReader::listAllFiles(
         }
 
         filenames.clear();
-        Poco::DirectoryIterator end;
-        for (Poco::DirectoryIterator it(directory); it != end; ++it)
-        {
-            filenames.emplace_back(LogFile{.filename = it.name(), .bytes = it->getSize()});
-        }
+        directory.list(filenames);
         all_filenames.emplace_back(std::make_pair(wal_parent_path, std::move(filenames)));
+        filenames.clear();
     }
 
     LogFilenameSet log_files;
     for (const auto & [parent_path, filenames] : all_filenames)
     {
-        for (const auto & file : filenames)
+        for (const auto & filename : filenames)
         {
-            auto name = LogFilename::parseFrom(parent_path, file.filename, logger, file.bytes);
+            auto name = LogFilename::parseFrom(parent_path, filename, logger);
             switch (name.stage)
             {
             case LogFileStage::Normal:
@@ -92,7 +81,7 @@ LogFilenameSet WALStoreReader::listAllFiles(
 std::tuple<std::optional<LogFilename>, LogFilenameSet>
 WALStoreReader::findCheckpoint(LogFilenameSet && all_files)
 {
-    auto latest_checkpoint_iter = all_files.cend();
+    LogFilenameSet::const_iterator latest_checkpoint_iter = all_files.cend();
     for (auto iter = all_files.cbegin(); iter != all_files.cend(); ++iter)
     {
         if (iter->level_num > 0)
@@ -149,7 +138,7 @@ WALStoreReaderPtr WALStoreReader::create(
     WALRecoveryMode recovery_mode_,
     const ReadLimiterPtr & read_limiter)
 {
-    LogFilenameSet log_files = listAllFiles(delegator, Logger::get(storage_name));
+    LogFilenameSet log_files = listAllFiles(delegator, Logger::get("WALStore", storage_name));
     return create(std::move(storage_name), provider, std::move(log_files), recovery_mode_, read_limiter);
 }
 
@@ -166,7 +155,7 @@ WALStoreReader::WALStoreReader(String storage_name,
     , files_to_read(std::move(files_))
     , next_reading_file(files_to_read.begin())
     , recovery_mode(recovery_mode_)
-    , logger(Logger::get(storage_name))
+    , logger(Logger::get("WALStore", std::move(storage_name)))
 {}
 
 bool WALStoreReader::remained() const
@@ -181,7 +170,7 @@ bool WALStoreReader::remained() const
     return false;
 }
 
-std::optional<String> WALStoreReader::next()
+std::tuple<bool, PageEntriesEdit> WALStoreReader::next()
 {
     bool ok = false;
     String record;
@@ -190,14 +179,14 @@ std::optional<String> WALStoreReader::next()
         std::tie(ok, record) = reader->readRecord();
         if (ok)
         {
-            return record;
+            return {true, ser::deserializeFrom(record)};
         }
 
         // Roll to read the next file
         if (bool next_file = openNextFile(); !next_file)
         {
             // No more file to be read.
-            return std::nullopt;
+            return {false, PageEntriesEdit{}};
         }
     } while (true);
 }
@@ -213,7 +202,7 @@ bool WALStoreReader::openNextFile()
         const auto log_num = next_file.log_num;
         const auto filename = next_file.filename(next_file.stage);
         const auto fullname = next_file.fullname(next_file.stage);
-        LOG_DEBUG(logger, "Open log file for reading [file={}]", fullname);
+        LOG_FMT_DEBUG(logger, "Open log file for reading [file={}]", fullname);
 
         auto read_buf = createReadBufferFromFileBaseByFileProvider(
             provider,

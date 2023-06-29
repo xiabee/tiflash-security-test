@@ -30,6 +30,12 @@
 #include <Storages/MutableSupport.h>
 #include <TableFunctions/TableFunctionFactory.h>
 
+
+namespace ProfileEvents
+{
+extern const Event InsertQuery;
+}
+
 namespace DB
 {
 namespace ErrorCodes
@@ -48,6 +54,7 @@ InterpreterInsertQuery::InterpreterInsertQuery(
     , context(context_)
     , allow_materialized(allow_materialized_)
 {
+    ProfileEvents::increment(ProfileEvents::InsertQuery);
 }
 
 
@@ -55,7 +62,7 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
 {
     if (query.table_function)
     {
-        const auto * table_function = typeid_cast<const ASTFunction *>(query.table_function.get());
+        auto table_function = typeid_cast<const ASTFunction *>(query.table_function.get());
         const auto & factory = TableFunctionFactory::instance();
         return factory.get(table_function->name, context)->execute(query.table_function, context);
     }
@@ -64,7 +71,7 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
     return context.getTable(query.database, query.table);
 }
 
-Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table) // NOLINT
+Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table)
 {
     Block table_sample_non_materialized;
     if (query.is_import)

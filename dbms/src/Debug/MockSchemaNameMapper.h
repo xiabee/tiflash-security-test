@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <TiDB/Schema/SchemaNameMapper.h>
+#include <Storages/Transaction/SchemaNameMapper.h>
 
 namespace DB
 {

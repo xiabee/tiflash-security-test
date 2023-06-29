@@ -278,40 +278,14 @@ struct AggregateFunctionSumKahanData
 };
 
 
-#define DEFAULT_DECIMAL_INFER                                                           \
-    static std::tuple<PrecType, ScaleType> decimalInfer(PrecType prec, ScaleType scale) \
-    {                                                                                   \
-        return SumDecimalInferer::infer(prec, scale);                                   \
-    }
-
-
 struct NameSum
 {
     static constexpr auto name = "sum";
-    DEFAULT_DECIMAL_INFER
 };
-
-struct NameSumWithOverFlow
-{
-    static constexpr auto name = "sumWithOverflow";
-    static std::tuple<PrecType, ScaleType> decimalInfer(PrecType prec, ScaleType scale)
-    {
-        return {prec, scale};
-    }
-};
-
-using NameSumOnPartialResult = NameSumWithOverFlow;
 
 struct NameCountSecondStage
 {
     static constexpr auto name = "countSecondStage";
-    DEFAULT_DECIMAL_INFER
-};
-
-struct NameSumKahan
-{
-    static constexpr auto name = "sumKahan";
-    DEFAULT_DECIMAL_INFER
 };
 
 /// Counts the sum of the numbers.
@@ -327,14 +301,14 @@ public:
 
     String getName() const override { return Name::name; }
 
-    ScaleType result_scale{};
-    PrecType result_prec{};
+    ScaleType result_scale;
+    PrecType result_prec;
 
     AggregateFunctionSum() = default;
 
     AggregateFunctionSum(PrecType prec, ScaleType scale)
     {
-        std::tie(result_prec, result_scale) = Name::decimalInfer(prec, scale);
+        std::tie(result_prec, result_scale) = SumDecimalInferer::infer(prec, scale);
     };
 
     DataTypePtr getReturnType() const override
@@ -349,7 +323,7 @@ public:
         }
     }
 
-    void create(AggregateDataPtr __restrict place) const override // NOLINT(readability-non-const-parameter)
+    void create(AggregateDataPtr __restrict place) const override
     {
         new (place) Data;
     }

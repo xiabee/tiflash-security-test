@@ -21,15 +21,8 @@ namespace DB
 /// Detail of the packet that decoding in TiRemoteInputStream.RemoteReader.decodeChunks()
 struct DecodeDetail
 {
-    // Responding packets count, usually be 1, be 0 when flush data before eof
-    Int64 packets = 1;
-
-    // For fine grained shuffle, each ExchangeReceiver/thread will decode its own blocks.
-    // So this is the row number of partial blocks of the original packet.
-    // This will be the row number of all blocks of the original packet if it's not fine grained shuffle.
     Int64 rows = 0;
-
-    // Total byte size of the origin packet, even for fine grained shuffle.
+    // byte size of origin packet.
     Int64 packet_bytes = 0;
 };
 } // namespace DB

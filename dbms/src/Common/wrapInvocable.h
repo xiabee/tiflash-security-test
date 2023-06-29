@@ -35,6 +35,7 @@ inline auto wrapInvocable(bool propagate_memory_tracker, Func && func, Args &&..
         // run the task with the parameters provided
         return std::apply(std::move(func), std::move(args));
     };
+
     return capture;
 }
 } // namespace DB

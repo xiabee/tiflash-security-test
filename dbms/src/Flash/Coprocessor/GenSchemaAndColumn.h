@@ -16,14 +16,11 @@
 
 #include <Core/ColumnsWithTypeAndName.h>
 #include <Core/NamesAndTypes.h>
-#include <Flash/Coprocessor/ChunkCodec.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 #include <Storages/Transaction/TiDB.h>
-#include <common/StringRef.h>
 
 namespace DB
 {
-NamesAndTypes genNamesAndTypes(const TiDBTableScan & table_scan, const StringRef & column_prefix);
+NamesAndTypes genNamesAndTypes(const TiDBTableScan & table_scan);
 ColumnsWithTypeAndName getColumnWithTypeAndName(const NamesAndTypes & names_and_types);
-NamesAndTypes toNamesAndTypes(const DAGSchema & dag_schema);
 } // namespace DB

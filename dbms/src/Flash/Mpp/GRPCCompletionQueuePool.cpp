@@ -44,10 +44,7 @@ void GRPCCompletionQueuePool::thread(size_t index)
 {
     GET_METRIC(tiflash_thread_count, type_threads_of_client_cq_pool).Increment();
     SCOPE_EXIT({
-        if (!is_shutdown)
-        {
-            GET_METRIC(tiflash_thread_count, type_threads_of_client_cq_pool).Decrement();
-        }
+        GET_METRIC(tiflash_thread_count, type_threads_of_client_cq_pool).Decrement();
     });
 
     auto & q = queues[index];

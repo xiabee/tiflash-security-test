@@ -47,7 +47,8 @@ public:
         const RSOperatorPtr & filter_,
         UInt64 max_version_,
         size_t expected_block_size_,
-        ReadMode read_mode_,
+        bool is_raw_,
+        bool do_range_filter_for_raw_,
         const int extra_table_id_index,
         const TableID physical_table_id,
         const String & req_id)
@@ -59,10 +60,11 @@ public:
         , header(toEmptyBlock(columns_to_read))
         , max_version(max_version_)
         , expected_block_size(expected_block_size_)
-        , read_mode(read_mode_)
+        , is_raw(is_raw_)
+        , do_range_filter_for_raw(do_range_filter_for_raw_)
         , extra_table_id_index(extra_table_id_index)
         , physical_table_id(physical_table_id)
-        , log(Logger::get(req_id))
+        , log(Logger::get(NAME, req_id))
     {
         if (extra_table_id_index != InvalidColumnID)
         {
@@ -95,14 +97,27 @@ protected:
                 if (!task)
                 {
                     done = true;
-                    LOG_DEBUG(log, "Read done");
+                    LOG_FMT_DEBUG(log, "Read done");
                     return {};
                 }
-                cur_segment = task->segment;
 
-                auto block_size = std::max(expected_block_size, static_cast<size_t>(dm_context->db_context.getSettingsRef().dt_segment_stable_pack_rows));
-                cur_stream = task->segment->getInputStream(read_mode, *dm_context, columns_to_read, task->read_snapshot, task->ranges, filter, max_version, block_size);
-                LOG_TRACE(log, "Start to read segment, segment={}", cur_segment->simpleInfo());
+                cur_segment = task->segment;
+                if (is_raw)
+                {
+                    cur_stream = cur_segment->getInputStreamRaw(*dm_context, columns_to_read, task->read_snapshot, do_range_filter_for_raw);
+                }
+                else
+                {
+                    cur_stream = cur_segment->getInputStream(
+                        *dm_context,
+                        columns_to_read,
+                        task->read_snapshot,
+                        task->ranges,
+                        filter,
+                        max_version,
+                        std::max(expected_block_size, static_cast<size_t>(dm_context->db_context.getSettingsRef().dt_segment_stable_pack_rows)));
+                }
+                LOG_FMT_TRACE(log, "Start to read segment [{}]", cur_segment->segmentId());
             }
             FAIL_POINT_PAUSE(FailPoints::pause_when_reading_from_dt_stream);
 
@@ -130,7 +145,7 @@ protected:
             else
             {
                 after_segment_read(dm_context, cur_segment);
-                LOG_TRACE(log, "Finish reading segment, segment={}", cur_segment->simpleInfo());
+                LOG_FMT_TRACE(log, "Finish reading segment [{}]", cur_segment->segmentId());
                 cur_segment = {};
                 cur_stream = {};
             }
@@ -139,7 +154,7 @@ protected:
 
     void readSuffixImpl() override
     {
-        LOG_DEBUG(log, "finish read {} rows from storage", total_rows);
+        LOG_FMT_DEBUG(log, "finish read {} rows from storage", total_rows);
     }
 
 private:
@@ -151,7 +166,8 @@ private:
     Block header;
     const UInt64 max_version;
     const size_t expected_block_size;
-    const ReadMode read_mode;
+    const bool is_raw;
+    const bool do_range_filter_for_raw;
     // position of the ExtraPhysTblID column in column_names parameter in the StorageDeltaMerge::read function.
     const int extra_table_id_index;
 

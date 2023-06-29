@@ -24,7 +24,6 @@ namespace tests
 class StringMatch : public FunctionTest
 {
 protected:
-    const String func_name = "like3Args";
     const String long_str = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzab"
                             "cdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdef"
                             "ghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl"
@@ -33,8 +32,6 @@ protected:
                             "xyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
 
     const String long_pattern = "abcdefghijklmnopqrstuvwxyz_bcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz%abcdefghijklmnopqrstuvwxyz";
-
-    ColumnWithTypeAndName escape = createConstColumn<Int32>(1, static_cast<Int32>('\\'));
 
     static ColumnWithTypeAndName toNullableVec(const std::vector<std::optional<String>> & v)
     {
@@ -125,9 +122,10 @@ try
 
     auto haystack = createColumn<String>(haystack_raw, "haystack");
     auto needle = createColumn<String>(needle_raw, "needle");
+    auto escape = createConstColumn<Int32>(1, static_cast<Int32>('\\'));
     auto expected = createColumn<UInt8>(result_raw, "result");
 
-    auto result = executeFunction(func_name, {haystack, needle, escape});
+    auto result = executeFunction("like3Args", {haystack, needle, escape});
 
     ASSERT_COLUMN_EQ(expected, result);
 
@@ -157,9 +155,10 @@ try
 
     auto nullable_haystack = createColumn<Nullable<String>>(nullable_haystack_raw, "haystack");
     auto nullable_needle = createColumn<Nullable<String>>(nullable_needle_raw, "needle");
+    auto nullable_escape = createConstColumn<Nullable<Int32>>(1, static_cast<Int32>('\\'));
     auto nullable_expected = createColumn<Nullable<UInt8>>(nullable_result_raw, "result");
 
-    auto nullable_result = executeFunction(func_name, {nullable_haystack, nullable_needle, escape});
+    auto nullable_result = executeFunction("like3Args", {nullable_haystack, nullable_needle, nullable_escape});
 
     ASSERT_COLUMN_EQ(nullable_expected, nullable_result);
 }
@@ -197,9 +196,10 @@ try
 
         auto haystack = createConstColumn<Nullable<String>>(1, cas.src);
         auto needle = createColumn<Nullable<String>>(needle_raw);
+        auto escape = createConstColumn<Nullable<Int32>>(1, static_cast<Int32>('\\'));
         auto expected = createColumn<Nullable<UInt8>>(result_raw);
 
-        auto result = executeFunction(func_name, {haystack, needle, escape});
+        auto result = executeFunction("like3Args", {haystack, needle, escape});
         ASSERT_COLUMN_EQ(expected, result);
     }
 }
@@ -213,18 +213,16 @@ TEST_F(StringMatch, LikeVectorWithVector)
     ASSERT_COLUMN_EQ(
         toNullableVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toNullableVec(haystack),
-            toNullableVec(needle),
-            escape));
+            toNullableVec(needle)));
 
     ASSERT_COLUMN_EQ(
         toVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toVec(haystack),
-            toVec(needle),
-            escape));
+            toVec(needle)));
 
     std::vector<std::optional<String>> haystack_null = {{}, "a"};
     std::vector<std::optional<String>> needle_null = {"我_tif%", {}};
@@ -232,10 +230,9 @@ TEST_F(StringMatch, LikeVectorWithVector)
     ASSERT_COLUMN_EQ(
         toNullableVec(expect_null),
         executeFunction(
-            func_name,
+            "like",
             toNullableVec(haystack_null),
-            toNullableVec(needle_null),
-            escape));
+            toNullableVec(needle_null)));
 }
 
 TEST_F(StringMatch, LikeConstWithVector)
@@ -246,36 +243,32 @@ TEST_F(StringMatch, LikeConstWithVector)
     ASSERT_COLUMN_EQ(
         toNullableVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toConst("abcaba"),
-            toNullableVec(needle),
-            escape));
+            toNullableVec(needle)));
 
     ASSERT_COLUMN_EQ(
         toVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toConst("abcaba"),
-            toVec(needle),
-            escape));
+            toVec(needle)));
 
     ASSERT_COLUMN_EQ(
         toVec(expect1),
         executeFunction(
-            func_name,
+            "like",
             toConst(long_str),
-            toVec(needle),
-            escape));
+            toVec(needle)));
 
     std::vector<std::optional<String>> needle_null = {{}};
     std::vector<std::optional<UInt64>> expect_null = {{}};
     ASSERT_COLUMN_EQ(
         toNullableVec(expect_null),
         executeFunction(
-            func_name,
+            "like",
             toConst("abc"),
-            toNullableVec(needle_null),
-            escape));
+            toNullableVec(needle_null)));
 }
 
 TEST_F(StringMatch, LikeVectorWithConst)
@@ -288,52 +281,46 @@ TEST_F(StringMatch, LikeVectorWithConst)
     ASSERT_COLUMN_EQ(
         toNullableVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toNullableVec(haystack),
-            toConst("%aa%"),
-            escape));
+            toConst("%aa%")));
 
     ASSERT_COLUMN_EQ(
         toVec(expect),
         executeFunction(
-            func_name,
+            "like",
             toVec(haystack),
-            toConst("%aa%"),
-            escape));
+            toConst("%aa%")));
 
     ASSERT_COLUMN_EQ(
         toVec(expect1),
         executeFunction(
-            func_name,
+            "like",
             toVec(haystack),
-            toConst("%爱tif%"),
-            escape));
+            toConst("%爱tif%")));
 
     ASSERT_COLUMN_EQ(
         toVec(expect2),
         executeFunction(
-            func_name,
+            "like",
             toVec(haystack),
-            toConst("%不爱tif%"),
-            escape));
+            toConst("%不爱tif%")));
 
     ASSERT_COLUMN_EQ(
         toVec(expect3),
         executeFunction(
-            func_name,
+            "like",
             toVec(haystack),
-            toConst(long_pattern),
-            escape));
+            toConst(long_pattern)));
 
     std::vector<std::optional<String>> haystack_null = {{}};
     std::vector<std::optional<UInt64>> expect_null = {{}};
     ASSERT_COLUMN_EQ(
         toNullableVec(expect_null),
         executeFunction(
-            func_name,
+            "like",
             toNullableVec(haystack_null),
-            toConst("abc"),
-            escape));
+            toConst("abc")));
 }
 
 TEST_F(StringMatch, LikeConstWithConst)
@@ -341,34 +328,30 @@ TEST_F(StringMatch, LikeConstWithConst)
     ASSERT_COLUMN_EQ(
         toConst(1),
         executeFunction(
-            func_name,
+            "like",
             toConst("resaasfe"),
-            toConst("%aa%"),
-            escape));
+            toConst("%aa%")));
 
     ASSERT_COLUMN_EQ(
         toConst(0),
         executeFunction(
-            func_name,
+            "like",
             toConst("abcde"),
-            toConst("%aa%"),
-            escape));
+            toConst("%aa%")));
 
     ASSERT_COLUMN_EQ(
         toConst(1),
         executeFunction(
-            func_name,
+            "like",
             toConst("我爱tiflash"),
-            toConst("%爱tif%"),
-            escape));
+            toConst("%爱tif%")));
 
     ASSERT_COLUMN_EQ(
         toConst(0),
         executeFunction(
-            func_name,
+            "like",
             toConst("我爱tiflash"),
-            toConst("%不爱tif%"),
-            escape));
+            toConst("%不爱tif%")));
 }
 
 } // namespace tests

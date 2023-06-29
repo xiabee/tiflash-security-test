@@ -44,8 +44,6 @@ private:
 
     BaseRuntimeStatistics non_joined_base;
 
-    BaseRuntimeStatistics join_build_base;
-
 protected:
     void appendExtraJson(FmtBuffer &) const override;
     void collectExtraRuntimeDetail() override;

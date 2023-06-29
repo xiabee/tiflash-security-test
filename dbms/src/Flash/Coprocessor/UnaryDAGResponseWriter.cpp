@@ -16,7 +16,6 @@
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
-#include <Flash/Coprocessor/ExecutionSummaryCollector.h>
 #include <Flash/Coprocessor/UnaryDAGResponseWriter.h>
 
 namespace DB
@@ -52,7 +51,7 @@ UnaryDAGResponseWriter::UnaryDAGResponseWriter(
 
 void UnaryDAGResponseWriter::encodeChunkToDAGResponse()
 {
-    auto * dag_chunk = dag_response->add_chunks();
+    auto dag_chunk = dag_response->add_chunks();
     dag_chunk->set_rows_data(chunk_codec_stream->getString());
     chunk_codec_stream->clear();
     current_records_num = 0;
@@ -64,21 +63,21 @@ void UnaryDAGResponseWriter::appendWarningsToDAGResponse()
     dag_context.consumeWarnings(warnings);
     for (auto & warning : warnings)
     {
-        auto * warn = dag_response->add_warnings();
+        auto warn = dag_response->add_warnings();
         // TODO: consider using allocated warnings to prevent copy?
         warn->CopyFrom(warning);
     }
     dag_response->set_warning_count(dag_context.getWarningCount());
 }
 
-void UnaryDAGResponseWriter::flush()
+void UnaryDAGResponseWriter::finishWrite()
 {
     if (current_records_num > 0)
     {
         encodeChunkToDAGResponse();
     }
-    // TODO separate from UnaryDAGResponseWriter and support mpp/batchCop.
     appendWarningsToDAGResponse();
+    addExecuteSummaries(*dag_response, false);
 }
 
 void UnaryDAGResponseWriter::write(const Block & block)

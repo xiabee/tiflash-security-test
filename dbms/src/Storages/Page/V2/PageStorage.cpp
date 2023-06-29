@@ -66,13 +66,13 @@ void PageStorage::StatisticsInfo::mergeEdits(const PageEntriesEdit & edit)
 {
     for (const auto & record : edit.getRecords())
     {
-        if (record.type == WriteBatchWriteType::DEL)
+        if (record.type == WriteBatch::WriteType::DEL)
             deletes++;
-        else if (record.type == WriteBatchWriteType::PUT)
+        else if (record.type == WriteBatch::WriteType::PUT)
             puts++;
-        else if (record.type == WriteBatchWriteType::REF)
+        else if (record.type == WriteBatch::WriteType::REF)
             refs++;
-        else if (record.type == WriteBatchWriteType::UPSERT)
+        else if (record.type == WriteBatch::WriteType::UPSERT)
             upserts++;
     }
 }
@@ -159,17 +159,15 @@ PageFileSet PageStorage::listAllPageFiles(const FileProviderPtr & file_provider,
 
 PageStorage::PageStorage(String name,
                          PSDiskDelegatorPtr delegator_, //
-                         const PageStorageConfig & config_,
+                         const Config & config_,
                          const FileProviderPtr & file_provider_,
-                         BackgroundProcessingPool & ver_compact_pool_,
-                         bool no_more_insert_)
+                         BackgroundProcessingPool & ver_compact_pool_)
     : DB::PageStorage(name, delegator_, config_, file_provider_)
     , write_files(std::max(1UL, config_.num_write_slots.get()))
     , page_file_log(&Poco::Logger::get("PageFile"))
     , log(&Poco::Logger::get("PageStorage"))
     , versioned_page_entries(storage_name, config.version_set_config, log)
     , ver_compact_pool(ver_compact_pool_)
-    , no_more_insert(no_more_insert_)
 {
     // at least 1 write slots
     config.num_write_slots = std::max(1UL, config.num_write_slots.get());
@@ -193,7 +191,7 @@ PageStorage::PageStorage(String name,
 }
 
 
-static inline bool isPageFileSizeFitsWritable(const PageFile & pf, const PageStorageConfig & config)
+static inline bool isPageFileSizeFitsWritable(const PageFile & pf, const PageStorage::Config & config)
 {
     return pf.getDataFileAppendPos() < config.file_roll_size && pf.getMetaFileAppendPos() < config.file_meta_roll_size;
 }
@@ -206,7 +204,7 @@ toConcreteSnapshot(const DB::PageStorage::SnapshotPtr & ptr)
 
 void PageStorage::restore()
 {
-    LOG_INFO(log, "{} begin to restore data from disk. [path={}] [num_writers={}]", storage_name, delegator->defaultPath(), write_files.size());
+    LOG_FMT_INFO(log, "{} begin to restore data from disk. [path={}] [num_writers={}]", storage_name, delegator->defaultPath(), write_files.size());
 
     /// page_files are in ascending ordered by (file_id, level).
     ListPageFilesOption opt;
@@ -257,7 +255,7 @@ void PageStorage::restore()
 #ifdef PAGE_STORAGE_UTIL_DEBUGGGING
         if (debugging_recover_stop_sequence != 0 && reader->writeBatchSequence() > debugging_recover_stop_sequence)
         {
-            LOG_TRACE(log, "{} debugging early stop on sequence: {}", storage_name, debugging_recover_stop_sequence);
+            LOG_FMT_TRACE(log, "{} debugging early stop on sequence: {}", storage_name, debugging_recover_stop_sequence);
             break;
         }
 #endif
@@ -272,11 +270,12 @@ void PageStorage::restore()
         {
             if (unlikely(cur_sequence > write_batch_seq + 1))
             {
-                LOG_WARNING(log, "{} restore skip non-continuous sequence from {} to {}, [{}]", storage_name, write_batch_seq, cur_sequence, reader->toString());
+                LOG_FMT_WARNING(log, "{} restore skip non-continuous sequence from {} to {}, [{}]", storage_name, write_batch_seq, cur_sequence, reader->toString());
             }
 
             try
             {
+                // LOG_FMT_TRACE(log, "{} recovering from {}", storage_name, reader->toString());
                 auto edits = reader->getEdits();
                 versioned_page_entries.apply(edits);
                 restore_info.mergeEdits(edits);
@@ -299,7 +298,7 @@ void PageStorage::restore()
         else
         {
             // Set belonging PageFile's offset and close reader.
-            LOG_TRACE(log, "{} merge done from {}", storage_name, reader->toString());
+            LOG_FMT_TRACE(log, "{} merge done from {}", storage_name, reader->toString());
             reader->setPageFileOffsets();
         }
     }
@@ -308,9 +307,9 @@ void PageStorage::restore()
     {
         // Remove old checkpoints and archive obsolete PageFiles that have not been archived yet during gc for some reason.
 #ifdef PAGE_STORAGE_UTIL_DEBUGGGING
-        LOG_TRACE(log, "{} These file would be archive:", storage_name);
+        LOG_FMT_TRACE(log, "{} These file would be archive:", storage_name);
         for (const auto & pf : page_files_to_remove)
-            LOG_TRACE(log, "{} {}", storage_name, pf.toString());
+            LOG_FMT_TRACE(log, "{} {}", storage_name, pf.toString());
 #else
         // when restore `PageStorage`, the `PageFile` in `page_files_to_remove` is not counted in the total size,
         // so no need to remove its' size here again.
@@ -361,7 +360,7 @@ void PageStorage::restore()
 
     auto snapshot = getConcreteSnapshot();
     size_t num_pages = snapshot->version()->numPages();
-    LOG_INFO(log, "{} restore {} pages, write batch sequence: {}, {}", storage_name, num_pages, write_batch_seq, statistics.toString());
+    LOG_FMT_INFO(log, "{} restore {} pages, write batch sequence: {}, {}", storage_name, num_pages, write_batch_seq, statistics.toString());
 }
 
 PageId PageStorage::getMaxId()
@@ -403,7 +402,7 @@ DB::PageEntry PageStorage::getEntryImpl(NamespaceId /*ns_id*/, PageId page_id, S
     }
     catch (DB::Exception & e)
     {
-        LOG_WARNING(log, "{} {}", storage_name, e.message());
+        LOG_FMT_WARNING(log, "{} {}", storage_name, e.message());
         return {}; // return invalid PageEntry
     }
 }
@@ -412,20 +411,18 @@ DB::PageEntry PageStorage::getEntryImpl(NamespaceId /*ns_id*/, PageId page_id, S
 // - Writable, reuse `old_writer` if it is not a nullptr, otherwise, create a new writer from `page_file`
 // - Not writable, renew the `page_file` and its belonging writer.
 //   The <id,level> of the new `page_file` is <max_id + 1, 0> of all `write_files`
-// If `force` is true, always create new page file for writing.
 PageStorage::WriterPtr PageStorage::checkAndRenewWriter( //
     WritingPageFile & writing_file,
     PageFileIdAndLevel max_page_file_id_lvl_hint,
     const String & parent_path_hint,
     PageStorage::WriterPtr && old_writer,
-    const String & logging_msg,
-    bool force)
+    const String & logging_msg)
 {
     WriterPtr write_file_writer;
 
     PageFile & page_file = writing_file.file;
-    bool is_writable = (!force && page_file.isValid() && page_file.getType() == PageFile::Type::Formal //
-                        && isPageFileSizeFitsWritable(page_file, config));
+    bool is_writable = page_file.isValid() && page_file.getType() == PageFile::Type::Formal //
+        && isPageFileSizeFitsWritable(page_file, config);
     if (is_writable)
     {
         if (old_writer)
@@ -460,13 +457,12 @@ PageStorage::WriterPtr PageStorage::checkAndRenewWriter( //
         PageFileIdAndLevel max_writing_id_lvl{max_page_file_id_lvl_hint};
         for (const auto & wf : write_files)
             max_writing_id_lvl = std::max(max_writing_id_lvl, wf.file.fileIdLevel());
-
         delegator->addPageFileUsedSize( //
             PageFileIdAndLevel(max_writing_id_lvl.first + 1, 0),
             0,
             pf_parent_path,
             /*need_insert_location*/ true);
-        LOG_DEBUG(log, "{}{} create new PageFile_{}_0 for write [path={}]", storage_name, logging_msg, (max_writing_id_lvl.first + 1), pf_parent_path);
+        LOG_FMT_DEBUG(log, "{}{} create new PageFile_{}_0 for write [path={}]", storage_name, logging_msg, (max_writing_id_lvl.first + 1), pf_parent_path);
         // Renew the `file` and `persisted.meta_offset`, keep `persisted.sequence` unchanged.
         writing_file.file
             = PageFile::newPageFile(max_writing_id_lvl.first + 1, 0, pf_parent_path, file_provider, PageFile::Type::Formal, page_file_log);
@@ -527,7 +523,7 @@ void PageStorage::writeImpl(DB::WriteBatch && wb, const WriteLimiterPtr & write_
             {
                 pcg64 rng(randomSeed());
                 std::chrono::milliseconds ms{std::uniform_int_distribution(0, 900)(rng)}; // 0~900 milliseconds
-                LOG_WARNING(
+                LOG_FMT_WARNING(
                     log,
                     "Failpoint random_slow_page_storage_write sleep for {}ms, WriteBatch with sequence={}",
                     ms.count(),
@@ -621,7 +617,6 @@ size_t PageStorage::getNumberOfPages()
     }
 }
 
-// For debugging purpose
 std::set<PageId> PageStorage::getAliveExternalPageIds(NamespaceId /*ns_id*/)
 {
     const auto & concrete_snap = getConcreteSnapshot();
@@ -702,6 +697,53 @@ PageMap PageStorage::readImpl(NamespaceId /*ns_id*/, const PageIds & page_ids, c
             page_map.emplace(page_id, page);
     }
     return page_map;
+}
+
+PageIds PageStorage::readImpl(NamespaceId /*ns_id*/, const PageIds & page_ids, const PageHandler & handler, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist)
+{
+    if (!snapshot)
+    {
+        snapshot = this->getSnapshot("");
+    }
+
+    if (!throw_on_not_exist)
+    {
+        throw Exception("Not support throw_on_not_exist on V2", ErrorCodes::NOT_IMPLEMENTED);
+    }
+
+    std::map<PageFileIdAndLevel, std::pair<PageIdAndEntries, ReaderPtr>> file_read_infos;
+    for (auto page_id : page_ids)
+    {
+        const auto page_entry = toConcreteSnapshot(snapshot)->version()->find(page_id);
+        if (!page_entry)
+            throw Exception(fmt::format("Page {} not found", page_id), ErrorCodes::LOGICAL_ERROR);
+        auto file_id_level = page_entry->fileIdLevel();
+        auto & [page_id_and_entries, file_reader] = file_read_infos[file_id_level];
+        page_id_and_entries.emplace_back(page_id, *page_entry);
+        if (file_reader == nullptr)
+        {
+            try
+            {
+                file_reader = getReader(file_id_level);
+            }
+            catch (DB::Exception & e)
+            {
+                e.addMessage(fmt::format("(while reading Page[{}] of {})", page_id, storage_name));
+                throw;
+            }
+        }
+    }
+
+    for (auto & [file_id_level, entries_and_reader] : file_read_infos)
+    {
+        (void)file_id_level;
+        auto & page_id_and_entries = entries_and_reader.first;
+        auto & reader = entries_and_reader.second;
+
+        reader->read(page_id_and_entries, handler, read_limiter);
+    }
+
+    return {};
 }
 
 PageMap PageStorage::readImpl(NamespaceId /*ns_id*/, const std::vector<PageReadFields> & page_fields, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist)
@@ -827,7 +869,7 @@ void PageStorage::registerExternalPagesCallbacks(const ExternalPageCallbacks & c
 
 void PageStorage::drop()
 {
-    LOG_INFO(log, "{} is going to drop", storage_name);
+    LOG_FMT_INFO(log, "{} is going to drop", storage_name);
 
     ListPageFilesOption opt;
     opt.ignore_checkpoint = false;
@@ -852,7 +894,7 @@ void PageStorage::drop()
             file_provider->deleteDirectory(path, false, true);
     }
 
-    LOG_INFO(log, "{} drop done.", storage_name);
+    LOG_FMT_INFO(log, "{} drop done.", storage_name);
 }
 
 struct GcContext
@@ -877,9 +919,9 @@ struct GcContext
     size_t num_files_remove_data = 0;
     size_t num_bytes_remove_data = 0;
 
-    PageStorageConfig calculateGcConfig(const PageStorageConfig & config) const
+    PageStorage::Config calculateGcConfig(const PageStorage::Config & config) const
     {
-        PageStorageConfig res = config;
+        PageStorage::Config res = config;
         // Each legacy is about serval hundred KiB or serval MiB
         // It means each time `gc` is called, we will read `num_legacy_file` * serval MiB
         // Do more agressive GC if there are too many Legacy files
@@ -996,7 +1038,7 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
     if (unlikely(page_files.empty()))
     {
         // In case the directory are removed by accident
-        LOG_WARNING(log, "{} There are no page files while running GC", storage_name);
+        LOG_FMT_WARNING(log, "{} There are no page files while running GC", storage_name);
         return false;
     }
 
@@ -1024,7 +1066,7 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
         statistics_snapshot = statistics;
     }
     PageFileIdAndLevel min_writing_file_id_level = writing_files_snapshot.minFileIDLevel();
-    LOG_TRACE(log, "{} Before gc, {}", storage_name, statistics_snapshot.toString());
+    LOG_FMT_TRACE(log, "{} Before gc, {}", storage_name, statistics_snapshot.toString());
 
     // Helper function for apply edits and clean up before gc exit.
     auto apply_and_cleanup = [&, this](PageEntriesEdit && gc_edits) -> void {
@@ -1071,55 +1113,13 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
         {
             external_pages_remover(external_pages, live_normal_pages);
         }
-
-        // This instance will accept no more write, and we check whether there is any valid page in non writing page file,
-        // If not, it's very possible that all data have been moved to v3, so we try to roll all writing files to make them can be gced
-        if (no_more_insert)
-        {
-            bool has_normal_non_writing_files = false;
-            bool has_non_empty_write_file = false;
-            for (const auto & page_file : page_files)
-            {
-                if (page_file.fileIdLevel() < min_writing_file_id_level)
-                {
-                    if (page_file.getType() == PageFile::Type::Formal)
-                    {
-                        has_normal_non_writing_files = true;
-                    }
-                }
-                else
-                {
-                    // writing files
-                    if (page_file.getDiskSize() > 0)
-                    {
-                        has_non_empty_write_file = true;
-                    }
-                }
-                if (has_normal_non_writing_files && has_non_empty_write_file)
-                    break;
-            }
-            if (!has_normal_non_writing_files && has_non_empty_write_file)
-            {
-                std::unique_lock lock(write_mutex);
-                LOG_DEBUG(log, "{} No valid pages in non writing page files and the writing page files are not all empty. Try to roll all {} writing page files", storage_name, write_files.size());
-                idle_writers.clear();
-                for (auto & write_file : write_files)
-                {
-                    auto writer = checkAndRenewWriter(write_file, {0, 0}, /*parent_path_hint=*/"", nullptr, "", /*force*/ true);
-                    idle_writers.emplace_back(std::move(writer));
-                }
-            }
-        }
     };
 
     GCType gc_type = GCType::Normal;
     // Ignore page files that maybe writing to.
     do
     {
-        // Don't skip the GC under the case:
-        //  1. For page_storage_ctl
-        //  2. After transform all data from v2 to v3
-        if (not_skip)
+        if (not_skip) // For page_storage_ctl, don't skip the GC
         {
             gc_type = GCType::Normal;
             break;
@@ -1129,10 +1129,6 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
         {
             // If only few page files, running gc is useless.
             gc_type = GCType::Skip;
-        }
-        else if (no_more_insert)
-        {
-            gc_type = GCType::Normal;
         }
         else if (last_gc_statistics.equals(statistics_snapshot))
         {
@@ -1149,7 +1145,7 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
         {
             // Apply empty edit and cleanup.
             apply_and_cleanup(PageEntriesEdit{});
-            LOG_TRACE(log, "{} GC exit with no files to gc.", storage_name);
+            LOG_FMT_TRACE(log, "{} GC exit with no files to gc.", storage_name);
             return false;
         }
     } while (false);
@@ -1243,9 +1239,9 @@ bool PageStorage::gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, c
         // Log warning if the GC run for a long time.
         static constexpr double EXIST_LONG_GC = 30.0;
         if (elapsed_sec > EXIST_LONG_GC)
-            LOG_WARNING(log, GC_LOG_PARAMS);
+            LOG_FMT_WARNING(log, GC_LOG_PARAMS);
         else
-            LOG_INFO(log, GC_LOG_PARAMS);
+            LOG_FMT_INFO(log, GC_LOG_PARAMS);
 #undef GC_LOG_PARAMS
     }
     return gc_context.compact_result.do_compaction;
@@ -1280,7 +1276,7 @@ void PageStorage::archivePageFiles(const PageFileSet & page_files, bool remove_s
                 delegator->removePageFile(page_file.fileIdLevel(), file_size, /*meta_left*/ false, /*remove_from_default_path*/ page_file.getType() == PageFile::Type::Checkpoint);
             }
         }
-        LOG_INFO(log, "{} archive {} files to {}", storage_name, page_files.size(), archive_path.toString());
+        LOG_FMT_INFO(log, "{} archive {} files to {}", storage_name, page_files.size(), archive_path.toString());
     } while (false);
 
     // Maybe there are a large number of files left on disk by TiFlash version v4.0.0~v4.0.11, or some files left on disk
@@ -1311,7 +1307,7 @@ void PageStorage::archivePageFiles(const PageFileSet & page_files, bool remove_s
         }
     }
     size_t num_left = archive_page_files.size() > num_removed ? (archive_page_files.size() - num_removed) : 0;
-    LOG_INFO(
+    LOG_FMT_INFO(
         log,
         "{} clean {} files in archive dir, {} files are left to be clean in the next round.",
         storage_name,

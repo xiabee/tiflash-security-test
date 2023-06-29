@@ -63,7 +63,7 @@ private:
     UInt64 flush_version = 0;
     UInt64 minor_compaction_version = 0;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
 private:
     inline void updateColumnFileStats();
@@ -76,16 +76,6 @@ public:
     /// Restore the metadata of this instance.
     /// Only called after reboot.
     static ColumnFilePersistedSetPtr restore(DMContext & context, const RowKeyRange & segment_range, PageId id);
-
-    /**
-     * Resets the logger by using the one from the segment.
-     * Segment_log is not available when constructing, because usually
-     * at that time the segment has not been constructed yet.
-     */
-    void resetLogger(const LoggerPtr & segment_log)
-    {
-        log = segment_log;
-    }
 
     /// Thread safe part start
     String simpleInfo() const { return "ColumnFilePersistedSet [" + DB::toString(metadata_id) + "]"; }
@@ -110,20 +100,8 @@ public:
 
     BlockPtr getLastSchema();
 
-    /**
-     * Return newly appended column files compared to `previous_column_files`.
-     * If `previous_column_files` is not the prefix of the current column files, exceptions will be thrown.
-     *
-     * Example:
-     *  A, B, C, D          Current Column File
-     *  A, B                Previous Column File
-     *        C, D          Return Value
-     *
-     * Example of throws exception:
-     *  A, B, C, D          Current Column File
-     *     B                Previous Column File
-     */
-    ColumnFilePersisteds diffColumnFiles(const ColumnFiles & previous_column_files) const;
+    ColumnFilePersisteds
+    checkHeadAndCloneTail(DMContext & context, const RowKeyRange & target_range, const ColumnFiles & head_column_files, WriteBatches & wbs) const;
 
     /// Thread safe part start
     PageId getId() const { return metadata_id; }

@@ -18,7 +18,6 @@
 #include <Common/ThreadManager.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
-#include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Coprocessor/DecodeDetail.h>
@@ -36,28 +35,9 @@ namespace DB
 {
 struct ReceivedMessage
 {
-    size_t source_index;
+    std::shared_ptr<mpp::MPPDataPacket> packet;
+    size_t source_index = 0;
     String req_info;
-    // shared_ptr<const MPPDataPacket> is copied to make sure error_ptr, resp_ptr and chunks are valid.
-    const std::shared_ptr<DB::TrackedMppDataPacket> packet;
-    const mpp::Error * error_ptr;
-    const String * resp_ptr;
-    std::vector<const String *> chunks;
-
-    // Constructor that move chunks.
-    ReceivedMessage(size_t source_index_,
-                    const String & req_info_,
-                    const std::shared_ptr<DB::TrackedMppDataPacket> & packet_,
-                    const mpp::Error * error_ptr_,
-                    const String * resp_ptr_,
-                    std::vector<const String *> && chunks_)
-        : source_index(source_index_)
-        , req_info(req_info_)
-        , packet(packet_)
-        , error_ptr(error_ptr_)
-        , resp_ptr(resp_ptr_)
-        , chunks(chunks_)
-    {}
 };
 
 struct ExchangeReceiverResult
@@ -70,26 +50,6 @@ struct ExchangeReceiverResult
     bool eof;
     DecodeDetail decode_detail;
 
-    ExchangeReceiverResult()
-        : ExchangeReceiverResult(nullptr, 0)
-    {}
-
-    static ExchangeReceiverResult newOk(std::shared_ptr<tipb::SelectResponse> resp_, size_t call_index_, const String & req_info_)
-    {
-        return {resp_, call_index_, req_info_, /*meet_error*/ false, /*error_msg*/ "", /*eof*/ false};
-    }
-
-    static ExchangeReceiverResult newEOF(const String & req_info_)
-    {
-        return {/*resp*/ nullptr, 0, req_info_, /*meet_error*/ false, /*error_msg*/ "", /*eof*/ true};
-    }
-
-    static ExchangeReceiverResult newError(size_t call_index, const String & req_info, const String & error_msg)
-    {
-        return {/*resp*/ nullptr, call_index, req_info, /*meet_error*/ true, error_msg, /*eof*/ false};
-    }
-
-private:
     ExchangeReceiverResult(
         std::shared_ptr<tipb::SelectResponse> resp_,
         size_t call_index_,
@@ -104,6 +64,10 @@ private:
         , error_msg(error_msg_)
         , eof(eof_)
     {}
+
+    ExchangeReceiverResult()
+        : ExchangeReceiverResult(nullptr, 0)
+    {}
 };
 
 enum class ExchangeReceiverState
@@ -114,7 +78,6 @@ enum class ExchangeReceiverState
     CLOSED,
 };
 
-using MsgChannelPtr = std::unique_ptr<MPMCQueue<std::shared_ptr<ReceivedMessage>>>;
 
 template <typename RPCContext>
 class ExchangeReceiverBase
@@ -129,8 +92,7 @@ public:
         size_t source_num_,
         size_t max_streams_,
         const String & req_id,
-        const String & executor_id,
-        uint64_t fine_grained_shuffle_stream_count);
+        const String & executor_id);
 
     ~ExchangeReceiverBase();
 
@@ -142,66 +104,59 @@ public:
 
     ExchangeReceiverResult nextResult(
         std::queue<Block> & block_queue,
-        const Block & header,
-        size_t stream_id,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
+        const Block & header);
 
     size_t getSourceNum() const { return source_num; }
-    uint64_t getFineGrainedShuffleStreamCount() const { return enable_fine_grained_shuffle_flag ? output_stream_count : 0; }
 
-    int getExternalThreadCnt() const { return thread_count; }
+    int computeNewThreadCount() const { return thread_count; }
+
+    void collectNewThreadCount(int & cnt)
+    {
+        if (!collected)
+        {
+            collected = true;
+            cnt += computeNewThreadCount();
+        }
+    }
+
+    void resetNewThreadCountCompute()
+    {
+        collected = false;
+    }
 
 private:
-    std::shared_ptr<MemoryTracker> mem_tracker;
     using Request = typename RPCContext::Request;
 
-    // Template argument enable_fine_grained_shuffle will be setup properly in setUpConnection().
-    template <bool enable_fine_grained_shuffle>
-    void readLoop(const Request & req);
-    template <bool enable_fine_grained_shuffle>
-    void reactor(const std::vector<Request> & async_requests);
     void setUpConnection();
+    void readLoop(const Request & req);
+    void reactor(const std::vector<Request> & async_requests);
 
     bool setEndState(ExchangeReceiverState new_state);
-    String getStatusString();
-
-    ExchangeReceiverResult handleUnnormalChannel(
-        std::queue<Block> & block_queue,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
+    ExchangeReceiverState getState();
 
     DecodeDetail decodeChunks(
         const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::queue<Block> & block_queue,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
+        const Block & header);
+
 
     void connectionDone(
         bool meet_error,
         const String & local_err_msg,
         const LoggerPtr & log);
 
-    void finishAllMsgChannels();
-    void cancelAllMsgChannels();
-
-    ExchangeReceiverResult toDecodeResult(
-        std::queue<Block> & block_queue,
-        const Block & header,
-        const std::shared_ptr<ReceivedMessage> & recv_msg,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
-
-private:
     std::shared_ptr<RPCContext> rpc_context;
 
     const tipb::ExchangeReceiver pb_exchange_receiver;
     const size_t source_num;
     const ::mpp::TaskMeta task_meta;
-    const bool enable_fine_grained_shuffle_flag;
-    const size_t output_stream_count;
+    const size_t max_streams;
     const size_t max_buffer_size;
 
     std::shared_ptr<ThreadManager> thread_manager;
     DAGSchema schema;
 
-    std::vector<MsgChannelPtr> msg_channels;
+    MPMCQueue<std::shared_ptr<ReceivedMessage>> msg_channel;
 
     std::mutex mu;
     /// should lock `mu` when visit these members

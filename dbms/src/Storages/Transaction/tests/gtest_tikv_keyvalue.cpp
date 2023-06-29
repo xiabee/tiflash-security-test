@@ -66,11 +66,6 @@ TiKVValue encode_lock_cf_value(
             res.write(s.data(), s.size());
         }
     }
-    {
-        res.write(RecordKVFormat::LAST_CHANGE_PREFIX);
-        RecordKVFormat::encodeUInt64(12345678, res);
-        TiKV::writeVarUInt(87654321, res);
-    }
     return TiKVValue(res.releaseStr());
 }
 

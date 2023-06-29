@@ -27,6 +27,7 @@ namespace ProfileEvents
 {
 // no need to update sync, since write buffers inherit that directly from `WriteBufferFromFileDescriptor`
 extern const Event WriteBufferFromFileDescriptorWrite;
+extern const Event WriteBufferFromFileDescriptorWriteFailed;
 extern const Event WriteBufferFromFileDescriptorWriteBytes;
 extern const Event ReadBufferFromFileDescriptorRead;
 extern const Event ReadBufferFromFileDescriptorReadBytes;
@@ -106,6 +107,7 @@ private:
             }
             if (unlikely(count == -1))
             {
+                ProfileEvents::increment(ProfileEvents::WriteBufferFromFileDescriptorWriteFailed);
                 if (errno == EINTR)
                     continue;
                 else
@@ -384,6 +386,8 @@ private:
 
     off_t doSeek(off_t offset, int whence) override
     {
+        ProfileEvents::increment(ProfileEvents::Seek);
+
         auto & frame = reinterpret_cast<ChecksumFrame<Backend> &>(
             *(this->working_buffer.begin() - sizeof(ChecksumFrame<Backend>))); // align should not fail
 

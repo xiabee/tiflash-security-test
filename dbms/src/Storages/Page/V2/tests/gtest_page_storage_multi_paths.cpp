@@ -79,7 +79,7 @@ protected:
     }
 
 protected:
-    PageStorageConfig config;
+    PageStorage::Config config;
     std::shared_ptr<BackgroundProcessingPool> bkg_pool;
     std::shared_ptr<PageStorage> storage;
     const FileProviderPtr file_provider;

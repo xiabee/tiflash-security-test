@@ -47,11 +47,10 @@ using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
 class Set
 {
 public:
-    explicit Set(const SizeLimits & limits, TiDB::TiDBCollators && collators_ = {})
+    Set(const SizeLimits & limits)
         : log(&Poco::Logger::get("Set"))
         , limits(limits)
         , set_elements(std::make_unique<SetElements>())
-        , collators(std::move(collators_))
     {
     }
 
@@ -75,7 +74,7 @@ public:
     /** Create a Set from stream.
       * Call setHeader, then call insertFromBlock for each block.
       */
-    void setHeader(const Block &);
+    void setHeader(const Block & header);
 
     /// Returns false, if some limit was exceeded and no need to insert more data.
     bool insertFromBlock(const Block & block, bool fill_set_elements);
@@ -95,8 +94,10 @@ public:
     void setContainsNullValue(bool contains_null_value_) { contains_null_value = contains_null_value_; }
     bool containsNullValue() const { return contains_null_value; }
 
+    void setCollators(TiDB::TiDBCollators & collators_) { collators = collators_; }
+
 private:
-    size_t keys_size{};
+    size_t keys_size;
     Sizes key_sizes;
 
     SetVariants data;

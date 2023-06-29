@@ -74,7 +74,7 @@ protected:
         storage = reopenWithConfig(config);
     }
 
-    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorageConfig & config_)
+    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorage::Config & config_)
     {
         auto delegator = path_pool->getPSDiskDelegatorSingle("log");
         auto storage = std::make_shared<PageStorage>("test.t", delegator, config_, file_provider, *bkg_pool);
@@ -83,7 +83,7 @@ protected:
     }
 
 protected:
-    PageStorageConfig config;
+    PageStorage::Config config;
     std::shared_ptr<BackgroundProcessingPool> bkg_pool;
     std::shared_ptr<PageStorage> storage;
     std::unique_ptr<StoragePathPool> path_pool;
@@ -467,7 +467,7 @@ try
         ASSERT_EQ(page_files.size(), 1UL);
     }
 
-    PageStorageConfig config;
+    PageStorage::Config config;
     config.file_roll_size = 10; // make it easy to renew a new page file for write
     storage = reopenWithConfig(config);
 
@@ -491,7 +491,7 @@ try
         c_buff[i] = i % 0xff;
     }
 
-    PageStorageConfig tmp_config = config;
+    PageStorage::Config tmp_config = config;
     tmp_config.file_roll_size = 128 * MB;
     storage = reopenWithConfig(tmp_config);
 
@@ -802,7 +802,7 @@ try
     }
 
     // Restore, the broken meta should be ignored
-    storage = reopenWithConfig(PageStorageConfig{});
+    storage = reopenWithConfig(PageStorage::Config{});
 
     {
         size_t num_pages = 0;
@@ -831,7 +831,7 @@ try
     }
 
     // Restore again, we should be able to read page 1
-    storage = reopenWithConfig(PageStorageConfig{});
+    storage = reopenWithConfig(PageStorage::Config{});
 
     {
         size_t num_pages = 0;
@@ -905,7 +905,7 @@ try
     }
 
     // Restore again, we should be able to read page 1
-    storage = reopenWithConfig(PageStorageConfig{});
+    storage = reopenWithConfig(PageStorage::Config{});
 
     {
         size_t num_pages = 0;

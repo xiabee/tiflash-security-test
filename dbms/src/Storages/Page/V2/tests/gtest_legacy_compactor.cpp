@@ -35,7 +35,7 @@ namespace DB::PS::V2::tests
 TEST(LegacyCompactorTest, WriteMultipleBatchRead)
 try
 {
-    PageStorageConfig config;
+    PageStorage::Config config;
     Poco::Logger * log = &Poco::Logger::get("LegacyCompactor_test");
 
     PageEntriesVersionSetWithDelta original_version("test", config.version_set_config, log);
@@ -79,9 +79,9 @@ try
         PageEntriesEdit edit;
 
         auto writes = wb.getWrites();
-        for (const auto & w : writes)
+        for (auto w : writes)
         {
-            if (w.type == WriteBatchWriteType::UPSERT)
+            if (w.type == WriteBatch::WriteType::UPSERT)
             {
                 auto entry = snapshot->version()->findNormalPageEntry(w.page_id);
                 if (entry)
@@ -89,7 +89,7 @@ try
                 else
                     FAIL() << "Cannot find specified page";
             }
-            else if (w.type == WriteBatchWriteType::REF)
+            else if (w.type == WriteBatch::WriteType::REF)
                 edit.ref(w.page_id, w.ori_page_id);
             else
                 FAIL() << "Snapshot writes should only contain UPSERT and REF";
@@ -174,7 +174,7 @@ try
     StoragePathPool spool = ctx.getPathPool().withTable("test", "t", false);
     auto delegator = spool.getPSDiskDelegatorSingle("meta");
     auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
-    PageStorage storage("compact_test", delegator, PageStorageConfig{}, file_provider, *bkg_pool);
+    PageStorage storage("compact_test", delegator, PageStorage::Config{}, file_provider, *bkg_pool);
 
     PageStorage::ListPageFilesOption opt;
     opt.ignore_checkpoint = false;
@@ -235,7 +235,7 @@ try
             num_pages += 1;
         }
 
-        LOG_INFO(storage.log, "All {} are consist.", num_pages);
+        LOG_FMT_INFO(storage.log, "All {} are consist.", num_pages);
     }
 }
 CATCH

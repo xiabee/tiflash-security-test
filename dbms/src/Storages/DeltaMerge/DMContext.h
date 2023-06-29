@@ -20,9 +20,6 @@
 #include <Interpreters/Settings.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/ScanContext.h>
-
-#include <memory>
 
 namespace DB
 {
@@ -45,6 +42,7 @@ struct DMContext : private boost::noncopyable
 
     StoragePathPool & path_pool;
     StoragePool & storage_pool;
+    const UInt64 hash_salt;
 
     // gc safe-point, maybe update.
     DB::Timestamp min_version;
@@ -87,22 +85,21 @@ struct DMContext : private boost::noncopyable
 
     String tracing_id;
 
-    ScanContextPtr scan_context;
-
 public:
     DMContext(const Context & db_context_,
               StoragePathPool & path_pool_,
               StoragePool & storage_pool_,
+              const UInt64 hash_salt_,
               const DB::Timestamp min_version_,
               const NotCompress & not_compress_,
               bool is_common_handle_,
               size_t rowkey_column_size_,
               const DB::Settings & settings,
-              const ScanContextPtr & scan_context_ = std::make_shared<ScanContext>(),
               const String & tracing_id_ = "")
         : db_context(db_context_)
         , path_pool(path_pool_)
         , storage_pool(storage_pool_)
+        , hash_salt(hash_salt_)
         , min_version(min_version_)
         , not_compress(not_compress_)
         , is_common_handle(is_common_handle_)
@@ -123,7 +120,6 @@ public:
         , enable_relevant_place(settings.dt_enable_relevant_place)
         , enable_skippable_place(settings.dt_enable_skippable_place)
         , tracing_id(tracing_id_)
-        , scan_context(scan_context_)
     {
     }
 

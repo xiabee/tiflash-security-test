@@ -23,10 +23,17 @@
 #include <Functions/ObjectPool.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/ExpressionActions.h>
-#include <boost_wrapper/geometry.h>
 
+#include <boost/geometry.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
+
+
+namespace ProfileEvents
+{
+extern const Event PolygonsAddedToPool;
+extern const Event PolygonsInPoolAllocatedBytes;
+} // namespace ProfileEvents
 
 namespace DB
 {
@@ -52,6 +59,9 @@ ColumnPtr callPointInPolygonImplWithPool(const IColumn & x, const IColumn & y, P
 
         /// To allocate memory.
         ptr->init();
+
+        ProfileEvents::increment(ProfileEvents::PolygonsAddedToPool);
+        ProfileEvents::increment(ProfileEvents::PolygonsInPoolAllocatedBytes, ptr->getAllocatedBytes());
 
         return ptr.release();
     };
@@ -111,30 +121,30 @@ public:
             throw Exception("Too few arguments", ErrorCodes::TOO_LESS_ARGUMENTS_FOR_FUNCTION);
         }
 
-        auto get_msg_prefix = [this](size_t i) {
+        auto getMsgPrefix = [this](size_t i) {
             return "Argument " + toString(i + 1) + " for function " + getName();
         };
 
         for (size_t i = 1; i < arguments.size(); ++i)
         {
-            const auto * array = checkAndGetDataType<DataTypeArray>(arguments[i].get());
+            auto * array = checkAndGetDataType<DataTypeArray>(arguments[i].get());
             if (array == nullptr && i != 1)
-                throw Exception(get_msg_prefix(i) + " must be array of tuples.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                throw Exception(getMsgPrefix(i) + " must be array of tuples.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-            const auto * tuple = checkAndGetDataType<DataTypeTuple>(array ? array->getNestedType().get() : arguments[i].get());
+            auto * tuple = checkAndGetDataType<DataTypeTuple>(array ? array->getNestedType().get() : arguments[i].get());
             if (tuple == nullptr)
-                throw Exception(get_msg_prefix(i) + " must contains tuple.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                throw Exception(getMsgPrefix(i) + " must contains tuple.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
             const DataTypes & elements = tuple->getElements();
 
             if (elements.size() != 2)
-                throw Exception(get_msg_prefix(i) + " must have exactly two elements.", ErrorCodes::BAD_ARGUMENTS);
+                throw Exception(getMsgPrefix(i) + " must have exactly two elements.", ErrorCodes::BAD_ARGUMENTS);
 
             for (auto j : ext::range(0, elements.size()))
             {
                 if (!elements[j]->isNumber())
                 {
-                    throw Exception(get_msg_prefix(i) + " must contains numeric tuple at position " + toString(j + 1),
+                    throw Exception(getMsgPrefix(i) + " must contains numeric tuple at position " + toString(j + 1),
                                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
                 }
             }
@@ -146,10 +156,10 @@ public:
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
         const IColumn * point_col = block.getByPosition(arguments[0]).column.get();
-        const auto * const_tuple_col = checkAndGetColumn<ColumnConst>(point_col);
+        auto const_tuple_col = checkAndGetColumn<ColumnConst>(point_col);
         if (const_tuple_col)
             point_col = &const_tuple_col->getDataColumn();
-        const auto * tuple_col = checkAndGetColumn<ColumnTuple>(point_col);
+        auto tuple_col = checkAndGetColumn<ColumnTuple>(point_col);
 
         if (!tuple_col)
         {
@@ -197,18 +207,18 @@ private:
     {
         Polygon<Type> polygon;
 
-        auto get_msg_prefix = [this](size_t i) {
+        auto getMsgPrefix = [this](size_t i) {
             return "Argument " + toString(i + 1) + " for function " + getName();
         };
 
         for (size_t i = 1; i < arguments.size(); ++i)
         {
-            const auto * const_col = checkAndGetColumn<ColumnConst>(block.getByPosition(arguments[i]).column.get());
-            const auto * array_col = const_col ? checkAndGetColumn<ColumnArray>(&const_col->getDataColumn()) : nullptr;
-            const auto * tuple_col = array_col ? checkAndGetColumn<ColumnTuple>(&array_col->getData()) : nullptr;
+            auto const_col = checkAndGetColumn<ColumnConst>(block.getByPosition(arguments[i]).column.get());
+            auto array_col = const_col ? checkAndGetColumn<ColumnArray>(&const_col->getDataColumn()) : nullptr;
+            auto tuple_col = array_col ? checkAndGetColumn<ColumnTuple>(&array_col->getData()) : nullptr;
 
             if (!tuple_col)
-                throw Exception(get_msg_prefix(i) + " must be constant array of tuples.", ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception(getMsgPrefix(i) + " must be constant array of tuples.", ErrorCodes::ILLEGAL_COLUMN);
 
             const auto & tuple_columns = tuple_col->getColumns();
             const auto & column_x = tuple_columns[0];
@@ -222,7 +232,7 @@ private:
             auto size = column_x->size();
 
             if (size == 0)
-                throw Exception(get_msg_prefix(i) + " shouldn't be empty.", ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception(getMsgPrefix(i) + " shouldn't be empty.", ErrorCodes::ILLEGAL_COLUMN);
 
             for (auto j : ext::range(0, size))
             {
@@ -236,11 +246,11 @@ private:
                 container.push_back(container.front());
         }
 
-        auto call_impl = use_object_pool
+        auto callImpl = use_object_pool
             ? FunctionPointInPolygonDetail::callPointInPolygonImplWithPool<Polygon<Type>, PointInPolygonImpl<Type>>
             : FunctionPointInPolygonDetail::callPointInPolygonImpl<Polygon<Type>, PointInPolygonImpl<Type>>;
 
-        return call_impl(x, y, polygon);
+        return callImpl(x, y, polygon);
     }
 };
 

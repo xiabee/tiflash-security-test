@@ -16,7 +16,14 @@
 
 #include <Common/ThreadFactory.h>
 #include <Common/UnaryCallback.h>
-#include <Common/grpcpp.h>
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <grpc++/grpc++.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #include <atomic>
 
@@ -32,16 +39,10 @@ public:
 
     ::grpc::CompletionQueue & pickQueue();
 
-    void markShutdown()
-    {
-        is_shutdown = true;
-    }
-
 private:
     void thread(size_t index);
 
     std::atomic<size_t> next = 0;
-    std::atomic<bool> is_shutdown{false};
     std::vector<::grpc::CompletionQueue> queues;
     std::vector<std::thread> workers;
 };

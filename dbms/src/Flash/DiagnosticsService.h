@@ -32,10 +32,9 @@ class DiagnosticsService final : public ::diagnosticspb::Diagnostics::Service
     , private boost::noncopyable
 {
 public:
-    explicit DiagnosticsService(Context & context_, Poco::Util::LayeredConfiguration & config_)
+    explicit DiagnosticsService(IServer & _server)
         : log(&Poco::Logger::get("DiagnosticsService"))
-        , context(context_)
-        , config(config_)
+        , server(_server)
     {}
     ~DiagnosticsService() override = default;
 
@@ -52,9 +51,8 @@ public:
 
 private:
     Poco::Logger * log;
-    Context & context;
 
-    Poco::Util::LayeredConfiguration & config;
+    IServer & server;
 };
 
 } // namespace DB

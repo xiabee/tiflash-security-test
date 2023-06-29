@@ -109,7 +109,7 @@ inline ::testing::AssertionResult getEntryCompare(
     String error;
     try
     {
-        auto id_entry = dir->getByID(page_id, snap);
+        auto id_entry = dir->get(page_id, snap);
         return check_id_entry({page_id, expected_entry}, id_entry);
     }
     catch (DB::Exception & ex)
@@ -186,7 +186,8 @@ inline ::testing::AssertionResult getEntriesCompare(
     String error;
     try
     {
-        auto id_entries = dir->getByIDs(page_ids, snap);
+        auto [id_entries, page_ids_not_found] = dir->get(page_ids, snap);
+        (void)page_ids_not_found;
         return check_id_entries(expected_entries, id_entries);
     }
     catch (DB::Exception & ex)
@@ -221,7 +222,7 @@ inline ::testing::AssertionResult getEntryNotExist(
     String error;
     try
     {
-        auto id_entry = dir->getByIDOrNull(page_id, snap);
+        auto id_entry = dir->getOrNull(page_id, snap);
         if (!id_entry.second.isValid())
             return ::testing::AssertionSuccess();
         error = fmt::format(
@@ -261,7 +262,8 @@ inline ::testing::AssertionResult getEntriesNotExist(
     String error;
     try
     {
-        auto id_entries = dir->getByIDs(page_ids, snap);
+        auto [id_entries, page_ids_not_found] = dir->get(page_ids, snap);
+        (void)page_ids_not_found;
         error = fmt::format(
             "Expect entry [id={}] from {} with snap{} not exist, but got {}",
             page_ids_expr,

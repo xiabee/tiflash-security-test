@@ -38,13 +38,13 @@ public:
     ExecutorStatistics(const tipb::Executor * executor, DAGContext & dag_context_)
         : dag_context(dag_context_)
     {
-        RUNTIME_CHECK(executor->has_executor_id());
+        assert(executor->has_executor_id());
         executor_id = executor->executor_id();
 
         type = ExecutorImpl::type;
 
         getChildren(*executor).forEach([&](const tipb::Executor & child) {
-            RUNTIME_CHECK(child.has_executor_id());
+            assert(child.has_executor_id());
             children.push_back(child.executor_id());
         });
     }
@@ -84,11 +84,10 @@ public:
         {
             for (const auto & input_stream : it->second)
             {
-                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(input_stream.get()); p_stream)
-                {
-                    const auto & profile_info = p_stream->getProfileInfo();
-                    base.append(profile_info);
-                }
+                auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(input_stream.get());
+                assert(p_stream);
+                const auto & profile_info = p_stream->getProfileInfo();
+                base.append(profile_info);
             }
         }
         if constexpr (ExecutorImpl::has_extra_info)

@@ -16,13 +16,13 @@
 
 #include <Common/nocopyable.h>
 #include <Storages/Transaction/ProxyFFI.h>
-#include <Storages/Transaction/SSTReader.h>
 
 #include <map>
 
 
 namespace DB
 {
+
 class KVStore;
 using KVStorePtr = std::shared_ptr<KVStore>;
 
@@ -43,7 +43,7 @@ struct MockSSTReader
         Data() = default;
     };
 
-    explicit MockSSTReader(const Data & data_)
+    MockSSTReader(const Data & data_)
         : iter(data_.begin())
         , end(data_.end())
         , remained(iter != end)
@@ -66,24 +66,20 @@ private:
     Data::const_iterator end;
     bool remained;
 
-    // (region_id, cf) -> Data
     static std::map<Key, MockSSTReader::Data> MockSSTData;
 };
 
-SSTReaderInterfaces make_mock_sst_reader_interface();
 
-class RegionMockTest final
+class RegionMockTest
 {
 public:
-    RegionMockTest(KVStore * kvstore_, RegionPtr region_);
+    RegionMockTest(KVStorePtr kvstore_, RegionPtr region_);
     ~RegionMockTest();
-
-    DISALLOW_COPY_AND_MOVE(RegionMockTest);
 
 private:
     TiFlashRaftProxyHelper mock_proxy_helper{};
     const TiFlashRaftProxyHelper * ori_proxy_helper{};
-    KVStore * kvstore;
+    KVStorePtr kvstore;
     RegionPtr region;
 };
 } // namespace DB

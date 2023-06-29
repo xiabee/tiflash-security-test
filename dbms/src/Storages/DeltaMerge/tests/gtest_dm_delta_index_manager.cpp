@@ -22,10 +22,10 @@ namespace DM
 {
 namespace tests
 {
-class DeltaIndexManagerTest : public ::testing::Test
+class DeltaIndexManager_test : public ::testing::Test
 {
 public:
-    DeltaIndexManagerTest()
+    DeltaIndexManager_test()
         : one_node_size(DefaultDeltaTree().getBytes())
     {}
 
@@ -41,7 +41,7 @@ DeltaIndexPtr genDeltaIndex()
 }
 
 
-TEST_F(DeltaIndexManagerTest, LRU)
+TEST_F(DeltaIndexManager_test, LRU)
 try
 {
     DeltaIndexManager manager(one_node_size * 100);

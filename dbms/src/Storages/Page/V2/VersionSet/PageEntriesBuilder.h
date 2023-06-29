@@ -42,22 +42,13 @@ public:
         current_version->copyEntries(*old_version);
     }
 
-    ~PageEntriesBuilder()
-    {
-        old_version->release();
-    }
+    ~PageEntriesBuilder() { old_version->release(); }
 
     void apply(const PageEntriesEdit & edit);
 
-    void gcApply(PageEntriesEdit & edit)
-    {
-        gcApplyTemplate(current_version, edit, current_version);
-    }
+    void gcApply(PageEntriesEdit & edit) { gcApplyTemplate(current_version, edit, current_version); }
 
-    PageEntries * build()
-    {
-        return current_version;
-    }
+    PageEntries * build() { return current_version; }
 
 public:
     template <typename OldVersionType, typename VersionType>
@@ -65,10 +56,10 @@ public:
     {
         for (auto & rec : edit.getRecords())
         {
-            if (unlikely(rec.type == WriteBatchWriteType::PUT))
+            if (unlikely(rec.type == WriteBatch::WriteType::PUT))
                 throw Exception("Should use UPDATE for gc edits, please check your code!!", ErrorCodes::LOGICAL_ERROR);
 
-            if (rec.type != WriteBatchWriteType::UPSERT)
+            if (rec.type != WriteBatch::WriteType::UPSERT)
                 continue;
             // Gc only apply MOVE_NORMAL_PAGE for updating normal page entries
             const auto old_page_entry = old_version->findNormalPageEntry(rec.page_id);

@@ -49,14 +49,35 @@ String getColumnTypeName(const Column column)
 template <typename Columns>
 void toString(const Columns & columns, FmtBuffer & buf)
 {
-    if (!columns.empty())
+    assert(columns.size() > 0);
+    int bound = columns.size() - 1;
+    for (int i = 0; i < bound; ++i)
     {
-        int bound = columns.size() - 1;
-        for (int i = 0; i < bound; ++i)
-        {
-            buf.fmtAppend("<{}, {}>, ", i, getColumnTypeName(columns.at(i)));
-        }
-        buf.fmtAppend("<{}, {}>", bound, getColumnTypeName(columns.at(bound)));
+        buf.fmtAppend("<{}, {}>, ", i, getColumnTypeName(columns.at(i)));
+    }
+    buf.fmtAppend("<{}, {}>", bound, getColumnTypeName(columns.at(bound)));
+}
+} // namespace
+
+String ExecutorSerializer::serialize(const tipb::DAGRequest * dag_request)
+{
+    assert((dag_request->executors_size() > 0) != dag_request->has_root_executor());
+    if (dag_request->has_root_executor())
+    {
+        serialize(dag_request->root_executor(), 0);
+        return buf.toString();
+    }
+    else
+    {
+        FmtBuffer buffer;
+        String prefix;
+        traverseExecutors(dag_request, [this, &prefix](const tipb::Executor & executor) {
+            assert(executor.has_executor_id());
+            buf.fmtAppend("{}{}\n", prefix, executor.executor_id());
+            prefix.append(" ");
+            return true;
+        });
+        return buffer.toString();
     }
 }
 
@@ -183,114 +204,7 @@ void serializeExchangeReceiver(const String & executor_id, const tipb::ExchangeR
     buf.append("}\n");
 }
 
-void serializeWindow(const String & executor_id, const tipb::Window & window [[maybe_unused]], FmtBuffer & buf)
-{
-    buf.fmtAppend("{} | partition_by: {{", executor_id);
-    buf.joinStr(
-        window.partition_by().begin(),
-        window.partition_by().end(),
-        [&](const auto & partition_by, FmtBuffer & fb) {
-            fb.append("(");
-            serializeExpression(partition_by.expr(), buf);
-            fb.fmtAppend(", desc: {})", partition_by.desc());
-        },
-        ", ");
-    buf.append("}}, order_by: {");
-    buf.joinStr(
-        window.order_by().begin(),
-        window.order_by().end(),
-        [&](const auto & order_by, FmtBuffer & fb) {
-            fb.append("(");
-            serializeExpression(order_by.expr(), buf);
-            fb.fmtAppend(", desc: {})", order_by.desc());
-        },
-        ", ");
-    buf.append("}, func_desc: {");
-    buf.joinStr(
-        window.func_desc().begin(),
-        window.func_desc().end(),
-        [&](const auto & func, FmtBuffer &) {
-            serializeExpression(func, buf);
-        },
-        ", ");
-    if (window.has_frame())
-    {
-        buf.append("}, frame: {");
-        if (window.frame().has_start())
-        {
-            buf.fmtAppend("start<{}, {}, {}>", window.frame().start().type(), window.frame().start().unbounded(), window.frame().start().offset());
-        }
-        if (window.frame().has_end())
-        {
-            buf.fmtAppend(", end<{}, {}, {}>", window.frame().end().type(), window.frame().end().unbounded(), window.frame().end().offset());
-        }
-    }
-    buf.append("}\n");
-}
-
-void serializeSort(const String & executor_id, const tipb::Sort & sort [[maybe_unused]], FmtBuffer & buf)
-{
-    buf.fmtAppend("{} | isPartialSort: {}, partition_by: {{", executor_id, sort.ispartialsort());
-    buf.joinStr(
-        sort.byitems().begin(),
-        sort.byitems().end(),
-        [&](const auto & by, FmtBuffer & fb) {
-            fb.append("(");
-            serializeExpression(by.expr(), buf);
-            fb.fmtAppend(", desc: {})", by.desc());
-        },
-        ", ");
-    buf.append("}\n");
-}
-} // namespace
-
-String ExecutorSerializer::serialize(const tipb::DAGRequest * dag_request)
-{
-    assert((dag_request->executors_size() > 0) != dag_request->has_root_executor());
-    if (dag_request->has_root_executor())
-    {
-        serializeTreeStruct(dag_request->root_executor(), 0);
-    }
-    else
-    {
-        serializeListStruct(dag_request);
-    }
-    return buf.toString();
-}
-
-void ExecutorSerializer::serializeListStruct(const tipb::DAGRequest * dag_request)
-{
-    String prefix;
-    traverseExecutors(dag_request, [this, &prefix](const tipb::Executor & executor) {
-        buf.append(prefix);
-        switch (executor.tp())
-        {
-        case tipb::ExecType::TypeTableScan:
-            serializeTableScan("TableScan", executor.tbl_scan(), buf);
-            break;
-        case tipb::ExecType::TypeSelection:
-            serializeSelection("Selection", executor.selection(), buf);
-            break;
-        case tipb::ExecType::TypeAggregation:
-        // stream agg is not supported, treated as normal agg
-        case tipb::ExecType::TypeStreamAgg:
-            serializeAggregation("Aggregation", executor.aggregation(), buf);
-            break;
-        case tipb::ExecType::TypeTopN:
-            serializeTopN("TopN", executor.topn(), buf);
-            break;
-        case tipb::ExecType::TypeLimit:
-            serializeLimit("Limit", executor.limit(), buf);
-            break;
-        default:
-            throw TiFlashException("Should not reach here", Errors::Coprocessor::Internal);
-        }
-        prefix.append(" ");
-        return true;
-    });
-}
-
-void ExecutorSerializer::serializeTreeStruct(const tipb::Executor & root_executor, size_t level)
+void ExecutorSerializer::serialize(const tipb::Executor & root_executor, size_t level)
 {
     auto append_str = [&level, this](const tipb::Executor & executor) {
         assert(executor.has_executor_id());
@@ -334,11 +248,9 @@ void ExecutorSerializer::serializeTreeStruct(const tipb::Executor & root_executo
             serializeExchangeSender(executor.executor_id(), executor.exchange_sender(), buf);
             break;
         case tipb::ExecType::TypeSort:
-            serializeSort(executor.executor_id(), executor.sort(), buf);
-            break;
+            throw TiFlashException("Sort executor is not supported", Errors::Coprocessor::Unimplemented); // todo support sort executor.
         case tipb::ExecType::TypeWindow:
-            serializeWindow(executor.executor_id(), executor.window(), buf);
-            break;
+            throw TiFlashException("Window executor is not supported", Errors::Coprocessor::Unimplemented); // todo support window executor.
         default:
             throw TiFlashException("Should not reach here", Errors::Coprocessor::Internal);
         }
@@ -350,7 +262,7 @@ void ExecutorSerializer::serializeTreeStruct(const tipb::Executor & root_executo
         if (executor.has_join())
         {
             for (const auto & child : executor.join().children())
-                serializeTreeStruct(child, level);
+                serialize(child, level);
             return false;
         }
         return true;

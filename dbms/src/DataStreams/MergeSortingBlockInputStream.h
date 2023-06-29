@@ -92,7 +92,7 @@ public:
     /// limit - if not 0, allowed to return just first 'limit' rows in sorted order.
     MergeSortingBlockInputStream(
         const BlockInputStreamPtr & input,
-        const SortDescription & description_,
+        SortDescription & description_,
         size_t max_merged_block_size_,
         size_t limit_,
         size_t max_bytes_before_external_sort_,
@@ -109,7 +109,6 @@ public:
 
 protected:
     Block readImpl() override;
-    void appendInfo(FmtBuffer & buffer) const override;
 
 private:
     SortDescription description;

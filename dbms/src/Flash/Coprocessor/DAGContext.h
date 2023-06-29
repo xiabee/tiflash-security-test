@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Storages/DeltaMerge/ScanContext.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #ifdef __clang__
@@ -28,11 +27,9 @@
 #include <Common/Logger.h>
 #include <DataStreams/BlockIO.h>
 #include <DataStreams/IBlockInputStream.h>
-#include <Flash/Coprocessor/FineGrainedShuffle.h>
 #include <Flash/Coprocessor/TablesRegionsInfo.h>
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Interpreters/SubqueryForSet.h>
-#include <Parsers/makeDummyQuery.h>
 #include <Storages/Transaction/TiDB.h>
 
 namespace DB
@@ -40,13 +37,6 @@ namespace DB
 class Context;
 class MPPTunnelSet;
 class ExchangeReceiver;
-using ExchangeReceiverPtr = std::shared_ptr<ExchangeReceiver>;
-/// key: executor_id of ExchangeReceiver nodes in dag.
-using ExchangeReceiverMap = std::unordered_map<String, ExchangeReceiverPtr>;
-class MPPReceiverSet;
-using MPPReceiverSetPtr = std::shared_ptr<MPPReceiverSet>;
-class CoprocessorReader;
-using CoprocessorReaderPtr = std::shared_ptr<CoprocessorReader>;
 
 class Join;
 using JoinPtr = std::shared_ptr<Join>;
@@ -55,12 +45,9 @@ struct JoinExecuteInfo
     String build_side_root_executor_id;
     JoinPtr join_ptr;
     BlockInputStreams non_joined_streams;
-    BlockInputStreams join_build_streams;
 };
 
 using MPPTunnelSetPtr = std::shared_ptr<MPPTunnelSet>;
-
-class ProcessListEntry;
 
 UInt64 inline getMaxErrorCount(const tipb::DAGRequest &)
 {
@@ -129,11 +116,10 @@ public:
     // for non-mpp(cop/batchCop)
     explicit DAGContext(const tipb::DAGRequest & dag_request_)
         : dag_request(&dag_request_)
-        , dummy_query_string(dag_request->DebugString())
-        , dummy_ast(makeDummyQuery())
         , collect_execution_summaries(dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
         , is_mpp_task(false)
         , is_root_mpp_task(false)
+        , tunnel_set(nullptr)
         , flags(dag_request->flags())
         , sql_mode(dag_request->sql_mode())
         , max_recorded_error_count(getMaxErrorCount(*dag_request))
@@ -149,12 +135,11 @@ public:
     // for mpp
     DAGContext(const tipb::DAGRequest & dag_request_, const mpp::TaskMeta & meta_, bool is_root_mpp_task_)
         : dag_request(&dag_request_)
-        , dummy_query_string(dag_request->DebugString())
-        , dummy_ast(makeDummyQuery())
         , collect_execution_summaries(dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
         , return_executor_id(true)
         , is_mpp_task(true)
         , is_root_mpp_task(is_root_mpp_task_)
+        , tunnel_set(nullptr)
         , flags(dag_request->flags())
         , sql_mode(dag_request->sql_mode())
         , mpp_task_meta(meta_)
@@ -164,6 +149,7 @@ public:
         , warning_count(0)
     {
         assert(dag_request->has_root_executor() && dag_request->root_executor().has_executor_id());
+
         // only mpp task has join executor.
         initExecutorIdToJoinIdMap();
         initOutputInfo();
@@ -172,32 +158,32 @@ public:
     // for test
     explicit DAGContext(UInt64 max_error_count_)
         : dag_request(nullptr)
-        , dummy_query_string("")
-        , dummy_ast(makeDummyQuery())
         , collect_execution_summaries(false)
         , is_mpp_task(false)
         , is_root_mpp_task(false)
+        , tunnel_set(nullptr)
         , flags(0)
         , sql_mode(0)
         , max_recorded_error_count(max_error_count_)
         , warnings(max_recorded_error_count)
         , warning_count(0)
+        , is_test(true)
     {}
 
     // for tests need to run query tasks.
     explicit DAGContext(const tipb::DAGRequest & dag_request_, String log_identifier, size_t concurrency)
         : dag_request(&dag_request_)
-        , dummy_query_string(dag_request->DebugString())
-        , dummy_ast(makeDummyQuery())
         , initialize_concurrency(concurrency)
-        , is_mpp_task(true)
+        , is_mpp_task(false)
         , is_root_mpp_task(false)
+        , tunnel_set(nullptr)
         , log(Logger::get(log_identifier))
         , flags(dag_request->flags())
         , sql_mode(dag_request->sql_mode())
         , max_recorded_error_count(getMaxErrorCount(*dag_request))
         , warnings(max_recorded_error_count)
         , warning_count(0)
+        , is_test(true)
     {
         assert(dag_request->has_root_executor() || dag_request->executors_size() > 0);
         return_executor_id = dag_request->root_executor().has_executor_id() || dag_request->executors(0).has_executor_id();
@@ -205,6 +191,7 @@ public:
         initOutputInfo();
     }
 
+    void attachBlockIO(const BlockIO & io_);
     std::unordered_map<String, BlockInputStreams> & getProfileStreamsMap();
 
     std::unordered_map<String, std::vector<String>> & getExecutorIdToJoinIdMap();
@@ -262,6 +249,12 @@ public:
 
     bool containsRegionsInfoForTable(Int64 table_id) const;
 
+    const BlockIO & getBlockIO() const
+    {
+        return io;
+    }
+
+    int getNewThreadCountOfExchangeReceiver() const;
     UInt64 getFlags() const
     {
         return flags;
@@ -304,27 +297,18 @@ public:
         return sql_mode & f;
     }
 
-    void updateFinalConcurrency(size_t cur_streams_size, size_t streams_upper_limit);
+    bool isTest() const { return is_test; }
 
-    ExchangeReceiverPtr getMPPExchangeReceiver(const String & executor_id) const;
-    void setMPPReceiverSet(const MPPReceiverSetPtr & receiver_set)
-    {
-        mpp_receiver_set = receiver_set;
-    }
-    void addCoprocessorReader(const CoprocessorReaderPtr & coprocessor_reader);
-    std::vector<CoprocessorReaderPtr> & getCoprocessorReaders();
+    void cancelAllExchangeReceiver();
+
+    void initExchangeReceiverIfMPP(Context & context, size_t max_streams);
+    const std::unordered_map<String, std::shared_ptr<ExchangeReceiver>> & getMPPExchangeReceiverMap() const;
 
     void addSubquery(const String & subquery_id, SubqueryForSet && subquery);
     bool hasSubquery() const { return !subqueries.empty(); }
     std::vector<SubqueriesForSets> && moveSubqueries() { return std::move(subqueries); }
-    void setProcessListEntry(std::shared_ptr<ProcessListEntry> entry) { process_list_entry = entry; }
-    std::shared_ptr<ProcessListEntry> getProcessListEntry() const { return process_list_entry; }
 
     const tipb::DAGRequest * dag_request;
-    /// Some existing code inherited from Clickhouse assume that each query must have a valid query string and query ast,
-    /// dummy_query_string and dummy_ast is used for that
-    String dummy_query_string;
-    ASTPtr dummy_ast;
     Int64 compile_time_ns = 0;
     size_t final_concurrency = 1;
     size_t initialize_concurrency = 1;
@@ -333,12 +317,11 @@ public:
     Clock::time_point read_wait_index_end_timestamp{Clock::duration::zero()};
     String table_scan_executor_id;
     String tidb_host = "Unknown";
-    bool collect_execution_summaries{};
-    bool return_executor_id{};
+    bool collect_execution_summaries;
+    bool return_executor_id;
     bool is_mpp_task = false;
     bool is_root_mpp_task = false;
     bool is_batch_cop = false;
-    // `tunnel_set` is always set by `MPPTask` and is intended to be used for `DAGQueryBlockInterpreter`.
     MPPTunnelSetPtr tunnel_set;
     TablesRegionsInfo tables_regions_info;
     // part of regions_for_local_read + regions_for_remote_read, only used for batch-cop
@@ -354,23 +337,14 @@ public:
     std::vector<tipb::FieldType> output_field_types;
     std::vector<Int32> output_offsets;
 
-    /// Hold the order of list based executors.
-    /// It is used to ensure that the order of Execution summary of list based executors is the same as the order of list based executors.
-    std::vector<String> list_based_executors_order;
-
-    /// executor_id, ScanContextPtr
-    /// Currently, max(scan_context_map.size()) == 1, because one mpp task only have do one table scan
-    /// While when we support collcate join later, scan_context_map.size() may > 1,
-    /// thus we need to pay attention to scan_context_map usage that time.
-    std::unordered_map<String, DM::ScanContextPtr> scan_context_map;
-
 private:
     void initExecutorIdToJoinIdMap();
     void initOutputInfo();
 
 private:
-    std::shared_ptr<ProcessListEntry> process_list_entry;
-    /// profile_streams_map is a map that maps from executor_id to profile BlockInputStreams.
+    /// Hold io for correcting the destruction order.
+    BlockIO io;
+    /// profile_streams_map is a map that maps from executor_id to profile BlockInputStreams
     std::unordered_map<String, BlockInputStreams> profile_streams_map;
     /// executor_id_to_join_id_map is a map that maps executor id to all the join executor id of itself and all its children.
     std::unordered_map<String, std::vector<String>> executor_id_to_join_id_map;
@@ -389,12 +363,15 @@ private:
     ConcurrentBoundedQueue<tipb::Error> warnings;
     /// warning_count is the actual warning count during the entire execution
     std::atomic<UInt64> warning_count;
-
-    MPPReceiverSetPtr mpp_receiver_set;
-    std::vector<CoprocessorReaderPtr> coprocessor_readers;
+    int new_thread_count_of_exchange_receiver = 0;
+    /// key: executor_id of ExchangeReceiver nodes in dag.
+    std::unordered_map<String, std::shared_ptr<ExchangeReceiver>> mpp_exchange_receiver_map;
+    bool mpp_exchange_receiver_map_inited = false;
     /// vector of SubqueriesForSets(such as join build subquery).
     /// The order of the vector is also the order of the subquery.
     std::vector<SubqueriesForSets> subqueries;
+
+    bool is_test = false; /// switch for test, do not use it in production.
 };
 
 } // namespace DB

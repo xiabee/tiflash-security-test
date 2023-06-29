@@ -120,7 +120,7 @@ dt_enable_rough_set_filter = false
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         // Reload users config with test case
         auto & global_ctx = TiFlashTestEnv::getGlobalContext();
@@ -210,7 +210,7 @@ dt_compression_level = 1
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         // Reload users config with test case
         global_ctx.reloadDeltaTreeConfig(*config);
@@ -286,10 +286,9 @@ dt_open_file_max_idle_seconds = 20
 dt_page_gc_low_write_prob = 0.2
         )"};
     auto & global_ctx = TiFlashTestEnv::getGlobalContext();
-    auto & global_path_pool = global_ctx.getPathPool();
     RegionManager region_manager;
     RegionPersister persister(global_ctx, region_manager);
-    persister.restore(global_path_pool, nullptr, PageStorageConfig{});
+    persister.restore(nullptr, PageStorage::Config{});
 
     auto verify_persister_reload_config = [&global_ctx](RegionPersister & persister) {
         DB::Settings & settings = global_ctx.getSettingsRef();
@@ -319,7 +318,7 @@ dt_page_gc_low_write_prob = 0.2
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         // Reload users config with test case
         global_ctx.reloadDeltaTreeConfig(*config);
@@ -365,10 +364,10 @@ dt_page_gc_low_write_prob = 0.2
     std::unique_ptr<StoragePathPool> path_pool = std::make_unique<StoragePathPool>(global_ctx.getPathPool().withTable("test", "t1", false));
     std::unique_ptr<DM::StoragePool> storage_pool = std::make_unique<DM::StoragePool>(global_ctx, /*ns_id*/ 100, *path_pool, "test.t1");
 
-    auto verify_storage_pool_reload_config = [&](std::unique_ptr<DM::StoragePool> & storage_pool) {
+    auto verify_storage_pool_reload_config = [&global_ctx](std::unique_ptr<DM::StoragePool> & storage_pool) {
         DB::Settings & settings = global_ctx.getSettingsRef();
 
-        auto cfg = storage_pool->dataWriter()->getSettings();
+        auto cfg = storage_pool->data_storage_v2->getSettings();
         EXPECT_NE(cfg.gc_min_files, settings.dt_storage_pool_data_gc_min_file_num);
         EXPECT_NE(cfg.gc_min_legacy_num, settings.dt_storage_pool_data_gc_min_legacy_num);
         EXPECT_NE(cfg.gc_min_bytes, settings.dt_storage_pool_data_gc_min_bytes);
@@ -377,9 +376,9 @@ dt_page_gc_low_write_prob = 0.2
         EXPECT_NE(cfg.open_file_max_idle_time, settings.dt_open_file_max_idle_seconds);
         EXPECT_NE(cfg.prob_do_gc_when_write_is_low, settings.dt_page_gc_low_write_prob * 1000);
 
-        global_ctx.getGlobalStoragePool()->gc();
+        storage_pool->gc(settings, DM::StoragePool::Seconds(0));
 
-        cfg = storage_pool->dataWriter()->getSettings();
+        cfg = storage_pool->data_storage_v2->getSettings();
         EXPECT_EQ(cfg.gc_min_files, settings.dt_storage_pool_data_gc_min_file_num);
         EXPECT_EQ(cfg.gc_min_legacy_num, settings.dt_storage_pool_data_gc_min_legacy_num);
         EXPECT_EQ(cfg.gc_min_bytes, settings.dt_storage_pool_data_gc_min_bytes);
@@ -394,7 +393,7 @@ dt_page_gc_low_write_prob = 0.2
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         // Reload users config with test case
         global_ctx.reloadDeltaTreeConfig(*config);
@@ -444,6 +443,7 @@ try
 [profiles]
 [profiles.default]
 dt_enable_rough_set_filter = false
+dt_raw_filter_range = 0
 dt_read_delta_only = 1
 dt_read_stable_only = true
         )"};
@@ -454,10 +454,11 @@ dt_read_stable_only = true
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         global_ctx.reloadDeltaTreeConfig(*config);
         ASSERT_EQ(global_ctx.getSettingsRef().dt_enable_rough_set_filter, false);
+        ASSERT_EQ(global_ctx.getSettingsRef().dt_raw_filter_range, false);
         ASSERT_EQ(global_ctx.getSettingsRef().dt_read_delta_only, true);
         ASSERT_EQ(global_ctx.getSettingsRef().dt_read_stable_only, true);
     }

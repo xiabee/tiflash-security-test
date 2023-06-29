@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Exception.h>
 #include <DataTypes/DataTypeDecimal.h>
 #include <DataTypes/DataTypeEnum.h>
 #include <DataTypes/DataTypeMyDate.h>
@@ -31,8 +30,6 @@
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TiDB.h>
 #include <Storages/Transaction/TypeMapping.h>
-
-#include <mutex>
 
 namespace DB
 {
@@ -353,40 +350,27 @@ Field getDefaultValue(const ASTPtr & default_value_ast)
     return Field();
 }
 
-TableID MockTiDB::newPartition(TableID belong_logical_table, const String & partition_name, Timestamp tso, bool is_add_part)
+void MockTiDB::newPartition(const String & database_name, const String & table_name, TableID partition_id, Timestamp tso, bool is_add_part)
 {
     std::lock_guard lock(tables_mutex);
 
-    TablePtr logical_table = getTableByID(belong_logical_table);
-    TableID partition_id = table_id_allocator++; // allocate automatically
+    TablePtr table = getTableByNameInternal(database_name, table_name);
+    TableInfo & table_info = table->table_info;
 
-    return newPartitionImpl(logical_table, partition_id, partition_name, tso, is_add_part);
-}
-
-TableID MockTiDB::newPartition(const String & database_name, const String & table_name, TableID partition_id, Timestamp tso, bool is_add_part)
-{
-    std::lock_guard lock(tables_mutex);
-
-    TablePtr logical_table = getTableByNameInternal(database_name, table_name);
-    return newPartitionImpl(logical_table, partition_id, toString(partition_id), tso, is_add_part);
-}
-
-TableID MockTiDB::newPartitionImpl(const TablePtr & logical_table, TableID partition_id, const String & partition_name, Timestamp tso, bool is_add_part)
-{
-    TableInfo & table_info = logical_table->table_info;
-    RUNTIME_CHECK_MSG(!logical_table->existPartitionID(partition_id),
-                      "Mock TiDB table {}.{} already has partition {}, table_info={}",
-                      logical_table->database_name,
-                      logical_table->table_name,
-                      partition_id,
-                      table_info.serialize());
+    const auto & part_def = find_if(
+        table_info.partition.definitions.begin(),
+        table_info.partition.definitions.end(),
+        [&partition_id](PartitionDefinition & part_def) { return part_def.id == partition_id; });
+    if (part_def != table_info.partition.definitions.end())
+        throw Exception("Mock TiDB table " + database_name + "." + table_name + " already has partition " + std::to_string(partition_id),
+                        ErrorCodes::LOGICAL_ERROR);
 
     table_info.is_partition_table = true;
     table_info.partition.enable = true;
     table_info.partition.num++;
     PartitionDefinition partition_def;
     partition_def.id = partition_id;
-    partition_def.name = partition_name;
+    partition_def.name = std::to_string(partition_id);
     table_info.partition.definitions.emplace_back(partition_def);
     table_info.update_timestamp = tso;
 
@@ -396,12 +380,11 @@ TableID MockTiDB::newPartitionImpl(const TablePtr & logical_table, TableID parti
 
         SchemaDiff diff;
         diff.type = SchemaActionType::AddTablePartition;
-        diff.schema_id = logical_table->database_id;
-        diff.table_id = logical_table->id();
+        diff.schema_id = table->database_id;
+        diff.table_id = table->id();
         diff.version = version;
         version_diff[version] = diff;
     }
-    return partition_id;
 }
 
 void MockTiDB::dropPartition(const String & database_name, const String & table_name, TableID partition_id)
@@ -648,13 +631,6 @@ TablePtr MockTiDB::getTableByNameInternal(const String & database_name, const St
     return it->second;
 }
 
-TablePtr MockTiDB::getTableByID(TableID table_id)
-{
-    if (auto it = tables_by_id.find(table_id); it != tables_by_id.end())
-        return it->second;
-    throw Exception(fmt::format("Mock TiDB table does not exists, table_id={}", table_id), ErrorCodes::UNKNOWN_TABLE);
-}
-
 TiDB::TableInfoPtr MockTiDB::getTableInfoByID(TableID table_id)
 {
     auto it = tables_by_id.find(table_id);
@@ -692,14 +668,9 @@ std::pair<bool, DatabaseID> MockTiDB::getDBIDByName(const String & database_name
     return std::make_pair(false, -1);
 }
 
-std::optional<SchemaDiff> MockTiDB::getSchemaDiff(Int64 version_)
+SchemaDiff MockTiDB::getSchemaDiff(Int64 version_)
 {
     return version_diff[version_];
-}
-
-bool MockTiDB::checkSchemaDiffExists(Int64 version)
-{
-    return version_diff.find(version) != version_diff.end();
 }
 
 } // namespace DB

@@ -44,7 +44,7 @@ CreatingSetsBlockInputStream::CreatingSetsBlockInputStream(
     const String & req_id)
     : subqueries_for_sets_list(std::move(subqueries_for_sets_list_))
     , network_transfer_limits(network_transfer_limits)
-    , log(Logger::get(req_id))
+    , log(Logger::get(name, req_id))
 {
     init(input);
 }
@@ -55,7 +55,7 @@ CreatingSetsBlockInputStream::CreatingSetsBlockInputStream(
     const SizeLimits & network_transfer_limits,
     const String & req_id)
     : network_transfer_limits(network_transfer_limits)
-    , log(Logger::get(req_id))
+    , log(Logger::get(name, req_id))
 {
     subqueries_for_sets_list.push_back(subqueries_for_sets);
     init(input);
@@ -85,7 +85,7 @@ Block CreatingSetsBlockInputStream::readImpl()
 {
     Block res;
 
-    RUNTIME_CHECK(created == true);
+    createAll();
 
     if (isCancelledOrThrowIfKilled())
         return res;
@@ -125,43 +125,32 @@ void CreatingSetsBlockInputStream::createAll()
         }
         Stopwatch watch;
         auto thread_manager = newThreadManager();
-        try
+        for (auto & subqueries_for_sets : subqueries_for_sets_list)
         {
-            for (auto & subqueries_for_sets : subqueries_for_sets_list)
+            for (auto & elem : subqueries_for_sets)
             {
-                for (auto & elem : subqueries_for_sets)
+                if (elem.second.source) /// There could be prepared in advance Set/Join - no source is specified for them.
                 {
-                    if (elem.second.source) /// There could be prepared in advance Set/Join - no source is specified for them.
-                    {
-                        if (isCancelledOrThrowIfKilled())
-                        {
-                            thread_manager->wait();
-                            return;
-                        }
-                        thread_manager->schedule(true, "CreatingSets", [this, &item = elem.second] { createOne(item); });
-                        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_in_creating_set_input_stream);
-                    }
+                    if (isCancelledOrThrowIfKilled())
+                        return;
+                    thread_manager->schedule(true, "CreatingSets", [this, &item = elem.second] { createOne(item); });
+                    FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_in_creating_set_input_stream);
                 }
             }
-        }
-        catch (...)
-        {
-            thread_manager->wait();
-            throw;
         }
 
         thread_manager->wait();
 
         if (!exception_from_workers.empty())
         {
-            LOG_ERROR(
+            LOG_FMT_ERROR(
                 log,
                 "Creating all tasks takes {} sec with exception and rethrow the first of total {} exceptions",
                 watch.elapsedSeconds(),
                 exception_from_workers.size());
             std::rethrow_exception(exception_from_workers.front());
         }
-        LOG_DEBUG(
+        LOG_FMT_DEBUG(
             log,
             "Creating all tasks takes {} sec. ",
             watch.elapsedSeconds());
@@ -184,7 +173,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
     Stopwatch watch;
     try
     {
-        LOG_DEBUG(log, "{}", gen_log_msg());
+        LOG_FMT_DEBUG(log, "{}", gen_log_msg());
         BlockOutputStreamPtr table_out;
         if (subquery.table)
             table_out = subquery.table->write({}, {});
@@ -203,7 +192,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
         {
             if (isCancelled())
             {
-                LOG_DEBUG(log, "Query was cancelled during set / join or temporary table creation.");
+                LOG_FMT_DEBUG(log, "Query was cancelled during set / join or temporary table creation.");
                 return;
             }
 
@@ -211,6 +200,14 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
             {
                 if (!subquery.set->insertFromBlock(block, /*fill_set_elements=*/false))
                     done_with_set = true;
+            }
+
+            if (!done_with_join)
+            {
+                // move building hash tables into `HashJoinBuildBlockInputStream`, so that fetch block and insert block into a hash table are
+                // running into a thread, avoiding generating more threads.
+                if (subquery.join->isBuildSetExceeded())
+                    done_with_join = true;
             }
 
             if (!done_with_table)
@@ -231,7 +228,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
 
             if (done_with_set && done_with_join && done_with_table)
             {
-                if (auto * profiling_in = dynamic_cast<IProfilingBlockInputStream *>(&*subquery.source))
+                if (IProfilingBlockInputStream * profiling_in = dynamic_cast<IProfilingBlockInputStream *>(&*subquery.source))
                     profiling_in->cancel(false);
 
                 break;
@@ -251,7 +248,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
         watch.stop();
 
         size_t head_rows = 0;
-        if (auto * profiling_in = dynamic_cast<IProfilingBlockInputStream *>(&*subquery.source))
+        if (IProfilingBlockInputStream * profiling_in = dynamic_cast<IProfilingBlockInputStream *>(&*subquery.source))
         {
             const BlockStreamProfileInfo & profile_info = profiling_in->getProfileInfo();
 
@@ -260,8 +257,6 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
             if (subquery.join)
                 subquery.join->setTotals(profiling_in->getTotals());
         }
-        if (subquery.join)
-            head_rows = subquery.join->getTotalBuildInputRows();
 
         if (head_rows != 0)
         {
@@ -277,16 +272,16 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
                 if (subquery.table)
                     msg.fmtAppend("Table with {} rows. ", head_rows);
 
-                msg.fmtAppend("In {:.3f} sec. ", watch.elapsedSeconds());
+                msg.fmtAppend("In {.3f} sec. ", watch.elapsedSeconds());
                 msg.fmtAppend("using {} threads.", subquery.join ? subquery.join->getBuildConcurrency() : 1);
                 return msg.toString();
             };
 
-            LOG_DEBUG(log, "{}", gen_debug_log_msg());
+            LOG_FMT_DEBUG(log, "{}", gen_debug_log_msg());
         }
         else
         {
-            LOG_DEBUG(log, "Subquery has empty result.");
+            LOG_FMT_DEBUG(log, "Subquery has empty result.");
         }
     }
     catch (...)
@@ -295,7 +290,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
         exception_from_workers.push_back(std::current_exception());
         if (subquery.join)
             subquery.join->setBuildTableState(Join::BuildTableState::FAILED);
-        LOG_ERROR(log, "{} throw exception: {} In {} sec. ", gen_log_msg(), getCurrentExceptionMessage(false, true), watch.elapsedSeconds());
+        LOG_FMT_ERROR(log, "{} throw exception: {} In {} sec. ", gen_log_msg(), getCurrentExceptionMessage(false, true), watch.elapsedSeconds());
     }
 }
 

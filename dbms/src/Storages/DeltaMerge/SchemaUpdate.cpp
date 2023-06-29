@@ -50,25 +50,25 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
             }
             else if (value.getType() == Field::Types::Decimal32)
             {
-                auto dec = safeGet<DecimalField<Decimal32>>(value);
-                auto res = dec.getValue().toFloat<Float64>(dec.getScale());
+                DecimalField<Decimal32> dec = safeGet<DecimalField<Decimal32>>(value);
+                Float64 res = dec.getValue().toFloat<Float64>(dec.getScale());
                 return toField(res);
             }
             else if (value.getType() == Field::Types::Decimal64)
             {
-                auto dec = safeGet<DecimalField<Decimal64>>(value);
-                auto res = dec.getValue().toFloat<Float64>(dec.getScale());
+                DecimalField<Decimal64> dec = safeGet<DecimalField<Decimal64>>(value);
+                Float64 res = dec.getValue().toFloat<Float64>(dec.getScale());
                 return toField(res);
             }
             else
             {
-                throw Exception(fmt::format("Unknown float number literal: {}, value type: {}", applyVisitor(FieldVisitorToString(), value), value.getTypeName()));
+                throw Exception(fmt::format("Unknown float number literal: {}, value type: {}" + applyVisitor(FieldVisitorToString(), value), value.getTypeName()));
             }
         }
         case TypeIndex::String:
         case TypeIndex::FixedString:
         {
-            auto res = get<String>(value);
+            String res = get<String>(value);
             return toField(res);
         }
         case TypeIndex::Int8:
@@ -247,7 +247,7 @@ void applyAlter(ColumnDefines & table_columns,
         if (unlikely(!exist_column))
         {
             // Fall back to find column by name, this path should only call by tests.
-            LOG_WARNING(
+            LOG_FMT_WARNING(
                 log,
                 "Try to apply alter to column: {}, id: {},"
                 " but not found by id, fall back locating col by name.",
@@ -311,7 +311,7 @@ void applyAlter(ColumnDefines & table_columns,
     }
     else
     {
-        LOG_WARNING(log, "receive unknown alter command, type: {}", static_cast<Int32>(command.type));
+        LOG_FMT_WARNING(log, "receive unknown alter command, type: {}", static_cast<Int32>(command.type));
     }
 }
 

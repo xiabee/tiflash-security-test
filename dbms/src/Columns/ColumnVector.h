@@ -45,14 +45,6 @@ struct CompareHelper
     }
 };
 
-template <>
-struct CompareHelper<Null>
-{
-    static bool less(Null, Null, int) { return false; }
-    static bool greater(Null, Null, int) { return false; }
-    static int compare(Null, Null, int) { return 0; }
-};
-
 template <typename T>
 struct FloatCompareHelper
 {
@@ -152,11 +144,7 @@ inline UInt64 unionCastToUInt64(Float32 x)
 template <typename targetType, typename encodeType>
 inline targetType decodeInt(const char * pos)
 {
-    if constexpr (std::is_same_v<targetType, Null>)
-    {
-        return Null{};
-    }
-    else if constexpr (is_signed_v<targetType>)
+    if (is_signed_v<targetType>)
     {
         return static_cast<targetType>(static_cast<std::make_signed_t<encodeType>>(readLittleEndian<encodeType>(pos)));
     }
@@ -292,11 +280,7 @@ public:
 
     StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
 
-    inline const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override
-    {
-        data.push_back(*reinterpret_cast<const T *>(pos));
-        return pos + sizeof(T);
-    }
+    const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override;
 
     void updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
     void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const override;
@@ -373,11 +357,6 @@ public:
     MutableColumns scatter(IColumn::ColumnIndex num_columns, const IColumn::Selector & selector) const override
     {
         return this->template scatterImpl<Self>(num_columns, selector);
-    }
-
-    void scatterTo(IColumn::ScatterColumns & columns, const IColumn::Selector & selector) const override
-    {
-        this->template scatterToImpl<Self>(columns, selector);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;

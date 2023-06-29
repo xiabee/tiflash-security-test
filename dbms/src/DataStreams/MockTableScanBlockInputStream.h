@@ -21,26 +21,20 @@ namespace DB
 class MockTableScanBlockInputStream : public IProfilingBlockInputStream
 {
 public:
-    MockTableScanBlockInputStream(ColumnsWithTypeAndName columns, size_t max_block_size, bool is_infinite_ = false);
+    MockTableScanBlockInputStream(ColumnsWithTypeAndName columns, size_t max_block_size);
     Block getHeader() const override
     {
         return Block(columns);
     }
     String getName() const override { return "MockTableScan"; }
-
-protected:
-    Block readImpl() override;
-    ColumnPtr makeColumn(ColumnWithTypeAndName elem) const;
-
-private:
     ColumnsWithTypeAndName columns;
     size_t output_index;
     size_t max_block_size;
     size_t rows;
 
-    // flag that decide whether the mockStream can produce infinite nums of blocks.
-    // Used in cancelMPPTask tests in order to keep the query tasks alive.
-    bool is_infinite;
+protected:
+    Block readImpl() override;
+    ColumnPtr makeColumn(ColumnWithTypeAndName elem) const;
 };
 
 } // namespace DB

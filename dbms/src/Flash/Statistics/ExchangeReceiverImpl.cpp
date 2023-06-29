@@ -48,16 +48,15 @@ void ExchangeReceiverStatistics::collectExtraRuntimeDetail()
     {
         for (const auto & io_stream : it->second)
         {
+            auto * exchange_receiver_stream = dynamic_cast<ExchangeReceiverInputStream *>(io_stream.get());
             /// InBoundIOInputStream of ExchangeReceiver should be ExchangeReceiverInputStream
-            if (auto * exchange_receiver_stream = dynamic_cast<ExchangeReceiverInputStream *>(io_stream.get()); exchange_receiver_stream)
+            assert(exchange_receiver_stream);
+            const auto & connection_profile_infos = exchange_receiver_stream->getConnectionProfileInfos();
+            assert(connection_profile_infos.size() == partition_num);
+            for (size_t i = 0; i < partition_num; ++i)
             {
-                const auto & connection_profile_infos = exchange_receiver_stream->getConnectionProfileInfos();
-                RUNTIME_CHECK(connection_profile_infos.size() == partition_num);
-                for (size_t i = 0; i < partition_num; ++i)
-                {
-                    exchange_receive_details[i].packets += connection_profile_infos[i].packets;
-                    exchange_receive_details[i].bytes += connection_profile_infos[i].bytes;
-                }
+                exchange_receive_details[i].packets += connection_profile_infos[i].packets;
+                exchange_receive_details[i].bytes += connection_profile_infos[i].bytes;
             }
         }
     }
@@ -73,7 +72,7 @@ ExchangeReceiverStatistics::ExchangeReceiverStatistics(const tipb::Executor * ex
     for (size_t index = 0; index < partition_num; ++index)
     {
         auto sender_task = mpp::TaskMeta{};
-        if (unlikely(!sender_task.ParseFromString(exchange_sender_receiver.encoded_task_meta(index))))
+        if (!sender_task.ParseFromString(exchange_sender_receiver.encoded_task_meta(index)))
             throw Exception("parse task meta error!");
         receiver_source_task_ids.push_back(sender_task.task_id());
 

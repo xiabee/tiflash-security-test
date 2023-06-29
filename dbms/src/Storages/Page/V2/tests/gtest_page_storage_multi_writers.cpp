@@ -63,7 +63,7 @@ protected:
         storage = reopenWithConfig(config);
     }
 
-    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorageConfig & config_)
+    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorage::Config & config_)
     {
         auto spool = db_context->getPathPool().withTable("test", "t", false);
         auto delegator = spool.getPSDiskDelegatorSingle("log");
@@ -73,7 +73,7 @@ protected:
     }
 
 protected:
-    PageStorageConfig config;
+    PageStorage::Config config;
     std::shared_ptr<BackgroundProcessingPool> bkg_pool;
     std::shared_ptr<PageStorage> storage;
     const FileProviderPtr file_provider;
@@ -224,16 +224,16 @@ public:
                 LOG_TRACE(&Poco::Logger::get("root"), e.displayText());
             }
 #else
-            PageIds page_ids;
+            PageIds pageIds;
             for (size_t i = 0; i < 5; ++i)
             {
-                page_ids.emplace_back(random() % ctx.MAX_PAGE_ID);
+                pageIds.emplace_back(random() % ctx.MAX_PAGE_ID);
             }
             try
             {
-                auto page_map = storage->read(page_ids);
-                for (const auto & page : page_map)
-                {
+                // std::function<void(PageId page_id, const Page &)>;
+                PageHandler handler = [&](PageId page_id, const Page & page) {
+                    (void)page_id;
                     // use `sleep` to mock heavy read
                     if (heavy_read_delay_ms > 0)
                     {
@@ -241,8 +241,9 @@ public:
                         usleep(heavy_read_delay_ms * 1000);
                     }
                     ++pages_read;
-                    bytes_read += page.second.data.size();
-                }
+                    bytes_read += page.data.size();
+                };
+                storage->read(pageIds, handler);
             }
             catch (DB::Exception & e)
             {
@@ -370,7 +371,7 @@ try
     size_t timeout_s = 5 * 60;
 
     srand(0x123987);
-    PageStorageConfig curr_config = config;
+    PageStorage::Config curr_config = config;
     curr_config.num_write_slots = num_write_slots;
 
     storage = reopenWithConfig(curr_config);

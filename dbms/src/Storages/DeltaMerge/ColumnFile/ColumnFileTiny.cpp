@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Exception.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/convertColumnTypeHelpers.h>
@@ -72,17 +71,11 @@ Columns ColumnFileTiny::readFromDisk(const PageReader & page_reader, //
         }
         else
         {
-            // New column after ddl is not exist in this CFTiny, fill with default value
+            // New column after ddl is not exist in this pack, fill with default value
             columns[index - col_start] = createColumnWithDefaultValue(cd, rows);
         }
     }
 
-    // All columns to be read are not exist in this CFTiny and filled with default value,
-    // we can skip reading from disk
-    if (fields.second.empty())
-        return columns;
-
-    // Read the columns from disk and apply DDL cast if need
     auto page_map = page_reader.read({fields});
     Page page = page_map[data_page_id];
     for (size_t index = col_start; index < col_end; ++index)
@@ -190,7 +183,7 @@ Block ColumnFileTiny::readBlockForMinorCompaction(const PageReader & page_reader
     }
 }
 
-ColumnFileTinyPtr ColumnFileTiny::writeColumnFile(DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs, const BlockPtr & schema, const CachePtr & cache)
+ColumnTinyFilePtr ColumnFileTiny::writeColumnFile(DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs, const BlockPtr & schema, const CachePtr & cache)
 {
     auto page_id = writeColumnFileData(context, block, offset, limit, wbs);
     auto new_column_file_schema = schema ? schema : std::make_shared<Block>(block.cloneEmpty());
@@ -208,9 +201,7 @@ PageId ColumnFileTiny::writeColumnFileData(DMContext & context, const Block & bl
     {
         auto last_buf_size = write_buf.count();
         serializeColumn(write_buf, *col.column, col.type, offset, limit, context.db_context.getSettingsRef().dt_compression_method, context.db_context.getSettingsRef().dt_compression_level);
-        size_t serialized_size = write_buf.count() - last_buf_size;
-        RUNTIME_CHECK_MSG(serialized_size != 0, "try to persist a block with empty column, colname={} colid={} block={}", col.name, col.column_id, block.dumpJsonStructure());
-        col_data_sizes.push_back(serialized_size);
+        col_data_sizes.push_back(write_buf.count() - last_buf_size);
     }
 
     auto data_size = write_buf.count();

@@ -64,7 +64,7 @@ public:
     class CommittedScanner : private boost::noncopyable
     {
     public:
-        explicit CommittedScanner(const RegionPtr & store_, bool use_lock = true)
+        CommittedScanner(const RegionPtr & store_, bool use_lock = true)
             : store(store_)
         {
             if (use_lock)
@@ -97,7 +97,7 @@ public:
     class CommittedRemover : private boost::noncopyable
     {
     public:
-        explicit CommittedRemover(const RegionPtr & store_, bool use_lock = true)
+        CommittedRemover(const RegionPtr & store_, bool use_lock = true)
             : store(store_)
         {
             if (use_lock)
@@ -167,11 +167,8 @@ public:
     std::tuple<WaitIndexResult, double> waitIndex(UInt64 index, const UInt64 timeout_ms, std::function<bool(void)> && check_running);
 
     UInt64 appliedIndex() const;
-    UInt64 appliedIndexTerm() const;
 
     void notifyApplied() { meta.notifyAll(); }
-    // Export for tests.
-    void setApplied(UInt64 index, UInt64 term);
 
     RegionVersion version() const;
     RegionVersion confVer() const;
@@ -194,6 +191,7 @@ public:
 
     TableID getMappedTableID() const;
     EngineStoreApplyRes handleWriteRaftCmd(const WriteCmdsView & cmds, UInt64 index, UInt64 term, TMTContext & tmt);
+    void handleIngestSSTInMemory(const SSTViewVec snaps, UInt64 index, UInt64 term);
     void finishIngestSSTByDTFile(RegionPtr && rhs, UInt64 index, UInt64 term);
 
     UInt64 getSnapshotEventFlag() const { return snapshot_event_flag; }
@@ -228,7 +226,7 @@ private:
 
     RegionMeta meta;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
     const TableID mapped_table_id;
 
@@ -248,10 +246,10 @@ public:
     const RegionRangeKeys & getRange();
     UInt64 appliedIndex();
 
-    RegionRaftCommandDelegate() = delete;
-
 private:
     friend class tests::RegionKVStoreTest;
+
+    RegionRaftCommandDelegate() = delete;
 
     Regions execBatchSplit(
         const raft_cmdpb::AdminRequest & request,

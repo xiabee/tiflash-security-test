@@ -19,6 +19,13 @@
 
 #include <future>
 
+
+namespace CurrentMetrics
+{
+extern const Metric QueryThread;
+}
+
+
 namespace DB
 {
 /** Scheme of operation:
@@ -82,7 +89,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::MergingAggregatedMemoryEfficie
     size_t reading_threads_,
     size_t merging_threads_,
     const String & req_id)
-    : log(Logger::get(req_id))
+    : log(Logger::get(name, req_id))
     , aggregator(params, req_id)
     , final(final_)
     , reading_threads(std::min(reading_threads_, inputs_.size()))
@@ -149,7 +156,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::cancel(bool kill)
 
     for (auto & input : inputs)
     {
-        if (auto * child = dynamic_cast<IProfilingBlockInputStream *>(input.stream.get()))
+        if (IProfilingBlockInputStream * child = dynamic_cast<IProfilingBlockInputStream *>(input.stream.get()))
         {
             try
             {
@@ -161,7 +168,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::cancel(bool kill)
                   * (example: connection reset during distributed query execution)
                   * - then don't care.
                   */
-                LOG_ERROR(log, "Exception while cancelling {}", child->getName());
+                LOG_FMT_ERROR(log, "Exception while cancelling {}", child->getName());
             }
         }
     }
@@ -191,6 +198,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::start()
 
             reading_pool->schedule(
                 wrapInvocable(true, [&child] {
+                    CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryThread};
                     child->readPrefix();
                 }));
         }
@@ -290,17 +298,19 @@ void MergingAggregatedMemoryEfficientBlockInputStream::finalize()
     if (!started)
         return;
 
-    LOG_TRACE(log, "Waiting for threads to finish");
+    LOG_FMT_TRACE(log, "Waiting for threads to finish");
 
     if (parallel_merge_data)
         parallel_merge_data->thread_pool->wait();
 
-    LOG_TRACE(log, "Waited for threads to finish");
+    LOG_FMT_TRACE(log, "Waited for threads to finish");
 }
 
 
 void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
 {
+    CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryThread};
+
     try
     {
         while (!parallel_merge_data->finish)
@@ -480,6 +490,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
             if (need_that_input(input))
             {
                 reading_pool->schedule(wrapInvocable(true, [&input, &read_from_input] {
+                    CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryThread};
                     read_from_input(input);
                 }));
             }
@@ -531,7 +542,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
                 /// Not yet partitioned (splitted to buckets) block. Will partition it and place result to 'splitted_blocks'.
                 if (input.block.info.bucket_num == -1 && input.block && input.splitted_blocks.empty())
                 {
-                    LOG_TRACE(log, "Having block without bucket: will split.");
+                    LOG_FMT_TRACE(log, "Having block without bucket: will split.");
 
                     input.splitted_blocks = aggregator.convertBlockToTwoLevel(input.block);
                     input.block = Block();

@@ -38,6 +38,12 @@
 #include <Poco/Net/SecureStreamSocket.h>
 #endif
 
+
+namespace CurrentMetrics
+{
+extern const Metric SendExternalTables;
+}
+
 namespace DB
 {
 namespace ErrorCodes
@@ -58,7 +64,7 @@ void Connection::connect()
         if (connected)
             disconnect();
 
-        LOG_TRACE(log_wrapper.get(), "Connecting. Database: {}. User: {}. {}, {}", (default_database.empty() ? "(not specified)" : default_database), user, (static_cast<bool>(secure) ? ". Secure" : ""), (static_cast<bool>(compression) ? "" : ". Uncompressed"));
+        LOG_FMT_TRACE(log_wrapper.get(), "Connecting. Database: {}. User: {}. {}, {}", (default_database.empty() ? "(not specified)" : default_database), user, (static_cast<bool>(secure) ? ". Secure" : ""), (static_cast<bool>(compression) ? "" : ". Uncompressed"));
         if (static_cast<bool>(secure))
         {
 #if Poco_NetSSL_FOUND
@@ -84,7 +90,7 @@ void Connection::connect()
         sendHello();
         receiveHello();
 
-        LOG_TRACE(log_wrapper.get(), "Connected to {} server version {}.{}.{}.", server_name, server_version_major, server_version_minor, server_revision);
+        LOG_FMT_TRACE(log_wrapper.get(), "Connected to {} server version {}.{}.{}.", server_name, server_version_major, server_version_minor, server_revision);
     }
     catch (Poco::Net::NetException & e)
     {
@@ -105,6 +111,8 @@ void Connection::connect()
 
 void Connection::disconnect()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Disconnecting");
+
     in = nullptr;
     out = nullptr; // can write to socket
     if (socket)
@@ -116,6 +124,8 @@ void Connection::disconnect()
 
 void Connection::sendHello()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Sending hello");
+
     writeVarUInt(Protocol::Client::Hello, *out);
     writeStringBinary((DBMS_NAME " ") + client_name, *out);
     writeVarUInt(DBMS_VERSION_MAJOR, *out);
@@ -131,6 +141,8 @@ void Connection::sendHello()
 
 void Connection::receiveHello()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Receiving hello");
+
     /// Receive hello packet.
     UInt64 packet_type = 0;
 
@@ -220,13 +232,15 @@ void Connection::forceConnected()
     }
     else if (!ping())
     {
-        LOG_TRACE(log_wrapper.get(), "Connection was closed, will reconnect.");
+        LOG_FMT_TRACE(log_wrapper.get(), "Connection was closed, will reconnect.");
         connect();
     }
 }
 
 bool Connection::ping()
 {
+    // LOG_FMT_TRACE(log_wrapper.get(), "Ping");
+
     TimeoutSetter timeout_setter(*socket, sync_request_timeout, true);
     try
     {
@@ -255,7 +269,7 @@ bool Connection::ping()
     }
     catch (const Poco::Exception & e)
     {
-        LOG_TRACE(log_wrapper.get(), "{}", e.displayText());
+        LOG_FMT_TRACE(log_wrapper.get(), "{}", e.displayText());
         return false;
     }
 
@@ -301,6 +315,8 @@ void Connection::sendQuery(
     compression_settings = settings ? CompressionSettings(*settings) : CompressionSettings(CompressionMethod::LZ4);
 
     query_id = query_id_;
+
+    //LOG_FMT_TRACE(log_wrapper.get(), "Sending query");
 
     writeVarUInt(Protocol::Client::Query, *out);
     writeStringBinary(query_id, *out);
@@ -354,6 +370,8 @@ void Connection::sendQuery(
 
 void Connection::sendCancel()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Sending cancel");
+
     writeVarUInt(Protocol::Client::Cancel, *out);
     out->next();
 }
@@ -361,6 +379,8 @@ void Connection::sendCancel()
 
 void Connection::sendData(const Block & block, const String & name)
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Sending data");
+
     if (!block_out)
     {
         if (compression == Protocol::Compression::Enable)
@@ -413,6 +433,8 @@ void Connection::sendExternalTablesData(ExternalTablesData & data)
     size_t out_bytes = out ? out->count() : 0;
     size_t maybe_compressed_out_bytes = maybe_compressed_out ? maybe_compressed_out->count() : 0;
     size_t rows = 0;
+
+    CurrentMetrics::Increment metric_increment{CurrentMetrics::SendExternalTables};
 
     for (auto & elem : data)
     {
@@ -470,6 +492,8 @@ bool Connection::hasReadBufferPendingData() const
 
 Connection::Packet Connection::receivePacket()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Receiving packet");
+
     try
     {
         Packet res;
@@ -528,6 +552,8 @@ Connection::Packet Connection::receivePacket()
 
 Block Connection::receiveData()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Receiving data");
+
     initBlockInput();
 
     String external_table_name;
@@ -571,6 +597,8 @@ void Connection::setDescription()
 
 std::unique_ptr<Exception> Connection::receiveException()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Receiving exception");
+
     Exception e;
     readException(e, *in, "Received from " + getDescription());
     return std::unique_ptr<Exception>{e.clone()};
@@ -579,6 +607,8 @@ std::unique_ptr<Exception> Connection::receiveException()
 
 Progress Connection::receiveProgress()
 {
+    //LOG_FMT_TRACE(log_wrapper.get(), "Receiving progress");
+
     Progress progress;
     progress.read(*in, server_revision);
     return progress;

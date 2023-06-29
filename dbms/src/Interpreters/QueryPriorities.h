@@ -23,6 +23,13 @@
 #include <memory>
 #include <mutex>
 
+
+namespace CurrentMetrics
+{
+extern const Metric QueryPreempted;
+}
+
+
 namespace DB
 {
 /** Implements query priorities in very primitive way.
@@ -88,6 +95,7 @@ private:
             if (!found)
                 return true;
 
+            CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryPreempted};
             if (std::cv_status::timeout == condvar.wait_for(lock, cur_timeout))
                 return false;
             else

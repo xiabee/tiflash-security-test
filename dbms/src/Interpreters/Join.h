@@ -21,6 +21,7 @@
 #include <Common/HashTable/HashMap.h>
 #include <Common/Logger.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <DataStreams/SizeLimits.h>
 #include <Interpreters/AggregationCommon.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/SettingsCommon.h>
@@ -94,11 +95,11 @@ public:
     Join(const Names & key_names_left_,
          const Names & key_names_right_,
          bool use_nulls_,
+         const SizeLimits & limits,
          ASTTableJoin::Kind kind_,
          ASTTableJoin::Strictness strictness_,
          const String & req_id,
-         bool enable_fine_grained_shuffle_,
-         size_t fine_grained_shuffle_count_,
+         size_t build_concurrency = 1,
          const TiDB::TiDBCollators & collators_ = TiDB::dummy_collators,
          const String & left_filter_column = "",
          const String & right_filter_column = "",
@@ -108,12 +109,19 @@ public:
          size_t max_block_size = 0,
          const String & match_helper_name = "");
 
-    /** Call `setBuildConcurrencyAndInitPool`, `initMapImpl` and `setSampleBlock`.
+    bool empty() { return type == Type::EMPTY; }
+
+    /** Set information about structure of right hand of JOIN (joined data).
       * You must call this method before subsequent calls to insertFromBlock.
       */
-    void init(const Block & sample_block, size_t build_concurrency_ = 1);
+    void setSampleBlock(const Block & block);
 
-    void insertFromBlock(const Block & block);
+    /** Add block of data from right hand of JOIN to the map.
+      * Returns false, if some limit was exceeded and you should not insert more data.
+      */
+    bool insertFromBlockInternal(Block * stored_block, size_t stream_index);
+
+    bool insertFromBlock(const Block & block);
 
     void insertFromBlock(const Block & block, size_t stream_index);
 
@@ -141,23 +149,13 @@ public:
     /// Sum size in bytes of all buffers, used for JOIN maps and for all memory pools.
     size_t getTotalByteCount() const;
 
-    size_t getTotalBuildInputRows() const { return total_input_build_rows; }
-
     ASTTableJoin::Kind getKind() const { return kind; }
 
     bool useNulls() const { return use_nulls; }
     const Names & getLeftJoinKeys() const { return key_names_left; }
-
-    size_t getBuildConcurrency() const
-    {
-        std::shared_lock lock(rwlock);
-        return getBuildConcurrencyInternal();
-    }
-    size_t getNotJoinedStreamConcurrency() const
-    {
-        std::shared_lock lock(rwlock);
-        return getNotJoinedStreamConcurrencyInternal();
-    }
+    size_t getBuildConcurrency() const { return build_concurrency; }
+    bool isBuildSetExceeded() const { return build_set_exceeded.load(); }
+    size_t getNotJoinedStreamConcurrency() const { return build_concurrency; };
 
     enum BuildTableState
     {
@@ -173,7 +171,7 @@ public:
         const Block * block;
         size_t row_num;
 
-        RowRef() = default;
+        RowRef() {}
         RowRef(const Block * block_, size_t row_num_)
             : block(block_)
             , row_num(row_num_)
@@ -185,7 +183,7 @@ public:
     {
         RowRefList * next = nullptr;
 
-        RowRefList() = default;
+        RowRefList() {}
         RowRefList(const Block * block_, size_t row_num_)
             : RowRef(block_, row_num_)
         {}
@@ -226,8 +224,6 @@ public:
     M(key32)                       \
     M(key64)                       \
     M(key_string)                  \
-    M(key_strbinpadding)           \
-    M(key_strbin)                  \
     M(key_fixed_string)            \
     M(keys128)                     \
     M(keys256)                     \
@@ -253,13 +249,10 @@ public:
         std::unique_ptr<ConcurrentHashMap<UInt32, Mapped, HashCRC32<UInt32>>> key32;
         std::unique_ptr<ConcurrentHashMap<UInt64, Mapped, HashCRC32<UInt64>>> key64;
         std::unique_ptr<ConcurrentHashMapWithSavedHash<StringRef, Mapped>> key_string;
-        std::unique_ptr<ConcurrentHashMapWithSavedHash<StringRef, Mapped>> key_strbinpadding;
-        std::unique_ptr<ConcurrentHashMapWithSavedHash<StringRef, Mapped>> key_strbin;
         std::unique_ptr<ConcurrentHashMapWithSavedHash<StringRef, Mapped>> key_fixed_string;
         std::unique_ptr<ConcurrentHashMap<UInt128, Mapped, HashCRC32<UInt128>>> keys128;
         std::unique_ptr<ConcurrentHashMap<UInt256, Mapped, HashCRC32<UInt256>>> keys256;
         std::unique_ptr<ConcurrentHashMap<StringRef, Mapped>> serialized;
-        // TODO: add more cases like Aggregator
     };
 
     using MapsAny = MapsTemplate<WithUsedFlag<false, RowRef>>;
@@ -288,6 +281,7 @@ private:
     bool use_nulls;
 
     size_t build_concurrency;
+    std::atomic_bool build_set_exceeded;
     /// collators for the join key
     const TiDB::TiDBCollators collators;
 
@@ -322,7 +316,7 @@ private:
 private:
     Type type = Type::EMPTY;
 
-    Type chooseMethod(const ColumnRawPtrs & key_columns, Sizes & key_sizes) const;
+    static Type chooseMethod(const ColumnRawPtrs & key_columns, Sizes & key_sizes);
 
     Sizes key_sizes;
 
@@ -337,8 +331,10 @@ private:
 
     const LoggerPtr log;
 
+    /// Limits for maximum map size.
+    SizeLimits limits;
+
     Block totals;
-    std::atomic<size_t> total_input_build_rows{0};
     /** Protect state for concurrent use in insertFromBlock and joinBlock.
       * Note that these methods could be called simultaneously only while use of StorageJoin,
       *  and StorageJoin only calls these two methods.
@@ -346,41 +342,10 @@ private:
       */
     mutable std::shared_mutex rwlock;
 
-    bool initialized = false;
-    bool enable_fine_grained_shuffle = false;
-    size_t fine_grained_shuffle_count = 0;
-
-    size_t getBuildConcurrencyInternal() const
-    {
-        if (unlikely(build_concurrency == 0))
-            throw Exception("Logical error: `setBuildConcurrencyAndInitPool` has not been called", ErrorCodes::LOGICAL_ERROR);
-        return build_concurrency;
-    }
-    size_t getNotJoinedStreamConcurrencyInternal() const
-    {
-        return getBuildConcurrencyInternal();
-    }
-
-    /// Initialize map implementations for various join types.
-    void initMapImpl(Type type_);
-
-    /** Set information about structure of right hand of JOIN (joined data).
-      * You must call this method before subsequent calls to insertFromBlock.
-      */
-    void setSampleBlock(const Block & block);
-
-    /** Set Join build concurrency and init hash map.
-      * You must call this method before subsequent calls to insertFromBlock.
-      */
-    void setBuildConcurrencyAndInitPool(size_t build_concurrency_);
+    void init(Type type_);
 
     /// Throw an exception if blocks have different types of key columns.
     void checkTypesOfKeys(const Block & block_left, const Block & block_right) const;
-
-    /** Add block of data from right hand of JOIN to the map.
-      * Returns false, if some limit was exceeded and you should not insert more data.
-      */
-    void insertFromBlockInternal(Block * stored_block, size_t stream_index);
 
     template <ASTTableJoin::Kind KIND, ASTTableJoin::Strictness STRICTNESS, typename Maps>
     void joinBlockImpl(Block & block, const Maps & maps) const;

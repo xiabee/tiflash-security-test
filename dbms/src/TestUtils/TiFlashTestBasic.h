@@ -73,10 +73,6 @@ namespace tests
         FAIL();                                                                        \
     }
 
-/**
-  * GTest related helper functions
-  */
-
 /// helper functions for comparing DataType
 ::testing::AssertionResult DataTypeCompare(
     const char * lhs_expr,

@@ -24,6 +24,13 @@
 #include <memory>
 #include <vector>
 
+
+namespace ProfileEvents
+{
+extern const Event ArenaAllocChunks;
+extern const Event ArenaAllocBytes;
+} // namespace ProfileEvents
+
 namespace DB
 {
 /** Memory pool to append something. For example, short strings.
@@ -48,6 +55,9 @@ private:
 
         Chunk(size_t size_, Chunk * prev_)
         {
+            ProfileEvents::increment(ProfileEvents::ArenaAllocChunks);
+            ProfileEvents::increment(ProfileEvents::ArenaAllocBytes, size_);
+
             begin = reinterpret_cast<char *>(Allocator::alloc(size_));
             pos = begin;
             end = begin + size_;

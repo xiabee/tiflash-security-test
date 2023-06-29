@@ -53,7 +53,7 @@ public:
 
     virtual grpc::Status execute();
 
-    static std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> genCopKeyRange(
+    static std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> GenCopKeyRange(
         const ::google::protobuf::RepeatedPtrField<::coprocessor::KeyRange> & ranges);
 
 protected:

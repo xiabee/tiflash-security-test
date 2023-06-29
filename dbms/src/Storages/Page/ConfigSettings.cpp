@@ -17,7 +17,7 @@
 
 namespace DB
 {
-void mergeConfigFromSettings(const DB::Settings & settings, PageStorageConfig & config)
+void mergeConfigFromSettings(const DB::Settings & settings, PageStorage::Config & config)
 {
     config.open_file_max_idle_time = settings.dt_open_file_max_idle_seconds;
 
@@ -38,9 +38,9 @@ void mergeConfigFromSettings(const DB::Settings & settings, PageStorageConfig & 
     config.blob_heavy_gc_valid_rate = settings.dt_page_gc_threshold;
 }
 
-PageStorageConfig getConfigFromSettings(const DB::Settings & settings)
+PageStorage::Config getConfigFromSettings(const DB::Settings & settings)
 {
-    PageStorageConfig config;
+    PageStorage::Config config;
     mergeConfigFromSettings(settings, config);
     return config;
 }

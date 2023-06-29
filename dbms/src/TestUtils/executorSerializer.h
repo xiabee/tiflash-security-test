@@ -28,8 +28,7 @@ public:
     String serialize(const tipb::DAGRequest * dag_request);
 
 private:
-    void serializeListStruct(const tipb::DAGRequest * dag_request);
-    void serializeTreeStruct(const tipb::Executor & root_executor, size_t level);
+    void serialize(const tipb::Executor & root_executor, size_t level);
     void addPrefix(size_t level) { buf.append(String(level, ' ')); }
 
 private:

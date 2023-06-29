@@ -14,10 +14,8 @@
 
 #pragma once
 
-#include <Core/ColumnsWithTypeAndName.h>
+#include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
-#include <Debug/MockServerInfo.h>
-#include <Debug/MockStorage.h>
 #include <IO/CompressionSettings.h>
 #include <Interpreters/ClientInfo.h>
 #include <Interpreters/Settings.h>
@@ -50,6 +48,9 @@ namespace DB
 struct ContextShared;
 class IRuntimeComponentsFactory;
 class QuotaForIntervals;
+class EmbeddedDictionaries;
+class ExternalDictionaries;
+class ExternalModels;
 class BackgroundProcessingPool;
 class MergeList;
 class MarkCache;
@@ -97,8 +98,6 @@ class WriteLimiter;
 using WriteLimiterPtr = std::shared_ptr<WriteLimiter>;
 class ReadLimiter;
 using ReadLimiterPtr = std::shared_ptr<ReadLimiter>;
-using MockMPPServerInfo = DB::tests::MockMPPServerInfo;
-using MockStorage = DB::tests::MockStorage;
 
 enum class PageStorageRunMode : UInt8;
 namespace DM
@@ -156,22 +155,10 @@ private:
 
     bool use_l0_opt = true;
 
-    enum TestMode
-    {
-        non_test,
-        mpp_test,
-        cop_test,
-        executor_test,
-        cancel_test
-    };
-    TestMode test_mode = non_test;
-
-    MockStorage mock_storage;
-    MockMPPServerInfo mpp_server_info{};
-
     TimezoneInfo timezone_info;
 
     DAGContext * dag_context = nullptr;
+
     using DatabasePtr = std::shared_ptr<IDatabase>;
     using Databases = std::map<String, std::shared_ptr<IDatabase>>;
 
@@ -285,6 +272,16 @@ public:
     /// Set a setting by name. Read the value in text form from a string (for example, from a config, or from a URL parameter).
     void setSetting(const String & name, const std::string & value);
 
+    const EmbeddedDictionaries & getEmbeddedDictionaries() const;
+    const ExternalDictionaries & getExternalDictionaries() const;
+    const ExternalModels & getExternalModels() const;
+    EmbeddedDictionaries & getEmbeddedDictionaries();
+    ExternalDictionaries & getExternalDictionaries();
+    ExternalModels & getExternalModels();
+    void tryCreateEmbeddedDictionaries() const;
+    void tryCreateExternalDictionaries() const;
+    void tryCreateExternalModels() const;
+
     /// I/O formats.
     BlockInputStreamPtr getInputFormat(const String & name, ReadBuffer & buf, const Block & sample, size_t max_block_size) const;
     BlockOutputStreamPtr getOutputFormat(const String & name, WriteBuffer & buf, const Block & sample) const;
@@ -327,8 +324,8 @@ public:
     void setQueryContext(Context & context_) { query_context = &context_; }
     void setSessionContext(Context & context_) { session_context = &context_; }
     void setGlobalContext(Context & context_) { global_context = &context_; }
-    const Settings & getSettingsRef() const;
-    Settings & getSettingsRef();
+    const Settings & getSettingsRef() const { return settings; };
+    Settings & getSettingsRef() { return settings; };
 
 
     void setProgressCallback(ProgressCallback callback);
@@ -383,9 +380,7 @@ public:
     void setUseL0Opt(bool use_l0_opt);
     bool useL0Opt() const;
 
-    BackgroundProcessingPool & initializeBackgroundPool(UInt16 pool_size);
     BackgroundProcessingPool & getBackgroundPool();
-    BackgroundProcessingPool & initializeBlockableBackgroundPool(UInt16 pool_size);
     BackgroundProcessingPool & getBlockableBackgroundPool();
     BackgroundProcessingPool & getPSBackgroundPool();
 
@@ -466,24 +461,6 @@ public:
 
     void reloadDeltaTreeConfig(const Poco::Util::AbstractConfiguration & config);
 
-    size_t getMaxStreams() const;
-
-    /// For executor, MPPTask, CancelMPPTasks tests.
-    bool isMPPTest() const;
-    void setMPPTest();
-    bool isCancelTest() const;
-    void setCancelTest();
-    bool isExecutorTest() const;
-    void setExecutorTest();
-    void setCopTest();
-    bool isCopTest() const;
-    bool isTest() const;
-
-    void setMockStorage(MockStorage & mock_storage_);
-    MockStorage mockStorage() const;
-    MockMPPServerInfo mockMPPServerInfo() const;
-    void setMockMPPServerInfo(MockMPPServerInfo & info);
-
 private:
     /** Check if the current client has access to the specified database.
       * If access is denied, throw an exception.
@@ -491,16 +468,16 @@ private:
       */
     void checkDatabaseAccessRightsImpl(const std::string & database_name) const;
 
+    EmbeddedDictionaries & getEmbeddedDictionariesImpl(bool throw_on_error) const;
+    ExternalDictionaries & getExternalDictionariesImpl(bool throw_on_error) const;
+    ExternalModels & getExternalModelsImpl(bool throw_on_error) const;
+
     StoragePtr getTableImpl(const String & database_name, const String & table_name, Exception * exception) const;
 
     SessionKey getSessionKey(const String & session_id) const;
 
     /// Session will be closed after specified timeout.
     void scheduleCloseSession(const SessionKey & key, std::chrono::steady_clock::duration timeout);
-
-    void checkIsConfigLoaded() const;
-
-    bool is_config_loaded = false; /// Is configuration loaded from toml file.
 };
 
 using ContextPtr = std::shared_ptr<Context>;
@@ -528,7 +505,7 @@ private:
 class SessionCleaner
 {
 public:
-    explicit SessionCleaner(Context & context_)
+    SessionCleaner(Context & context_)
         : context{context_}
     {}
     ~SessionCleaner();

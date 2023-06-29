@@ -65,7 +65,7 @@ private:
     /// Address of mask. Always transformed to IPv6.
     Poco::Net::IPAddress mask_address;
     /// Number of bits in mask.
-    UInt8 prefix_bits{};
+    UInt8 prefix_bits;
 
 public:
     explicit IPAddressPattern(const String & str)
@@ -79,7 +79,7 @@ public:
         else
         {
             String addr(str, 0, pos - str.c_str());
-            auto prefix_bits = parse<UInt8>(pos + 1);
+            UInt8 prefix_bits = parse<UInt8>(pos + 1);
 
             construct(Poco::Net::IPAddress(addr), prefix_bits);
         }
@@ -130,7 +130,7 @@ private:
         /// Resolve by hand, because Poco don't use AI_ALL flag but we need it.
         addrinfo * ai = nullptr;
 
-        addrinfo hints{};
+        addrinfo hints;
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_UNSPEC;
         hints.ai_flags |= AI_V4MAPPED | AI_ALL;
@@ -227,11 +227,11 @@ bool AddressPatterns::contains(const Poco::Net::IPAddress & addr) const
         }
         catch (const DB::Exception & e)
         {
-            LOG_WARNING(&Poco::Logger::get("AddressPatterns"),
-                        "Failed to check if pattern contains address {}. {}, code = {}",
-                        addr.toString(),
-                        e.displayText(),
-                        e.code());
+            LOG_FMT_WARNING(&Poco::Logger::get("AddressPatterns"),
+                            "Failed to check if pattern contains address {}. {}, code = {}",
+                            addr.toString(),
+                            e.displayText(),
+                            e.code());
 
             if (e.code() == ErrorCodes::DNS_ERROR)
             {
@@ -250,19 +250,19 @@ void AddressPatterns::addFromConfig(const String & config_elem, Poco::Util::Abst
     Poco::Util::AbstractConfiguration::Keys config_keys;
     config.keys(config_elem, config_keys);
 
-    for (auto & config_key : config_keys)
+    for (Poco::Util::AbstractConfiguration::Keys::const_iterator it = config_keys.begin(); it != config_keys.end(); ++it)
     {
         Container::value_type pattern;
-        String value = config.getString(config_elem + "." + config_key);
+        String value = config.getString(config_elem + "." + *it);
 
-        if (startsWith(config_key, "ip"))
+        if (startsWith(*it, "ip"))
             pattern = std::make_unique<IPAddressPattern>(value);
-        else if (startsWith(config_key, "host_regexp"))
+        else if (startsWith(*it, "host_regexp"))
             pattern = std::make_unique<HostRegexpPattern>(value);
-        else if (startsWith(config_key, "host"))
+        else if (startsWith(*it, "host"))
             pattern = std::make_unique<HostExactPattern>(value);
         else
-            throw Exception("Unknown address pattern type: " + config_key, ErrorCodes::UNKNOWN_ADDRESS_PATTERN_TYPE);
+            throw Exception("Unknown address pattern type: " + *it, ErrorCodes::UNKNOWN_ADDRESS_PATTERN_TYPE);
 
         patterns.emplace_back(std::move(pattern));
     }

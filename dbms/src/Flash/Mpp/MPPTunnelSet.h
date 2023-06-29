@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/MPPTunnel.h>
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -33,17 +32,9 @@ class MPPTunnelSetBase : private boost::noncopyable
 {
 public:
     using TunnelPtr = std::shared_ptr<Tunnel>;
-    explicit MPPTunnelSetBase(const String & req_id)
-        : log(Logger::get(req_id))
-    {}
 
-    // this is a root mpp writing.
-    void write(tipb::SelectResponse & response);
-    // this is a broadcast or pass through writing.
-    void broadcastOrPassThroughWrite(TrackedMppDataPacketPtr && packet);
-    // this is a partition writing.
-    void partitionWrite(TrackedMppDataPacketPtr && packet, int16_t partition_id);
-    /// this is a execution summary writing.
+    void clearExecutionSummaries(tipb::SelectResponse & response);
+
     /// for both broadcast writing and partition writing, only
     /// return meaningful execution summary for the first tunnel,
     /// because in TiDB, it does not know enough information
@@ -52,29 +43,36 @@ public:
     /// so if return execution summary for all the tunnels, the
     /// information in TiDB will be amplified, which may make
     /// user confused.
-    void sendExecutionSummary(const tipb::SelectResponse & response);
+    // this is a broadcast writing.
+    void write(tipb::SelectResponse & response);
+    void write(mpp::MPPDataPacket & packet);
 
-    void close(const String & reason, bool wait_sender_finish);
-    void finishWrite();
-    void registerTunnel(const MPPTaskId & id, const TunnelPtr & tunnel);
-
-    TunnelPtr getTunnelByReceiverTaskId(const MPPTaskId & id);
+    // this is a partition writing.
+    void write(tipb::SelectResponse & response, int16_t partition_id);
+    void write(mpp::MPPDataPacket & packet, int16_t partition_id);
 
     uint16_t getPartitionNum() const { return tunnels.size(); }
 
-    int getExternalThreadCnt()
+    void addTunnel(const TunnelPtr & tunnel)
     {
-        return external_thread_cnt;
+        tunnels.push_back(tunnel);
+        if (!tunnel->isLocal())
+        {
+            remote_tunnel_cnt++;
+        }
+    }
+
+    int getRemoteTunnelCnt()
+    {
+        return remote_tunnel_cnt;
     }
 
     const std::vector<TunnelPtr> & getTunnels() const { return tunnels; }
 
 private:
     std::vector<TunnelPtr> tunnels;
-    std::unordered_map<MPPTaskId, size_t> receiver_task_id_to_index_map;
-    const LoggerPtr log;
 
-    int external_thread_cnt = 0;
+    int remote_tunnel_cnt = 0;
 };
 
 class MPPTunnelSet : public MPPTunnelSetBase<MPPTunnel>

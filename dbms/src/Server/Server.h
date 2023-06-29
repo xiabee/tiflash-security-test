@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <Server/FlashGrpcServerHolder.h>
+#include <daemon/BaseDaemon.h>
 #include <Server/IServer.h>
 #include <Server/ServerInfo.h>
-#include <daemon/BaseDaemon.h>
+
 
 /** Server provides three interfaces:
   * 1. HTTP - simple interface for any applications.
@@ -40,7 +40,7 @@ public:
         return BaseDaemon::config();
     }
 
-    const TiFlashSecurityConfig & securityConfig() const override { return security_config; };
+    virtual const TiFlashSecurityConfig & securityConfig() const override { return security_config; };
 
     Poco::Logger & logger() const override
     {
@@ -73,6 +73,7 @@ private:
 
     ServerInfo server_info;
 
+    class FlashGrpcServerHolder;
     class TcpHttpServersHolder;
 };
 

@@ -41,7 +41,7 @@ try
             createConstColumn<Nullable<Int64>>(4, 4)));
     // const, const, const
     ASSERT_COLUMN_EQ(
-        createConstColumn<String>(1, "www."),
+        createConstColumn<Nullable<String>>(1, "www."),
         executeFunction(
             "substringUTF8",
             createConstColumn<Nullable<String>>(1, "www.pingcap.com"),

@@ -28,7 +28,6 @@ public:
     static constexpr auto func_name = "tidbConcat";
 
     using Type = Nullable<String>;
-    using NotNullType = String;
 
     InferredDataVector<Type> test_strings = {"", "www.pingcap", "中文.测.试。。。", {}};
 };
@@ -46,7 +45,7 @@ try
                 createColumn<Type>({value})));
         // const
         ASSERT_COLUMN_EQ(
-            value.has_value() ? createConstColumn<NotNullType>(1, value.value()) : createConstColumn<Type>(1, value),
+            createConstColumn<Type>(1, value),
             executeFunction(
                 StringTidbConcat::func_name,
                 createConstColumn<Type>(1, value)));
@@ -65,7 +64,7 @@ try
             // all args is const or has only null const
             auto is_result_const = (is_value1_const && is_value2_const) || (!value1.has_value() && is_value1_const) || (!value2.has_value() && is_value2_const);
             ASSERT_COLUMN_EQ(
-                is_result_const ? (is_result_not_null ? createConstColumn<NotNullType>(1, result.value()) : createConstColumn<Type>(1, result)) : createColumn<Type>({result}),
+                is_result_const ? createConstColumn<Type>(1, result) : createColumn<Type>({result}),
                 executeFunction(
                     StringTidbConcat::func_name,
                     is_value1_const ? createConstColumn<Type>(1, value1) : createColumn<Type>({value1}),

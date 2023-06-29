@@ -72,8 +72,6 @@ public:
 
         Like,
         NotLike,
-
-        IsNull,
     };
 
     static std::unordered_map<tipb::ScalarFuncSig, RSFilterType> scalar_func_rs_filter_map;

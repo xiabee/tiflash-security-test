@@ -22,16 +22,15 @@ namespace DB
 PageStoragePtr PageStorage::create(
     String name,
     PSDiskDelegatorPtr delegator,
-    const PageStorageConfig & config,
+    const PageStorage::Config & config,
     const FileProviderPtr & file_provider,
     Context & global_ctx,
-    bool use_v3,
-    bool no_more_insert_to_v2)
+    bool use_v3)
 {
     if (use_v3)
         return std::make_shared<PS::V3::PageStorageImpl>(name, delegator, config, file_provider);
     else
-        return std::make_shared<PS::V2::PageStorage>(name, delegator, config, file_provider, global_ctx.getPSBackgroundPool(), no_more_insert_to_v2);
+        return std::make_shared<PS::V2::PageStorage>(name, delegator, config, file_provider, global_ctx.getPSBackgroundPool());
 }
 
 /***************************
@@ -54,6 +53,8 @@ public:
     virtual DB::Page read(PageId page_id) const = 0;
 
     virtual PageMap read(const PageIds & page_ids) const = 0;
+
+    virtual void read(const PageIds & page_ids, PageHandler & handler) const = 0;
 
     using PageReadFields = PageStorage::PageReadFields;
     virtual PageMap read(const std::vector<PageReadFields> & page_fields) const = 0;
@@ -101,6 +102,11 @@ public:
     PageMap read(const PageIds & page_ids) const override
     {
         return storage->read(ns_id, page_ids, read_limiter, snap);
+    }
+
+    void read(const PageIds & page_ids, PageHandler & handler) const override
+    {
+        storage->read(ns_id, page_ids, handler, read_limiter, snap);
     }
 
     using PageReadFields = PageStorage::PageReadFields;
@@ -211,6 +217,12 @@ public:
         }
 
         return page_maps;
+    }
+
+    void read(const PageIds & page_ids, PageHandler & handler) const override
+    {
+        const auto & page_ids_not_found = storage_v3->read(ns_id, page_ids, handler, read_limiter, toConcreteV3Snapshot(), false);
+        storage_v2->read(ns_id, page_ids_not_found, handler, read_limiter, toConcreteV2Snapshot());
     }
 
     using PageReadFields = PageStorage::PageReadFields;
@@ -395,6 +407,11 @@ PageMap PageReader::read(const PageIds & page_ids) const
     return impl->read(page_ids);
 }
 
+void PageReader::read(const PageIds & page_ids, PageHandler & handler) const
+{
+    impl->read(page_ids, handler);
+}
+
 PageMap PageReader::read(const std::vector<PageStorage::PageReadFields> & page_fields) const
 {
     return impl->read(page_fields);
@@ -485,19 +502,19 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
         switch (write.type)
         {
         // PUT/PUT_EXTERNAL only for V3
-        case WriteBatchWriteType::PUT:
-        case WriteBatchWriteType::PUT_EXTERNAL:
+        case WriteBatch::WriteType::PUT:
+        case WriteBatch::WriteType::PUT_EXTERNAL:
         {
             page_ids_before_ref.insert(write.page_id);
             break;
         }
         // Both need del in v2 and v3
-        case WriteBatchWriteType::DEL:
+        case WriteBatch::WriteType::DEL:
         {
             wb_for_v2.copyWrite(write);
             break;
         }
-        case WriteBatchWriteType::REF:
+        case WriteBatch::WriteType::REF:
         {
             // 1. Try to resolve normal page id
             PageId resolved_page_id = storage_v3->getNormalPageId(ns_id,
@@ -570,7 +587,7 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
                                       page_for_put.data.size());
             }
 
-            LOG_INFO(
+            LOG_FMT_INFO(
                 Logger::get("PageWriter"),
                 "Can't find the origin page in v3, migrate a new being ref page into V3 [page_id={}] [origin_id={}] [field_offsets={}]",
                 write.page_id,
@@ -581,7 +598,7 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
         }
         default:
         {
-            throw Exception(fmt::format("Unknown write type: {}", static_cast<Int32>(write.type)));
+            throw Exception(fmt::format("Unknown write type: {}", write.type));
         }
         }
     }
@@ -604,7 +621,7 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
 }
 
 
-PageStorageConfig PageWriter::getSettings() const
+PageStorage::Config PageWriter::getSettings() const
 {
     switch (run_mode)
     {
@@ -625,7 +642,7 @@ PageStorageConfig PageWriter::getSettings() const
     }
 }
 
-void PageWriter::reloadSettings(const PageStorageConfig & new_config) const
+void PageWriter::reloadSettings(const PageStorage::Config & new_config) const
 {
     switch (run_mode)
     {

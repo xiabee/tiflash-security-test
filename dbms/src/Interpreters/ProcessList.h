@@ -31,6 +31,12 @@
 #include <mutex>
 #include <unordered_map>
 
+
+namespace CurrentMetrics
+{
+extern const Metric Query;
+}
+
 namespace DB
 {
 class IStorage;
@@ -80,9 +86,11 @@ private:
     /// Progress of output stream
     Progress progress_out;
 
-    MemoryTrackerPtr memory_tracker;
+    MemoryTracker memory_tracker;
 
     QueryPriorities::Handle priority_handle;
+
+    CurrentMetrics::Increment num_queries{CurrentMetrics::Query};
 
     std::atomic<bool> is_killed{false};
 
@@ -115,13 +123,14 @@ public:
         QueryPriorities::Handle && priority_handle_)
         : query(query_)
         , client_info(client_info_)
-        , memory_tracker(MemoryTracker::create(max_memory_usage))
+        , memory_tracker(max_memory_usage)
         , priority_handle(std::move(priority_handle_))
     {
-        memory_tracker->setDescription("(for query)");
-        current_memory_tracker = memory_tracker.get();
+        memory_tracker.setDescription("(for query)");
+        current_memory_tracker = &memory_tracker;
+
         if (memory_tracker_fault_probability)
-            memory_tracker->setFaultProbability(memory_tracker_fault_probability);
+            memory_tracker.setFaultProbability(memory_tracker_fault_probability);
     }
 
     ~ProcessListElement()
@@ -145,10 +154,6 @@ public:
     }
 
     ThrottlerPtr getUserNetworkThrottler();
-    MemoryTrackerPtr getMemoryTrackerPtr()
-    {
-        return memory_tracker;
-    }
 
     bool updateProgressIn(const Progress & value)
     {
@@ -180,8 +185,8 @@ public:
         res.total_rows = progress_in.total_rows;
         res.written_rows = progress_out.rows;
         res.written_bytes = progress_out.bytes;
-        res.memory_usage = memory_tracker->get();
-        res.peak_memory_usage = memory_tracker->getPeak();
+        res.memory_usage = memory_tracker.get();
+        res.peak_memory_usage = memory_tracker.getPeak();
 
         return res;
     }
@@ -208,21 +213,18 @@ struct ProcessListForUser
     QueryToElement queries;
 
     /// Limit and counter for memory of all simultaneously running queries of single user.
-    MemoryTrackerPtr user_memory_tracker;
+    MemoryTracker user_memory_tracker;
 
     /// Count network usage for all simultaneously running queries of single user.
     ThrottlerPtr user_throttler;
 
-    ProcessListForUser()
-        : user_memory_tracker(MemoryTracker::create())
-    {}
     /// Clears MemoryTracker for the user.
     /// Sometimes it is important to reset the MemoryTracker, because it may accumulate skew
     ///  due to the fact that there are cases when memory can be allocated while processing the query, but released later.
     /// Clears network bandwidth Throttler, so it will not count periods of inactivity.
     void reset()
     {
-        user_memory_tracker->reset();
+        user_memory_tracker.reset();
         if (user_throttler)
             user_throttler.reset();
     }
@@ -287,7 +289,7 @@ private:
     QueryPriorities priorities;
 
     /// Limit and counter for memory of all simultaneously running queries.
-    MemoryTrackerPtr total_memory_tracker;
+    MemoryTracker total_memory_tracker;
 
     /// Limit network bandwidth for all users
     ThrottlerPtr total_network_throttler;
@@ -299,7 +301,6 @@ public:
     ProcessList(size_t max_size_ = 0)
         : cur_size(0)
         , max_size(max_size_)
-        , total_memory_tracker(root_of_query_mem_trackers)
     {}
 
     using EntryPtr = std::shared_ptr<ProcessListEntry>;

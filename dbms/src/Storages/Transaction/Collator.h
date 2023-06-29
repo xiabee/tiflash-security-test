@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Columns/Collator.h>
-#include <Storages/Transaction/CollatorCompare.h>
 #include <common/StringRef.h>
 
 #include <memory>
@@ -43,25 +42,6 @@ public:
         UTF8_BIN = 83,
     };
 
-    // internal wrapped collator types which are effective for `switch case`
-    enum class CollatorType : uint32_t
-    {
-        // bin
-        UTF8MB4_BIN = 0,
-        UTF8_BIN,
-        LATIN1_BIN,
-        ASCII_BIN,
-        // binary
-        BINARY,
-        // ----
-        UTF8_GENERAL_CI,
-        UTF8MB4_GENERAL_CI,
-        UTF8_UNICODE_CI,
-        UTF8MB4_UNICODE_CI,
-        // ----
-        MAX_,
-    };
-
     /// Get the collator according to the internal collation ID, which directly comes from tipb and has been properly
     /// de-rewritten - the "New CI Collation" will flip the sign of the collation ID.
     static TiDBCollatorPtr getCollator(int32_t id);
@@ -84,59 +64,25 @@ public:
     ~ITiDBCollator() override = default;
 
     int compare(const char * s1, size_t length1, const char * s2, size_t length2) const override = 0;
-
-    ALWAYS_INLINE inline int compareFastPath(const char * s1, size_t length1, const char * s2, size_t length2) const
-    {
-        if (likely(isPaddingBinary()))
-        {
-            return DB::BinCollatorCompare<true>(s1, length1, s2, length2);
-        }
-        return compare(s1, length1, s2, length2);
-    }
-
     virtual StringRef sortKey(const char * s, size_t length, std::string & container) const = 0;
     virtual std::unique_ptr<IPattern> pattern() const = 0;
     int32_t getCollatorId() const { return collator_id; }
-    CollatorType getCollatorType() const { return collator_type; }
-    bool isBinary() const;
-    bool isCI() const;
-
-    ALWAYS_INLINE static inline bool isPaddingBinary(CollatorType collator_type)
+    bool isBinary() const { return collator_id == BINARY; }
+    bool isCI() const
     {
-        switch (collator_type)
-        {
-        case CollatorType::UTF8MB4_BIN:
-        case CollatorType::UTF8_BIN:
-        case CollatorType::LATIN1_BIN:
-        case CollatorType::ASCII_BIN:
-        {
-            // collator_type < 4
-            return true;
-        }
-        default:
-            break;
-        }
-        return false;
+        return collator_id == UTF8_UNICODE_CI || collator_id == UTF8_GENERAL_CI
+            || collator_id == UTF8MB4_UNICODE_CI || collator_id == UTF8MB4_GENERAL_CI;
     }
-
-    ALWAYS_INLINE inline bool isPaddingBinary() const
+    bool isBin() const
     {
-        return isPaddingBinary(getCollatorType());
-    }
-
-    ALWAYS_INLINE inline StringRef sortKeyFastPath(const char * s, size_t length, std::string & container) const
-    {
-        if (likely(isPaddingBinary()))
-        {
-            return DB::BinCollatorSortKey<true>(s, length);
-        }
-        return sortKey(s, length, container);
+        return collator_id == UTF8_BIN || collator_id == UTF8MB4_BIN
+            || collator_id == ASCII_BIN || collator_id == LATIN1_BIN;
     }
 
 protected:
-    explicit ITiDBCollator(int32_t collator_id_);
-    int32_t collator_id; // collator id to be compatible with TiDB
-    CollatorType collator_type{CollatorType::MAX_}; // collator type for internal usage
+    explicit ITiDBCollator(int32_t collator_id_)
+        : collator_id(collator_id_){};
+    int32_t collator_id;
 };
 
 /// these dummy_xxx are used as the default value to avoid too many meaningless
@@ -144,7 +90,5 @@ protected:
 extern TiDBCollators dummy_collators;
 extern std::vector<std::string> dummy_sort_key_contaners;
 extern std::string dummy_sort_key_contaner;
-
-ITiDBCollator::CollatorType GetTiDBCollatorType(const void * collator);
 
 } // namespace TiDB

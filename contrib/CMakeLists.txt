@@ -1,5 +1,3 @@
-set_property(DIRECTORY PROPERTY EXCLUDE_FROM_ALL 1)
-
 if (NOT MSVC)
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-old-style-cast")
 endif ()
@@ -62,19 +60,6 @@ if (USE_INTERNAL_SSL_LIBRARY)
     add_library (OpenSSL::SSL ALIAS ssl)
 endif ()
 
-if (USE_GM_SSL)
-    set (save_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-    set (save_CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
-    set (_save ${ENABLE_TESTS})
-    set (CMAKE_CXX_FLAGS "")
-    set (CMAKE_C_FLAGS "")
-    set (ENABLE_TESTS 0)
-    add_subdirectory (GmSSL)
-    set (ENABLE_TESTS ${_save})
-    set (CMAKE_CXX_FLAGS ${save_CMAKE_CXX_FLAGS})
-    set (CMAKE_C_FLAGS ${save_CMAKE_C_FLAGS})
-endif()
-
 if (USE_INTERNAL_POCO_LIBRARY)
     set (save_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
     set (save_CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
@@ -112,24 +97,35 @@ if (USE_INTERNAL_GRPC_LIBRARY)
 endif ()
 
 add_subdirectory (kvproto/cpp)
-target_no_warning(kvproto deprecated-declarations)
-target_no_warning(kvproto non-c-typedef-for-linkage)
-target_no_warning(kvproto implicit-const-int-float-conversion)
+if(TIFLASH_LLVM_TOOLCHAIN)
+    target_compile_options(kvproto PRIVATE
+            -Wno-deprecated-declarations
+            -Wno-non-c-typedef-for-linkage
+            -Wno-implicit-const-int-float-conversion)
+endif()
 # -----
 set (_save ${ENABLE_TESTS})
 set (ENABLE_TESTS 0)
 # disable ENABLE_TESTS for client-c
 # GTest package conflicts with TiFlash's GTest, so we have to disable test compilation in client-c.
 add_subdirectory (client-c)
-target_no_warning(kv_client deprecated-declarations)
-target_no_warning(kv_client non-c-typedef-for-linkage)
-target_no_warning(kv_client implicit-const-int-float-conversion)
+if(TIFLASH_LLVM_TOOLCHAIN)
+    target_compile_options(kv_client PRIVATE
+            -Wno-deprecated-declarations
+            -Wno-non-c-typedef-for-linkage
+            -Wno-implicit-const-int-float-conversion)
+endif()
 set (ENABLE_TESTS ${_save})
 # -------
 add_subdirectory (tipb/cpp)
 
 if (USE_INTERNAL_TIFLASH_PROXY)
     add_subdirectory (tiflash-proxy-cmake)
+endif ()
+
+# TODO: remove tcmalloc
+if (ENABLE_TCMALLOC AND USE_INTERNAL_GPERFTOOLS_LIBRARY)
+    add_subdirectory (libtcmalloc)
 endif ()
 
 if (ENABLE_JEMALLOC AND USE_INTERNAL_JEMALLOC_LIBRARY)
@@ -168,12 +164,4 @@ SET (BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "Disable google-benchmark testi
 add_subdirectory(benchmark)
 
 set (BUILD_TESTING OFF CACHE BOOL "Disable cpu-features testing" FORCE)
-if (NOT (OS_DARWIN AND ARCH_AARCH64))
-    add_subdirectory(cpu_features)
-endif()
-
-if (ARCH_AARCH64 AND OS_LINUX)
-    add_subdirectory(arm-optimized-routines-cmake)
-endif ()
-
-add_subdirectory(magic_enum)
+add_subdirectory(cpu_features)

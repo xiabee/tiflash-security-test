@@ -15,8 +15,7 @@
 #include <DataStreams/BlocksListBlockInputStream.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Storages/DeltaMerge/PKSquashingBlockInputStream.h>
-#include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <TestUtils/InputStreamTestUtils.h>
+#include <Storages/DeltaMerge/tests/dm_basic_include.h>
 
 namespace DB
 {
@@ -24,7 +23,7 @@ namespace DM
 {
 namespace tests
 {
-TEST(PKSquashTest, WithExtraSort)
+TEST(PKSquash_test, WithExtraSort)
 {
     BlocksList blocks;
 

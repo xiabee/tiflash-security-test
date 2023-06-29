@@ -185,7 +185,7 @@ LearnerReadSnapshot doLearnerRead(
         auto region = kvstore->getRegion(info.region_id);
         if (region == nullptr)
         {
-            LOG_WARNING(log, "[region {}] is not found in KVStore, try again", info.region_id);
+            LOG_FMT_WARNING(log, "[region {}] is not found in KVStore, try again", info.region_id);
             throw RegionException({info.region_id}, RegionException::RegionReadStatus::NOT_FOUND);
         }
         regions_snapshot.emplace(info.region_id, std::move(region));
@@ -278,7 +278,7 @@ LearnerReadSnapshot doLearnerRead(
             GET_METRIC(tiflash_raft_read_index_duration_seconds).Observe(read_index_elapsed_ms / 1000.0);
             const size_t cached_size = ori_batch_region_size - batch_read_index_req.size();
 
-            LOG_DEBUG(
+            LOG_FMT_DEBUG(
                 log,
                 "Batch read index, original size {}, send & get {} message, cost {}ms{}",
                 ori_batch_region_size,
@@ -311,7 +311,7 @@ LearnerReadSnapshot doLearnerRead(
             }
         }
 
-        auto handle_wait_timeout_region = [&unavailable_regions, for_batch_cop](const DB::RegionID region_id, UInt64 index) {
+        auto handle_wait_timeout_region = [&unavailable_regions, for_batch_cop](const DB::RegionID region_id) {
             if (!for_batch_cop)
             {
                 // If server is being terminated / time-out, add the region_id into `unavailable_regions` to other store.
@@ -319,7 +319,7 @@ LearnerReadSnapshot doLearnerRead(
                 return;
             }
             // TODO: Maybe collect all the Regions that happen wait index timeout instead of just throwing one Region id
-            throw TiFlashException(fmt::format("Region {} is unavailable at {}", region_id, index), Errors::Coprocessor::RegionError);
+            throw TiFlashException(fmt::format("Region {} is unavailable", region_id), Errors::Coprocessor::RegionError);
         };
         const auto wait_index_timeout_ms = tmt.waitIndexTimeout();
         for (size_t region_idx = region_begin_idx, read_index_res_idx = 0; region_idx < region_end_idx; ++region_idx, ++read_index_res_idx)
@@ -342,7 +342,7 @@ LearnerReadSnapshot doLearnerRead(
                 auto [wait_res, time_cost] = region->waitIndex(index_to_wait, tmt.waitIndexTimeout(), [&tmt]() { return tmt.checkRunning(); });
                 if (wait_res != WaitIndexResult::Finished)
                 {
-                    handle_wait_timeout_region(region_to_query.region_id, index_to_wait);
+                    handle_wait_timeout_region(region_to_query.region_id);
                     continue;
                 }
                 if (time_cost > 0)
@@ -357,7 +357,7 @@ LearnerReadSnapshot doLearnerRead(
                 // for Regions one by one.
                 if (!region->checkIndex(index_to_wait))
                 {
-                    handle_wait_timeout_region(region_to_query.region_id, index_to_wait);
+                    handle_wait_timeout_region(region_to_query.region_id);
                     continue;
                 }
             }
@@ -373,7 +373,7 @@ LearnerReadSnapshot doLearnerRead(
                     region_to_query.bypass_lock_ts,
                     region_to_query.version,
                     region_to_query.conf_version,
-                    log);
+                    log->getLog());
 
                 std::visit(
                     variant_op::overloaded{
@@ -381,7 +381,7 @@ LearnerReadSnapshot doLearnerRead(
                         [&](RegionException::RegionReadStatus & status) {
                             if (status != RegionException::RegionReadStatus::OK)
                             {
-                                LOG_WARNING(
+                                LOG_FMT_WARNING(
                                     log,
                                     "Check memory cache, region {}, version {}, handle range {}, status {}",
                                     region_to_query.region_id,
@@ -397,7 +397,7 @@ LearnerReadSnapshot doLearnerRead(
         }
         GET_METRIC(tiflash_syncing_data_freshness).Observe(batch_wait_data_watch.elapsedSeconds()); // For DBaaS SLI
         auto wait_index_elapsed_ms = watch.elapsedMilliseconds();
-        LOG_DEBUG(
+        LOG_FMT_DEBUG(
             log,
             "Finish wait index | resolve locks | check memory cache for {} regions, cost {}ms, {} unavailable regions",
             batch_read_index_req.size(),
@@ -425,7 +425,7 @@ LearnerReadSnapshot doLearnerRead(
     unavailable_regions.tryThrowRegionException(for_batch_cop);
 
     auto end_time = Clock::now();
-    LOG_DEBUG(
+    LOG_FMT_DEBUG(
         log,
         "[Learner Read] batch read index | wait index cost {} ms totally, regions_num={}, concurrency={}",
         std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count(),
@@ -472,7 +472,7 @@ void validateQueryInfo(
         {
             fail_region_ids.emplace(region_query_info.region_id);
             fail_status = status;
-            LOG_WARNING(
+            LOG_FMT_WARNING(
                 log,
                 "Check after read from Storage, region {}, version {}, handle range {}, status {}",
                 region_query_info.region_id,

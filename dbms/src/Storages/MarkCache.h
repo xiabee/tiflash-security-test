@@ -14,23 +14,24 @@
 
 #pragma once
 
+#include <memory>
+
 #include <Common/LRUCache.h>
 #include <Common/ProfileEvents.h>
 #include <Common/SipHash.h>
-#include <DataStreams/MarkInCompressedFile.h>
 #include <Interpreters/AggregationCommon.h>
-
-#include <memory>
+#include <DataStreams/MarkInCompressedFile.h>
 
 
 namespace ProfileEvents
 {
-extern const Event MarkCacheHits;
-extern const Event MarkCacheMisses;
-} // namespace ProfileEvents
+    extern const Event MarkCacheHits;
+    extern const Event MarkCacheMisses;
+}
 
 namespace DB
 {
+
 /// Estimate of number of bytes in cache for marks.
 struct MarksWeightFunction
 {
@@ -51,9 +52,8 @@ private:
     using Base = LRUCache<String, MarksInCompressedFile, std::hash<String>, MarksWeightFunction>;
 
 public:
-    explicit MarkCache(size_t max_size_in_bytes)
-        : Base(max_size_in_bytes)
-    {}
+    MarkCache(size_t max_size_in_bytes, const Delay & expiration_delay)
+        : Base(max_size_in_bytes, expiration_delay) {}
 
     template <typename LoadFunc>
     MappedPtr getOrSet(const Key & key, LoadFunc && load)
@@ -70,4 +70,4 @@ public:
 
 using MarkCachePtr = std::shared_ptr<MarkCache>;
 
-} // namespace DB
+}

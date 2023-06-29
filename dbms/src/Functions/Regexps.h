@@ -18,6 +18,13 @@
 #include <Functions/ObjectPool.h>
 #include <Functions/likePatternToRegexp.h>
 
+
+namespace ProfileEvents
+{
+extern const Event RegexpCreated;
+}
+
+
 namespace DB
 {
 namespace Regexps
@@ -47,6 +54,7 @@ inline Pool::Pointer get(const std::string & pattern, int flags)
         if (no_capture)
             flags |= OptimizedRegularExpression::RE_NO_CAPTURE;
 
+        ProfileEvents::increment(ProfileEvents::RegexpCreated);
         return new Regexp{createRegexp<like>(pattern, flags)};
     });
 }

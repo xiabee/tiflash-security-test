@@ -117,7 +117,7 @@ void Set::setHeader(const Block & block)
     extractNestedColumnsAndNullMap(key_columns, null_map_holder, null_map);
 
     /// Choose data structure to use for the set.
-    data.init(data.chooseMethod(key_columns, key_sizes, collators));
+    data.init(data.chooseMethod(key_columns, key_sizes));
 }
 
 
@@ -183,7 +183,7 @@ bool Set::insertFromBlock(const Block & block, bool fill_set_elements)
 
 static Field extractValueFromNode(ASTPtr & node, const IDataType & type, const Context & context)
 {
-    if (auto * lit = typeid_cast<ASTLiteral *>(node.get()))
+    if (ASTLiteral * lit = typeid_cast<ASTLiteral *>(node.get()))
     {
         return convertFieldToType(lit->value, type);
     }
@@ -222,7 +222,7 @@ void Set::createFromAST(const DataTypes & types, ASTPtr node, const Context & co
             else
                 setContainsNullValue(true);
         }
-        else if (auto * func = typeid_cast<ASTFunction *>(elem.get()))
+        else if (ASTFunction * func = typeid_cast<ASTFunction *>(elem.get()))
         {
             if (func->name != "tuple")
                 throw Exception("Incorrect element of set. Must be tuple.", ErrorCodes::INCORRECT_ELEMENT_OF_SET);
@@ -274,19 +274,19 @@ std::vector<const tipb::Expr *> Set::createFromDAGExpr(const DataTypes & types, 
     setHeader(header);
 
     MutableColumns columns = header.cloneEmptyColumns();
-    std::vector<const tipb::Expr *> remaining_exprs;
+    std::vector<const tipb::Expr *> remainingExprs;
 
     // if left arg is null constant, just return without decode children expr
     if (types[0]->onlyNull())
-        return remaining_exprs;
+        return remainingExprs;
 
     for (int i = 1; i < expr.children_size(); i++)
     {
-        const auto & child = expr.children(i);
+        auto & child = expr.children(i);
         // todo support constant expression by constant folding
         if (!isLiteralExpr(child))
         {
-            remaining_exprs.push_back(&child);
+            remainingExprs.push_back(&child);
             continue;
         }
         Field value = decodeLiteral(child);
@@ -301,7 +301,7 @@ std::vector<const tipb::Expr *> Set::createFromDAGExpr(const DataTypes & types, 
 
     Block block = header.cloneWithColumns(std::move(columns));
     insertFromBlock(block, fill_set_elements);
-    return remaining_exprs;
+    return remainingExprs;
 }
 
 ColumnPtr Set::execute(const Block & block, bool negative) const

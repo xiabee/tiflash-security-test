@@ -55,16 +55,6 @@ bool checkColumn(const IColumn * column)
     return checkAndGetColumn<Type>(column);
 }
 
-template <typename Type>
-const Type * checkAndGetNestedColumn(const IColumn * column)
-{
-    if (!column || !column->isColumnNullable())
-        return {};
-
-    const auto * data_column = &static_cast<const ColumnNullable *>(column)->getNestedColumn();
-
-    return checkAndGetColumn<Type>(data_column);
-}
 
 template <typename Type>
 const ColumnConst * checkAndGetColumnConst(const IColumn * column, bool maybe_nullable_column = false)
@@ -72,7 +62,7 @@ const ColumnConst * checkAndGetColumnConst(const IColumn * column, bool maybe_nu
     if (!column || !column->isColumnConst())
         return {};
 
-    const auto * res = static_cast<const ColumnConst *>(column);
+    const ColumnConst * res = static_cast<const ColumnConst *>(column);
 
     const auto * data_column = &res->getDataColumn();
     if (maybe_nullable_column && data_column->isColumnNullable())

@@ -15,12 +15,16 @@
 #pragma once
 
 #include <Common/Logger.h>
-#include <Common/nocopyable.h>
 #include <Core/Types.h>
 #include <Storages/Page/PageDefines.h>
 
 #include <mutex>
 #include <unordered_map>
+
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB
 {
@@ -51,18 +55,17 @@ public:
     PathPool() = default;
 
     // Constructor to be used during initialization
-    PathPool(
+    PathPool( //
         const Strings & main_data_paths,
-        const Strings & latest_data_paths,
-        const Strings & kvstore_paths,
+        const Strings & latest_data_paths, //
+        const Strings & kvstore_paths, //
         PathCapacityMetricsPtr global_capacity_,
-        FileProviderPtr file_provider_,
+        FileProviderPtr file_provider_, //
         bool enable_raft_compatible_mode_ = false);
 
     // Constructor to create PathPool for one Storage
     StoragePathPool withTable(const String & database_, const String & table_, bool path_need_database_name_) const;
 
-    // TODO: remove this outdated code
     bool isRaftCompatibleModeEnabled() const { return enable_raft_compatible_mode; }
 
     // Generate a delegator for managing the paths of `RegionPersister`.
@@ -82,46 +85,14 @@ public:
     const Strings & listGlobalPagePaths() const { return global_page_paths; }
 
 public:
-    // A thread safe wrapper for storing a map of <page data file id, path index>
-    class PageFilePathMap
+    struct PageFileIdLvlHasher
     {
-    public:
-        inline bool exist(const PageFileIdAndLevel & id_lvl) const
+        std::size_t operator()(const PageFileIdAndLevel & id_lvl) const
         {
-            std::lock_guard guard(mtx);
-            return page_id_to_index.count(id_lvl) > 0;
+            return std::hash<PageFileId>()(id_lvl.first) ^ std::hash<PageFileLevel>()(id_lvl.second);
         }
-        inline std::optional<UInt32> getIndex(const PageFileIdAndLevel & id_lvl) const
-        {
-            std::lock_guard guard(mtx);
-            if (auto iter = page_id_to_index.find(id_lvl); iter != page_id_to_index.end())
-                return iter->second;
-            return std::nullopt;
-        }
-        inline void setIndex(const PageFileIdAndLevel & id_lvl, UInt32 index)
-        {
-            std::lock_guard gurad(mtx);
-            page_id_to_index[id_lvl] = index;
-        }
-        inline void eraseIfExist(const PageFileIdAndLevel & id_lvl)
-        {
-            std::lock_guard gurad(mtx);
-            if (auto iter = page_id_to_index.find(id_lvl);
-                iter != page_id_to_index.end())
-                page_id_to_index.erase(iter);
-        }
-
-    private:
-        mutable std::mutex mtx;
-        struct PageFileIdLvlHasher
-        {
-            std::size_t operator()(const PageFileIdAndLevel & id_lvl) const
-            {
-                return std::hash<PageFileId>()(id_lvl.first) ^ std::hash<PageFileLevel>()(id_lvl.second);
-            }
-        };
-        std::unordered_map<PageFileIdAndLevel, UInt32, PageFileIdLvlHasher> page_id_to_index;
     };
+    using PageFilePathMap = std::unordered_map<PageFileIdAndLevel, UInt32, PageFileIdLvlHasher>;
 
     friend class PSDiskDelegatorRaft;
     friend class PSDiskDelegatorGlobalSingle;
@@ -142,7 +113,7 @@ private:
     LoggerPtr log;
 };
 
-class StableDiskDelegator
+class StableDiskDelegator : private boost::noncopyable
 {
 public:
     explicit StableDiskDelegator(StoragePathPool & pool_)
@@ -161,20 +132,13 @@ public:
 
     void removeDTFile(UInt64 file_id);
 
-    DISALLOW_COPY_AND_MOVE(StableDiskDelegator);
-
 private:
     StoragePathPool & pool;
 };
 
-// TODO: the `freePageFileUsedSize` and `removePageFile`
-// is not well design interface. We need refactor related
-// methods later.
-class PSDiskDelegator
+class PSDiskDelegator : private boost::noncopyable
 {
 public:
-    PSDiskDelegator() = default;
-
     virtual ~PSDiskDelegator() = default;
 
     virtual bool fileExist(const PageFileIdAndLevel & id_lvl) const = 0;
@@ -194,7 +158,7 @@ public:
         bool need_insert_location)
         = 0;
 
-    virtual void freePageFileUsedSize(
+    virtual size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path)
@@ -203,8 +167,6 @@ public:
     virtual String getPageFilePath(const PageFileIdAndLevel & id_lvl) const = 0;
 
     virtual void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) = 0;
-
-    DISALLOW_COPY_AND_MOVE(PSDiskDelegator);
 };
 
 class PSDiskDelegatorMulti : public PSDiskDelegator
@@ -231,7 +193,7 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
+    size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path) override;
@@ -272,7 +234,7 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
+    size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path) override;
@@ -307,7 +269,7 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
+    size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path) override;
@@ -324,6 +286,7 @@ private:
     using RaftPathInfos = std::vector<RaftPathInfo>;
 
     PathPool & pool;
+    mutable std::mutex mutex;
     RaftPathInfos raft_path_infos;
     // PageFileID -> path index
     PathPool::PageFilePathMap page_path_map;
@@ -354,7 +317,7 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
+    size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path) override;
@@ -364,6 +327,8 @@ public:
     void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
 
 private:
+    mutable std::mutex mutex;
+
     const PathPool & pool;
     const String path_prefix;
     // PageFileID -> path index
@@ -395,7 +360,7 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
+    size_t freePageFileUsedSize(
         const PageFileIdAndLevel & id_lvl,
         size_t size_to_free,
         const String & pf_parent_path) override;
@@ -408,22 +373,25 @@ private:
     const PathPool & pool;
     const String path_prefix;
 
+    mutable std::mutex mutex;
     PathPool::PageFilePathMap page_path_map;
 };
 
-/// A class to manage paths for a specified physical table.
+/// A class to manage paths for the specified storage.
 class StoragePathPool
 {
 public:
     static constexpr const char * STABLE_FOLDER_NAME = "stable";
 
-    StoragePathPool(const Strings & main_data_paths,
-                    const Strings & latest_data_paths,
+    StoragePathPool(const Strings & main_data_paths, const Strings & latest_data_paths, //
                     String database_,
                     String table_,
-                    bool path_need_database_name_,
+                    bool path_need_database_name_, //
                     PathCapacityMetricsPtr global_capacity_,
                     FileProviderPtr file_provider_);
+
+    StoragePathPool(const StoragePathPool & rhs);
+    StoragePathPool & operator=(const StoragePathPool & rhs);
 
     // Generate a lightweight delegator for managing stable data, such as choosing path for DTFile or getting DTFile path by ID and so on.
     // Those paths are generated from `main_path_infos` and `STABLE_FOLDER_NAME`
@@ -438,31 +406,14 @@ public:
     // Those paths are generated from the first path of `latest_path_infos` and `prefix`
     PSDiskDelegatorPtr getPSDiskDelegatorSingle(const String & prefix) { return std::make_shared<PSDiskDelegatorSingle>(*this, prefix); }
 
-    bool createPSV2DeleteMarkFile();
-
-    bool isPSV2Deleted() const;
-
-    void clearPSV2ObsoleteData();
-
-    void rename(const String & new_database, const String & new_table);
+    void rename(const String & new_database, const String & new_table, bool clean_rename);
 
     void drop(bool recursive, bool must_success = true);
-
-    void shutdown() { shutdown_called.store(true); }
-
-    bool isShutdown() const { return shutdown_called.load(); }
-
-    DISALLOW_COPY(StoragePathPool);
-
-    StoragePathPool(StoragePathPool && rhs) noexcept;
-    StoragePathPool & operator=(StoragePathPool && rhs);
 
 private:
     String getStorePath(const String & extra_path_root, const String & database_name, const String & table_name) const;
 
     void renamePath(const String & old_path, const String & new_path);
-
-    String getPSV2DeleteMarkFilePath() const;
 
 private:
     using DMFilePathMap = std::unordered_map<UInt64, UInt32>;
@@ -484,23 +435,20 @@ private:
     friend class PSDiskDelegatorSingle;
 
 private:
-    // Note that we keep an assumption that the size of `main_path_infos` and `latest_path_infos`
-    // won't be changed during the whole runtime.
     // Path, size
     MainPathInfos main_path_infos;
     LatestPathInfos latest_path_infos;
+    // DMFileID -> path index
+    DMFilePathMap dt_file_path_map;
 
     String database;
     String table;
 
-    // This mutex mainly used to protect the `dt_file_path_map`
+    // Note that we keep an assumption that the size of `main_path_infos` and `latest_path_infos` won't be changed during the whole runtime.
+    // This mutex mainly used to protect the `dt_file_path_map` , `page_path_map` of each path.
     mutable std::mutex mutex;
-    // DMFileID -> path index
-    DMFilePathMap dt_file_path_map;
 
     bool path_need_database_name = false;
-
-    std::atomic<bool> shutdown_called;
 
     PathCapacityMetricsPtr global_capacity;
 

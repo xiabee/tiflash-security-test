@@ -30,7 +30,7 @@ extern const int INVALID_CONFIG_PARAMETER;
 } // namespace ErrorCodes
 
 /// Load raft related configs.
-TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log)
+TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfiguration & config, Poco::Logger * log)
 {
     TiFlashRaftConfig res;
     res.flash_server_addr = config.getString("flash.service_addr", "0.0.0.0:3930");
@@ -46,11 +46,11 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
         {
             res.pd_addrs.push_back(string_token);
         }
-        LOG_INFO(log, "Found pd addrs: {}", pd_service_addrs);
+        LOG_FMT_INFO(log, "Found pd addrs: {}", pd_service_addrs);
     }
     else
     {
-        LOG_INFO(log, "Not found pd addrs.");
+        LOG_FMT_INFO(log, "Not found pd addrs.");
     }
 
     if (config.has("raft.ignore_databases"))
@@ -67,7 +67,7 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
                 fb.append(arg);
             },
             ", ");
-        LOG_INFO(log, "Found ignore databases: {}", fmt_buf.toString());
+        LOG_FMT_INFO(log, "Found ignore databases: {}", fmt_buf.toString());
     }
 
     if (config.has("raft.storage_engine"))
@@ -92,7 +92,11 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
     {
         String snapshot_method = config.getString("raft.snapshot.method");
         std::transform(snapshot_method.begin(), snapshot_method.end(), snapshot_method.begin(), [](char ch) { return std::tolower(ch); });
-        if (snapshot_method == "file1")
+        if (snapshot_method == "block")
+        {
+            res.snapshot_apply_method = TiDB::SnapshotApplyMethod::Block;
+        }
+        else if (snapshot_method == "file1")
         {
             res.snapshot_apply_method = TiDB::SnapshotApplyMethod::DTFile_Directory;
         }
@@ -121,7 +125,7 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
         break;
     }
 
-    LOG_INFO(log, "Default storage engine [type={}] [snapshot.method={}]", static_cast<Int64>(res.engine), applyMethodToString(res.snapshot_apply_method));
+    LOG_FMT_INFO(log, "Default storage engine [type={}] [snapshot.method={}]", static_cast<Int64>(res.engine), applyMethodToString(res.snapshot_apply_method));
 
     return res;
 }

@@ -21,8 +21,6 @@
 #include <fmt/format.h>
 #include <tipb/executor.pb.h>
 
-#include <magic_enum.hpp>
-
 namespace DB
 {
 MPPTaskStatistics::MPPTaskStatistics(const MPPTaskId & id_, String address_)
@@ -67,10 +65,10 @@ Int64 toNanoseconds(MPPTaskStatistics::Timestamp timestamp)
 void MPPTaskStatistics::initializeExecutorDAG(DAGContext * dag_context)
 {
     assert(dag_context);
+    assert(dag_context->dag_request);
     assert(dag_context->isMPPTask());
-    RUNTIME_CHECK(dag_context->dag_request && dag_context->dag_request->has_root_executor());
     const auto & root_executor = dag_context->dag_request->root_executor();
-    RUNTIME_CHECK(root_executor.has_exchange_sender());
+    assert(root_executor.has_exchange_sender());
 
     is_root = dag_context->isRootMPPTask();
     sender_executor_id = root_executor.executor_id();
@@ -82,7 +80,12 @@ const BaseRuntimeStatistics & MPPTaskStatistics::collectRuntimeStatistics()
     executor_statistics_collector.collectRuntimeDetails();
     const auto & executor_statistics_res = executor_statistics_collector.getResult();
     auto it = executor_statistics_res.find(sender_executor_id);
-    RUNTIME_CHECK_MSG(it != executor_statistics_res.end(), "Can't find exchange sender statistics after `collectRuntimeStatistics`");
+    if (it == executor_statistics_res.end())
+    {
+        throw TiFlashException(
+            "Can't find exchange sender statistics after `collectRuntimeStatistics`",
+            Errors::Coprocessor::Internal);
+    }
     const auto & return_statistics = it->second->getBaseRuntimeStatistics();
 
     // record io bytes
@@ -94,7 +97,7 @@ const BaseRuntimeStatistics & MPPTaskStatistics::collectRuntimeStatistics()
 
 void MPPTaskStatistics::logTracingJson()
 {
-    LOG_INFO(
+    LOG_FMT_INFO(
         logger,
         R"({{"query_tso":{},"task_id":{},"is_root":{},"sender_executor_id":"{}","executors":{},"host":"{}")"
         R"(,"task_init_timestamp":{},"task_start_timestamp":{},"task_end_timestamp":{})"
@@ -118,7 +121,7 @@ void MPPTaskStatistics::logTracingJson()
         local_input_bytes,
         remote_input_bytes,
         output_bytes,
-        magic_enum::enum_name(status),
+        taskStatusToString(status),
         error_message,
         working_time,
         memory_peak);
@@ -141,17 +144,16 @@ void MPPTaskStatistics::recordInputBytes(DAGContext & dag_context)
     {
         for (const auto & io_stream : map_entry.second)
         {
-            if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get()); p_stream)
+            auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get());
+            assert(p_stream);
+            const auto & profile_info = p_stream->getProfileInfo();
+            if (dynamic_cast<ExchangeReceiverInputStream *>(p_stream) || dynamic_cast<CoprocessorBlockInputStream *>(p_stream))
             {
-                const auto & profile_info = p_stream->getProfileInfo();
-                if (dynamic_cast<ExchangeReceiverInputStream *>(p_stream) || dynamic_cast<CoprocessorBlockInputStream *>(p_stream))
-                {
-                    remote_input_bytes += profile_info.bytes;
-                }
-                else
-                {
-                    local_input_bytes += profile_info.bytes;
-                }
+                remote_input_bytes += profile_info.bytes;
+            }
+            else
+            {
+                local_input_bytes += profile_info.bytes;
             }
         }
     }

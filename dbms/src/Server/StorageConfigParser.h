@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Common/Logger.h>
 #include <Core/Types.h>
 
 #include <tuple>
@@ -76,7 +75,7 @@ public:
         , auto_tune_sec(5)
     {}
 
-    void parse(const String & storage_io_rate_limit, const LoggerPtr & log);
+    void parse(const String & storage_io_rate_limit, Poco::Logger * log);
 
     std::string toString() const;
 
@@ -110,14 +109,14 @@ public:
 
     Strings getAllNormalPaths() const;
 
-    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
+    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(Poco::Util::LayeredConfiguration & config, Poco::Logger * log);
 
 private:
-    void parseStoragePath(const String & storage_section, const LoggerPtr & log);
+    void parseStoragePath(const String & storage_section, Poco::Logger * log);
 
-    bool parseFromDeprecatedConfiguration(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
+    bool parseFromDeprecatedConfiguration(Poco::Util::LayeredConfiguration & config, Poco::Logger * log);
 
-    void parseMisc(const String & storage_section, const LoggerPtr & log);
+    void parseMisc(const String & storage_section, Poco::Logger * log);
 };
 
 

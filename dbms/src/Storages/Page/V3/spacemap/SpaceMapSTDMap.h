@@ -54,9 +54,7 @@ protected:
     STDMapSpaceMap(UInt64 start, UInt64 end)
         : SpaceMap(start, end, SMAP64_STD_MAP)
     {
-        free_map.insert({start, end - start});
-        std::set<UInt64> offsets{start};
-        free_map_invert_index.emplace(end - start, offsets);
+        free_map.insert({start, end});
     }
 
     String toDebugString() override
@@ -166,12 +164,9 @@ protected:
 
         if (length > it->second || it->first + it->second < offset + length)
         {
-            LOG_WARNING(log, "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]", offset, length, it->first, it->second);
+            LOG_FMT_WARNING(log, "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]", offset, length, it->first, it->second);
             return false;
         }
-
-        // remove it from `free_map_invert_index`
-        deleteFromInvertIndex(it->second, it->first);
 
         // match
         if (it->first == offset)
@@ -186,7 +181,6 @@ protected:
                 auto shrink_offset = it->first + length;
                 auto shrink_size = it->second - length;
                 free_map.erase(it);
-                insertIntoInvertIndex(shrink_size, shrink_offset);
                 free_map[shrink_offset] = shrink_size;
             }
         }
@@ -194,15 +188,12 @@ protected:
         {
             // Shrink the free block from right
             assert(it->second != length); // should not run into here
-            insertIntoInvertIndex(it->second - length, it->first);
             free_map[it->first] = it->second - length;
         }
         else
         {
             // In the mid, and not match the left or right.
             // Split to two space
-            insertIntoInvertIndex(it->first + it->second - offset - length, offset + length);
-            insertIntoInvertIndex(offset - it->first, it->first);
             free_map.insert({offset + length, it->first + it->second - offset - length});
             free_map[it->first] = offset - it->first;
         }
@@ -212,36 +203,126 @@ protected:
 
     std::tuple<UInt64, UInt64, bool> searchInsertOffset(size_t size) override
     {
-        if (unlikely(free_map.empty()))
+        UInt64 offset = UINT64_MAX, last_offset = UINT64_MAX;
+        UInt64 max_cap = 0;
+        // The biggest free block capacity and its start offset
+        UInt64 scan_biggest_cap = 0;
+        UInt64 scan_biggest_offset = 0;
+
+        if (free_map.empty())
         {
-            LOG_ERROR(log, "Current space map is full");
-            return std::make_tuple(UINT64_MAX, 0, false);
+            LOG_FMT_ERROR(log, "Current space map is full");
+            hint_biggest_cap = 0;
+            return std::make_tuple(offset, hint_biggest_cap, false);
         }
-        RUNTIME_CHECK_MSG(!free_map_invert_index.empty(), "Invalid state: free_map is empty but invert index is not empty");
-        auto iter = free_map_invert_index.lower_bound(size);
-        if (unlikely(iter == free_map_invert_index.end()))
+
+        auto r_it = free_map.rbegin();
+        last_offset = (r_it->first + r_it->second == end) ? r_it->first : UINT64_MAX;
+
+        auto it = free_map.begin();
+        for (; it != free_map.end(); it++)
         {
-            LOG_ERROR(log, "Can't found any place to insert for size {}", size);
-            return std::make_tuple(UINT64_MAX, free_map_invert_index.rbegin()->first, false);
+            if (it->second >= size)
+            {
+                break;
+            }
+            // Keep track of the biggest free block we scanned before `it`
+            if (it->second > scan_biggest_cap)
+            {
+                scan_biggest_cap = it->second;
+                scan_biggest_offset = it->first;
+            }
         }
-        auto length = iter->first;
-        auto offset = *(iter->second.begin());
-        bool is_expansion = (offset + length == end);
-        deleteFromInvertIndex(length, offset);
-        assert(length >= size);
-        free_map.erase(offset);
-        if (length > size)
+
+        // No enough space for insert
+        if (it == free_map.end())
         {
-            free_map.insert({offset + size, length - size});
-            insertIntoInvertIndex(length - size, offset + size);
+            LOG_FMT_ERROR(log, "Not sure why can't found any place to insert."
+                               "[size={}] [old biggest_offset={}] [old biggest_cap={}] [new biggest_offset={}] [new biggest_cap={}]", //
+                          size,
+                          hint_biggest_offset,
+                          hint_biggest_cap,
+                          scan_biggest_offset,
+                          scan_biggest_cap);
+            hint_biggest_offset = scan_biggest_offset;
+            hint_biggest_cap = scan_biggest_cap;
+
+            return std::make_tuple(offset, hint_biggest_cap, false);
         }
-        UInt64 biggest_cap = free_map_invert_index.empty() ? 0 : free_map_invert_index.rbegin()->first;
-        return std::make_tuple(offset, biggest_cap, is_expansion);
+
+        // Update return start
+        offset = it->first;
+
+        if (it->second == size)
+        {
+            // It is not champion, just return
+            if (it->first != hint_biggest_offset)
+            {
+                free_map.erase(it);
+                max_cap = hint_biggest_cap;
+                return std::make_tuple(offset, max_cap, last_offset == offset);
+            }
+
+            // It is champion, need to update `scan_biggest_cap`, `scan_biggest_offset`
+            // and scan other free blocks to update `biggest_offset` and `biggest_cap`
+            it = free_map.erase(it);
+        }
+        else
+        {
+            // Shrink the free block by `size`
+            auto k = it->first + size;
+            auto v = it->second - size;
+
+            it = free_map.erase(it);
+            it = free_map.insert(/*hint=*/it, {k, v}); // Use the `it` after erased as a hint, should be good for performance
+
+            // It is not champion, just return
+            if (k - size != hint_biggest_offset)
+            {
+                max_cap = hint_biggest_cap;
+                return std::make_tuple(offset, max_cap, last_offset == offset);
+            }
+
+            // It is champion, need to update `scan_biggest_cap`, `scan_biggest_offset`
+            // and scan other free blocks to update `biggest_offset` and `biggest_cap`
+            if (v > scan_biggest_cap)
+            {
+                scan_biggest_cap = v;
+                scan_biggest_offset = k;
+            }
+        }
+
+        for (; it != free_map.end(); it++)
+        {
+            if (it->second > scan_biggest_cap)
+            {
+                scan_biggest_cap = it->second;
+                scan_biggest_offset = it->first;
+            }
+        }
+        hint_biggest_offset = scan_biggest_offset;
+        hint_biggest_cap = scan_biggest_cap;
+
+        return std::make_tuple(offset, hint_biggest_cap, last_offset == offset);
     }
 
     UInt64 updateAccurateMaxCapacity() override
     {
-        return free_map_invert_index.empty() ? 0 : free_map_invert_index.rbegin()->first;
+        UInt64 max_offset = 0;
+        UInt64 max_cap = 0;
+
+        for (const auto & [start, size] : free_map)
+        {
+            if (size > max_cap)
+            {
+                max_cap = size;
+                max_offset = start;
+            }
+        }
+        hint_biggest_offset = max_offset;
+        hint_biggest_cap = max_cap;
+
+        return max_cap;
     }
 
     bool markFreeImpl(UInt64 offset, size_t length) override
@@ -260,7 +341,6 @@ protected:
 
         bool meanless = false;
         std::tie(it, meanless) = free_map.insert({offset, length});
-        insertIntoInvertIndex(length, offset);
 
         auto it_prev = it;
         auto it_next = it;
@@ -276,9 +356,8 @@ protected:
             it_prev--;
             if (it_prev->first + it_prev->second > it->first)
             {
-                LOG_WARNING(log, "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]", it->first, it->second, it_prev->first, it_prev->second);
+                LOG_FMT_WARNING(log, "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]", it->first, it->second, it_prev->first, it_prev->second);
                 free_map.erase(it);
-                deleteFromInvertIndex(length, offset);
                 return false;
             }
         }
@@ -288,9 +367,8 @@ protected:
         {
             if (it->first + it->second > it_next->first)
             {
-                LOG_WARNING(log, "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]", it->first, it->second, it_next->first, it_next->second);
+                LOG_FMT_WARNING(log, "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]", it->first, it->second, it_next->first, it_next->second);
                 free_map.erase(it);
-                deleteFromInvertIndex(length, offset);
                 return false;
             }
         }
@@ -310,9 +388,6 @@ protected:
             // Prev space can merge
             if (it_prev->first + it_prev->second == it->first)
             {
-                deleteFromInvertIndex(it_prev->second, it_prev->first);
-                deleteFromInvertIndex(length, offset);
-                insertIntoInvertIndex(it->first + it->second - it_prev->first, it_prev->first);
                 free_map[it_prev->first] = it->first + it->second - it_prev->first;
                 free_map.erase(it);
                 it = it_prev;
@@ -331,9 +406,6 @@ protected:
 
         if (it->first + it->second == it_next->first)
         {
-            deleteFromInvertIndex(it_next->second, it_next->first);
-            deleteFromInvertIndex(it->second, it->first);
-            insertIntoInvertIndex(it_next->first + it_next->second - it->first, it->first);
             free_map[it->first] = it_next->first + it_next->second - it->first;
             free_map.erase(it_next);
         }
@@ -342,40 +414,12 @@ protected:
     }
 
 private:
-    inline void deleteFromInvertIndex(UInt64 length, UInt64 offset)
-    {
-        auto index_iter = free_map_invert_index.find(length);
-        RUNTIME_CHECK_MSG(index_iter != free_map_invert_index.end(), "Fail to find length {} offset {} in free_map_invert_index", length, offset);
-        auto & offsets = index_iter->second;
-        offsets.erase(offset);
-        if (offsets.empty())
-        {
-            free_map_invert_index.erase(length);
-        }
-    }
-
-    inline void insertIntoInvertIndex(UInt64 length, UInt64 offset)
-    {
-        if (auto index_iter = free_map_invert_index.find(length); index_iter != free_map_invert_index.end())
-        {
-            index_iter->second.insert(offset);
-        }
-        else
-        {
-            std::set<UInt64> offsets{offset};
-            free_map_invert_index.emplace(length, offsets);
-        }
-    }
-
-#ifndef DBMS_PUBLIC_GTEST
-private:
-#else
-public:
-#endif
     // Save the <offset, length> of free blocks
     std::map<UInt64, UInt64> free_map;
-    // Length -> set<Offset>
-    std::map<UInt64, std::set<UInt64>> free_map_invert_index;
+    // Keep a hint track of the biggest free block. Save its biggest capacity and start offset.
+    // The hint could be invalid after `markSmapUsed` while restoring or `markSmapFree`.
+    UInt64 hint_biggest_offset = 0;
+    UInt64 hint_biggest_cap = 0;
 };
 
 using STDMapSpaceMapPtr = std::shared_ptr<STDMapSpaceMap>;

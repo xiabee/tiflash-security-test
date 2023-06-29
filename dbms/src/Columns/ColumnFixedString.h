@@ -141,11 +141,6 @@ public:
         return scatterImpl<ColumnFixedString>(num_columns, selector);
     }
 
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override
-    {
-        scatterToImpl<ColumnFixedString>(columns, selector);
-    }
-
     void gather(ColumnGathererStream & gatherer_stream) override;
 
     void reserve(size_t size) override

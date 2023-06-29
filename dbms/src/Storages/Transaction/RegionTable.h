@@ -17,7 +17,6 @@
 #include <Common/nocopyable.h>
 #include <Core/Block.h>
 #include <Core/Names.h>
-#include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/RegionDataRead.h>
 #include <Storages/Transaction/RegionException.h>
@@ -56,11 +55,6 @@ struct RegionPtrWithSnapshotFiles;
 class RegionScanFilter;
 using RegionScanFilterPtr = std::shared_ptr<RegionScanFilter>;
 
-using SafeTS = UInt64;
-enum : SafeTS
-{
-    InvalidSafeTS = std::numeric_limits<UInt64>::max()
-};
 class RegionTable : private boost::noncopyable
 {
 public:
@@ -91,21 +85,6 @@ public:
 
     using TableMap = std::unordered_map<TableID, Table>;
     using RegionInfoMap = std::unordered_map<RegionID, TableID>;
-
-    // safe ts is maintained by check_leader RPC (https://github.com/tikv/tikv/blob/1ea26a2ac8761af356cc5c0825eb89a0b8fc9749/components/resolved_ts/src/advance.rs#L262),
-    // leader_safe_ts is the safe_ts in leader, leader will send <applied_index, safe_ts> to learner to advance safe_ts of learner, and TiFlash will record the safe_ts into safe_ts_map in check_leader RPC.
-    // self_safe_ts is the safe_ts in TiFlah learner. When TiFlash proxy receive <applied_index, safe_ts> from leader, TiFlash will update safe_ts_map when TiFlash has applied the raft log to applied_index.
-    struct SafeTsEntry
-    {
-        explicit SafeTsEntry(UInt64 leader_safe_ts, UInt64 self_safe_ts)
-            : leader_safe_ts(leader_safe_ts)
-            , self_safe_ts(self_safe_ts)
-        {}
-        std::atomic<UInt64> leader_safe_ts;
-        std::atomic<UInt64> self_safe_ts;
-    };
-    using SafeTsEntryPtr = std::unique_ptr<SafeTsEntry>;
-    using SafeTsMap = std::unordered_map<RegionID, SafeTsEntryPtr>;
 
     using DirtyRegions = std::unordered_set<RegionID>;
     using TableToOptimize = std::unordered_set<TableID>;
@@ -148,14 +127,14 @@ public:
     /// This functional only shrink the table range of this region_id
     void shrinkRegionRange(const Region & region);
 
-    void removeRegion(RegionID region_id, bool remove_data, const RegionTaskLock &);
+    void removeRegion(const RegionID region_id, bool remove_data, const RegionTaskLock &);
 
     bool tryFlushRegions();
     RegionDataReadInfoList tryFlushRegion(RegionID region_id, bool try_persist = false);
     RegionDataReadInfoList tryFlushRegion(const RegionPtrWithBlock & region, bool try_persist);
 
-    void handleInternalRegionsByTable(TableID table_id, std::function<void(const InternalRegions &)> && callback) const;
-    std::vector<std::pair<RegionID, RegionPtr>> getRegionsByTable(TableID table_id) const;
+    void handleInternalRegionsByTable(const TableID table_id, std::function<void(const InternalRegions &)> && callback) const;
+    std::vector<std::pair<RegionID, RegionPtr>> getRegionsByTable(const TableID table_id) const;
 
     /// Write the data of the given region into the table with the given table ID, fill the data list for outer to remove.
     /// Will trigger schema sync on read error for only once,
@@ -164,8 +143,23 @@ public:
     static void writeBlockByRegion(Context & context,
                                    const RegionPtrWithBlock & region,
                                    RegionDataReadInfoList & data_list_to_remove,
-                                   const LoggerPtr & log,
+                                   Poco::Logger * log,
                                    bool lock_region = true);
+
+    /// Read the data of the given region into block, take good care of learner read and locks.
+    /// Assuming that the schema has been properly synced by outer, i.e. being new enough to decode data before start_ts,
+    /// we directly ask RegionBlockReader::read to perform a read with the given start_ts and force_decode being true.
+    using ReadBlockByRegionRes = std::variant<Block, RegionException::RegionReadStatus>;
+    static ReadBlockByRegionRes readBlockByRegion(const TiDB::TableInfo & table_info,
+                                                  const ColumnsDescription & columns,
+                                                  const Names & column_names_to_read,
+                                                  const RegionPtr & region,
+                                                  RegionVersion region_version,
+                                                  RegionVersion conf_version,
+                                                  bool resolve_locks,
+                                                  Timestamp start_ts,
+                                                  const std::unordered_set<UInt64> * bypass_lock_ts,
+                                                  RegionScanFilterPtr scan_filter = nullptr);
 
     /// Check transaction locks in region, and write committed data in it into storage engine if check passed. Otherwise throw an LockException.
     /// The write logic is the same as #writeBlockByRegion, with some extra checks about region version and conf_version.
@@ -177,28 +171,20 @@ public:
                                                                     const std::unordered_set<UInt64> * bypass_lock_ts,
                                                                     RegionVersion region_version,
                                                                     RegionVersion conf_version,
-                                                                    const LoggerPtr & log);
+                                                                    Poco::Logger * log);
 
     /// extend range for possible InternalRegion or add one.
-    void extendRegionRange(RegionID region_id, const RegionRangeKeys & region_range_keys);
-
-
-    void updateSafeTS(UInt64 region_id, UInt64 leader_safe_ts, UInt64 self_safe_ts);
-
-    // unit: ms. If safe_ts diff is larger than 2min, we think the data synchronization progress is far behind the leader.
-    static const UInt64 SafeTsDiffThreshold = 2 * 60 * 1000;
-    bool isSafeTSLag(UInt64 region_id, UInt64 * leader_safe_ts, UInt64 * self_safe_ts);
-
+    void extendRegionRange(const RegionID region_id, const RegionRangeKeys & region_range_keys);
 
 private:
     friend class MockTiDB;
     friend class StorageDeltaMerge;
 
-    Table & getOrCreateTable(TableID table_id);
+    Table & getOrCreateTable(const TableID table_id);
     void removeTable(TableID table_id);
-    InternalRegion & getOrInsertRegion(const Region & region);
-    InternalRegion & insertRegion(Table & table, const RegionRangeKeys & region_range_keys, RegionID region_id);
     InternalRegion & insertRegion(Table & table, const Region & region);
+    InternalRegion & getOrInsertRegion(const Region & region);
+    InternalRegion & insertRegion(Table & table, const RegionRangeKeys & region_range_keys, const RegionID region_id);
     InternalRegion & doGetInternalRegion(TableID table_id, RegionID region_id);
 
     RegionDataReadInfoList flushRegion(const RegionPtrWithBlock & region, bool try_persist) const;
@@ -208,7 +194,6 @@ private:
 private:
     TableMap tables;
     RegionInfoMap regions;
-    SafeTsMap safe_ts_map;
     DirtyRegions dirty_regions;
 
     FlushThresholds flush_thresholds;
@@ -216,9 +201,8 @@ private:
     Context * const context;
 
     mutable std::mutex mutex;
-    mutable std::shared_mutex rw_lock;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 
 
@@ -275,9 +259,10 @@ struct RegionPtrWithSnapshotFiles
     using Base = RegionPtr;
 
     /// can accept const ref of RegionPtr without cache
-    RegionPtrWithSnapshotFiles(
-        const Base & base_,
-        std::vector<DM::ExternalDTFileInfo> && external_files_ = {});
+    RegionPtrWithSnapshotFiles(const Base & base_, std::vector<UInt64> ids_ = {})
+        : base(base_)
+        , ingest_ids(std::move(ids_))
+    {}
 
     /// to be compatible with usage as RegionPtr.
     Base::element_type * operator->() const { return base.operator->(); }
@@ -287,7 +272,7 @@ struct RegionPtrWithSnapshotFiles
     operator const Base &() const { return base; }
 
     const Base & base;
-    const std::vector<DM::ExternalDTFileInfo> external_files;
+    const std::vector<UInt64> ingest_ids;
 };
 
 } // namespace DB

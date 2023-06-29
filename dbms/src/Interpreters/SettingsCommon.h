@@ -16,7 +16,7 @@
 
 #include <Common/Checksum.h>
 #include <Common/FieldVisitors.h>
-#include <Common/getNumberOfCPUCores.h>
+#include <Common/getNumberOfLogicalCPUCores.h>
 #include <Core/Field.h>
 #include <DataStreams/SizeLimits.h>
 #include <IO/CompressedStream.h>
@@ -167,7 +167,7 @@ public:
 
     static UInt64 getAutoValue()
     {
-        static auto res = getNumberOfPhysicalCPUCores();
+        static auto res = getNumberOfLogicalCPUCores();
         return res;
     }
 

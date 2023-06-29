@@ -239,9 +239,9 @@ public:
       */
     virtual int compareAt(size_t n, size_t m, const IColumn & rhs, int nan_direction_hint) const = 0;
 
-    virtual int compareAt(size_t, size_t, const IColumn &, int, const ICollator &) const
+    virtual int compareAtWithCollation(size_t, size_t, const IColumn &, int, const ICollator &) const
     {
-        throw Exception(fmt::format("Method compareAt with collation is not supported for {}", getName()), ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method compareAtWithCollation is not supported for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /** Returns a permutation that sorts elements of this column,
@@ -252,13 +252,14 @@ public:
       */
     virtual void getPermutation(bool reverse, size_t limit, int nan_direction_hint, Permutation & res) const = 0;
 
-    virtual void getPermutation(const ICollator &, bool, size_t, int, Permutation &) const
+    virtual void getPermutationWithCollation(const ICollator &, bool, size_t, int, Permutation &) const
     {
-        throw Exception(fmt::format("Method getPermutation with collation is not supported for {}", getName()), ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method getPermutationWithCollation is not supported for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /** Copies each element according offsets parameter.
       * (i-th element should be copied offsets[i] - offsets[i - 1] times.)
+      * It is necessary in ARRAY JOIN operation.
       */
     using Offset = UInt64;
     using Offsets = PaddedPODArray<Offset>;
@@ -269,25 +270,8 @@ public:
       * For default implementation, see scatterImpl.
       */
     using ColumnIndex = UInt64;
-    using ScatterColumns = std::vector<MutablePtr>;
     using Selector = PaddedPODArray<ColumnIndex>;
-    virtual ScatterColumns scatter(ColumnIndex num_columns, const Selector & selector) const = 0;
-
-    void initializeScatterColumns(ScatterColumns & columns, ColumnIndex num_columns, size_t num_rows) const
-    {
-        columns.reserve(num_columns);
-        for (ColumnIndex i = 0; i < num_columns; ++i)
-            columns.emplace_back(cloneEmpty());
-
-        size_t reserve_size = num_rows * 1.1 / num_columns; /// 1.1 is just a guess. Better to use n-sigma rule.
-
-        if (reserve_size > 1)
-            for (auto & column : columns)
-                column->reserve(reserve_size);
-    }
-
-    /// Different from scatter, scatterTo appends the scattered data to 'columns' instead of creating ScatterColumns
-    virtual void scatterTo(ScatterColumns & columns, const Selector & selector) const = 0;
+    virtual std::vector<MutablePtr> scatter(ColumnIndex num_columns, const Selector & selector) const = 0;
 
     /// Insert data from several other columns according to source mask (used in vertical merge).
     /// For now it is a helper to de-virtualize calls to insert*() functions inside gather loop
@@ -404,7 +388,7 @@ public:
     String dumpStructure() const;
 
 protected:
-    /// Template is to de-virtualize calls to insertFrom method.
+    /// Template is to devirtualize calls to insertFrom method.
     /// In derived classes (that use final keyword), implement scatter method as call to scatterImpl.
     template <typename Derived>
     std::vector<MutablePtr> scatterImpl(ColumnIndex num_columns, const Selector & selector) const
@@ -416,27 +400,22 @@ protected:
                 fmt::format("Size of selector: {} doesn't match size of column: {}", selector.size(), num_rows),
                 ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
-        ScatterColumns columns;
-        initializeScatterColumns(columns, num_columns, num_rows);
+        std::vector<MutablePtr> columns(num_columns);
+        for (auto & column : columns)
+            column = cloneEmpty();
+
+        {
+            size_t reserve_size = num_rows * 1.1 / num_columns; /// 1.1 is just a guess. Better to use n-sigma rule.
+
+            if (reserve_size > 1)
+                for (auto & column : columns)
+                    column->reserve(reserve_size);
+        }
 
         for (size_t i = 0; i < num_rows; ++i)
             static_cast<Derived &>(*columns[selector[i]]).insertFrom(*this, i);
 
         return columns;
-    }
-
-    template <typename Derived>
-    void scatterToImpl(ScatterColumns & columns, const Selector & selector) const
-    {
-        size_t num_rows = size();
-
-        if (num_rows != selector.size())
-            throw Exception(
-                fmt::format("Size of selector: {} doesn't match size of column: {}", selector.size(), num_rows),
-                ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
-
-        for (size_t i = 0; i < num_rows; ++i)
-            static_cast<Derived &>(*columns[selector[i]]).insertFrom(*this, i);
     }
 };
 

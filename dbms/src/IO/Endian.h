@@ -14,12 +14,10 @@
 
 #pragma once
 
-#include <boost_wrapper/endian_conversion.h>
+#include <boost/endian/conversion.hpp>
 
 namespace DB
 {
-/// Requires:
-///   T is non-bool integral or scoped enumeration type
 template <typename T>
 inline T toLittleEndian(const T & x)
 {
@@ -29,15 +27,6 @@ inline T toLittleEndian(const T & x)
         return boost::endian::endian_reverse(x);
 }
 
-/// Requires:
-///   T is integral, enumeration, float or double
-template <typename T>
-inline void toLittleEndianInPlace(T & x)
-{
-    if constexpr (boost::endian::order::native != boost::endian::order::little)
-        boost::endian::endian_reverse_inplace(x);
-}
-
 template <typename T>
 inline T toBigEndian(const T & x)
 {
@@ -45,15 +34,6 @@ inline T toBigEndian(const T & x)
         return boost::endian::endian_reverse(x);
     else
         return x;
-}
-
-/// Requires:
-///   T is integral, enumeration, float or double
-template <typename T>
-inline void toBigEndianInPlace(T & x)
-{
-    if constexpr (boost::endian::order::native == boost::endian::order::little)
-        boost::endian::endian_reverse_inplace(x);
 }
 
 template <typename T>

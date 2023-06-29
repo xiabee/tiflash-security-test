@@ -13,13 +13,20 @@
 // limitations under the License.
 
 #pragma once
-#include <Common/grpcpp.h>
 #include <Core/Types.h>
 #include <IO/createReadBufferFromFileBase.h>
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
 #include <Poco/Util/LayeredConfiguration.h>
 #include <common/logger_useful.h>
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <grpc++/grpc++.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #include <set>
 
@@ -47,7 +54,7 @@ struct TiFlashSecurityConfig
 public:
     TiFlashSecurityConfig() = default;
 
-    TiFlashSecurityConfig(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log)
+    TiFlashSecurityConfig(Poco::Util::LayeredConfiguration & config, Poco::Logger * log)
     {
         if (config.has("security"))
         {
@@ -80,7 +87,7 @@ public:
             else
             {
                 has_tls_config = true;
-                LOG_INFO(
+                LOG_FMT_INFO(
                     log,
                     "security config is set: ca path is {} cert path is {} key path is {}",
                     ca_path,

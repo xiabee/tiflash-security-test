@@ -1,9 +1,9 @@
 enable_language(ASM)
 
 set(LIBUNWIND_SOURCE_DIR "${TiFlash_SOURCE_DIR}/contrib/libunwind")
-if(OS_LINUX)
+if(ARCH_LINUX)
     set(UNWIND_OS "linux")
-elseif(OS_FREEBSD)
+elseif(ARCH_FREEBSD)
     set(UNWIND_OS "freebsd")
 endif()
 

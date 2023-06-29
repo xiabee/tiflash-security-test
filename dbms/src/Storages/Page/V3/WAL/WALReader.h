@@ -71,7 +71,7 @@ public:
 
     bool remained() const;
 
-    std::optional<String> next();
+    std::tuple<bool, PageEntriesEdit> next();
 
     void throwIfError() const
     {

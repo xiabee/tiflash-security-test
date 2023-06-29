@@ -14,10 +14,9 @@
 
 #include <Common/FailPoint.h>
 #include <Common/Stopwatch.h>
+#include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Mpp/MPPHandler.h>
 #include <Flash/Mpp/Utils.h>
-
-#include <ext/scope_guard.h>
 
 namespace DB
 {
@@ -29,26 +28,21 @@ extern const char exception_before_mpp_root_task_run[];
 
 void MPPHandler::handleError(const MPPTaskPtr & task, String error)
 {
-    if (task)
+    try
     {
-        try
-        {
-            task->handleError(error);
-        }
-        catch (...)
-        {
-            tryLogCurrentException(log, "Fail to handle error and clean task");
-        }
-        task->unregisterTask();
+        if (task)
+            task->cancel(error);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(log, "Fail to handle error and clean task");
     }
 }
 // execute is responsible for making plan , register tasks and tunnels and start the running thread.
 grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskResponse * response)
 {
     MPPTaskPtr task = nullptr;
-    SCOPE_EXIT({
-        current_memory_tracker = nullptr; /// to avoid reusing threads in gRPC
-    });
+    current_memory_tracker = nullptr; /// to avoid reusing threads in gRPC
     try
     {
         Stopwatch stopwatch;
@@ -74,18 +68,18 @@ grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskRe
             FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_non_root_task_run);
         }
         task->run();
-        LOG_INFO(log, "processing dispatch is over; the time cost is {} ms", stopwatch.elapsedMilliseconds());
+        LOG_FMT_INFO(log, "processing dispatch is over; the time cost is {} ms", stopwatch.elapsedMilliseconds());
     }
     catch (Exception & e)
     {
-        LOG_ERROR(log, "dispatch task meet error : {}", e.displayText());
+        LOG_FMT_ERROR(log, "dispatch task meet error : {}", e.displayText());
         auto * err = response->mutable_error();
         err->set_msg(e.displayText());
         handleError(task, e.displayText());
     }
     catch (std::exception & e)
     {
-        LOG_ERROR(log, "dispatch task meet error : {}", e.what());
+        LOG_FMT_ERROR(log, "dispatch task meet error : {}", e.what());
         auto * err = response->mutable_error();
         err->set_msg(e.what());
         handleError(task, e.what());

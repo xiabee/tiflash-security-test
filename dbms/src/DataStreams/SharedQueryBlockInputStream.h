@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Common/FailPoint.h>
 #include <Common/MPMCQueue.h>
 #include <Common/ThreadFactory.h>
 #include <Common/ThreadManager.h>
@@ -25,11 +24,6 @@
 
 namespace DB
 {
-namespace FailPoints
-{
-extern const char random_sharedquery_failpoint[];
-} // namespace FailPoints
-
 /** This block input stream is used by SharedQuery.
   * It enable multiple threads read from one stream.
  */
@@ -40,7 +34,7 @@ class SharedQueryBlockInputStream : public IProfilingBlockInputStream
 public:
     SharedQueryBlockInputStream(size_t clients, const BlockInputStreamPtr & in_, const String & req_id)
         : queue(clients)
-        , log(Logger::get(req_id))
+        , log(Logger::get(NAME, req_id))
         , in(in_)
     {
         children.push_back(in);
@@ -112,10 +106,7 @@ public:
     }
 
 protected:
-    /// The BlockStreamProfileInfo of SharedQuery is useless,
-    /// and it will trigger tsan UT fail because of data race.
-    /// So overriding method `read` here.
-    Block read(FilterPtr &, bool) override
+    Block readImpl() override
     {
         std::unique_lock lock(mutex);
 
@@ -125,7 +116,7 @@ protected:
             throw Exception("read operation called after readSuffix");
 
         Block block;
-        if (queue.pop(block) != MPMCQueueResult::OK)
+        if (!queue.pop(block))
         {
             if (!isCancelled())
             {
@@ -137,10 +128,6 @@ protected:
 
         return block;
     }
-    Block readImpl() override
-    {
-        throw Exception("Unsupport");
-    }
 
     void fetchBlocks()
     {
@@ -149,10 +136,9 @@ protected:
             in->readPrefix();
             while (true)
             {
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_sharedquery_failpoint);
                 Block block = in->read();
                 // in is finished or queue is canceled
-                if (!block || queue.push(block) != MPMCQueueResult::OK)
+                if (!block || !queue.push(block))
                     break;
             }
             in->readSuffix();

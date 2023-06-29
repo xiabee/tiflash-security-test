@@ -16,11 +16,10 @@
 
 #include <Common/Exception.h>
 #include <Common/Logger.h>
+#include <Common/MemoryTracker.h>
+#include <DataStreams/BlockIO.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <Flash/Executor/QueryExecutorHolder.h>
-#include <Flash/Mpp/MPPReceiverSet.h>
 #include <Flash/Mpp/MPPTaskId.h>
-#include <Flash/Mpp/MPPTaskScheduleEntry.h>
 #include <Flash/Mpp/MPPTaskStatistics.h>
 #include <Flash/Mpp/MPPTunnel.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
@@ -38,14 +37,6 @@
 namespace DB
 {
 class MPPTaskManager;
-
-enum class AbortType
-{
-    /// todo add ONKILL to distinguish between silent cancellation and kill
-    ONCANCELLATION,
-    ONERROR,
-};
-
 class MPPTask : public std::enable_shared_from_this<MPPTask>
     , private boost::noncopyable
 {
@@ -65,15 +56,28 @@ public:
 
     TaskStatus getStatus() const { return status.load(); }
 
-    void handleError(const String & error_msg);
+    void cancel(const String & reason);
 
     void prepare(const mpp::DispatchTaskRequest & task_request);
 
     void run();
 
+    void registerTunnel(const MPPTaskId & id, MPPTunnelPtr tunnel);
+
+    int getNeededThreads();
+
+    enum class ScheduleState
+    {
+        WAITING,
+        SCHEDULED,
+        FAILED,
+        EXCEEDED,
+        COMPLETED
+    };
+
     bool scheduleThisTask(ScheduleState state);
 
-    MPPTaskScheduleEntry & getScheduleEntry() { return schedule_entry; }
+    bool isScheduled();
 
     // tunnel and error_message
     std::pair<MPPTunnelPtr, String> getTunnel(const ::mpp::EstablishMPPConnectionRequest * request);
@@ -87,12 +91,11 @@ private:
 
     void unregisterTask();
 
-    // abort the mpp task, note this function should be non-blocking, it just set some flags
-    void abort(const String & message, AbortType abort_type);
+    void writeErrToAllTunnels(const String & e);
 
-    void abortTunnels(const String & message, bool wait_sender_finish);
-    void abortReceivers();
-    void abortDataStreams(AbortType abort_type);
+    /// Similar to `writeErrToAllTunnels`, but it just try to write the error message to tunnel
+    /// without waiting the tunnel to be connected
+    void closeAllTunnels(const String & reason);
 
     void finishWrite();
 
@@ -104,46 +107,48 @@ private:
 
     int estimateCountOfNewThreads();
 
-    void registerTunnels(const mpp::DispatchTaskRequest & task_request);
+    void sendCancelToQuery(bool kill);
 
-    void initExchangeReceivers();
+    BlockInputStreamPtr getDataStream();
 
     tipb::DAGRequest dag_req;
-    mpp::TaskMeta meta;
-    MPPTaskId id;
 
     ContextPtr context;
-
-    MPPTaskManager * manager;
-    std::atomic<bool> registered{false};
-
-    MPPTaskScheduleEntry schedule_entry;
-
     // `dag_context` holds inputstreams which could hold ref to `context` so it should be destructed
     // before `context`.
     std::unique_ptr<DAGContext> dag_context;
-
-    std::shared_ptr<ProcessListEntry> process_list_entry;
-
-    QueryExecutorHolder query_executor_holder;
+    MemoryTracker * memory_tracker = nullptr;
 
     std::atomic<TaskStatus> status{INITIALIZING};
-    String err_string;
 
-    std::mutex tunnel_and_receiver_mu;
+    mpp::TaskMeta meta;
+
+    MPPTaskId id;
 
     MPPTunnelSetPtr tunnel_set;
 
-    MPPReceiverSetPtr receiver_set;
+    // which targeted task we should send data by which tunnel.
+    std::unordered_map<MPPTaskId, MPPTunnelPtr> tunnel_map;
 
-    int new_thread_count_of_mpp_receiver = 0;
+    std::mutex stream_mu;
+    // must destroy before DAGContext.
+    BlockInputStreamPtr data_stream;
+
+    MPPTaskManager * manager = nullptr;
 
     const LoggerPtr log;
 
     MPPTaskStatistics mpp_task_statistics;
 
+    Exception err;
+
     friend class MPPTaskManager;
-    friend class MPPHandler;
+
+    int needed_threads;
+
+    std::mutex schedule_mu;
+    std::condition_variable schedule_cv;
+    ScheduleState schedule_state;
 };
 
 using MPPTaskPtr = std::shared_ptr<MPPTask>;

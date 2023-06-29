@@ -50,7 +50,7 @@ ConfigReloaderPtr parseSettings(
     Poco::Util::LayeredConfiguration & config,
     const std::string & config_path,
     std::unique_ptr<Context> & global_context,
-    const LoggerPtr & log)
+    Poco::Logger * log)
 {
     std::string users_config_path = config.getString("users_config", String(1, '\0'));
     bool load_from_main_config_path = true;
@@ -67,7 +67,7 @@ ConfigReloaderPtr parseSettings(
     if (load_from_main_config_path)
         users_config_path = config_path;
 
-    LOG_INFO(log, "Set users config file to: {}", users_config_path);
+    LOG_FMT_INFO(log, "Set users config file to: {}", users_config_path);
 
     return std::make_unique<ConfigReloader>(
         users_config_path, //

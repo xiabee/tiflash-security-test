@@ -128,11 +128,9 @@ CATCH
 TEST_F(DynamicThreadPoolTest, testMemoryTracker)
 try
 {
-    auto t0 = MemoryTracker::create();
-    auto t1 = MemoryTracker::create();
-    auto t2 = MemoryTracker::create();
+    MemoryTracker t0, t1, t2;
 
-    current_memory_tracker = t2.get();
+    current_memory_tracker = &t2;
 
     auto getter = [] {
         return current_memory_tracker;
@@ -147,18 +145,18 @@ try
     auto f = pool.schedule(false, getter);
     ASSERT_EQ(f.get(), nullptr);
 
-    auto f0 = pool.schedule(false, setter, t0.get());
+    auto f0 = pool.schedule(false, setter, &t0);
     f0.wait();
 
     auto f1 = pool.schedule(false, getter);
     // f0 didn't pollute memory_tracker
     ASSERT_EQ(f1.get(), nullptr);
 
-    current_memory_tracker = t1.get();
+    current_memory_tracker = &t1;
 
     auto f2 = pool.schedule(true, getter);
     // set propagate = true and it did propagate
-    ASSERT_EQ(f2.get(), t1.get());
+    ASSERT_EQ(f2.get(), &t1);
 
     auto f3 = pool.schedule(false, getter);
     // set propagate = false and it didn't propagate

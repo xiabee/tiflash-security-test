@@ -22,7 +22,6 @@
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -31,6 +30,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "dm_basic_include.h"
 
 namespace DB
 {
@@ -43,6 +43,7 @@ namespace DM
 {
 namespace tests
 {
+
 /// Helper class to test with multiple segments.
 /// You can call `prepareSegments` to prepare multiple segments. After that,
 /// you can use `verifyExpectedRowsForAllSegments` to verify the expectation for each segment.
@@ -83,8 +84,8 @@ public:
         for (auto & [_key, seg] : store->segments)
         {
             UNUSED(_key);
-            LOG_INFO(log, "Segment #{}: Range = {}", segment_idx, seg->getRowKeyRange().toDebugString());
-            rows_by_segments[segment_idx] = seg->getEstimatedRows();
+            LOG_FMT_INFO(log, "Segment #{}: Range = {}", segment_idx, seg->getRowKeyRange().toDebugString());
+            rows_by_segments[segment_idx] = seg->getStable()->getRows();
             expected_stable_rows[segment_idx] = seg->getStable()->getRows();
             expected_delta_rows[segment_idx] = seg->getDelta()->getRows();
             segment_idx++;
@@ -108,7 +109,6 @@ public:
             // Check there is only one segment
             ASSERT_EQ(store->segments.size(), 1);
             const auto & [_key, seg] = *store->segments.begin();
-            (void)_key;
             ASSERT_EQ(seg->getDelta()->getRows(), n_avg_rows_per_segment * 4);
             ASSERT_EQ(seg->getStable()->getRows(), 0);
 
@@ -150,7 +150,7 @@ public:
             store->read_write_mutex.lock();
             auto seg = std::next(store->segments.begin(), segment_idx)->second;
             store->read_write_mutex.unlock();
-            auto result = store->segmentSplit(*dm_context, seg, DeltaMergeStore::SegmentSplitReason::ForegroundWrite);
+            auto result = store->segmentSplit(*dm_context, seg, /*is_foreground*/ true);
             if (result.first)
             {
                 break;
@@ -166,7 +166,6 @@ public:
         auto segment_idx = 0;
         for (auto & [_key, seg] : store->segments)
         {
-            (void)_key;
             ASSERT_EQ(seg->getDelta()->getRows(), expected_delta_rows[segment_idx]) << "Assert failed for segment #" << segment_idx;
             ASSERT_EQ(seg->getStable()->getRows(), expected_stable_rows[segment_idx]) << "Assert failed for segment #" << segment_idx;
             segment_idx++;

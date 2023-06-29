@@ -94,8 +94,6 @@ public:
 
     Block readDataForFlush() const;
 
-    bool mayBeFlushedFrom(ColumnFile *) const override { return false; }
-
     String toString() const override
     {
         String s = "{in_memory_file,rows:" + DB::toString(rows) //

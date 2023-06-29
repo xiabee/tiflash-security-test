@@ -16,7 +16,9 @@
 
 #include <Storages/Transaction/RegionDataRead.h>
 #include <Storages/Transaction/RegionManager.h>
+#include <Storages/Transaction/RegionPersister.h>
 #include <Storages/Transaction/StorageEngineType.h>
+
 
 namespace TiDB
 {
@@ -24,22 +26,21 @@ struct TableInfo;
 }
 namespace DB
 {
-class Context;
 namespace RegionBench
 {
 extern void concurrentBatchInsert(const TiDB::TableInfo &, Int64, Int64, Int64, UInt64, UInt64, Context &);
-} // namespace RegionBench
+}
 namespace DM
 {
 enum class FileConvertJobType;
-struct ExternalDTFileInfo;
-} // namespace DM
+}
 
 namespace tests
 {
 class RegionKVStoreTest;
 }
 
+class Context;
 class IAST;
 using ASTPtr = std::shared_ptr<IAST>;
 using ASTs = std::vector<ASTPtr>;
@@ -70,16 +71,13 @@ using RegionPreDecodeBlockDataPtr = std::unique_ptr<RegionPreDecodeBlockData>;
 class ReadIndexWorkerManager;
 using BatchReadIndexRes = std::vector<std::pair<kvrpcpb::ReadIndexResponse, uint64_t>>;
 class ReadIndexStressTest;
-struct FileUsageStatistics;
-class PathPool;
-class RegionPersister;
 
 /// TODO: brief design document.
 class KVStore final : private boost::noncopyable
 {
 public:
     KVStore(Context & context, TiDB::SnapshotApplyMethod snapshot_apply_method_);
-    void restore(PathPool & path_pool, const TiFlashRaftProxyHelper *);
+    void restore(const TiFlashRaftProxyHelper *);
 
     RegionPtr getRegion(RegionID region_id) const;
 
@@ -93,7 +91,7 @@ public:
 
     void tryPersist(RegionID region_id);
 
-    static bool tryFlushRegionCacheInStorage(TMTContext & tmt, const Region & region, const LoggerPtr & log, bool try_until_succeed = true);
+    static void tryFlushRegionCacheInStorage(TMTContext & tmt, const Region & region, Poco::Logger * log);
 
     size_t regionSize() const;
     EngineStoreApplyRes handleAdminRaftCmd(raft_cmdpb::AdminRequest && request,
@@ -110,30 +108,27 @@ public:
         TMTContext & tmt);
     EngineStoreApplyRes handleWriteRaftCmd(const WriteCmdsView & cmds, UInt64 region_id, UInt64 index, UInt64 term, TMTContext & tmt);
 
-    bool needFlushRegionData(UInt64 region_id, TMTContext & tmt);
-    bool tryFlushRegionData(UInt64 region_id, bool force_persist, bool try_until_succeed, TMTContext & tmt, UInt64 index, UInt64 term);
-
-    /**
-     * Only used in tests. In production we will call preHandleSnapshotToFiles + applyPreHandledSnapshot.
-     */
-    void handleApplySnapshot(metapb::Region && region, uint64_t peer_id, SSTViewVec, uint64_t index, uint64_t term, TMTContext & tmt);
-
-    std::vector<DM::ExternalDTFileInfo> preHandleSnapshotToFiles(
+    void handleApplySnapshot(metapb::Region && region, uint64_t peer_id, const SSTViewVec, uint64_t index, uint64_t term, TMTContext & tmt);
+    RegionPreDecodeBlockDataPtr preHandleSnapshotToBlock(
         RegionPtr new_region,
-        SSTViewVec,
+        const SSTViewVec,
+        uint64_t index,
+        uint64_t term,
+        TMTContext & tmt);
+    std::vector<UInt64> /*   */ preHandleSnapshotToFiles(
+        RegionPtr new_region,
+        const SSTViewVec,
         uint64_t index,
         uint64_t term,
         TMTContext & tmt);
     template <typename RegionPtrWrap>
-    void applyPreHandledSnapshot(const RegionPtrWrap &, TMTContext & tmt);
+    void handlePreApplySnapshot(const RegionPtrWrap &, TMTContext & tmt);
 
     void handleDestroy(UInt64 region_id, TMTContext & tmt);
     void setRegionCompactLogConfig(UInt64, UInt64, UInt64);
-    EngineStoreApplyRes handleIngestSST(UInt64 region_id, SSTViewVec, UInt64 index, UInt64 term, TMTContext & tmt);
+    EngineStoreApplyRes handleIngestSST(UInt64 region_id, const SSTViewVec, UInt64 index, UInt64 term, TMTContext & tmt);
     RegionPtr genRegionPtr(metapb::Region && region, UInt64 peer_id, UInt64 index, UInt64 term);
     const TiFlashRaftProxyHelper * getProxyHelper() const { return proxy_helper; }
-    // Exported only for tests.
-    TiFlashRaftProxyHelper * mutProxyHelperUnsafe() { return const_cast<TiFlashRaftProxyHelper *>(proxy_helper); }
 
     TiDB::SnapshotApplyMethod applyMethod() const { return snapshot_apply_method; }
 
@@ -167,12 +162,12 @@ public:
 
     ~KVStore();
 
-    FileUsageStatistics getFileUsageStatistics() const;
+    FileUsageStatistics getFileUsageStatistics() const
+    {
+        return region_persister.getFileUsageStatistics();
+    }
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#endif
-    friend struct MockRaftStoreProxy;
     friend class MockTiDB;
     friend struct MockTiDBTable;
     friend struct MockRaftCommand;
@@ -195,7 +190,7 @@ private:
     StoreMeta & getStore();
     const StoreMeta & getStore() const;
 
-    std::vector<DM::ExternalDTFileInfo> preHandleSSTsToDTFiles(
+    std::vector<UInt64> preHandleSSTsToDTFiles(
         RegionPtr new_region,
         const SSTViewVec,
         uint64_t index,
@@ -204,7 +199,7 @@ private:
         TMTContext & tmt);
 
     template <typename RegionPtrWrap>
-    void checkAndApplyPreHandledSnapshot(const RegionPtrWrap &, TMTContext & tmt);
+    void checkAndApplySnapshot(const RegionPtrWrap &, TMTContext & tmt);
     template <typename RegionPtrWrap>
     void onSnapshot(const RegionPtrWrap &, RegionPtr old_region, UInt64 old_region_index, TMTContext & tmt);
 
@@ -232,22 +227,14 @@ private:
         UInt64 term,
         TMTContext & tmt);
 
-    /// Notice that if flush_if_possible is set to false, we only check if a flush is allowed by rowsize/size/interval.
-    /// It will not check if a flush will eventually succeed.
-    /// In other words, `canFlushRegionDataImpl(flush_if_possible=true)` can return false.
-    bool canFlushRegionDataImpl(const RegionPtr & curr_region_ptr, UInt8 flush_if_possible, bool try_until_succeed, TMTContext & tmt, const RegionTaskLock & region_task_lock, UInt64 index, UInt64 term);
-    bool forceFlushRegionDataImpl(Region & curr_region, bool try_until_succeed, TMTContext & tmt, const RegionTaskLock & region_task_lock, UInt64 index, UInt64 term);
-
     void persistRegion(const Region & region, const RegionTaskLock & region_task_lock, const char * caller);
     void releaseReadIndexWorkers();
     void handleDestroy(UInt64 region_id, TMTContext & tmt, const KVStoreTaskLock &);
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#endif
     RegionManager region_manager;
 
-    std::unique_ptr<RegionPersister> region_persister;
+    RegionPersister region_persister;
 
     std::atomic<Timepoint> last_gc_time = Timepoint::min();
 
@@ -258,11 +245,11 @@ private:
 
     TiDB::SnapshotApplyMethod snapshot_apply_method;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
-    std::atomic<UInt64> region_compact_log_period;
-    std::atomic<UInt64> region_compact_log_min_rows;
-    std::atomic<UInt64> region_compact_log_min_bytes;
+    std::atomic<UInt64> REGION_COMPACT_LOG_PERIOD;
+    std::atomic<UInt64> REGION_COMPACT_LOG_MIN_ROWS;
+    std::atomic<UInt64> REGION_COMPACT_LOG_MIN_BYTES;
 
     mutable std::mutex bg_gc_region_data_mutex;
     std::list<RegionDataReadInfoList> bg_gc_region_data;
@@ -288,7 +275,7 @@ class KVStoreTaskLock : private boost::noncopyable
     std::lock_guard<std::mutex> lock;
 };
 
-void WaitCheckRegionReady(const TMTContext &, KVStore & kvstore, const std::atomic_size_t & terminate_signals_counter);
-void WaitCheckRegionReady(const TMTContext &, KVStore & kvstore, const std::atomic_size_t &, double, double, double);
+void WaitCheckRegionReady(const TMTContext &, const std::atomic_size_t & terminate_signals_counter);
+void WaitCheckRegionReady(const TMTContext &, const std::atomic_size_t &, double, double, double);
 
 } // namespace DB

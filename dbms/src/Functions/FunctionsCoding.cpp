@@ -29,6 +29,7 @@ struct NameFunctionIPv4NumToStringClassC
 
 void registerFunctionsCoding(FunctionFactory & factory)
 {
+    factory.registerFunction<FunctionToStringCutToZero>();
     factory.registerFunction<FunctionCutIPv6>();
     factory.registerFunction<FunctionIPv6StringToNum>();
     factory.registerFunction<FunctionIPv4NumToString<0, NameFunctionIPv4NumToString>>();
@@ -38,8 +39,15 @@ void registerFunctionsCoding(FunctionFactory & factory)
     factory.registerFunction<FunctionTiDBIPv6StringToNum>();
     factory.registerFunction<FunctionTiDBIPv6NumToString>();
     factory.registerFunction<FunctionIPv4ToIPv6>();
+    factory.registerFunction<FunctionMACNumToString>();
+    factory.registerFunction<FunctionMACStringTo<ParseMACImpl>>();
+    factory.registerFunction<FunctionMACStringTo<ParseOUIImpl>>();
+    factory.registerFunction<FunctionUUIDNumToString>();
+    factory.registerFunction<FunctionUUIDStringToNum>();
+    factory.registerFunction<FunctionGenerateUUIDv4>();
     factory.registerFunction<FunctionHex>();
     factory.registerFunction<FunctionUnhex>();
+    factory.registerFunction<FunctionBitmaskToArray>();
 }
 
 } // namespace DB

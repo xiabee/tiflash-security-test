@@ -16,6 +16,7 @@
 
 #include <Columns/IColumnDummy.h>
 
+
 namespace DB
 {
 class ColumnNothing final : public COWPtrHelper<IColumnDummy, ColumnNothing>

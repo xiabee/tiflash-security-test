@@ -46,10 +46,9 @@ public:
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
     void insertDefault() override;
     void popBack(size_t n) override;
-    ScatterColumns scatter(
+    std::vector<MutableColumnPtr> scatter(
         IColumn::ColumnIndex num_columns,
         const IColumn::Selector & selector) const override;
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override;
 
     void getExtremes(Field &, Field &) const override {}
 

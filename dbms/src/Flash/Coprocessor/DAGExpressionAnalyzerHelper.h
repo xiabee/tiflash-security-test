@@ -25,10 +25,6 @@ class DAGExpressionAnalyzer;
 class DAGExpressionAnalyzerHelper
 {
 public:
-    static String buildFunction(
-        DAGExpressionAnalyzer * analyzer,
-        const tipb::Expr & expr,
-        const ExpressionActionsPtr & actions);
     static String buildInFunction(
         DAGExpressionAnalyzer * analyzer,
         const tipb::Expr & expr,
@@ -83,11 +79,6 @@ public:
         const ExpressionActionsPtr & actions);
 
     static String buildRegexpFunction(
-        DAGExpressionAnalyzer * analyzer,
-        const tipb::Expr & expr,
-        const ExpressionActionsPtr & actions);
-
-    static String buildDefaultFunction(
         DAGExpressionAnalyzer * analyzer,
         const tipb::Expr & expr,
         const ExpressionActionsPtr & actions);

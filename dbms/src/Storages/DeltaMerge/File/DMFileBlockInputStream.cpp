@@ -14,7 +14,6 @@
 
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB::DM
 {
@@ -29,14 +28,20 @@ DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & con
     setFromSettings(context.getSettingsRef());
 }
 
-DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr & dmfile, const ColumnDefines & read_columns, const RowKeyRanges & rowkey_ranges, const ScanContextPtr & scan_context)
+DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr & dmfile, const ColumnDefines & read_columns, const RowKeyRanges & rowkey_ranges)
 {
-    RUNTIME_CHECK(dmfile->getStatus() == DMFile::Status::READABLE, dmfile->fileId(), DMFile::statusString(dmfile->getStatus()));
+    if (dmfile->getStatus() != DMFile::Status::READABLE)
+        throw Exception(fmt::format(
+                            "DMFile [{}] is expected to be in READABLE status, but: {}",
+                            dmfile->fileId(),
+                            DMFile::statusString(dmfile->getStatus())),
+                        ErrorCodes::LOGICAL_ERROR);
 
     // if `rowkey_ranges` is empty, we unconditionally read all packs
     // `rowkey_ranges` and `is_common_handle`  will only be useful in clean read mode.
     // It is safe to ignore them here.
-    RUNTIME_CHECK_MSG(!(rowkey_ranges.empty() && enable_handle_clean_read), "rowkey ranges shouldn't be empty with clean-read enabled");
+    if (unlikely(rowkey_ranges.empty() && enable_clean_read))
+        throw Exception("rowkey ranges shouldn't be empty with clean-read enabled", ErrorCodes::LOGICAL_ERROR);
 
     bool is_common_handle = !rowkey_ranges.empty() && rowkey_ranges[0].is_common_handle;
 
@@ -49,18 +54,13 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
         read_packs,
         file_provider,
         read_limiter,
-        scan_context,
         tracing_id);
-
-    bool enable_read_thread = SegmentReaderPoolManager::instance().isSegmentReader();
 
     DMFileReader reader(
         dmfile,
         read_columns,
         is_common_handle,
-        enable_handle_clean_read,
-        enable_del_clean_read,
-        is_fast_scan,
+        enable_clean_read,
         max_data_version,
         std::move(pack_filter),
         mark_cache,
@@ -72,10 +72,8 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
         read_limiter,
         rows_threshold_per_read,
         read_one_pack_every_time,
-        tracing_id,
-        enable_read_thread,
-        scan_context);
+        tracing_id);
 
-    return std::make_shared<DMFileBlockInputStream>(std::move(reader), enable_read_thread);
+    return std::make_shared<DMFileBlockInputStream>(std::move(reader));
 }
 } // namespace DB::DM

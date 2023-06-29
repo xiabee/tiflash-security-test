@@ -18,8 +18,9 @@
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/SchemaUpdate.h>
 #include <Storages/DeltaMerge/convertColumnTypeHelpers.h>
-#include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/Transaction/TiDB.h>
+
+#include "dm_basic_include.h"
 
 namespace DB
 {

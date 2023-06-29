@@ -14,15 +14,11 @@
 
 #pragma once
 
-#include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
 #include <Storages/DeltaMerge/File/DMFileReader.h>
-#include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 
-#include <memory>
 namespace DB
 {
 class Context;
@@ -33,23 +29,11 @@ namespace DM
 class DMFileBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    explicit DMFileBlockInputStream(DMFileReader && reader_, bool enable_read_thread_)
+    explicit DMFileBlockInputStream(DMFileReader && reader_)
         : reader(std::move(reader_))
-        , enable_read_thread(enable_read_thread_)
-    {
-        if (enable_read_thread)
-        {
-            DMFileReaderPool::instance().add(reader);
-        }
-    }
+    {}
 
-    ~DMFileBlockInputStream()
-    {
-        if (enable_read_thread)
-        {
-            DMFileReaderPool::instance().del(reader);
-        }
-    }
+    ~DMFileBlockInputStream() = default;
 
     String getName() const override { return "DMFile"; }
 
@@ -57,14 +41,10 @@ public:
 
     bool getSkippedRows(size_t & skip_rows) override { return reader.getSkippedRows(skip_rows); }
 
-    Block read() override
-    {
-        return reader.read();
-    }
+    Block read() override { return reader.read(); }
 
 private:
     DMFileReader reader;
-    bool enable_read_thread;
 };
 
 using DMFileBlockInputStreamPtr = std::shared_ptr<DMFileBlockInputStream>;
@@ -78,33 +58,25 @@ public:
     // - current settings from this context
     // - current read limiter form this context
     // - current file provider from this context
-    explicit DMFileBlockInputStreamBuilder(const Context & dm_context);
+    explicit DMFileBlockInputStreamBuilder(const Context & context);
 
     // Build the final stream ptr.
-    // Empty `rowkey_ranges` means not filter by rowkey
     // Should not use the builder again after `build` is called.
     DMFileBlockInputStreamPtr build(
         const DMFilePtr & dmfile,
         const ColumnDefines & read_columns,
-        const RowKeyRanges & rowkey_ranges,
-        const ScanContextPtr & scan_context);
+        const RowKeyRanges & rowkey_ranges);
 
     // **** filters **** //
 
-    // Only set enable_handle_clean_read_ param to true when
-    //    in normal mode (is_fast_scan_ == false):
-    //      1. There is no delta.
-    //      2. You don't need pk, version and delete_tag columns
-    //    in fast scan mode (is_fast_scan_ == true):
-    //      1. You don't need pk columns
-    //    If you have no idea what it means, then simply set it to false.
-    // Only set enable_del_clean_read_ param to true when you don't need del columns in fast scan.
+    // Only set this param to true when
+    // 1. There is no delta.
+    // 2. You don't need pk, version and delete_tag columns
+    // If you have no idea what it means, then simply set it to false.
     // `max_data_version_` is the MVCC filter version for reading. Used by clean read check
-    DMFileBlockInputStreamBuilder & enableCleanRead(bool enable_handle_clean_read_, bool is_fast_scan_, bool enable_del_clean_read_, UInt64 max_data_version_)
+    DMFileBlockInputStreamBuilder & enableCleanRead(bool enable, UInt64 max_data_version_)
     {
-        enable_handle_clean_read = enable_handle_clean_read_;
-        enable_del_clean_read = enable_del_clean_read_;
-        is_fast_scan = is_fast_scan_;
+        enable_clean_read = enable;
         max_data_version = max_data_version_;
         return *this;
     }
@@ -153,7 +125,6 @@ private:
         enable_column_cache = settings.dt_enable_stable_column_cache;
         aio_threshold = settings.min_bytes_to_use_direct_io;
         max_read_buffer_size = settings.max_read_buffer_size;
-        enable_read_thread = settings.dt_enable_read_thread;
         return *this;
     }
     DMFileBlockInputStreamBuilder & setCaches(const MarkCachePtr & mark_cache_, const MinMaxIndexCachePtr & index_cache_)
@@ -167,51 +138,41 @@ private:
     FileProviderPtr file_provider;
 
     // clean read
-
-    bool enable_handle_clean_read = false;
-    bool is_fast_scan = false;
-    bool enable_del_clean_read = false;
+    bool enable_clean_read = false;
     UInt64 max_data_version = std::numeric_limits<UInt64>::max();
     // Rough set filter
     RSOperatorPtr rs_filter;
     // packs filter (filter by pack index)
-    IdSetPtr read_packs{};
+    IdSetPtr read_packs;
     MarkCachePtr mark_cache;
     MinMaxIndexCachePtr index_cache;
     // column cache
     bool enable_column_cache = false;
     ColumnCachePtr column_cache;
     ReadLimiterPtr read_limiter;
-    size_t aio_threshold{};
-    size_t max_read_buffer_size{};
+    size_t aio_threshold;
+    size_t max_read_buffer_size;
     size_t rows_threshold_per_read = DMFILE_READ_ROWS_THRESHOLD;
     bool read_one_pack_every_time = false;
-    bool enable_read_thread = false;
+
     String tracing_id;
 };
 
 /**
  * Create a simple stream that read all blocks on default.
- * Only read one pack every time.
  * @param context Database context.
  * @param file DMFile pointer.
- * @param cols The columns to read. Empty means read all columns.
  * @return A shared pointer of an input stream
  */
-inline DMFileBlockInputStreamPtr createSimpleBlockInputStream(const DB::Context & context, const DMFilePtr & file, ColumnDefines cols = {})
+inline DMFileBlockInputStreamPtr createSimpleBlockInputStream(const DB::Context & context, const DMFilePtr & file)
 {
     // disable clean read is needed, since we just want to read all data from the file, and we do not know about the column handle
     // enable read_one_pack_every_time_ is needed to preserve same block structure as the original file
     DMFileBlockInputStreamBuilder builder(context);
-    if (cols.empty())
-    {
-        // turn into read all columns from file
-        cols = file->getColumnDefines();
-    }
     return builder
         .setRowsThreshold(DMFILE_READ_ROWS_THRESHOLD)
         .onlyReadOnePackEveryTime()
-        .build(file, cols, DB::DM::RowKeyRanges{}, std::make_shared<ScanContext>());
+        .build(file, file->getColumnDefines(), DB::DM::RowKeyRanges{});
 }
 
 } // namespace DM

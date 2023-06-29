@@ -22,6 +22,12 @@
 #include <Poco/Event.h>
 #include <common/ThreadPool.h>
 
+
+namespace CurrentMetrics
+{
+extern const Metric QueryThread;
+}
+
 namespace DB
 {
 /** Executes another BlockInputStream in a separate thread.
@@ -135,6 +141,8 @@ protected:
     /// Calculations that can be performed in a separate thread
     void calculate()
     {
+        CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryThread};
+
         try
         {
             if (first)

@@ -197,7 +197,6 @@ public:
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override;
 
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override;
     void gather(ColumnGathererStream &) override
     {
         throw Exception("Cannot gather into constant column " + getName(), ErrorCodes::NOT_IMPLEMENTED);
@@ -234,8 +233,7 @@ public:
     template <typename T>
     T getValue() const
     {
-        auto && tmp = getField();
-        return std::move(tmp.safeGet<typename NearestFieldType<T>::Type>());
+        return getField().safeGet<typename NearestFieldType<T>::Type>();
     }
 };
 

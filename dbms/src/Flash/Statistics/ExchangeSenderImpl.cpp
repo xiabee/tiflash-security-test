@@ -60,22 +60,22 @@ void ExchangeSenderStatistics::collectExtraRuntimeDetail()
 ExchangeSenderStatistics::ExchangeSenderStatistics(const tipb::Executor * executor, DAGContext & dag_context_)
     : ExchangeSenderStatisticsBase(executor, dag_context_)
 {
-    RUNTIME_CHECK(dag_context.isMPPTask());
+    assert(dag_context.isMPPTask());
 
     assert(executor->tp() == tipb::ExecType::TypeExchangeSender);
     const auto & exchange_sender_executor = executor->exchange_sender();
-    RUNTIME_CHECK(exchange_sender_executor.has_tp());
+    assert(exchange_sender_executor.has_tp());
     exchange_type = exchange_sender_executor.tp();
     partition_num = exchange_sender_executor.encoded_task_meta_size();
 
     const auto & mpp_tunnel_set = dag_context.tunnel_set;
-    RUNTIME_CHECK(partition_num == mpp_tunnel_set->getPartitionNum());
+    assert(partition_num == mpp_tunnel_set->getPartitionNum());
     const auto & mpp_tunnels = mpp_tunnel_set->getTunnels();
 
     for (int i = 0; i < exchange_sender_executor.encoded_task_meta_size(); ++i)
     {
         mpp::TaskMeta task_meta;
-        if (unlikely(!task_meta.ParseFromString(exchange_sender_executor.encoded_task_meta(i))))
+        if (!task_meta.ParseFromString(exchange_sender_executor.encoded_task_meta(i)))
             throw TiFlashException("Failed to decode task meta info in ExchangeSender", Errors::Coprocessor::BadRequest);
         sender_target_task_ids.push_back(task_meta.task_id());
 
@@ -87,7 +87,7 @@ ExchangeSenderStatistics::ExchangeSenderStatistics(const tipb::Executor * execut
     // TODO pass tidb host in exchange_sender_executor.task_meta[0]
     if (dag_context.isRootMPPTask())
     {
-        RUNTIME_CHECK(mpp_tunnel_details.size() == 1);
+        assert(mpp_tunnel_details.size() == 1);
         mpp_tunnel_details.back().sender_target_host = dag_context.tidb_host;
     }
 }

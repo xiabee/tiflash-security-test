@@ -20,8 +20,8 @@ namespace DB
 {
 struct Settings;
 
-void mergeConfigFromSettings(const DB::Settings & settings, PageStorageConfig & config);
+void mergeConfigFromSettings(const DB::Settings & settings, PageStorage::Config & config);
 
-PageStorageConfig getConfigFromSettings(const DB::Settings & settings);
+PageStorage::Config getConfigFromSettings(const DB::Settings & settings);
 
 } // namespace DB

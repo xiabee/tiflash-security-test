@@ -77,7 +77,7 @@ MutableColumnPtr ColumnAggregateFunction::convertToValues() const
         *   AggregateFunction(quantileTiming(0.5), UInt64)
         * into UInt16 - already finished result of `quantileTiming`.
         */
-    if (const auto * function_state = typeid_cast<const AggregateFunctionState *>(function))
+    if (const AggregateFunctionState * function_state = typeid_cast<const AggregateFunctionState *>(function))
     {
         auto res = createView();
         res->set(function_state->getNestedFunction());
@@ -97,7 +97,7 @@ MutableColumnPtr ColumnAggregateFunction::convertToValues() const
 
 void ColumnAggregateFunction::insertRangeFrom(const IColumn & from, size_t start, size_t length)
 {
-    const auto & from_concrete = static_cast<const ColumnAggregateFunction &>(from);
+    const ColumnAggregateFunction & from_concrete = static_cast<const ColumnAggregateFunction &>(from);
 
     if (start + length > from_concrete.getData().size())
         throw Exception(
@@ -424,11 +424,6 @@ MutableColumns ColumnAggregateFunction::scatter(IColumn::ColumnIndex num_columns
         static_cast<ColumnAggregateFunction &>(*columns[selector[i]]).data.push_back(data[i]);
 
     return columns;
-}
-
-void ColumnAggregateFunction::scatterTo(ScatterColumns & columns [[maybe_unused]], const Selector & selector [[maybe_unused]]) const
-{
-    throw TiFlashException("ColumnAggregateFunction does not support scatterTo", Errors::Coprocessor::Unimplemented);
 }
 
 void ColumnAggregateFunction::getPermutation(bool /*reverse*/, size_t /*limit*/, int /*nan_direction_hint*/, IColumn::Permutation & res) const

@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #pragma once
+#include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/RegionMeta.h>
 #include <Storages/Transaction/RegionPersister.h>
+#include <Storages/Transaction/TiKVRecordFormat.h>
 
 #include <optional>
 

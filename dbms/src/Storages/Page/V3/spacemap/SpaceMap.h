@@ -21,6 +21,9 @@ namespace DB::PS::V3
 class SpaceMap;
 using SpaceMapPtr = std::shared_ptr<SpaceMap>;
 /**
+ * SpaceMap design doc: 
+ * https://docs.google.com/document/d/1l1GoIV6Rp0GEwuYtToJMKYACmZv6jf4kp1n8JdQidS8/edit#heading=h.pff0nn7vsa6w
+ * 
  * SpaceMap have red-black tree/ map implemention.
  * Each node on the tree records the information of free data blocks,
  * 
@@ -34,13 +37,15 @@ public:
     enum SpaceMapType
     {
         SMAP64_INVALID = 0,
-        // <-- Here used to be another type, but we removed it already.
+        SMAP64_RBTREE = 1,
         SMAP64_STD_MAP = 2,
+        SMAP64_BIG = 3 // support for writebatch bigger than blobstore.config.file_limit_size
     };
 
     /**
      * Create a SpaceMap that manages space address [start, end).
      *  - type : 
+     *      - SMAP64_RBTREE : red-black tree implementation
      *      - SMAP64_STD_MAP: std::map implementation
      *  - start : begin of the space
      *  - end : end if the space
@@ -134,8 +139,12 @@ public:
     {
         switch (type)
         {
+        case SMAP64_RBTREE:
+            return "RB-Tree";
         case SMAP64_STD_MAP:
             return "STD Map";
+        case SMAP64_BIG:
+            return "STD Big";
         default:
             return "Invalid";
         }
