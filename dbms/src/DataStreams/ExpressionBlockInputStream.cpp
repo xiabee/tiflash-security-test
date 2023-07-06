@@ -22,20 +22,9 @@ ExpressionBlockInputStream::ExpressionBlockInputStream(
     const ExpressionActionsPtr & expression_,
     const String & req_id)
     : expression(expression_)
-    , log(Logger::get(NAME, req_id))
+    , log(Logger::get(req_id))
 {
     children.push_back(input);
-}
-
-Block ExpressionBlockInputStream::getTotals()
-{
-    if (IProfilingBlockInputStream * child = dynamic_cast<IProfilingBlockInputStream *>(&*children.back()))
-    {
-        totals = child->getTotals();
-        expression->executeOnTotals(totals);
-    }
-
-    return totals;
 }
 
 Block ExpressionBlockInputStream::getHeader() const
@@ -53,5 +42,4 @@ Block ExpressionBlockInputStream::readImpl()
     expression->execute(res);
     return res;
 }
-
 } // namespace DB

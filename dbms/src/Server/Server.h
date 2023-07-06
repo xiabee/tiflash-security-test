@@ -14,14 +14,13 @@
 
 #pragma once
 
-#include <daemon/BaseDaemon.h>
+#include <Server/FlashGrpcServerHolder.h>
 #include <Server/IServer.h>
 #include <Server/ServerInfo.h>
+#include <daemon/BaseDaemon.h>
 
-
-/** Server provides three interfaces:
-  * 1. HTTP - simple interface for any applications.
-  * 2. TCP - interface for native clickhouse-client and for server to server internal communications.
+/** Server provides the following interfaces:
+  * 1. TCP - interface for native clickhouse-client and for server to server internal communications.
   *    More rich and efficient, but less compatible
   *     - data is transferred by columns;
   *     - data is transferred compressed;
@@ -35,12 +34,12 @@ class Server : public BaseDaemon
     , public IServer
 {
 public:
+    using ServerApplication::run;
+
     Poco::Util::LayeredConfiguration & config() const override
     {
         return BaseDaemon::config();
     }
-
-    virtual const TiFlashSecurityConfig & securityConfig() const override { return security_config; };
 
     Poco::Logger & logger() const override
     {
@@ -57,7 +56,11 @@ public:
         return BaseDaemon::isCancelled();
     }
 
+    void defineOptions(Poco::Util::OptionSet & _options) override;
+
 protected:
+    int run() override;
+
     void initialize(Application & self) override;
 
     void uninitialize() override;
@@ -69,11 +72,8 @@ protected:
 private:
     std::unique_ptr<Context> global_context;
 
-    TiFlashSecurityConfig security_config;
-
     ServerInfo server_info;
 
-    class FlashGrpcServerHolder;
     class TcpHttpServersHolder;
 };
 

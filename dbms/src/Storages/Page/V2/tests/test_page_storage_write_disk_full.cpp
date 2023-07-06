@@ -18,7 +18,6 @@
 #include <Poco/FormattingChannel.h>
 #include <Poco/PatternFormatter.h>
 #include <Poco/Runnable.h>
-#include <Poco/ThreadPool.h>
 #include <Poco/Timer.h>
 #include <Storages/Page/V2/PageStorage.h>
 #include <common/logger_useful.h>
@@ -152,7 +151,7 @@ int main(int argc, char ** argv)
         file.remove(true);
 
     // Create PageStorage
-    DB::PageStorage::Config config;
+    DB::PageStorageConfig config;
     config.file_roll_size = 96UL * 1024 * 1024;
     PSPtr ps = std::make_shared<DB::PageStorage>(path, config);
 

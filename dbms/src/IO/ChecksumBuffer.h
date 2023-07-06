@@ -25,18 +25,21 @@
 
 namespace ProfileEvents
 {
-// no need to update sync, since write buffers inherit that directly from `WriteBufferFromFileDescriptor`
+extern const Event FileFSync;
 extern const Event WriteBufferFromFileDescriptorWrite;
-extern const Event WriteBufferFromFileDescriptorWriteFailed;
 extern const Event WriteBufferFromFileDescriptorWriteBytes;
 extern const Event ReadBufferFromFileDescriptorRead;
 extern const Event ReadBufferFromFileDescriptorReadBytes;
 extern const Event ReadBufferFromFileDescriptorReadFailed;
 extern const Event Seek;
 } // namespace ProfileEvents
-
 namespace DB
 {
+namespace ErrorCodes
+{
+extern const int CANNOT_FSYNC;
+} // namespace ErrorCodes
+
 /**
  * A frame consists of a header and a body that conforms the following structure:
  *
@@ -107,7 +110,6 @@ private:
             }
             if (unlikely(count == -1))
             {
-                ProfileEvents::increment(ProfileEvents::WriteBufferFromFileDescriptorWriteFailed);
                 if (errno == EINTR)
                     continue;
                 else
@@ -146,6 +148,21 @@ private:
     off_t getMaterializedBytes() override
     {
         return materialized_bytes + ((offset() != 0) ? (sizeof(ChecksumFrame<Backend>) + offset()) : 0);
+    }
+
+    void sync() override
+    {
+        next();
+
+        ProfileEvents::increment(ProfileEvents::FileFSync);
+        int res = out->fsync();
+        if (-1 == res)
+            throwFromErrno("Cannot fsync " + getFileName(), ErrorCodes::CANNOT_FSYNC);
+    }
+
+    void close() override
+    {
+        out->close();
     }
 
 public:
@@ -386,8 +403,6 @@ private:
 
     off_t doSeek(off_t offset, int whence) override
     {
-        ProfileEvents::increment(ProfileEvents::Seek);
-
         auto & frame = reinterpret_cast<ChecksumFrame<Backend> &>(
             *(this->working_buffer.begin() - sizeof(ChecksumFrame<Backend>))); // align should not fail
 

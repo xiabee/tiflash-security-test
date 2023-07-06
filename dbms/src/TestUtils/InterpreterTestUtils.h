@@ -14,49 +14,39 @@
 
 #pragma once
 
-#include <AggregateFunctions/registerAggregateFunctions.h>
-#include <Common/FmtUtils.h>
-#include <Flash/Coprocessor/DAGContext.h>
-#include <Flash/Statistics/traverseExecutors.h>
-#include <Functions/registerFunctions.h>
-#include <TestUtils/FunctionTestUtils.h>
-#include <TestUtils/TiFlashTestBasic.h>
-#include <TestUtils/TiFlashTestEnv.h>
-#include <TestUtils/executorSerializer.h>
-#include <TestUtils/mockExecutor.h>
+#include <TestUtils/ExecutorTestUtils.h>
+
+#include <unordered_map>
+#include <vector>
+
 namespace DB::tests
 {
-void executeInterpreter(const std::shared_ptr<tipb::DAGRequest> & request, Context & context);
-class InterpreterTest : public ::testing::Test
+class InterpreterTestUtils : public ExecutorTest
 {
-protected:
-    void SetUp() override
-    {
-        initializeContext();
-        initializeClientInfo();
-    }
-
 public:
-    InterpreterTest()
-        : context(TiFlashTestEnv::getContext())
-    {}
-    static void SetUpTestCase();
-
-    virtual void initializeContext();
-
-    void initializeClientInfo();
-
-    DAGContext & getDAGContext();
-
-    static void dagRequestEqual(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & actual);
-
-    void executeInterpreter(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & request, size_t concurrency);
+    void runAndAssert(
+        const std::shared_ptr<tipb::DAGRequest> & request,
+        size_t concurrency);
 
 protected:
-    MockDAGRequestContext context;
-    std::unique_ptr<DAGContext> dag_context_ptr;
+    void initExpectResults();
+    void appendExpectResults();
+
+    void SetUp() override;
+    void TearDown() override;
+
+    void setRecord() { just_record = true; }
+
+private:
+    // The following steps update the expected results of cases in bulk
+    // 1. manually delete the *.out file
+    // 2. call setRecord()
+    // 3. run unit test cases
+    bool just_record = false;
+
+    // <func_name, vector<result>>
+    std::unordered_map<String, std::vector<String>> case_expect_results;
+    size_t expect_result_index = 0;
 };
 
-#define ASSERT_DAGREQUEST_EQAUL(str, request) dagRequestEqual((str), (request));
-#define ASSERT_BLOCKINPUTSTREAM_EQAUL(str, request, concurrency) executeInterpreter((str), (request), (concurrency))
 } // namespace DB::tests

@@ -14,36 +14,34 @@
 
 #pragma once
 
-#include <memory>
-
 #include <Common/LRUCache.h>
 #include <Common/ProfileEvents.h>
 #include <Common/SipHash.h>
-#include <Interpreters/AggregationCommon.h>
 #include <DataStreams/MarkInCompressedFile.h>
+#include <Interpreters/AggregationCommon.h>
+
+#include <memory>
 
 
 namespace ProfileEvents
 {
-    extern const Event MarkCacheHits;
-    extern const Event MarkCacheMisses;
-}
+extern const Event MarkCacheHits;
+extern const Event MarkCacheMisses;
+} // namespace ProfileEvents
 
 namespace DB
 {
-
 /// Estimate of number of bytes in cache for marks.
 struct MarksWeightFunction
 {
     size_t operator()(const MarksInCompressedFile & marks) const
     {
-        /// NOTE Could add extra 100 bytes for overhead of std::vector, cache structures and allocator.
-        return marks.size() * sizeof(MarkInCompressedFile);
+        return marks.allocated_bytes();
     }
 };
 
 
-/** Cache of 'marks' for StorageMergeTree.
+/** Cache of 'marks' for StorageDeltaMerge.
   * Marks is an index structure that addresses ranges in column file, corresponding to ranges of primary key.
   */
 class MarkCache : public LRUCache<String, MarksInCompressedFile, std::hash<String>, MarksWeightFunction>
@@ -52,8 +50,9 @@ private:
     using Base = LRUCache<String, MarksInCompressedFile, std::hash<String>, MarksWeightFunction>;
 
 public:
-    MarkCache(size_t max_size_in_bytes, const Delay & expiration_delay)
-        : Base(max_size_in_bytes, expiration_delay) {}
+    explicit MarkCache(size_t max_size_in_bytes)
+        : Base(max_size_in_bytes)
+    {}
 
     template <typename LoadFunc>
     MappedPtr getOrSet(const Key & key, LoadFunc && load)
@@ -70,4 +69,4 @@ public:
 
 using MarkCachePtr = std::shared_ptr<MarkCache>;
 
-}
+} // namespace DB

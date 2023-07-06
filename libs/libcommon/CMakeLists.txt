@@ -52,6 +52,7 @@ add_library (common ${SPLIT_SHARED}
     src/crc64.cpp
     src/simd.cpp
     src/detect_features.cpp
+    src/avx2_mem_utils_impl.cpp
 
     include/common/types.h
     include/common/DateLUT.h
@@ -100,19 +101,6 @@ add_library (common ${SPLIT_SHARED}
 if (USE_JEMALLOC)
     message (STATUS "Link jemalloc: ${JEMALLOC_LIBRARIES}")
     set (MALLOC_LIBRARIES ${JEMALLOC_LIBRARIES})
-elseif (USE_TCMALLOC)
-
-    if (DEBUG_TCMALLOC AND NOT GPERFTOOLS_TCMALLOC_MINIMAL_DEBUG)
-        message (WARNING "Requested DEBUG_TCMALLOC but debug lib not found. try install libgoogle-perftools-dev")
-    endif ()
-
-    if (DEBUG_TCMALLOC AND GPERFTOOLS_TCMALLOC_MINIMAL_DEBUG)
-        message (STATUS "Link libtcmalloc_minimal_debug for testing: ${GPERFTOOLS_TCMALLOC_MINIMAL_DEBUG}")
-        set (MALLOC_LIBRARIES ${GPERFTOOLS_TCMALLOC_MINIMAL_DEBUG})
-    else ()
-        message (STATUS "Link libtcmalloc_minimal: ${GPERFTOOLS_TCMALLOC_MINIMAL}")
-        set (MALLOC_LIBRARIES ${GPERFTOOLS_TCMALLOC_MINIMAL})
-    endif ()
 elseif(USE_MIMALLOC)
     message (STATUS "Link mimalloc: ${MIMALLOC_LIBRARIES}")
     set (MALLOC_LIBRARIES ${MIMALLOC_LIBRARIES})
@@ -136,6 +124,12 @@ target_include_directories (common PUBLIC ${COMMON_INCLUDE_DIR})
 
 target_include_directories (common BEFORE PUBLIC ${Boost_INCLUDE_DIRS})
 
+if(OS_DARWIN AND ARCH_AARCH64)
+    set(CPU_FEATURES_LIBRARY)
+else()
+    set(CPU_FEATURES_LIBRARY cpu_features)
+endif()
+
 # `libcommon` provides a bridge for many other libs.
 # We expose the linkage to public because we want headers to be inherited.
 target_link_libraries (
@@ -151,7 +145,7 @@ target_link_libraries (
     ${GLIBC_COMPATIBILITY_LIBRARIES}
     ${MEMCPY_LIBRARIES}
     fmt
-    cpu_features
+    ${CPU_FEATURES_LIBRARY}
 )
 
 if (RT_LIBRARY)
@@ -163,38 +157,48 @@ if (ENABLE_TESTS)
 endif ()
 
 # Region for specialized CPU flags tuning
-if (TIFLASH_ENABLE_AVX_SUPPORT)
-    # https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html
-    set_source_files_properties(src/mem_utils_avx2.cpp APPEND COMPILE_FLAGS "-mavx -mavx2")
-    if (TIFLASH_COMPILER_VPCLMULQDQ_SUPPORT)
-        set_source_files_properties(src/crc64_avx2.cpp
-                APPEND COMPILE_FLAGS "-mavx2 -mpclmul -mvpclmulqdq -Wno-ignored-attributes")
-    endif()
-endif ()
 
-if (TIFLASH_ENABLE_AVX512_SUPPORT)
-    # https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html
-    set_source_files_properties(src/mem_utils_avx512.cpp
-            APPEND COMPILE_FLAGS "-mavx512bw -mavx512vl -mavx512f")
-    if (TIFLASH_COMPILER_VPCLMULQDQ_SUPPORT)
-        set_source_files_properties(src/crc64_avx512.cpp
-                APPEND COMPILE_FLAGS "-mpclmul -mvpclmulqdq -mavx512dq -mavx512f -Wno-ignored-attributes")
-    endif()
-endif ()
+check_then_add_sources_compile_flag (
+    TIFLASH_COMPILER_VPCLMULQDQ_SUPPORT
+    "-mvpclmulqdq;-Wno-ignored-attributes"
+    src/crc64_avx2.cpp
+    src/crc64_avx512.cpp
+)
 
-if (TIFLASH_ENABLE_ASIMD_SUPPORT)
-    # https://gcc.gnu.org/onlinedocs/gcc/ARM-Options.html
-    set_source_files_properties(src/mem_utils_asimd.cpp APPEND COMPILE_FLAGS "-march=armv8-a+simd")
-    set_source_files_properties(src/crc64_sse2_asimd.cpp APPEND COMPILE_FLAGS "-march=armv8-a+simd+crypto")
-endif ()
+check_then_add_sources_compile_flag (
+    TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT
+    "${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}"
+    src/mem_utils_avx2.cpp
+    src/crc64_avx2.cpp
+    src/avx2_mem_utils_impl.cpp
+)
+
+set_property(SOURCE src/avx2_mem_utils_impl.cpp APPEND PROPERTY COMPILE_OPTIONS "-fomit-frame-pointer") # remove frame pointer
+
+check_then_add_sources_compile_flag (
+    TIFLASH_ENABLE_AVX512_SUPPORT
+    "-mavx512bw;-mavx512vl;-mavx512f;-mavx512dq"
+    src/mem_utils_avx512.cpp
+    src/crc64_avx512.cpp
+)
+
+check_then_add_sources_compile_flag (
+    TIFLASH_ENABLE_ASIMD_SUPPORT
+    "-march=armv8-a+simd"
+    src/mem_utils_asimd.cpp
+)
+
+check_then_add_sources_compile_flag (
+    TIFLASH_ENABLE_ASIMD_SUPPORT
+    "-march=armv8-a+simd+crypto"
+    src/crc64_sse2_asimd.cpp
+)
 
 if (TIFLASH_ENABLE_SVE_SUPPORT)
     # https://gcc.gnu.org/onlinedocs/gcc/ARM-Options.html
     # set_source_files_properties(<SOURCE_FILE> APPEND COMPILE_FLAGS "-march=armv8.6-a+sve")
 endif ()
 
-if (ARCH_AMD64)
-    set_source_files_properties(
-            src/crc64_sse2_asimd.cpp
-            APPEND COMPILE_FLAGS "-mpclmul")
+if (ARCH_AARCH64 AND OS_LINUX)
+    target_link_libraries (common PUBLIC tiflash-aarch64-string tiflash-aarch64-math)
 endif()

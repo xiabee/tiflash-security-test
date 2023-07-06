@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include <Common/FailPoint.h>
+#include <Common/UniThreadPool.h>
 #include <Databases/DatabaseTiFlash.h>
 #include <Encryption/ReadBufferFromFileProvider.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterDropQuery.h>
 #include <Parsers/ASTCreateQuery.h>
@@ -25,12 +27,11 @@
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
 #include <Storages/MutableSupport.h>
-#include <Storages/Transaction/SchemaNameMapper.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TMTStorages.h>
 #include <Storages/registerStorages.h>
 #include <TestUtils/TiFlashTestBasic.h>
-#include <common/ThreadPool.h>
+#include <TiDB/Schema/SchemaNameMapper.h>
 #include <common/logger_useful.h>
 
 #include <optional>
@@ -87,26 +88,20 @@ public:
     {
         // Clean all database from context.
         auto ctx = TiFlashTestEnv::getContext();
-        for (const auto & [name, db] : ctx.getDatabases())
+        for (const auto & [name, db] : ctx->getDatabases())
         {
-            ctx.detachDatabase(name);
+            ctx->detachDatabase(name);
             db->shutdown();
         }
     }
 
     static void recreateMetadataPath()
     {
-        String path = TiFlashTestEnv::getContext().getPath();
-
+        String path = TiFlashTestEnv::getContext()->getPath();
         auto p = path + "/metadata/";
-        if (Poco::File file(p); file.exists())
-            file.remove(true);
-        Poco::File{p}.createDirectories();
-
+        TiFlashTestEnv::tryRemovePath(p, /*recreate=*/true);
         p = path + "/data/";
-        if (Poco::File file(p); file.exists())
-            file.remove(true);
-        Poco::File{p}.createDirectories();
+        TiFlashTestEnv::tryRemovePath(p, /*recreate=*/true);
     }
 
 protected:
@@ -145,16 +140,16 @@ try
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
         ASSERT_NE(ast, nullptr);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.tryGetDatabase(db_name);
+    auto db = ctx->tryGetDatabase(db_name);
     ASSERT_NE(db, nullptr);
     EXPECT_EQ(db->getEngineName(), "TiFlash");
-    EXPECT_TRUE(db->empty(ctx));
+    EXPECT_TRUE(db->empty(*ctx));
 
     const String tbl_name = "t_111";
     {
@@ -168,18 +163,18 @@ try
               ") ENGINE = DeltaMerge(c_custkey)";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
     {
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
 
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
@@ -196,10 +191,10 @@ try
         drop_query->table = tbl_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(storage, nullptr);
     }
 
@@ -209,10 +204,10 @@ try
         drop_query->database = db_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto db = ctx.tryGetDatabase(db_name);
+        auto db = ctx->tryGetDatabase(db_name);
         ASSERT_EQ(db, nullptr);
     }
 }
@@ -229,16 +224,16 @@ try
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
         ASSERT_NE(ast, nullptr);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.tryGetDatabase(db_name);
+    auto db = ctx->tryGetDatabase(db_name);
     ASSERT_NE(db, nullptr);
     EXPECT_EQ(db->getEngineName(), "TiFlash");
-    EXPECT_TRUE(db->empty(ctx));
+    EXPECT_TRUE(db->empty(*ctx));
 
     const String tbl_name = "t_111";
     {
@@ -252,18 +247,18 @@ try
               ") ENGINE = DeltaMerge(c_custkey)";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
     {
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
 
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
@@ -273,18 +268,15 @@ try
         EXPECT_EQ(managed_storage->getDatabaseName(), db_name);
     }
 
-    const String to_tbl_name = "t_112";
+    const String to_tbl_display_name = "tbl_test";
     {
         // Rename table
-        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db, to_tbl_name, db_name, to_tbl_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, to_tbl_display_name);
 
-        auto old_storage = db->tryGetTable(ctx, tbl_name);
-        ASSERT_EQ(old_storage, nullptr);
-
-        auto storage = db->tryGetTable(ctx, to_tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
-        EXPECT_EQ(storage->getTableName(), to_tbl_name);
+        EXPECT_EQ(storage->getTableName(), tbl_name);
 
         auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage);
         EXPECT_EQ(managed_storage->getDatabaseName(), db_name);
@@ -294,13 +286,13 @@ try
         // Drop table
         auto drop_query = std::make_shared<ASTDropQuery>();
         drop_query->database = db_name;
-        drop_query->table = to_tbl_name;
+        drop_query->table = tbl_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto storage = db->tryGetTable(ctx, to_tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(storage, nullptr);
     }
 
@@ -310,10 +302,10 @@ try
         drop_query->database = db_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto db = ctx.tryGetDatabase(db_name);
+        auto db = ctx->tryGetDatabase(db_name);
         ASSERT_EQ(db, nullptr);
     }
 }
@@ -331,7 +323,7 @@ try
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
         ASSERT_NE(ast, nullptr);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
@@ -342,21 +334,21 @@ try
         const String statement = "CREATE DATABASE " + db2_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
         ASSERT_NE(ast, nullptr);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.tryGetDatabase(db_name);
+    auto db = ctx->tryGetDatabase(db_name);
     ASSERT_NE(db, nullptr);
     EXPECT_EQ(db->getEngineName(), "TiFlash");
-    EXPECT_TRUE(db->empty(ctx));
+    EXPECT_TRUE(db->empty(*ctx));
 
-    auto db2 = ctx.tryGetDatabase(db2_name);
+    auto db2 = ctx->tryGetDatabase(db2_name);
     ASSERT_NE(db2, nullptr);
     EXPECT_EQ(db2->getEngineName(), "TiFlash");
-    EXPECT_TRUE(db2->empty(ctx));
+    EXPECT_TRUE(db2->empty(*ctx));
 
     const String tbl_name = "t_111";
     {
@@ -370,18 +362,18 @@ try
               ") ENGINE = DeltaMerge(c_custkey)";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
     {
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
 
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
@@ -391,18 +383,18 @@ try
         EXPECT_EQ(managed_storage->getDatabaseName(), db_name);
     }
 
-    const String to_tbl_name = "t_112";
+    const String to_tbl_display_name = "tbl_test";
     {
         // Rename table
-        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db2, to_tbl_name, db2_name, to_tbl_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db2, tbl_name, db2_name, to_tbl_display_name);
 
-        auto old_storage = db->tryGetTable(ctx, tbl_name);
+        auto old_storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(old_storage, nullptr);
 
-        auto storage = db2->tryGetTable(ctx, to_tbl_name);
+        auto storage = db2->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
-        EXPECT_EQ(storage->getTableName(), to_tbl_name);
+        EXPECT_EQ(storage->getTableName(), tbl_name);
 
         auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage);
         EXPECT_EQ(managed_storage->getDatabaseName(), db2_name);
@@ -412,13 +404,13 @@ try
         // Drop table
         auto drop_query = std::make_shared<ASTDropQuery>();
         drop_query->database = db2_name;
-        drop_query->table = to_tbl_name;
+        drop_query->table = tbl_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto storage = db2->tryGetTable(ctx, to_tbl_name);
+        auto storage = db2->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(storage, nullptr);
     }
 
@@ -428,10 +420,10 @@ try
         drop_query->database = db_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto db = ctx.tryGetDatabase(db_name);
+        auto db = ctx->tryGetDatabase(db_name);
         ASSERT_EQ(db, nullptr);
     }
 
@@ -441,10 +433,10 @@ try
         drop_query->database = db2_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto db2 = ctx.tryGetDatabase(db_name);
+        auto db2 = ctx->tryGetDatabase(db_name);
         ASSERT_EQ(db2, nullptr);
     }
 }
@@ -462,7 +454,7 @@ try
         // Create database
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
@@ -472,15 +464,15 @@ try
         // Create database2
         const String statement = "CREATE DATABASE " + db2_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.getDatabase(db_name);
+    auto db = ctx->getDatabase(db_name);
 
-    auto db2 = ctx.getDatabase(db2_name);
+    auto db2 = ctx->getDatabase(db2_name);
 
     const String tbl_name = "t_111";
     {
@@ -492,45 +484,44 @@ try
             )";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
-    const String to_tbl_name = "t_112";
     // Rename table to another database, and mock crash by failed point
     FailPointHelper::enableFailPoint(FailPoints::exception_before_rename_table_old_meta_removed);
     ASSERT_THROW(
-        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db2, to_tbl_name, db2_name, to_tbl_name),
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db2, tbl_name, db2_name, tbl_name),
         DB::Exception);
 
     {
         // After fail point triggled we should have both meta file in disk
         Poco::File old_meta_file{db->getTableMetadataPath(tbl_name)};
         ASSERT_TRUE(old_meta_file.exists());
-        Poco::File new_meta_file(db2->getTableMetadataPath(to_tbl_name));
+        Poco::File new_meta_file(db2->getTableMetadataPath(tbl_name));
         ASSERT_TRUE(new_meta_file.exists());
         // Old table should remain in db
-        auto old_storage = db->tryGetTable(ctx, tbl_name);
+        auto old_storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(old_storage, nullptr);
         // New table is not exists in db2
-        auto new_storage = db2->tryGetTable(ctx, tbl_name);
+        auto new_storage = db2->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(new_storage, nullptr);
     }
 
     {
         // If we loadTable for db2, new table meta should be removed.
         ThreadPool thread_pool(2);
-        db2->loadTables(ctx, &thread_pool, true);
+        db2->loadTables(*ctx, &thread_pool, true);
 
-        Poco::File new_meta_file(db2->getTableMetadataPath(to_tbl_name));
+        Poco::File new_meta_file(db2->getTableMetadataPath(tbl_name));
         ASSERT_FALSE(new_meta_file.exists());
 
-        auto storage = db2->tryGetTable(ctx, to_tbl_name);
+        auto storage = db2->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(storage, nullptr);
     }
 
@@ -541,10 +532,10 @@ try
         drop_query->table = tbl_name;
         drop_query->if_exists = false;
         ASTPtr ast_drop_query = drop_query;
-        InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+        InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
         drop_interpreter.execute();
 
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(storage, nullptr);
     }
 }
@@ -560,13 +551,13 @@ try
         // Create database
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.getDatabase(db_name);
+    auto db = ctx->getDatabase(db_name);
 
     const String tbl_name = "t_111";
     {
@@ -578,18 +569,18 @@ try
             )";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
     {
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
 
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
@@ -603,9 +594,9 @@ try
     const String new_display_tbl_name = "accounts";
     {
         // Rename table with only display table name updated.
-        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db, tbl_name, db_name, new_display_tbl_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, new_display_tbl_name);
 
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
         EXPECT_EQ(storage->getTableName(), tbl_name);
@@ -621,26 +612,26 @@ try
     ASTPtr create_db_ast;
     {
         // Detach database and attach, we should get that table
-        auto deatched_db = ctx.detachDatabase(db_name);
+        auto deatched_db = ctx->detachDatabase(db_name);
 
         // Attach database
-        create_db_ast = deatched_db->getCreateDatabaseQuery(ctx);
+        create_db_ast = deatched_db->getCreateDatabaseQuery(*ctx);
         deatched_db->shutdown();
         deatched_db.reset();
     }
     {
-        InterpreterCreateQuery interpreter(create_db_ast, ctx);
+        InterpreterCreateQuery interpreter(create_db_ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
 
         // Get database
-        auto db = ctx.tryGetDatabase(db_name);
+        auto db = ctx->tryGetDatabase(db_name);
         ASSERT_NE(db, nullptr);
-        EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+        EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
         EXPECT_EQ(db->getEngineName(), "TiFlash");
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
         EXPECT_EQ(storage->getTableName(), tbl_name);
@@ -662,13 +653,13 @@ try
         // Create database
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.getDatabase(db_name);
+    auto db = ctx->getDatabase(db_name);
 
     const String tbl_name = "t_111";
     {
@@ -740,18 +731,18 @@ try
             )stmt";
         ASTPtr ast = parseQuery(parser, stmt, 0);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    EXPECT_FALSE(db->empty(ctx));
-    EXPECT_TRUE(db->isTableExist(ctx, tbl_name));
+    EXPECT_FALSE(db->empty(*ctx));
+    EXPECT_TRUE(db->isTableExist(*ctx, tbl_name));
 
     {
         // Get storage from database
-        auto storage = db->tryGetTable(ctx, tbl_name);
+        auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
 
         EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
@@ -781,13 +772,13 @@ try
         const String statement = "CREATE DATABASE " + db_name + " ENGINE=TiFlash";
         ASTPtr ast = parseCreateStatement(statement);
         ASSERT_NE(ast, nullptr);
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
     }
 
-    auto db = ctx.tryGetDatabase(db_name);
+    auto db = ctx->tryGetDatabase(db_name);
     ASSERT_NE(db, nullptr);
 
     String meta_path;
@@ -796,12 +787,12 @@ try
         ASSERT_EQ(paths.size(), 1UL);
         meta_path = paths[0];
     }
-    auto db_data_path = TiFlashTestEnv::getContext().getPath() + "/data/";
-    DatabaseLoading::loadTable(ctx, *db, meta_path, db_name, db_data_path, "TiFlash", "t_45.sql", false);
+    auto db_data_path = TiFlashTestEnv::getContext()->getPath() + "/data/";
+    DatabaseLoading::loadTable(*ctx, *db, meta_path, db_name, db_data_path, "TiFlash", "t_45.sql", false);
 
     // Get storage from database
     const auto * tbl_name = "t_45";
-    auto storage = db->tryGetTable(ctx, tbl_name);
+    auto storage = db->tryGetTable(*ctx, tbl_name);
     ASSERT_NE(storage, nullptr);
     EXPECT_EQ(storage->getName(), MutableSupport::delta_tree_storage_name);
     EXPECT_EQ(storage->getTableName(), tbl_name);
@@ -863,29 +854,29 @@ try
 
     for (const auto & [expect_name, json_str] : cases)
     {
-        TiDB::DBInfoPtr db_info = std::make_shared<TiDB::DBInfo>(json_str);
+        TiDB::DBInfoPtr db_info = std::make_shared<TiDB::DBInfo>(json_str, NullspaceID);
         ASSERT_NE(db_info, nullptr);
         ASSERT_EQ(db_info->name, expect_name);
 
         const auto seri = db_info->serialize();
 
         {
-            auto deseri = std::make_shared<TiDB::DBInfo>(seri);
+            auto deseri = std::make_shared<TiDB::DBInfo>(seri, NullspaceID);
             ASSERT_NE(deseri, nullptr);
             ASSERT_EQ(deseri->name, expect_name);
         }
 
         auto ctx = TiFlashTestEnv::getContext();
         auto name_mapper = SchemaNameMapper();
-        const String statement = createDatabaseStmt(ctx, *db_info, name_mapper);
+        const String statement = createDatabaseStmt(*ctx, *db_info, name_mapper);
         ASTPtr ast = parseCreateStatement(statement);
 
-        InterpreterCreateQuery interpreter(ast, ctx);
+        InterpreterCreateQuery interpreter(ast, *ctx);
         interpreter.setInternal(true);
         interpreter.setForceRestoreData(false);
         interpreter.execute();
 
-        auto db = ctx.getDatabase(name_mapper.mapDatabaseName(*db_info));
+        auto db = ctx->getDatabase(name_mapper.mapDatabaseName(*db_info));
         ASSERT_NE(db, nullptr);
         EXPECT_EQ(db->getEngineName(), "TiFlash");
         auto * flash_db = typeid_cast<DatabaseTiFlash *>(db.get());
@@ -912,7 +903,7 @@ String readFile(Context & ctx, const String & file)
 DatabasePtr detachThenAttach(Context & ctx, const String & db_name, DatabasePtr && db, Poco::Logger * log)
 {
     auto meta = readFile(ctx, getDatabaseMetadataPath(db->getMetadataPath()));
-    LOG_FMT_DEBUG(log, "After tombstone [meta={}]", meta);
+    LOG_DEBUG(log, "After tombstone [meta={}]", meta);
     {
         // Detach and load again
         auto detach_query = std::make_shared<ASTDropQuery>();
@@ -961,39 +952,39 @@ try
             drop_query->database = db_name;
             drop_query->if_exists = true;
             ASTPtr ast_drop_query = drop_query;
-            InterpreterDropQuery drop_interpreter(ast_drop_query, ctx);
+            InterpreterDropQuery drop_interpreter(ast_drop_query, *ctx);
             drop_interpreter.execute();
         }
 
         {
             // Create database
             ASTPtr ast = parseCreateStatement(statement);
-            InterpreterCreateQuery interpreter(ast, ctx);
+            InterpreterCreateQuery interpreter(ast, *ctx);
             interpreter.setInternal(true);
             interpreter.setForceRestoreData(false);
             interpreter.execute();
         }
 
-        auto db = ctx.getDatabase(db_name);
-        auto meta = readFile(ctx, getDatabaseMetadataPath(db->getMetadataPath()));
-        LOG_FMT_DEBUG(log, "After create [meta={}]", meta);
+        auto db = ctx->getDatabase(db_name);
+        auto meta = readFile(*ctx, getDatabaseMetadataPath(db->getMetadataPath()));
+        LOG_DEBUG(log, "After create [meta={}]", meta);
 
         DB::Timestamp tso = 1000;
-        db->alterTombstone(ctx, tso);
+        db->alterTombstone(*ctx, tso);
         EXPECT_TRUE(db->isTombstone());
         EXPECT_EQ(db->getTombstone(), tso);
 
         // Try restore from disk
-        db = detachThenAttach(ctx, db_name, std::move(db), log);
+        db = detachThenAttach(*ctx, db_name, std::move(db), log);
         EXPECT_TRUE(db->isTombstone());
         EXPECT_EQ(db->getTombstone(), tso);
 
         // Recover
-        db->alterTombstone(ctx, 0);
+        db->alterTombstone(*ctx, 0);
         EXPECT_FALSE(db->isTombstone());
 
         // Try restore from disk
-        db = detachThenAttach(ctx, db_name, std::move(db), log);
+        db = detachThenAttach(*ctx, db_name, std::move(db), log);
         EXPECT_FALSE(db->isTombstone());
     }
 }

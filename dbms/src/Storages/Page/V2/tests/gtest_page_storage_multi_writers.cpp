@@ -15,6 +15,7 @@
 #include <Common/CurrentMetrics.h>
 #include <Encryption/FileProvider.h>
 #include <IO/ReadBufferFromMemory.h>
+#include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/File.h>
 #include <Poco/Logger.h>
@@ -22,12 +23,12 @@
 #include <Poco/ThreadPool.h>
 #include <Poco/Timer.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/V2/PageDefines.h>
 #include <Storages/Page/V2/PageFile.h>
 #include <Storages/Page/V2/PageStorage.h>
-#include <Storages/Page/WriteBatch.h>
+#include <Storages/Page/WriteBatchImpl.h>
 #include <Storages/PathPool.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 
@@ -45,7 +46,7 @@ class PageStorageMultiWriters_test : public DB::base::TiFlashStorageTestBasic
 {
 public:
     PageStorageMultiWriters_test()
-        : file_provider{DB::tests::TiFlashTestEnv::getContext().getFileProvider()}
+        : file_provider{DB::tests::TiFlashTestEnv::getDefaultFileProvider()}
     {}
 
 protected:
@@ -63,7 +64,7 @@ protected:
         storage = reopenWithConfig(config);
     }
 
-    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorage::Config & config_)
+    std::shared_ptr<PageStorage> reopenWithConfig(const PageStorageConfig & config_)
     {
         auto spool = db_context->getPathPool().withTable("test", "t", false);
         auto delegator = spool.getPSDiskDelegatorSingle("log");
@@ -73,7 +74,7 @@ protected:
     }
 
 protected:
-    PageStorage::Config config;
+    PageStorageConfig config;
     std::shared_ptr<BackgroundProcessingPool> bkg_pool;
     std::shared_ptr<PageStorage> storage;
     const FileProviderPtr file_provider;
@@ -224,16 +225,16 @@ public:
                 LOG_TRACE(&Poco::Logger::get("root"), e.displayText());
             }
 #else
-            PageIds pageIds;
+            PageIds page_ids;
             for (size_t i = 0; i < 5; ++i)
             {
-                pageIds.emplace_back(random() % ctx.MAX_PAGE_ID);
+                page_ids.emplace_back(random() % ctx.MAX_PAGE_ID);
             }
             try
             {
-                // std::function<void(PageId page_id, const Page &)>;
-                PageHandler handler = [&](PageId page_id, const Page & page) {
-                    (void)page_id;
+                auto page_map = storage->read(page_ids);
+                for (const auto & page : page_map)
+                {
                     // use `sleep` to mock heavy read
                     if (heavy_read_delay_ms > 0)
                     {
@@ -241,9 +242,8 @@ public:
                         usleep(heavy_read_delay_ms * 1000);
                     }
                     ++pages_read;
-                    bytes_read += page.data.size();
-                };
-                storage->read(pageIds, handler);
+                    bytes_read += page.second.data.size();
+                }
             }
             catch (DB::Exception & e)
             {
@@ -371,7 +371,7 @@ try
     size_t timeout_s = 5 * 60;
 
     srand(0x123987);
-    PageStorage::Config curr_config = config;
+    PageStorageConfig curr_config = config;
     curr_config.num_write_slots = num_write_slots;
 
     storage = reopenWithConfig(curr_config);
@@ -407,7 +407,7 @@ try
         ASSERT_EQ(old_entry.checksum, entry.checksum) << "of Page[" << page_id << "]";
 
         auto old_page = old_storage->read(page_id, nullptr, old_snapshot);
-        char * buf = old_page.data.begin();
+        const char * buf = old_page.data.begin();
         for (size_t i = 0; i < old_page.data.size(); ++i)
             ASSERT_EQ(((size_t) * (buf + i)) % 0xFF, page_id % 0xFF);
 

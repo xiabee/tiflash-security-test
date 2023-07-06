@@ -35,7 +35,7 @@ using RegionPtr = std::shared_ptr<Region>;
 
 struct SSTViewVec;
 struct TiFlashRaftProxyHelper;
-struct SSTReader;
+class SSTReader;
 class StorageDeltaMerge;
 
 namespace DM
@@ -50,17 +50,20 @@ using SSTFilesToBlockInputStreamPtr = std::shared_ptr<SSTFilesToBlockInputStream
 class BoundedSSTFilesToBlockInputStream;
 using BoundedSSTFilesToBlockInputStreamPtr = std::shared_ptr<BoundedSSTFilesToBlockInputStream>;
 
+// Read blocks from TiKV's SSTFiles
 class SSTFilesToBlockInputStream final : public IBlockInputStream
 {
 public:
-    SSTFilesToBlockInputStream(RegionPtr region_,
-                               const SSTViewVec & snaps_,
-                               const TiFlashRaftProxyHelper * proxy_helper_,
-                               DecodingStorageSchemaSnapshotConstPtr schema_snap_,
-                               Timestamp gc_safepoint_,
-                               bool force_decode_,
-                               TMTContext & tmt_,
-                               size_t expected_size_ = DEFAULT_MERGE_BLOCK_SIZE);
+    SSTFilesToBlockInputStream( //
+        const std::string & log_prefix_,
+        RegionPtr region_,
+        const SSTViewVec & snaps_,
+        const TiFlashRaftProxyHelper * proxy_helper_,
+        DecodingStorageSchemaSnapshotConstPtr schema_snap_,
+        Timestamp gc_safepoint_,
+        bool force_decode_,
+        TMTContext & tmt_,
+        size_t expected_size_ = DEFAULT_MERGE_BLOCK_SIZE);
     ~SSTFilesToBlockInputStream() override;
 
     String getName() const override { return "SSTFilesToBlockInputStream"; }
@@ -82,7 +85,7 @@ public:
     };
 
 private:
-    void loadCFDataFromSST(ColumnFamilyType cf, const DecodedTiKVKey * rowkey_need_include);
+    void loadCFDataFromSST(ColumnFamilyType cf, const DecodedTiKVKey * rowkey_to_be_included);
 
     Block readCommitedBlock();
 
@@ -94,7 +97,7 @@ private:
     TMTContext & tmt;
     const Timestamp gc_safepoint;
     size_t expected_size;
-    Poco::Logger * log;
+    LoggerPtr log;
 
     using SSTReaderPtr = std::unique_ptr<SSTReader>;
     SSTReaderPtr write_cf_reader;
@@ -118,10 +121,10 @@ class BoundedSSTFilesToBlockInputStream final
 {
 public:
     BoundedSSTFilesToBlockInputStream(SSTFilesToBlockInputStreamPtr child,
-                                      const ColId pk_column_id_,
+                                      ColId pk_column_id_,
                                       const DecodingStorageSchemaSnapshotConstPtr & schema_snap);
 
-    String getName() const { return "BoundedSSTFilesToBlockInputStream"; }
+    static String getName() { return "BoundedSSTFilesToBlockInputStream"; }
 
     void readPrefix();
 
@@ -131,10 +134,10 @@ public:
 
     SSTFilesToBlockInputStream::ProcessKeys getProcessKeys() const;
 
-    const RegionPtr getRegion() const;
+    RegionPtr getRegion() const;
 
-    // Return values: (effective rows, not clean rows, gc hint version)
-    std::tuple<size_t, size_t, UInt64> getMvccStatistics() const;
+    // Return values: (effective rows, not clean rows, is delete rows, gc hint version)
+    std::tuple<size_t, size_t, size_t, UInt64> getMvccStatistics() const;
 
 private:
     const ColId pk_column_id;

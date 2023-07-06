@@ -30,6 +30,7 @@
 #include <IO/ReadBufferFromPocoSocket.h>
 #include <IO/WriteBufferFromPocoSocket.h>
 #include <IO/copyData.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/Quota.h>
 #include <Interpreters/SharedQueries.h>
 #include <Interpreters/TablesStatus.h>
@@ -80,7 +81,7 @@ void TCPHandler::runImpl()
 
     if (in->eof())
     {
-        LOG_FMT_WARNING(log, "Client has not sent any data.");
+        LOG_WARNING(log, "Client has not sent any data.");
         return;
     }
 
@@ -92,13 +93,13 @@ void TCPHandler::runImpl()
     {
         if (e.code() == ErrorCodes::CLIENT_HAS_CONNECTED_TO_WRONG_PORT)
         {
-            LOG_FMT_DEBUG(log, "Client has connected to wrong port.");
+            LOG_DEBUG(log, "Client has connected to wrong port.");
             return;
         }
 
         if (e.code() == ErrorCodes::ATTEMPT_TO_READ_AFTER_EOF)
         {
-            LOG_FMT_WARNING(log, "Client has gone away.");
+            LOG_WARNING(log, "Client has gone away.");
             return;
         }
 
@@ -120,7 +121,7 @@ void TCPHandler::runImpl()
         if (!connection_context.isDatabaseExist(default_database))
         {
             Exception e(fmt::format("Database {} doesn't exist", default_database), ErrorCodes::UNKNOWN_DATABASE);
-            LOG_FMT_WARNING(log, "Code: {}, e.displayText() = {}, Stack trace:\n\n{}", e.code(), e.displayText(), e.getStackTrace().toString());
+            LOG_WARNING(log, "Code: {}, e.displayText() = {}, Stack trace:\n\n{}", e.code(), e.displayText(), e.getStackTrace().toString());
             default_database = "test";
         }
 
@@ -131,7 +132,7 @@ void TCPHandler::runImpl()
 
     connection_context.setProgressCallback([this](const Progress & value) { return this->updateProgress(value); });
 
-    while (1)
+    while (true)
     {
         /// We are waiting for a packet from the client. Thus, every `POLL_INTERVAL` seconds check whether we need to shut down.
         while (!static_cast<ReadBufferFromPocoSocket &>(*in).poll(global_settings.poll_interval * 1000000) && !server.isCancelled())
@@ -177,29 +178,7 @@ void TCPHandler::runImpl()
             state.maybe_compressed_in.reset(); /// For more accurate accounting by MemoryTracker.
 
             /// Processing Query
-            const Settings & settings = query_context.getSettingsRef();
-            if (settings.shared_query_clients && !state.query_id.empty())
-            {
-                LOG_FMT_DEBUG(log, "shared query");
-
-                state.io = query_context.getSharedQueries()->getOrCreateBlockIO(
-                    state.query_id,
-                    settings.shared_query_clients,
-                    [&]() {
-                        return executeQuery(state.query, query_context, false, state.stage);
-                    });
-
-                /// As getOrCreateBlockIO could produce exception, this line must be put after.
-                shared_query_id = state.query_id;
-
-                if (state.io.out)
-                    throw Exception("Insert query is not supported in shared query mode");
-            }
-            else
-            {
-                state.io = executeQuery(state.query, query_context, false, state.stage);
-            }
-
+            state.io = executeQuery(state.query, query_context, false, state.stage);
             if (state.io.out)
                 state.need_receive_data_for_insert = true;
 
@@ -221,7 +200,7 @@ void TCPHandler::runImpl()
         catch (LockException & e)
         {
             state.io.onException();
-            lock_info = std::move(e.lock_info);
+            lock_info = std::move(e.locks[0].second);
         }
         catch (RegionException & e)
         {
@@ -282,7 +261,7 @@ void TCPHandler::runImpl()
         {
             /** Could not send exception information to the client. */
             network_error = true;
-            LOG_FMT_WARNING(log, "Client has gone away.");
+            LOG_WARNING(log, "Client has gone away.");
         }
 
         try
@@ -290,7 +269,7 @@ void TCPHandler::runImpl()
             // Manually call cancel before reset, as state.io.in is shared between clients in shared mode.
             if (!shared_query_id.empty())
             {
-                if (IProfilingBlockInputStream * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
+                if (auto * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
                     input->cancel(true);
             }
 
@@ -307,7 +286,7 @@ void TCPHandler::runImpl()
 
         watch.stop();
 
-        LOG_FMT_INFO(log, "Processed in {:.3f} sec.", watch.elapsedSeconds());
+        LOG_INFO(log, "Processed in {:.3f} sec.", watch.elapsedSeconds());
 
         if (network_error)
             break;
@@ -321,16 +300,16 @@ void TCPHandler::readData(const Settings & global_settings)
 
     /// Poll interval should not be greater than receive_timeout
     size_t default_poll_interval = global_settings.poll_interval * 1000000;
-    size_t current_poll_interval = static_cast<size_t>(receive_timeout.totalMicroseconds());
+    auto current_poll_interval = static_cast<size_t>(receive_timeout.totalMicroseconds());
     constexpr size_t min_poll_interval = 5000; // 5 ms
     size_t poll_interval = std::max(min_poll_interval, std::min(default_poll_interval, current_poll_interval));
 
-    while (1)
+    while (true)
     {
         Stopwatch watch(CLOCK_MONOTONIC_COARSE);
 
         /// We are waiting for a packet from the client. Thus, every `POLL_INTERVAL` seconds check whether we need to shut down.
-        while (1)
+        while (true)
         {
             if (static_cast<ReadBufferFromPocoSocket &>(*in).poll(poll_interval))
                 break;
@@ -439,7 +418,6 @@ void TCPHandler::processOrdinaryQuery()
               */
             if (!block && !isQueryCancelled())
             {
-                sendTotals();
                 sendExtremes();
                 sendProfileInfo();
                 sendProgress();
@@ -482,7 +460,7 @@ void TCPHandler::processTablesStatusRequest()
 
 void TCPHandler::sendProfileInfo()
 {
-    if (const IProfilingBlockInputStream * input = dynamic_cast<const IProfilingBlockInputStream *>(state.io.in.get()))
+    if (const auto * input = dynamic_cast<const IProfilingBlockInputStream *>(state.io.in.get()))
     {
         writeVarUInt(Protocol::Server::ProfileInfo, *out);
         input->getProfileInfo().write(*out);
@@ -490,31 +468,9 @@ void TCPHandler::sendProfileInfo()
     }
 }
 
-
-void TCPHandler::sendTotals()
-{
-    if (IProfilingBlockInputStream * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
-    {
-        const Block & totals = input->getTotals();
-
-        if (totals)
-        {
-            initBlockOutput(totals);
-
-            writeVarUInt(Protocol::Server::Totals, *out);
-            writeStringBinary("", *out);
-
-            state.block_out->write(totals);
-            state.maybe_compressed_out->next();
-            out->next();
-        }
-    }
-}
-
-
 void TCPHandler::sendExtremes()
 {
-    if (IProfilingBlockInputStream * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
+    if (auto * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
     {
         Block extremes = input->getExtremes();
 
@@ -800,7 +756,7 @@ bool TCPHandler::isQueryCancelled()
         case Protocol::Client::Cancel:
             if (state.empty())
                 throw NetException("Unexpected packet Cancel received from client", ErrorCodes::UNEXPECTED_PACKET_FROM_CLIENT);
-            LOG_FMT_INFO(log, "Query was cancelled.");
+            LOG_INFO(log, "Query was cancelled.");
             state.is_cancelled = true;
             return true;
 
@@ -837,8 +793,8 @@ void TCPHandler::sendRegionException(const std::vector<UInt64> & region_ids)
 {
     writeVarUInt(Protocol::Server::RegionException, *out);
     writeVarUInt(region_ids.size(), *out);
-    for (size_t i = 0; i < region_ids.size(); i++)
-        writeVarUInt(region_ids[i], *out);
+    for (UInt64 region_id : region_ids)
+        writeVarUInt(region_id, *out);
     out->next();
 }
 
@@ -890,7 +846,7 @@ void TCPHandler::run()
         /// Timeout - not an error.
         if (!strcmp(e.what(), "Timeout"))
         {
-            LOG_FMT_DEBUG(log, "Poco::Exception. Code: {}, e.code() = {}, e.displayText() = {}, e.what() = {}", ErrorCodes::POCO_EXCEPTION, e.code(), e.displayText(), e.what());
+            LOG_DEBUG(log, "Poco::Exception. Code: {}, e.code() = {}, e.displayText() = {}, e.what() = {}", ErrorCodes::POCO_EXCEPTION, e.code(), e.displayText(), e.what());
         }
         else
             throw;
@@ -914,8 +870,8 @@ void TCPHandler::processSharedQuery()
         Block block;
         if (isQueryCancelled())
         {
-            LOG_FMT_WARNING(log, "Cancel input stream");
-            if (IProfilingBlockInputStream * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
+            LOG_WARNING(log, "Cancel input stream");
+            if (auto * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
                 input->cancel(true);
         }
         else

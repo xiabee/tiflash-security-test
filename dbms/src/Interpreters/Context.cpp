@@ -19,27 +19,29 @@
 #include <Common/Macros.h>
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashMetrics.h>
+#include <Common/TiFlashSecurity.h>
 #include <Common/escapeForFileName.h>
 #include <Common/formatReadable.h>
+#include <Common/randomSeed.h>
 #include <Common/setThreadName.h>
 #include <DataStreams/FormatFactory.h>
 #include <Databases/IDatabase.h>
 #include <Debug/DBGInvoker.h>
+#include <Debug/MockStorage.h>
 #include <Encryption/DataKeyManager.h>
 #include <Encryption/FileProvider.h>
 #include <Encryption/RateLimiter.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <IO/ReadBufferFromFile.h>
 #include <IO/UncompressedCache.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/EmbeddedDictionaries.h>
-#include <Interpreters/ExternalDictionaries.h>
-#include <Interpreters/ExternalModels.h>
 #include <Interpreters/ISecurityManager.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/Quota.h>
 #include <Interpreters/RuntimeComponentsFactory.h>
 #include <Interpreters/Settings.h>
+#include <Interpreters/SharedContexts/Disagg.h>
 #include <Interpreters/SharedQueries.h>
 #include <Interpreters/SystemLog.h>
 #include <Parsers/ASTCreateQuery.h>
@@ -49,27 +51,31 @@
 #include <Poco/Mutex.h>
 #include <Poco/Net/IPAddress.h>
 #include <Poco/UUID.h>
+#include <Server/RaftConfigParser.h>
+#include <Server/ServerInfo.h>
 #include <Storages/BackgroundProcessingPool.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaIndexManager.h>
 #include <Storages/DeltaMerge/Index/MinMaxIndex.h>
 #include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/IStorage.h>
 #include <Storages/MarkCache.h>
 #include <Storages/Page/V3/PageStorageImpl.h>
+#include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/PathPool.h>
 #include <Storages/Transaction/BackgroundService.h>
-#include <Storages/Transaction/SchemaSyncService.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <TableFunctions/TableFunctionFactory.h>
+#include <TiDB/Schema/SchemaSyncService.h>
 #include <common/logger_useful.h>
 #include <fiu.h>
 #include <fmt/core.h>
 
 #include <boost/functional/hash/hash.hpp>
-#include <map>
 #include <pcg_random.hpp>
 #include <set>
+#include <unordered_map>
 
 
 namespace ProfileEvents
@@ -79,8 +85,6 @@ extern const Event ContextLock;
 
 namespace CurrentMetrics
 {
-extern const Metric ContextLockWait;
-extern const Metric MemoryTrackingForMerges;
 extern const Metric GlobalStorageRunMode;
 } // namespace CurrentMetrics
 
@@ -124,8 +128,8 @@ struct ContextShared
     /// Separate mutex for access of dictionaries. Separate mutex to avoid locks when server doing request to itself.
     mutable std::mutex embedded_dictionaries_mutex;
     mutable std::mutex external_dictionaries_mutex;
-    mutable std::mutex external_models_mutex;
 
+    std::optional<ServerInfo> server_info;
     String path; /// Path to the primary data directory, with a slash at the end.
     String tmp_path; /// The path to the temporary files that occur when processing the request.
     String flags_path; /// Path to the directory with some control flags for server maintenance.
@@ -135,9 +139,6 @@ struct ContextShared
 
     Databases databases; /// List of databases and tables in them.
     FormatFactory format_factory; /// Formats.
-    mutable std::shared_ptr<EmbeddedDictionaries> embedded_dictionaries; /// Metrica's dictionaeis. Have lazy initialization.
-    mutable std::shared_ptr<ExternalDictionaries> external_dictionaries;
-    mutable std::shared_ptr<ExternalModels> external_models;
     String default_profile_name; /// Default profile name used for default values.
     String system_profile_name; /// Profile used by system processes
     std::shared_ptr<ISecurityManager> security_manager; /// Known users.
@@ -155,7 +156,6 @@ struct ContextShared
     BackgroundProcessingPoolPtr ps_compact_background_pool; /// The thread pool for the background work performed by the ps v2.
     mutable TMTContextPtr tmt_context; /// Context of TiFlash. Note that this should be free before background_pool.
     MultiVersion<Macros> macros; /// Substitutions extracted from config.
-    size_t max_table_size_to_drop = 50000000000lu; /// Protects MergeTree tables from accidental DROP (50GB by default)
     String format_schema_path; /// Path to a directory that contains schema files used by input formats.
 
     SharedQueriesPtr shared_queries; /// The cache of shared queries.
@@ -163,8 +163,17 @@ struct ContextShared
     PathCapacityMetricsPtr path_capacity_ptr; /// Path capacity metrics
     FileProviderPtr file_provider; /// File provider.
     IORateLimiter io_rate_limiter;
-    PageStorageRunMode storage_run_mode;
+    PageStorageRunMode storage_run_mode = PageStorageRunMode::ONLY_V3;
     DM::GlobalStoragePoolPtr global_storage_pool;
+
+    /// The PS instance available on Write Node.
+    UniversalPageStorageServicePtr ps_write;
+
+    /// Everything related with Disaggregation.
+    SharedContextDisaggPtr ctx_disagg;
+
+    TiFlashSecurityConfigPtr security_config;
+
     /// Named sessions. The user could specify session identifier to reuse settings and temporary tables in subsequent requests.
 
     class SessionKeyHash
@@ -206,10 +215,14 @@ struct ContextShared
 
     Context::ConfigReloadCallback config_reload_callback;
 
+    std::shared_ptr<DB::DM::SharedBlockSchemas> shared_block_schemas;
+
     explicit ContextShared(std::shared_ptr<IRuntimeComponentsFactory> runtime_components_factory_)
         : runtime_components_factory(std::move(runtime_components_factory_))
+        , storage_run_mode(PageStorageRunMode::ONLY_V3)
     {
         /// TODO: make it singleton (?)
+#ifndef MULTIPLE_CONTEXT_GTEST
         static std::atomic<size_t> num_calls{0};
         if (++num_calls > 1)
         {
@@ -218,6 +231,7 @@ struct ContextShared
             std::cerr.flush();
             std::terminate();
         }
+#endif
 
         initialize();
     }
@@ -243,6 +257,28 @@ struct ContextShared
         if (shutdown_called)
             return;
         shutdown_called = true;
+
+        if (global_storage_pool)
+        {
+            // shutdown the gc task of global storage pool before
+            // shutting down the tables.
+            global_storage_pool->shutdown();
+        }
+
+        if (ps_write)
+        {
+            ps_write->shutdown();
+        }
+
+        if (tmt_context)
+        {
+            tmt_context->shutdown();
+        }
+
+        if (schema_sync_service)
+        {
+            schema_sync_service = nullptr;
+        }
 
         /** At this point, some tables may have threads that block our mutex.
           * To complete them correctly, we will copy the current list of tables,
@@ -277,17 +313,19 @@ private:
 Context::Context() = default;
 
 
-Context Context::createGlobal(std::shared_ptr<IRuntimeComponentsFactory> runtime_components_factory)
+std::unique_ptr<Context> Context::createGlobal(std::shared_ptr<IRuntimeComponentsFactory> runtime_components_factory)
 {
-    Context res;
-    res.runtime_components_factory = runtime_components_factory;
-    res.shared = std::make_shared<ContextShared>(runtime_components_factory);
-    res.quota = std::make_shared<QuotaForIntervals>();
-    res.timezone_info.init();
+    std::unique_ptr<Context> res(new Context());
+    res->setGlobalContext(*res);
+    res->runtime_components_factory = runtime_components_factory;
+    res->shared = std::make_shared<ContextShared>(runtime_components_factory);
+    res->shared->ctx_disagg = SharedContextDisagg::create(*res);
+    res->quota = std::make_shared<QuotaForIntervals>();
+    res->timezone_info.init();
     return res;
 }
 
-Context Context::createGlobal()
+std::unique_ptr<Context> Context::createGlobal()
 {
     return createGlobal(std::make_unique<RuntimeComponentsFactory>());
 }
@@ -308,8 +346,6 @@ Context::~Context()
 
 std::unique_lock<std::recursive_mutex> Context::getLock() const
 {
-    ProfileEvents::increment(ProfileEvents::ContextLock);
-    CurrentMetrics::Increment increment{CurrentMetrics::ContextLockWait};
     return std::unique_lock(shared->mutex);
 }
 
@@ -322,6 +358,14 @@ const ProcessList & Context::getProcessList() const
     return shared->process_list;
 }
 
+void Context::setServerInfo(const ServerInfo & server_info)
+{
+    shared->server_info = server_info;
+}
+const std::optional<ServerInfo> & Context::getServerInfo() const
+{
+    return shared->server_info;
+}
 
 Databases Context::getDatabases() const
 {
@@ -530,11 +574,10 @@ void Context::setUserFilesPath(const String & path)
     shared->user_files_path = path;
 }
 
-void Context::setPathPool( //
+void Context::setPathPool(
     const Strings & main_data_paths,
     const Strings & latest_data_paths,
     const Strings & kvstore_paths,
-    bool enable_raft_compatible_mode,
     PathCapacityMetricsPtr global_capacity_,
     FileProviderPtr file_provider_)
 {
@@ -544,8 +587,7 @@ void Context::setPathPool( //
         latest_data_paths,
         kvstore_paths,
         global_capacity_,
-        file_provider_,
-        enable_raft_compatible_mode);
+        file_provider_);
 }
 
 void Context::setConfig(const ConfigurationPtr & config)
@@ -574,6 +616,19 @@ ConfigurationPtr Context::getUsersConfig()
 {
     auto lock = getLock();
     return shared->users_config;
+}
+
+void Context::setSecurityConfig(Poco::Util::AbstractConfiguration & config, const LoggerPtr & log)
+{
+    auto lock = getLock();
+    shared->security_config = std::make_shared<TiFlashSecurityConfig>(log);
+    shared->security_config->init(config);
+}
+
+TiFlashSecurityConfigPtr Context::getSecurityConfig()
+{
+    auto lock = getLock();
+    return shared->security_config;
 }
 
 void Context::reloadDeltaTreeConfig(const Poco::Util::AbstractConfiguration & config)
@@ -715,7 +770,7 @@ Dependencies Context::getDependencies(const String & database_name, const String
         checkDatabaseAccessRightsImpl(db);
     }
 
-    ViewDependencies::const_iterator iter = shared->view_dependencies.find(DatabaseAndTableName(db, table_name));
+    auto iter = shared->view_dependencies.find(DatabaseAndTableName(db, table_name));
     if (iter == shared->view_dependencies.end())
         return {};
 
@@ -729,7 +784,7 @@ bool Context::isTableExist(const String & database_name, const String & table_na
     String db = resolveDatabase(database_name, current_database);
     checkDatabaseAccessRightsImpl(db);
 
-    Databases::const_iterator it = shared->databases.find(db);
+    auto it = shared->databases.find(db);
     return shared->databases.end() != it
         && it->second->isTableExist(*this, table_name);
 }
@@ -755,7 +810,7 @@ void Context::assertTableExists(const String & database_name, const String & tab
     String db = resolveDatabase(database_name, current_database);
     checkDatabaseAccessRightsImpl(db);
 
-    Databases::const_iterator it = shared->databases.find(db);
+    auto it = shared->databases.find(db);
     if (shared->databases.end() == it)
         throw Exception(fmt::format("Database {} doesn't exist", backQuoteIfNeed(db)), ErrorCodes::UNKNOWN_DATABASE);
 
@@ -772,7 +827,7 @@ void Context::assertTableDoesntExist(const String & database_name, const String 
     if (check_database_access_rights)
         checkDatabaseAccessRightsImpl(db);
 
-    Databases::const_iterator it = shared->databases.find(db);
+    auto it = shared->databases.find(db);
     if (shared->databases.end() != it && it->second->isTableExist(*this, table_name))
         throw Exception(fmt::format("Table {}.{} already exists.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)), ErrorCodes::TABLE_ALREADY_EXISTS);
 }
@@ -827,7 +882,7 @@ Tables Context::getExternalTables() const
 
 StoragePtr Context::tryGetExternalTable(const String & table_name) const
 {
-    TableAndCreateASTs::const_iterator jt = external_tables.find(table_name);
+    auto jt = external_tables.find(table_name);
     if (external_tables.end() == jt)
         return StoragePtr();
 
@@ -865,7 +920,7 @@ StoragePtr Context::getTableImpl(const String & database_name, const String & ta
     String db = resolveDatabase(database_name, current_database);
     checkDatabaseAccessRightsImpl(db);
 
-    Databases::const_iterator it = shared->databases.find(db);
+    auto it = shared->databases.find(db);
     if (shared->databases.end() == it)
     {
         if (exception)
@@ -895,7 +950,7 @@ void Context::addExternalTable(const String & table_name, const StoragePtr & sto
 
 StoragePtr Context::tryRemoveExternalTable(const String & table_name)
 {
-    TableAndCreateASTs::const_iterator it = external_tables.find(table_name);
+    auto it = external_tables.find(table_name);
 
     if (external_tables.end() == it)
         return StoragePtr();
@@ -955,7 +1010,7 @@ std::unique_ptr<DDLGuard> Context::getDDLGuardIfTableDoesntExist(const String & 
 {
     auto lock = getLock();
 
-    Databases::const_iterator it = shared->databases.find(database);
+    auto it = shared->databases.find(database);
     if (shared->databases.end() != it && it->second->isTableExist(*this, table))
         return {};
 
@@ -994,7 +1049,7 @@ ASTPtr Context::getCreateTableQuery(const String & database_name, const String &
 
 ASTPtr Context::getCreateExternalTableQuery(const String & table_name) const
 {
-    TableAndCreateASTs::const_iterator jt = external_tables.find(table_name);
+    auto jt = external_tables.find(table_name);
     if (external_tables.end() == jt)
         throw Exception(fmt::format("Temporary table {} doesn't exist", backQuoteIfNeed(table_name)), ErrorCodes::UNKNOWN_TABLE);
 
@@ -1011,8 +1066,17 @@ ASTPtr Context::getCreateDatabaseQuery(const String & database_name) const
     return shared->databases[db]->getCreateDatabaseQuery(*this);
 }
 
+void Context::checkIsConfigLoaded() const
+{
+    if (shared->application_type == ApplicationType::SERVER && !is_config_loaded)
+    {
+        throw Exception("Configuration are used before load from configure file tiflash.toml, so the user config may not take effect.", ErrorCodes::LOGICAL_ERROR);
+    }
+}
+
 Settings Context::getSettings() const
 {
+    checkIsConfigLoaded();
     return settings;
 }
 
@@ -1089,7 +1153,7 @@ void Context::setCurrentQueryId(const String & query_id)
                 UInt64 a;
                 UInt64 b;
             };
-        } random;
+        } random{};
 
         {
             auto lock = getLock();
@@ -1176,115 +1240,17 @@ Context & Context::getGlobalContext()
     return *global_context;
 }
 
-
-const EmbeddedDictionaries & Context::getEmbeddedDictionaries() const
+const Settings & Context::getSettingsRef() const
 {
-    return getEmbeddedDictionariesImpl(false);
+    checkIsConfigLoaded();
+    return settings;
 }
 
-EmbeddedDictionaries & Context::getEmbeddedDictionaries()
+Settings & Context::getSettingsRef()
 {
-    return getEmbeddedDictionariesImpl(false);
+    checkIsConfigLoaded();
+    return settings;
 }
-
-
-const ExternalDictionaries & Context::getExternalDictionaries() const
-{
-    return getExternalDictionariesImpl(false);
-}
-
-ExternalDictionaries & Context::getExternalDictionaries()
-{
-    return getExternalDictionariesImpl(false);
-}
-
-
-const ExternalModels & Context::getExternalModels() const
-{
-    return getExternalModelsImpl(false);
-}
-
-ExternalModels & Context::getExternalModels()
-{
-    return getExternalModelsImpl(false);
-}
-
-
-EmbeddedDictionaries & Context::getEmbeddedDictionariesImpl(const bool throw_on_error) const
-{
-    std::lock_guard lock(shared->embedded_dictionaries_mutex);
-
-    if (!shared->embedded_dictionaries)
-    {
-        auto geo_dictionaries_loader = runtime_components_factory->createGeoDictionariesLoader();
-
-        shared->embedded_dictionaries = std::make_shared<EmbeddedDictionaries>(
-            std::move(geo_dictionaries_loader),
-            *this->global_context,
-            throw_on_error);
-    }
-
-    return *shared->embedded_dictionaries;
-}
-
-
-ExternalDictionaries & Context::getExternalDictionariesImpl(const bool throw_on_error) const
-{
-    std::lock_guard lock(shared->external_dictionaries_mutex);
-
-    if (!shared->external_dictionaries)
-    {
-        if (!this->global_context)
-            throw Exception("Logical error: there is no global context", ErrorCodes::LOGICAL_ERROR);
-
-        auto config_repository = runtime_components_factory->createExternalDictionariesConfigRepository();
-
-        shared->external_dictionaries = std::make_shared<ExternalDictionaries>(
-            std::move(config_repository),
-            *this->global_context,
-            throw_on_error);
-    }
-
-    return *shared->external_dictionaries;
-}
-
-ExternalModels & Context::getExternalModelsImpl(bool throw_on_error) const
-{
-    std::lock_guard lock(shared->external_models_mutex);
-
-    if (!shared->external_models)
-    {
-        if (!this->global_context)
-            throw Exception("Logical error: there is no global context", ErrorCodes::LOGICAL_ERROR);
-
-        auto config_repository = runtime_components_factory->createExternalModelsConfigRepository();
-
-        shared->external_models = std::make_shared<ExternalModels>(
-            std::move(config_repository),
-            *this->global_context,
-            throw_on_error);
-    }
-
-    return *shared->external_models;
-}
-
-void Context::tryCreateEmbeddedDictionaries() const
-{
-    static_cast<void>(getEmbeddedDictionariesImpl(true));
-}
-
-
-void Context::tryCreateExternalDictionaries() const
-{
-    static_cast<void>(getExternalDictionariesImpl(true));
-}
-
-
-void Context::tryCreateExternalModels() const
-{
-    static_cast<void>(getExternalModelsImpl(true));
-}
-
 
 void Context::setProgressCallback(ProgressCallback callback)
 {
@@ -1349,14 +1315,6 @@ DBGInvoker & Context::getDBGInvoker() const
     return shared->dbg_invoker;
 }
 
-TMTContext & Context::getTMTContext() const
-{
-    auto lock = getLock();
-    if (!shared->tmt_context)
-        throw Exception("no tmt context");
-    return *(shared->tmt_context);
-}
-
 void Context::setMarkCache(size_t cache_size_in_bytes)
 {
     auto lock = getLock();
@@ -1364,7 +1322,7 @@ void Context::setMarkCache(size_t cache_size_in_bytes)
     if (shared->mark_cache)
         throw Exception("Mark cache has been already created.", ErrorCodes::LOGICAL_ERROR);
 
-    shared->mark_cache = std::make_shared<MarkCache>(cache_size_in_bytes, std::chrono::seconds(settings.mark_cache_min_lifetime));
+    shared->mark_cache = std::make_shared<MarkCache>(cache_size_in_bytes);
 }
 
 
@@ -1390,7 +1348,7 @@ void Context::setMinMaxIndexCache(size_t cache_size_in_bytes)
     if (shared->minmax_index_cache)
         throw Exception("Minmax index cache has been already created.", ErrorCodes::LOGICAL_ERROR);
 
-    shared->minmax_index_cache = std::make_shared<DM::MinMaxIndexCache>(cache_size_in_bytes, std::chrono::seconds(settings.mark_cache_min_lifetime));
+    shared->minmax_index_cache = std::make_shared<DM::MinMaxIndexCache>(cache_size_in_bytes);
 }
 
 DM::MinMaxIndexCachePtr Context::getMinMaxIndexCache() const
@@ -1441,20 +1399,32 @@ void Context::dropCaches() const
         shared->mark_cache->reset();
 }
 
-BackgroundProcessingPool & Context::getBackgroundPool()
+BackgroundProcessingPool & Context::initializeBackgroundPool(UInt16 pool_size)
 {
     auto lock = getLock();
     if (!shared->background_pool)
-        shared->background_pool = std::make_shared<BackgroundProcessingPool>(settings.background_pool_size, "bg-");
+        shared->background_pool = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-");
     return *shared->background_pool;
+}
+
+BackgroundProcessingPool & Context::getBackgroundPool()
+{
+    auto lock = getLock();
+    return *shared->background_pool;
+}
+
+BackgroundProcessingPool & Context::initializeBlockableBackgroundPool(UInt16 pool_size)
+{
+    auto lock = getLock();
+    if (!shared->blockable_background_pool)
+        shared->blockable_background_pool = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-block-");
+    return *shared->blockable_background_pool;
 }
 
 BackgroundProcessingPool & Context::getBlockableBackgroundPool()
 {
-    // TODO: choose a better thread pool size and maybe a better name for the pool
+    // TODO: maybe a better name for the pool
     auto lock = getLock();
-    if (!shared->blockable_background_pool)
-        shared->blockable_background_pool = std::make_shared<BackgroundProcessingPool>(settings.background_pool_size, "bg-block-");
     return *shared->blockable_background_pool;
 }
 
@@ -1475,12 +1445,28 @@ void Context::createTMTContext(const TiFlashRaftConfig & raft_config, pingcap::C
     shared->tmt_context = std::make_shared<TMTContext>(*this, raft_config, cluster_config);
 }
 
+bool Context::isTMTContextInited() const
+{
+    auto lock = getLock();
+    return shared->tmt_context != nullptr;
+}
+
+TMTContext & Context::getTMTContext() const
+{
+    auto lock = getLock();
+    if (!shared->tmt_context)
+        throw Exception("no tmt context");
+    return *(shared->tmt_context);
+}
+
 void Context::initializePathCapacityMetric( //
     size_t global_capacity_quota, //
     const Strings & main_data_paths,
     const std::vector<size_t> & main_capacity_quota, //
     const Strings & latest_data_paths,
-    const std::vector<size_t> & latest_capacity_quota)
+    const std::vector<size_t> & latest_capacity_quota,
+    const Strings & remote_cache_paths,
+    const std::vector<size_t> & remote_cache_capacity_quota)
 {
     auto lock = getLock();
     if (shared->path_capacity_ptr)
@@ -1490,7 +1476,9 @@ void Context::initializePathCapacityMetric( //
         main_data_paths,
         main_capacity_quota,
         latest_data_paths,
-        latest_capacity_quota);
+        latest_capacity_quota,
+        remote_cache_paths,
+        remote_cache_capacity_quota);
 }
 
 PathCapacityMetricsPtr Context::getPathCapacity() const
@@ -1590,18 +1578,31 @@ static bool isPageStorageV2Existed(const PathPool & path_pool)
 
 static bool isPageStorageV3Existed(const PathPool & path_pool)
 {
+    const std::vector<String> path_prefixes = {
+        PathPool::log_path_prefix,
+        PathPool::data_path_prefix,
+        PathPool::meta_path_prefix,
+        PathPool::kvstore_path_prefix,
+    };
     for (const auto & path : path_pool.listGlobalPagePaths())
     {
-        Poco::File dir(path);
-        if (!dir.exists())
-            continue;
-
-        std::vector<std::string> files;
-        dir.list(files);
-        if (!files.empty())
+        for (const auto & path_prefix : path_prefixes)
         {
-            return true;
+            Poco::File dir(path + "/" + path_prefix);
+            if (dir.exists())
+                return true;
         }
+    }
+    return false;
+}
+
+static bool isWriteNodeUniPSExisted(const PathPool & path_pool)
+{
+    for (const auto & path : path_pool.listGlobalPagePaths())
+    {
+        Poco::File dir(path + "/" + PathPool::write_uni_path_prefix);
+        if (dir.exists())
+            return true;
     }
     return false;
 }
@@ -1622,19 +1623,34 @@ void Context::initializePageStorageMode(const PathPool & path_pool, UInt64 stora
     case PageFormat::V1:
     case PageFormat::V2:
     {
-        if (isPageStorageV3Existed(path_pool))
+        if (isPageStorageV3Existed(path_pool) || isWriteNodeUniPSExisted(path_pool))
         {
-            throw Exception("Invalid config `storage.format_version`, Current page V3 data exist. But using the PageFormat::V2."
+            throw Exception("Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V2."
                             "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from scratch.",
                             ErrorCodes::LOGICAL_ERROR);
         }
-        // not exist V3
+        // not exist newer format page data
         shared->storage_run_mode = PageStorageRunMode::ONLY_V2;
         return;
     }
     case PageFormat::V3:
     {
+        if (isWriteNodeUniPSExisted(path_pool))
+        {
+            throw Exception("Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V3."
+                            "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from scratch.",
+                            ErrorCodes::LOGICAL_ERROR);
+        }
         shared->storage_run_mode = isPageStorageV2Existed(path_pool) ? PageStorageRunMode::MIX_MODE : PageStorageRunMode::ONLY_V3;
+        return;
+    }
+    case PageFormat::V4:
+    {
+        if (isPageStorageV2Existed(path_pool) || isPageStorageV3Existed(path_pool))
+        {
+            throw Exception("Uni PS can only be enabled on a fresh start", ErrorCodes::LOGICAL_ERROR);
+        }
+        shared->storage_run_mode = PageStorageRunMode::UNI_PS;
         return;
     }
     default:
@@ -1658,15 +1674,15 @@ void Context::setPageStorageRunMode(PageStorageRunMode run_mode) const
 bool Context::initializeGlobalStoragePoolIfNeed(const PathPool & path_pool)
 {
     auto lock = getLock();
-    if (shared->global_storage_pool)
-    {
-        // Can't init GlobalStoragePool twice.
-        // otherwise the pagestorage instances in `StoragePool` for each table won't be updated and cause unexpected problem.
-        throw Exception("GlobalStoragePool has already been initialized.", ErrorCodes::LOGICAL_ERROR);
-    }
     CurrentMetrics::set(CurrentMetrics::GlobalStorageRunMode, static_cast<UInt8>(shared->storage_run_mode));
     if (shared->storage_run_mode == PageStorageRunMode::MIX_MODE || shared->storage_run_mode == PageStorageRunMode::ONLY_V3)
     {
+        if (shared->global_storage_pool)
+        {
+            // GlobalStoragePool may be initialized many times in some test cases for restore.
+            LOG_WARNING(shared->log, "GlobalStoragePool has already been initialized.");
+            shared->global_storage_pool->shutdown();
+        }
         try
         {
             shared->global_storage_pool = std::make_shared<DM::GlobalStoragePool>(path_pool, *this, settings);
@@ -1690,6 +1706,105 @@ DM::GlobalStoragePoolPtr Context::getGlobalStoragePool() const
 {
     auto lock = getLock();
     return shared->global_storage_pool;
+}
+
+/**
+ * This PageStorage is initialized in two cases:
+ * 1. Not in disaggregated mode.
+ * 2. In disaggregated write mode.
+ */
+void Context::initializeWriteNodePageStorageIfNeed(const PathPool & path_pool)
+{
+    auto lock = getLock();
+    if (shared->storage_run_mode == PageStorageRunMode::UNI_PS)
+    {
+        RUNTIME_CHECK(shared->ps_write == nullptr);
+        try
+        {
+            PageStorageConfig config;
+            shared->ps_write = UniversalPageStorageService::create( //
+                *this,
+                "write",
+                path_pool.getPSDiskDelegatorGlobalMulti(PathPool::write_uni_path_prefix),
+                config);
+            LOG_INFO(shared->log, "initialized GlobalUniversalPageStorage(WriteNode)");
+        }
+        catch (...)
+        {
+            tryLogCurrentException(__PRETTY_FUNCTION__);
+            throw;
+        }
+    }
+    else
+    {
+        shared->ps_write = nullptr;
+    }
+}
+
+UniversalPageStoragePtr Context::getWriteNodePageStorage() const
+{
+    auto lock = getLock();
+    if (shared->ps_write)
+    {
+        return shared->ps_write->getUniversalPageStorage();
+    }
+    else
+    {
+        LOG_WARNING(shared->log, "Calling getWriteNodePageStorage() without initialization, stack={}", StackTrace().toString());
+        return nullptr;
+    }
+}
+
+UniversalPageStoragePtr Context::tryGetWriteNodePageStorage() const
+{
+    auto lock = getLock();
+    if (shared->ps_write)
+        return shared->ps_write->getUniversalPageStorage();
+    return nullptr;
+}
+
+bool Context::trySyncAllDataToRemoteStore() const
+{
+    auto lock = getLock();
+    if (shared->ctx_disagg->isDisaggregatedStorageMode() && shared->ps_write)
+    {
+        shared->ps_write->setSyncAllData();
+        return true;
+    }
+    return false;
+}
+
+// In some unit tests, we may want to reinitialize WriteNodePageStorage multiple times to mock restart.
+// And we need to release old one before creating new one.
+// And we must do it explicitly. Because if we do it implicitly in `initializeWriteNodePageStorageIfNeed`, there is a potential deadlock here.
+// Thread A:
+//   Get lock on SharedContext -> call UniversalPageStorageService::shutdown -> remove background tasks -> try get rwlock on the task
+// Thread B:
+//   Get rwlock on task -> call a method on Context to get some object -> try to get lock on SharedContext
+void Context::tryReleaseWriteNodePageStorageForTest()
+{
+    UniversalPageStorageServicePtr ps_write;
+    {
+        auto lock = getLock();
+        if (shared->ps_write)
+        {
+            LOG_WARNING(shared->log, "Release GlobalUniversalPageStorage(WriteNode).");
+            ps_write = shared->ps_write;
+            shared->ps_write = nullptr;
+        }
+    }
+    if (ps_write)
+    {
+        // call shutdown without lock
+        ps_write->shutdown();
+        ps_write = nullptr;
+    }
+}
+
+SharedContextDisaggPtr Context::getSharedContextDisagg() const
+{
+    RUNTIME_CHECK(shared->ctx_disagg != nullptr); // We always initialize the shared context in createGlobal()
+    return shared->ctx_disagg;
 }
 
 UInt16 Context::getTCPPort() const
@@ -1736,58 +1851,6 @@ QueryLog * Context::getQueryLog()
     }
 
     return system_logs->query_log.get();
-}
-
-
-void Context::setMaxTableSizeToDrop(size_t max_size)
-{
-    // Is initialized at server startup
-    shared->max_table_size_to_drop = max_size;
-}
-
-void Context::checkTableCanBeDropped(const String & database, const String & table, size_t table_size)
-{
-    size_t max_table_size_to_drop = shared->max_table_size_to_drop;
-
-    if (!max_table_size_to_drop || table_size <= max_table_size_to_drop)
-        return;
-
-    Poco::File force_file(getFlagsPath() + "force_drop_table");
-    bool force_file_exists = force_file.exists();
-
-    if (force_file_exists)
-    {
-        try
-        {
-            force_file.remove();
-            return;
-        }
-        catch (...)
-        {
-            /// User should recreate force file on each drop, it shouldn't be protected
-            tryLogCurrentException("Drop table check", "Can't remove force file to enable table drop");
-        }
-    }
-
-    String table_size_str = formatReadableSizeWithDecimalSuffix(table_size);
-    String max_table_size_to_drop_str = formatReadableSizeWithDecimalSuffix(max_table_size_to_drop);
-
-    std::string exception_msg = fmt::format("Table {0}.{1} was not dropped.\n"
-                                            "Reason:\n"
-                                            "1. Table size({2}) is greater than max_table_size_to_drop ({3})\n"
-                                            "2. File '{4}' intended to force DROP {5}\n",
-                                            "How to fix this:\n"
-                                            "1. Either increase (or set to zero) max_table_size_to_drop in server config and restart ClickHouse\n"
-                                            "2. Either create forcing file {4} and make sure that ClickHouse has write permission for it.\n"
-                                            "Example:\nsudo touch '{4}' && sudo chmod 666 '{4}'",
-                                            backQuoteIfNeed(database),
-                                            backQuoteIfNeed(table),
-                                            table_size_str,
-                                            max_table_size_to_drop_str,
-                                            force_file.path(),
-                                            (force_file_exists ? "exists but not writeable (could not be removed)" : "doesn't exist"));
-
-    throw Exception(exception_msg, ErrorCodes::TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT);
 }
 
 
@@ -1848,6 +1911,7 @@ void Context::setDefaultProfiles(const Poco::Util::AbstractConfiguration & confi
     shared->default_profile_name = config.getString("default_profile", "default");
     shared->system_profile_name = config.getString("system_profile", shared->default_profile_name);
     setSetting("profile", shared->system_profile_name);
+    is_config_loaded = true;
 }
 
 String Context::getDefaultProfileName() const
@@ -1870,16 +1934,6 @@ void Context::setFormatSchemaPath(const String & path)
     shared->format_schema_path = path;
 }
 
-void Context::setUseL0Opt(bool use_l0)
-{
-    use_l0_opt = use_l0;
-}
-
-bool Context::useL0Opt() const
-{
-    return use_l0_opt;
-}
-
 SharedQueriesPtr Context::getSharedQueries()
 {
     auto lock = getLock();
@@ -1887,6 +1941,113 @@ SharedQueriesPtr Context::getSharedQueries()
     if (!shared->shared_queries)
         shared->shared_queries = std::make_shared<SharedQueries>();
     return shared->shared_queries;
+}
+
+const std::shared_ptr<DB::DM::SharedBlockSchemas> & Context::getSharedBlockSchemas() const
+{
+    return shared->shared_block_schemas;
+}
+
+void Context::initializeSharedBlockSchemas(size_t shared_block_schemas_size)
+{
+    shared->shared_block_schemas = std::make_shared<DB::DM::SharedBlockSchemas>(shared_block_schemas_size);
+}
+
+size_t Context::getMaxStreams() const
+{
+    size_t max_streams = settings.max_threads;
+    bool is_cop_request = false;
+    if (dag_context != nullptr)
+    {
+        if (isExecutorTest() || isInterpreterTest())
+            max_streams = dag_context->initialize_concurrency;
+        else if (!dag_context->isBatchCop() && !dag_context->isMPPTask())
+        {
+            is_cop_request = true;
+            max_streams = 1;
+        }
+    }
+    if (max_streams == 0)
+        max_streams = 1;
+    if (unlikely(max_streams != 1 && is_cop_request))
+        /// for cop request, the max_streams should be 1
+        throw Exception("Cop request only support running with max_streams = 1");
+    return max_streams;
+}
+
+bool Context::isMPPTest() const
+{
+    return test_mode == mpp_test || test_mode == cancel_test;
+}
+
+void Context::setMPPTest()
+{
+    test_mode = mpp_test;
+}
+
+bool Context::isCancelTest() const
+{
+    return test_mode == cancel_test;
+}
+
+void Context::setCancelTest()
+{
+    test_mode = cancel_test;
+}
+
+bool Context::isExecutorTest() const
+{
+    return test_mode == executor_test;
+}
+
+void Context::setExecutorTest()
+{
+    test_mode = executor_test;
+}
+
+bool Context::isInterpreterTest() const
+{
+    return test_mode == interpreter_test;
+}
+
+void Context::setInterpreterTest()
+{
+    test_mode = interpreter_test;
+}
+
+bool Context::isCopTest() const
+{
+    return test_mode == cop_test;
+}
+
+void Context::setCopTest()
+{
+    test_mode = cop_test;
+}
+
+bool Context::isTest() const
+{
+    return test_mode != non_test;
+}
+
+void Context::setMockStorage(MockStorage * mock_storage_)
+{
+    mock_storage = mock_storage_;
+}
+
+MockStorage * Context::mockStorage() const
+{
+    return mock_storage;
+}
+
+MockMPPServerInfo Context::mockMPPServerInfo() const
+{
+    return mpp_server_info;
+}
+
+void Context::setMockMPPServerInfo(MockMPPServerInfo & info)
+{
+    mpp_server_info = info;
 }
 
 SessionCleaner::~SessionCleaner()

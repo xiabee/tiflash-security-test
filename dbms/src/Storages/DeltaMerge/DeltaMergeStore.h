@@ -14,17 +14,22 @@
 
 #pragma once
 
+#include <Common/UniThreadPool.h>
 #include <Core/Block.h>
 #include <Core/SortDescription.h>
 #include <DataStreams/IBlockInputStream.h>
-#include <Interpreters/Context.h>
+#include <Interpreters/Context_fwd.h>
+#include <Operators/Operator.h>
 #include <Storages/AlterCommands.h>
 #include <Storages/BackgroundProcessingPool.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFilePersisted.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/DeltaMerge/Filter/PushDownFilter.h>
+#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
-#include <Storages/DeltaMerge/StoragePool.h>
-#include <Storages/PathPool.h>
+#include <Storages/Page/PageStorage_fwd.h>
 #include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
 #include <Storages/Transaction/TiDB.h>
 
@@ -32,11 +37,20 @@
 
 namespace DB
 {
+
 class Logger;
 using LoggerPtr = std::shared_ptr<Logger>;
+struct CheckpointInfo;
+using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
+
+class StoragePathPool;
 
 namespace DM
 {
+class StoragePool;
+using StoragePoolPtr = std::shared_ptr<StoragePool>;
+class DMFile;
+using DMFilePtr = std::shared_ptr<DMFile>;
 class Segment;
 using SegmentPtr = std::shared_ptr<Segment>;
 using SegmentPair = std::pair<SegmentPtr, SegmentPtr>;
@@ -46,34 +60,50 @@ struct DMContext;
 using DMContextPtr = std::shared_ptr<DMContext>;
 using NotCompress = std::unordered_set<ColId>;
 using SegmentIdSet = std::unordered_set<UInt64>;
+struct ExternalDTFileInfo;
+struct GCOptions;
 
-inline static const PageId DELTA_MERGE_FIRST_SEGMENT_ID = 1;
-
-struct SegmentStat
+namespace tests
 {
-    UInt64 segment_id;
-    RowKeyRange range;
+class DeltaMergeStoreTest;
+}
 
+inline static const PageIdU64 DELTA_MERGE_FIRST_SEGMENT_ID = 1;
+
+struct SegmentStats
+{
+    UInt64 segment_id = 0;
+    RowKeyRange range;
+    UInt64 epoch = 0;
     UInt64 rows = 0;
     UInt64 size = 0;
-    UInt64 delete_ranges = 0;
-
-    UInt64 stable_size_on_disk = 0;
-
-    UInt64 delta_pack_count = 0;
-    UInt64 stable_pack_count = 0;
-
-    Float64 avg_delta_pack_rows = 0;
-    Float64 avg_stable_pack_rows = 0;
 
     Float64 delta_rate = 0;
+    UInt64 delta_memtable_rows = 0;
+    UInt64 delta_memtable_size = 0;
+    UInt64 delta_memtable_column_files = 0;
+    UInt64 delta_memtable_delete_ranges = 0;
+    UInt64 delta_persisted_page_id = 0;
+    UInt64 delta_persisted_rows = 0;
+    UInt64 delta_persisted_size = 0;
+    UInt64 delta_persisted_column_files = 0;
+    UInt64 delta_persisted_delete_ranges = 0;
     UInt64 delta_cache_size = 0;
-
     UInt64 delta_index_size = 0;
-};
-using SegmentStats = std::vector<SegmentStat>;
 
-struct DeltaMergeStoreStat
+    UInt64 stable_page_id = 0;
+    UInt64 stable_rows = 0;
+    UInt64 stable_size = 0;
+    UInt64 stable_dmfiles = 0;
+    UInt64 stable_dmfiles_id_0 = 0;
+    UInt64 stable_dmfiles_rows = 0;
+    UInt64 stable_dmfiles_size = 0;
+    UInt64 stable_dmfiles_size_on_disk = 0;
+    UInt64 stable_dmfiles_packs = 0;
+};
+using SegmentsStats = std::vector<SegmentStats>;
+
+struct StoreStats
 {
     UInt64 segment_count = 0;
 
@@ -108,7 +138,9 @@ struct DeltaMergeStoreStat
     Float64 avg_stable_rows = 0;
     Float64 avg_stable_size = 0;
 
+    // statistics about column file in delta
     UInt64 total_pack_count_in_delta = 0;
+    UInt64 max_pack_count_in_delta = 0;
     Float64 avg_pack_count_in_delta = 0;
     Float64 avg_pack_rows_in_delta = 0;
     Float64 avg_pack_size_in_delta = 0;
@@ -122,35 +154,24 @@ struct DeltaMergeStoreStat
     Float64 storage_stable_oldest_snapshot_lifetime = 0.0;
     UInt64 storage_stable_oldest_snapshot_thread_id = 0;
     String storage_stable_oldest_snapshot_tracing_id;
-    UInt64 storage_stable_num_pages = 0;
-    UInt64 storage_stable_num_normal_pages = 0;
-    UInt64 storage_stable_max_page_id = 0;
 
     UInt64 storage_delta_num_snapshots = 0;
     Float64 storage_delta_oldest_snapshot_lifetime = 0.0;
     UInt64 storage_delta_oldest_snapshot_thread_id = 0;
     String storage_delta_oldest_snapshot_tracing_id;
-    UInt64 storage_delta_num_pages = 0;
-    UInt64 storage_delta_num_normal_pages = 0;
-    UInt64 storage_delta_max_page_id = 0;
 
     UInt64 storage_meta_num_snapshots = 0;
     Float64 storage_meta_oldest_snapshot_lifetime = 0.0;
     UInt64 storage_meta_oldest_snapshot_thread_id = 0;
     String storage_meta_oldest_snapshot_tracing_id;
-    UInt64 storage_meta_num_pages = 0;
-    UInt64 storage_meta_num_normal_pages = 0;
-    UInt64 storage_meta_max_page_id = 0;
 
     UInt64 background_tasks_length = 0;
 };
 
-// It is used to prevent hash conflict of file caches.
-static std::atomic<UInt64> DELTA_MERGE_STORE_HASH_SALT{0};
-
 class DeltaMergeStore : private boost::noncopyable
 {
 public:
+    friend class ::DB::DM::tests::DeltaMergeStoreTest;
     struct Settings
     {
         NotCompress not_compress_columns{};
@@ -158,7 +179,7 @@ public:
     static Settings EMPTY_SETTINGS;
 
     using SegmentSortedMap = std::map<RowKeyValueRef, SegmentPtr, std::less<>>;
-    using SegmentMap = std::unordered_map<PageId, SegmentPtr>;
+    using SegmentMap = std::unordered_map<PageIdU64, SegmentPtr>;
 
     enum ThreadType
     {
@@ -176,84 +197,11 @@ public:
     enum TaskType
     {
         Split,
-        Merge,
         MergeDelta,
         Compact,
         Flush,
         PlaceIndex,
     };
-
-    // TODO: Rename to MergeDeltaThreadType
-    enum TaskRunThread
-    {
-        BackgroundThreadPool,
-        Foreground,
-        ForegroundRPC,
-        BackgroundGCThread,
-    };
-
-    static std::string toString(ThreadType type)
-    {
-        switch (type)
-        {
-        case Init:
-            return "Init";
-        case Write:
-            return "Write";
-        case Read:
-            return "Read";
-        case BG_Split:
-            return "BG_Split";
-        case BG_Merge:
-            return "BG_Merge";
-        case BG_MergeDelta:
-            return "BG_MergeDelta";
-        case BG_Compact:
-            return "BG_Compact";
-        case BG_Flush:
-            return "BG_Flush";
-        case BG_GC:
-            return "BG_GC";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static std::string toString(TaskType type)
-    {
-        switch (type)
-        {
-        case Split:
-            return "Split";
-        case Merge:
-            return "Merge";
-        case MergeDelta:
-            return "MergeDelta";
-        case Compact:
-            return "Compact";
-        case Flush:
-            return "Flush";
-        case PlaceIndex:
-            return "PlaceIndex";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static std::string toString(TaskRunThread type)
-    {
-        switch (type)
-        {
-        case BackgroundThreadPool:
-            return "BackgroundThreadPool";
-        case Foreground:
-            return "Foreground";
-        case BackgroundGCThread:
-            return "BackgroundGCThread";
-        default:
-            return "Unknown";
-        }
-    }
 
     struct BackgroundTask
     {
@@ -261,7 +209,6 @@ public:
 
         DMContextPtr dm_context;
         SegmentPtr segment;
-        SegmentPtr next_segment;
 
         explicit operator bool() const { return segment != nullptr; }
     };
@@ -298,20 +245,29 @@ public:
                     bool data_path_contains_database_name,
                     const String & db_name,
                     const String & table_name_,
+                    KeyspaceID keyspace_id_,
                     TableID physical_table_id_,
+                    bool has_replica,
                     const ColumnDefines & columns,
                     const ColumnDefine & handle,
                     bool is_common_handle_,
                     size_t rowkey_column_size_,
-                    const Settings & settings_ = EMPTY_SETTINGS);
+                    const Settings & settings_ = EMPTY_SETTINGS,
+                    ThreadPool * thread_pool = nullptr);
     ~DeltaMergeStore();
 
     void setUpBackgroundTask(const DMContextPtr & dm_context);
 
-    const String & getDatabaseName() const { return db_name; }
-    const String & getTableName() const { return table_name; }
+    const String & getDatabaseName() const
+    {
+        return db_name;
+    }
+    const String & getTableName() const
+    {
+        return table_name;
+    }
 
-    void rename(String new_path, bool clean_rename, String new_database_name, String new_table_name);
+    void rename(String new_path, String new_database_name, String new_table_name);
 
     void clearData();
 
@@ -326,23 +282,51 @@ public:
 
     void deleteRange(const Context & db_context, const DB::Settings & db_settings, const RowKeyRange & delete_range);
 
-    std::tuple<String, PageId> preAllocateIngestFile();
+    std::tuple<String, PageIdU64> preAllocateIngestFile();
 
-    void preIngestFile(const String & parent_path, PageId file_id, size_t file_size);
+    void preIngestFile(const String & parent_path, PageIdU64 file_id, size_t file_size);
 
+    /// You must ensure external files are ordered and do not overlap. Otherwise exceptions will be thrown.
+    /// You must ensure all of the external files are contained by the range. Otherwise exceptions will be thrown.
     void ingestFiles(const DMContextPtr & dm_context, //
                      const RowKeyRange & range,
-                     const PageIds & file_ids,
+                     const std::vector<DM::ExternalDTFileInfo> & external_files,
                      bool clear_data_in_range);
 
+    /// You must ensure external files are ordered and do not overlap. Otherwise exceptions will be thrown.
+    /// You must ensure all of the external files are contained by the range. Otherwise exceptions will be thrown.
     void ingestFiles(const Context & db_context, //
                      const DB::Settings & db_settings,
                      const RowKeyRange & range,
-                     const PageIds & file_ids,
+                     const std::vector<DM::ExternalDTFileInfo> & external_files,
                      bool clear_data_in_range)
     {
         auto dm_context = newDMContext(db_context, db_settings);
-        return ingestFiles(dm_context, range, file_ids, clear_data_in_range);
+        return ingestFiles(dm_context, range, external_files, clear_data_in_range);
+    }
+
+    std::vector<SegmentPtr> ingestSegmentsUsingSplit(
+        const DMContextPtr & dm_context,
+        const RowKeyRange & ingest_range,
+        const std::vector<SegmentPtr> & target_segments);
+
+    bool ingestSegmentDataIntoSegmentUsingSplit(
+        DMContext & dm_context,
+        const SegmentPtr & segment,
+        const RowKeyRange & ingest_range,
+        const SegmentPtr & segment_to_ingest);
+
+    void ingestSegmentsFromCheckpointInfo(const DMContextPtr & dm_context,
+                                          const DM::RowKeyRange & range,
+                                          CheckpointInfoPtr checkpoint_info);
+
+    void ingestSegmentsFromCheckpointInfo(const Context & db_context,
+                                          const DB::Settings & db_settings,
+                                          const DM::RowKeyRange & range,
+                                          CheckpointInfoPtr checkpoint_info)
+    {
+        auto dm_context = newDMContext(db_context, db_settings);
+        return ingestSegmentsFromCheckpointInfo(dm_context, range, checkpoint_info);
     }
 
     /// Read all rows without MVCC filtering
@@ -350,50 +334,105 @@ public:
                               const DB::Settings & db_settings,
                               const ColumnDefines & columns_to_read,
                               size_t num_streams,
+                              bool keep_order,
                               const SegmentIdSet & read_segments = {},
                               size_t extra_table_id_index = InvalidColumnID);
 
-    /// Read rows with MVCC filtering
-    /// `sorted_ranges` should be already sorted and merged
+
+    /// Read rows in two modes:
+    ///     when is_fast_scan == false, we will read rows with MVCC filtering, del mark !=0  filter and sorted merge.
+    ///     when is_fast_scan == true, we will read rows without MVCC and sorted merge.
+    /// `sorted_ranges` should be already sorted and merged.
     BlockInputStreams read(const Context & db_context,
                            const DB::Settings & db_settings,
                            const ColumnDefines & columns_to_read,
                            const RowKeyRanges & sorted_ranges,
                            size_t num_streams,
                            UInt64 max_version,
-                           const RSOperatorPtr & filter,
+                           const PushDownFilterPtr & filter,
                            const String & tracing_id,
+                           bool keep_order,
+                           bool is_fast_scan = false,
                            size_t expected_block_size = DEFAULT_BLOCK_SIZE,
                            const SegmentIdSet & read_segments = {},
-                           size_t extra_table_id_index = InvalidColumnID);
+                           size_t extra_table_id_index = InvalidColumnID,
+                           ScanContextPtr scan_context = nullptr);
 
-    /// Force flush all data to disk.
-    void flushCache(const Context & context, const RowKeyRange & range)
-    {
-        auto dm_context = newDMContext(context, context.getSettingsRef());
-        flushCache(dm_context, range);
-    }
 
-    void flushCache(const DMContextPtr & dm_context, const RowKeyRange & range);
+    /// Read rows in two modes:
+    ///     when is_fast_scan == false, we will read rows with MVCC filtering, del mark !=0  filter and sorted merge.
+    ///     when is_fast_scan == true, we will read rows without MVCC and sorted merge.
+    /// `sorted_ranges` should be already sorted and merged.
+    SourceOps readSourceOps(PipelineExecutorStatus & exec_status_,
+                            const Context & db_context,
+                            const DB::Settings & db_settings,
+                            const ColumnDefines & columns_to_read,
+                            const RowKeyRanges & sorted_ranges,
+                            size_t num_streams,
+                            UInt64 max_version,
+                            const PushDownFilterPtr & filter,
+                            const String & tracing_id,
+                            bool keep_order,
+                            bool is_fast_scan = false,
+                            size_t expected_block_size = DEFAULT_BLOCK_SIZE,
+                            const SegmentIdSet & read_segments = {},
+                            size_t extra_table_id_index = InvalidColumnID,
+                            ScanContextPtr scan_context = nullptr);
+
+    Remote::DisaggPhysicalTableReadSnapshotPtr
+    writeNodeBuildRemoteReadSnapshot(
+        const Context & db_context,
+        const DB::Settings & db_settings,
+        const RowKeyRanges & sorted_ranges,
+        size_t num_streams,
+        const String & tracing_id,
+        const SegmentIdSet & read_segments = {},
+        ScanContextPtr scan_context = nullptr);
+
+    /// Try flush all data in `range` to disk and return whether the task succeed.
+    bool flushCache(const Context & context, const RowKeyRange & range, bool try_until_succeed = true);
+
+    bool flushCache(const DMContextPtr & dm_context, const RowKeyRange & range, bool try_until_succeed = true);
 
     /// Merge delta into the stable layer for all segments.
     ///
     /// This function is called when using `MANAGE TABLE [TABLE] MERGE DELTA` from TiFlash Client.
-    void mergeDeltaAll(const Context & context);
+    bool mergeDeltaAll(const Context & context);
 
     /// Merge delta into the stable layer for one segment located by the specified start key.
     /// Returns the range of the merged segment, which can be used to merge the remaining segments incrementally (new_start_key = old_end_key).
     /// If there is no segment found by the start key, nullopt is returned.
     ///
     /// This function is called when using `ALTER TABLE [TABLE] COMPACT ...` from TiDB.
-    std::optional<DM::RowKeyRange> mergeDeltaBySegment(const Context & context, const DM::RowKeyValue & start_key, const TaskRunThread run_thread);
+    std::optional<DM::RowKeyRange> mergeDeltaBySegment(const Context & context, const DM::RowKeyValue & start_key);
 
     /// Compact the delta layer, merging multiple fragmented delta files into larger ones.
     /// This is a minor compaction as it does not merge the delta into stable layer.
     void compact(const Context & context, const RowKeyRange & range);
 
     /// Iterator over all segments and apply gc jobs.
-    UInt64 onSyncGc(Int64 limit);
+    UInt64 onSyncGc(Int64 limit, const GCOptions & gc_options);
+
+    /**
+     * Try to merge the segment in the current thread as the GC operation.
+     * This function may be blocking, and should be called in the GC background thread.
+     */
+    SegmentPtr gcTrySegmentMerge(const DMContextPtr & dm_context, const SegmentPtr & segment);
+
+    /**
+     * Try to merge delta in the current thread as the GC operation.
+     * This function may be blocking, and should be called in the GC background thread.
+     */
+    SegmentPtr gcTrySegmentMergeDelta(const DMContextPtr & dm_context, const SegmentPtr & segment, const SegmentPtr & prev_segment, const SegmentPtr & next_segment, DB::Timestamp gc_safe_point);
+
+    /**
+     * Starting from the given base segment, find continuous segments that could be merged.
+     *
+     * When there are mergeable segments, the baseSegment is returned in index 0 and mergeable segments are then placed in order.
+     *   It is ensured that there are at least 2 elements in the returned vector.
+     * When there is no mergeable segment, the returned vector will be empty.
+     */
+    std::vector<SegmentPtr> getMergeableSegments(const DMContextPtr & context, const SegmentPtr & baseSegment);
 
     /// Apply DDL `commands` on `table_columns`
     void applyAlters(const AlterCommands & commands, //
@@ -406,18 +445,40 @@ public:
         std::shared_lock lock(read_write_mutex);
         return store_columns;
     }
-    const ColumnDefines & getTableColumns() const { return original_table_columns; }
-    const ColumnDefine & getHandle() const { return original_table_handle_define; }
+    const ColumnDefines & getTableColumns() const
+    {
+        return original_table_columns;
+    }
+    const ColumnDefine & getHandle() const
+    {
+        return original_table_handle_define;
+    }
     BlockPtr getHeader() const;
-    const Settings & getSettings() const { return settings; }
-    DataTypePtr getPKDataType() const { return original_table_handle_define.type; }
+    const Settings & getSettings() const
+    {
+        return settings;
+    }
+    DataTypePtr getPKDataType() const
+    {
+        return original_table_handle_define.type;
+    }
     SortDescription getPrimarySortDescription() const;
 
     void check(const Context & db_context);
-    DeltaMergeStoreStat getStat();
-    SegmentStats getSegmentStats();
-    bool isCommonHandle() const { return is_common_handle; }
-    size_t getRowKeyColumnSize() const { return rowkey_column_size; }
+
+    StoreStats getStoreStats();
+    SegmentsStats getSegmentsStats();
+
+    bool isCommonHandle() const
+    {
+        return is_common_handle;
+    }
+    size_t getRowKeyColumnSize() const
+    {
+        return rowkey_column_size;
+    }
+
+    static ReadMode getReadMode(const Context & db_context, bool is_fast_scan, bool keep_order, const PushDownFilterPtr & filter);
 
 public:
     /// Methods mainly used by region split.
@@ -429,7 +490,7 @@ public:
 private:
 #endif
 
-    DMContextPtr newDMContext(const Context & db_context, const DB::Settings & db_settings, const String & tracing_id = "");
+    DMContextPtr newDMContext(const Context & db_context, const DB::Settings & db_settings, const String & tracing_id = "", ScanContextPtr scan_context = nullptr);
 
     static bool pkIsHandle(const ColumnDefine & handle_define)
     {
@@ -444,55 +505,179 @@ private:
 
     void waitForDeleteRange(const DMContextPtr & context, const SegmentPtr & segment);
 
-    /// Try to update the segment. "Update" means splitting the segment into two, merging two segments, merging the delta, etc.
-    /// If an update is really performed, the segment will be abandoned (with `segment->hasAbandoned() == true`).
-    /// See `segmentSplit`, `segmentMerge`, `segmentMergeDelta` for details.
-    ///
-    /// This may be called from multiple threads, e.g. at the foreground write moment, or in background threads.
-    /// A `thread_type` should be specified indicating the type of the thread calling this function.
-    /// Depend on the thread type, the "update" to do may be varied.
+    /**
+     * Try to update the segment. "Update" means splitting the segment into two, merging two segments, merging the delta, etc.
+     * If an update is really performed, the segment will be abandoned (with `segment->hasAbandoned() == true`).
+     * See `segmentSplit`, `segmentMerge`, `segmentMergeDelta` for details.
+     *
+     * This may be called from multiple threads, e.g. at the foreground write moment, or in background threads.
+     * A `thread_type` should be specified indicating the type of the thread calling this function.
+     * Depend on the thread type, the "update" to do may be varied.
+     */
     void checkSegmentUpdate(const DMContextPtr & context, const SegmentPtr & segment, ThreadType thread_type);
 
-    /// Split the segment into two.
-    /// After splitting, the segment will be abandoned (with `segment->hasAbandoned() == true`) and the new two segments will be returned.
-    SegmentPair segmentSplit(DMContext & dm_context, const SegmentPtr & segment, bool is_foreground);
+    enum class SegmentSplitReason
+    {
+        ForegroundWrite,
+        Background,
+        ForIngest,
+    };
 
-    /// Merge two segments into one.
-    /// After merging, both segments will be abandoned (with `segment->hasAbandoned() == true`).
-    void segmentMerge(DMContext & dm_context, const SegmentPtr & left, const SegmentPtr & right, bool is_foreground);
+    /**
+     * Note: This enum simply shadows Segment::SplitMode without introducing the whole Segment into this header.
+     */
+    enum class SegmentSplitMode
+    {
+        /**
+         * Split according to settings.
+         *
+         * If logical split is allowed in the settings, logical split will be tried first.
+         * Logical split may fall back to physical split when calculating split point failed.
+         */
+        Auto,
 
-    /// Merge the delta (major compaction) in the segment.
-    /// After delta-merging, the segment will be abandoned (with `segment->hasAbandoned() == true`) and a new segment will be returned.
+        /**
+         * Do logical split. If split point is not specified and cannot be calculated out,
+         * the split will fail.
+         */
+        Logical,
+
+        /**
+         * Do physical split.
+         */
+        Physical,
+    };
+
+    /**
+     * Split the segment into two.
+     * After splitting, the segment will be abandoned (with `segment->hasAbandoned() == true`) and the new two segments will be returned.
+     *
+     * When `opt_split_at` is not specified, this function will try to find a mid point for splitting, and may lead to failures.
+     */
+    SegmentPair segmentSplit(DMContext & dm_context, const SegmentPtr & segment, SegmentSplitReason reason, std::optional<RowKeyValue> opt_split_at = std::nullopt, SegmentSplitMode opt_split_mode = SegmentSplitMode::Auto);
+
+    enum class SegmentMergeReason
+    {
+        BackgroundGCThread,
+    };
+
+    /**
+     * Merge multiple continuous segments (order by segment start key) into one.
+     * Throw exception if < 2 segments are given.
+     * Fail if given segments are not continuous or not valid.
+     * After merging, all specified segments will be abandoned (with `segment->hasAbandoned() == true`).
+     */
+    SegmentPtr segmentMerge(DMContext & dm_context, const std::vector<SegmentPtr> & ordered_segments, SegmentMergeReason reason);
+
+    enum class MergeDeltaReason
+    {
+        BackgroundThreadPool,
+        BackgroundGCThread,
+        ForegroundWrite,
+        Manual,
+    };
+
+    /**
+     * Merge the delta (major compaction) in the segment.
+     * After delta-merging, the segment will be abandoned (with `segment->hasAbandoned() == true`) and a new segment will be returned.
+     */
     SegmentPtr segmentMergeDelta(
         DMContext & dm_context,
         const SegmentPtr & segment,
-        TaskRunThread thread,
+        MergeDeltaReason reason,
         SegmentSnapshotPtr segment_snap = nullptr);
 
-    bool updateGCSafePoint();
+    /**
+     * Ingest a DMFile into the segment, optionally causing a new segment being created.
+     *
+     * Note 1: You must ensure the DMFile is not shared in multiple segments.
+     * Note 2: You must enable the GC for the DMFile by yourself.
+     * Note 3: You must ensure the DMFile has been managed by the storage pool, and has been written
+     *         to the PageStorage's data.
 
-    bool handleBackgroundTask(bool heavy);
+     * @param clear_all_data_in_segment Whether all data in the segment should be discarded.
+     * @returns one of:
+     *          - A new segment: A new segment is created for containing the data
+     *          - The same segment as passed in: Data is ingested into the delta layer of current segment
+     *          - nullptr: when there are errors
+     */
+    SegmentPtr segmentIngestData(
+        DMContext & dm_context,
+        const SegmentPtr & segment,
+        const DMFilePtr & data_file,
+        bool clear_all_data_in_segment);
+
+    /**
+     * Discard all data in the segment, and use the specified DMFile as the stable instead.
+     * The specified DMFile is safe to be shared for multiple segments.
+     *
+     * Note 1: This function will not enable GC for the new_stable_file for you, in case of you may want to share the same
+     *         stable file for multiple segments. It is your own duty to enable GC later.
+     *
+     * Note 2: You must ensure the specified new_stable_file has been managed by the storage pool, and has been written
+     *         to the PageStorage's data. Otherwise there will be exceptions.
+     *
+     * Note 3: This API is subjected to be changed in future, as it relies on the knowledge that all current data
+     *         in this segment is useless, which is a pretty tough requirement.
+     * TODO: use `segmentIngestData` to replace this api
+     */
+    SegmentPtr segmentDangerouslyReplaceDataFromCheckpoint(
+        DMContext & dm_context,
+        const SegmentPtr & segment,
+        const DMFilePtr & data_file,
+        const ColumnFilePersisteds & column_file_persisteds);
 
     // isSegmentValid should be protected by lock on `read_write_mutex`
-    inline bool isSegmentValid(std::shared_lock<std::shared_mutex> &, const SegmentPtr & segment)
+    bool isSegmentValid(const std::shared_lock<std::shared_mutex> &, const SegmentPtr & segment)
     {
         return doIsSegmentValid(segment);
     }
-    inline bool isSegmentValid(std::unique_lock<std::shared_mutex> &, const SegmentPtr & segment)
+    bool isSegmentValid(const std::unique_lock<std::shared_mutex> &, const SegmentPtr & segment)
     {
         return doIsSegmentValid(segment);
     }
     bool doIsSegmentValid(const SegmentPtr & segment);
 
+    /**
+     * Ingest DTFiles directly into the stable layer by splitting segments.
+     * This strategy can be used only when the destination range is cleared before ingesting.
+     */
+    std::vector<SegmentPtr> ingestDTFilesUsingSplit(
+        const DMContextPtr & dm_context,
+        const RowKeyRange & range,
+        const std::vector<ExternalDTFileInfo> & external_files,
+        const std::vector<DMFilePtr> & files,
+        bool clear_data_in_range);
+
+    std::vector<SegmentPtr> ingestDTFilesUsingColumnFile(
+        const DMContextPtr & dm_context,
+        const RowKeyRange & range,
+        const std::vector<DMFilePtr> & files,
+        bool clear_data_in_range);
+
+    bool ingestDTFileIntoSegmentUsingSplit(
+        DMContext & dm_context,
+        const SegmentPtr & segment,
+        const RowKeyRange & ingest_range,
+        const DMFilePtr & file,
+        bool clear_data_in_range);
+
+    bool updateGCSafePoint();
+
+    bool handleBackgroundTask(bool heavy);
+
     void restoreStableFiles();
+    void restoreStableFilesFromLocal();
 
     SegmentReadTasks getReadTasksByRanges(DMContext & dm_context,
                                           const RowKeyRanges & sorted_ranges,
                                           size_t expected_tasks_count = 1,
-                                          const SegmentIdSet & read_segments = {});
+                                          const SegmentIdSet & read_segments = {},
+                                          bool try_split_task = true);
 
 private:
     void dropAllSegments(bool keep_first_segment);
+    String getLogTracingId(const DMContext & dm_ctx);
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -501,16 +686,18 @@ public:
 #endif
 
     Context & global_context;
-    StoragePathPool path_pool;
+    std::shared_ptr<StoragePathPool> path_pool;
     Settings settings;
     StoragePoolPtr storage_pool;
 
     String db_name;
     String table_name;
-    TableID physical_table_id;
 
-    bool is_common_handle;
-    size_t rowkey_column_size;
+    const KeyspaceID keyspace_id;
+    const TableID physical_table_id;
+
+    const bool is_common_handle;
+    const size_t rowkey_column_size;
 
     ColumnDefines original_table_columns;
     BlockPtr original_table_header; // Used to speed up getHeader()
@@ -522,6 +709,7 @@ public:
     ColumnDefinesPtr store_columns;
 
     std::atomic<bool> shutdown_called{false};
+    std::atomic<bool> replica_exist{true};
 
     BackgroundProcessingPool & background_pool;
     BackgroundProcessingPool::TaskHandle background_task_handle;
@@ -542,8 +730,6 @@ public:
 
     // Synchronize between write threads and read threads.
     mutable std::shared_mutex read_write_mutex;
-
-    UInt64 hash_salt;
 
     LoggerPtr log;
 }; // namespace DM

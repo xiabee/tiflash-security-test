@@ -19,8 +19,9 @@
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/PathPool.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <gtest/gtest.h>
 
 #include <ctime>
@@ -71,22 +72,22 @@ struct DTToolTest : public DB::base::TiFlashStorageTestBasic
             property.effective_num_rows = block_size;
             properties.push_back(property);
         }
-        auto path_pool = std::make_unique<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
-        auto storage_pool = std::make_unique<DB::DM::StoragePool>(*db_context, /*ns_id*/ 1, *path_pool, "test.t1");
+        auto path_pool = std::make_shared<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
+        auto storage_pool = std::make_shared<DB::DM::StoragePool>(*db_context, NullspaceID, /*ns_id*/ 1, *path_pool, "test.t1");
         auto dm_settings = DB::DM::DeltaMergeStore::Settings{};
         auto dm_context = std::make_unique<DB::DM::DMContext>( //
             *db_context,
-            *path_pool,
-            *storage_pool,
-            /*hash_salt*/ 0,
-            0,
-            dm_settings.not_compress_columns,
+            path_pool,
+            storage_pool,
+            /*min_version_*/ 0,
+            NullspaceID,
+            /*physical_table_id*/ 1,
             false,
             1,
             db_context->getSettingsRef());
         // Write
         {
-            dmfile = DB::DM::DMFile::create(1, getTemporaryPath(), false, std::nullopt);
+            dmfile = DB::DM::DMFile::create(1, getTemporaryPath(), std::nullopt);
             {
                 auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfile, *defines);
                 stream.writePrefix();
@@ -180,7 +181,7 @@ TEST_F(DTToolTest, ConsecutiveMigration)
     };
 
     EXPECT_EQ(DTTool::Migrate::migrateServiceMain(*db_context, args), 0);
-    auto logger = &Poco::Logger::get("DTToolTest");
+    auto logger = DB::Logger::get("DTToolTest");
     std::unordered_map<std::string, std::string> records;
     {
         Poco::File file{dmfile->path()};
@@ -190,7 +191,7 @@ TEST_F(DTToolTest, ConsecutiveMigration)
         {
             if (!DTTool::Migrate::needFrameMigration(*dmfile, i))
                 continue;
-            LOG_FMT_INFO(logger, "record file: {}", i);
+            LOG_INFO(logger, "record file: {}", i);
             getHash(records, i);
         }
     }

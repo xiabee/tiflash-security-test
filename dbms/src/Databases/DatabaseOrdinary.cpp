@@ -15,10 +15,12 @@
 #include <Common/FailPoint.h>
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
+#include <Common/UniThreadPool.h>
 #include <Common/escapeForFileName.h>
 #include <Databases/DatabaseMemory.h>
 #include <Databases/DatabaseOrdinary.h>
 #include <Databases/DatabasesCommon.h>
+#include <Encryption/FileProvider.h>
 #include <Encryption/ReadBufferFromFileProvider.h>
 #include <Encryption/WriteBufferFromFileProvider.h>
 #include <Interpreters/Context.h>
@@ -28,10 +30,8 @@
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/parseQuery.h>
 #include <Poco/DirectoryIterator.h>
-#include <common/ThreadPool.h>
 #include <common/logger_useful.h>
 #include <fmt/core.h>
-
 
 namespace DB
 {
@@ -45,6 +45,7 @@ extern const int FILE_DOESNT_EXIST;
 extern const int LOGICAL_ERROR;
 extern const int CANNOT_GET_CREATE_TABLE_QUERY;
 extern const int SYNTAX_ERROR;
+extern const int TIDB_TABLE_ALREADY_EXISTS;
 } // namespace ErrorCodes
 
 namespace FailPoints
@@ -94,26 +95,56 @@ void DatabaseOrdinary::loadTables(Context & context, ThreadPool * thread_pool, b
     std::sort(file_names.begin(), file_names.end());
 
     size_t total_tables = file_names.size();
-    LOG_FMT_INFO(log, "Total {} tables.", total_tables);
+    LOG_INFO(log, "Total {} tables.", total_tables);
 
     String data_path = context.getPath() + "data/" + escapeForFileName(name) + "/";
 
     AtomicStopwatch watch;
     std::atomic<size_t> tables_processed{0};
 
+    auto wait_group = thread_pool ? thread_pool->waitGroup() : nullptr;
+
+    std::mutex failed_tables_mutex;
+    Tables tables_failed_to_startup;
+
     auto task_function = [&](FileNames::const_iterator begin, FileNames::const_iterator end) {
         for (auto it = begin; it != end; ++it)
         {
-            const String & table = *it;
+            const String & table_file = *it;
 
             /// Messages, so that it's not boring to wait for the server to load for a long time.
             if ((++tables_processed) % PRINT_MESSAGE_EACH_N_TABLES == 0 || watch.compareAndRestart(PRINT_MESSAGE_EACH_N_SECONDS))
             {
-                LOG_FMT_INFO(log, "{:.2f}%", tables_processed * 100.0 / total_tables);
+                LOG_INFO(log, "{:.2f}%", tables_processed * 100.0 / total_tables);
                 watch.restart();
             }
 
-            DatabaseLoading::loadTable(context, *this, metadata_path, name, data_path, getEngineName(), table, has_force_restore_data_flag);
+            auto [table_name, table] = DatabaseLoading::loadTable(context, *this, metadata_path, name, data_path, getEngineName(), table_file, has_force_restore_data_flag);
+
+            /// After table was basically initialized, startup it.
+            if (table)
+            {
+                try
+                {
+                    table->startup();
+                }
+                catch (DB::Exception & e)
+                {
+                    if (e.code() == ErrorCodes::TIDB_TABLE_ALREADY_EXISTS)
+                    {
+                        // While doing IStorage::startup, Exception thorwn with TIDB_TABLE_ALREADY_EXISTS,
+                        // means that we may crashed in the middle of renaming tables. We clean the meta file
+                        // for those storages by `cleanupTables`.
+                        // - If the storage is the outdated one after renaming, remove it is right.
+                        // - If the storage should be the target table, remove it means we "rollback" the
+                        //   rename action. And the table will be renamed by TiDBSchemaSyncer later.
+                        std::lock_guard lock(failed_tables_mutex);
+                        tables_failed_to_startup.emplace(table_name, table);
+                    }
+                    else
+                        throw;
+                }
+            }
         }
     };
 
@@ -125,21 +156,20 @@ void DatabaseOrdinary::loadTables(Context & context, ThreadPool * thread_pool, b
         auto begin = file_names.begin() + i * bunch_size;
         auto end = (i + 1 == num_bunches) ? file_names.end() : (file_names.begin() + (i + 1) * bunch_size);
 
-        auto task = [task_function, begin, end] {
-            return task_function(begin, end);
+        auto task = [&task_function, begin, end] {
+            task_function(begin, end);
         };
 
         if (thread_pool)
-            thread_pool->schedule(task);
+            wait_group->schedule(task);
         else
             task();
     }
 
     if (thread_pool)
-        thread_pool->wait();
+        wait_group->wait();
 
-    /// After all tables was basically initialized, startup them.
-    DatabaseLoading::startupTables(*this, name, tables, thread_pool, log);
+    DatabaseLoading::cleanupTables(*this, name, tables_failed_to_startup, log);
 }
 
 void DatabaseOrdinary::createTable(const Context & context, const String & table_name, const StoragePtr & table, const ASTPtr & query)
@@ -226,7 +256,7 @@ void DatabaseOrdinary::renameTable(
     IDatabase & to_database,
     const String & to_table_name)
 {
-    DatabaseOrdinary * to_database_concrete = typeid_cast<DatabaseOrdinary *>(&to_database);
+    auto * to_database_concrete = typeid_cast<DatabaseOrdinary *>(&to_database);
 
     if (!to_database_concrete)
         throw Exception("Moving tables between databases of different engines is not supported", ErrorCodes::NOT_IMPLEMENTED);

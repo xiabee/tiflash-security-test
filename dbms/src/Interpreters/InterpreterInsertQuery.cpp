@@ -21,6 +21,7 @@
 #include <DataStreams/SquashingBlockOutputStream.h>
 #include <DataStreams/copyData.h>
 #include <IO/ConcatReadBuffer.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/InterpreterInsertQuery.h>
 #include <Interpreters/InterpreterSelectWithUnionQuery.h>
 #include <Parsers/ASTFunction.h>
@@ -29,12 +30,6 @@
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Storages/MutableSupport.h>
 #include <TableFunctions/TableFunctionFactory.h>
-
-
-namespace ProfileEvents
-{
-extern const Event InsertQuery;
-}
 
 namespace DB
 {
@@ -54,7 +49,6 @@ InterpreterInsertQuery::InterpreterInsertQuery(
     , context(context_)
     , allow_materialized(allow_materialized_)
 {
-    ProfileEvents::increment(ProfileEvents::InsertQuery);
 }
 
 
@@ -62,7 +56,7 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
 {
     if (query.table_function)
     {
-        auto table_function = typeid_cast<const ASTFunction *>(query.table_function.get());
+        const auto * table_function = typeid_cast<const ASTFunction *>(query.table_function.get());
         const auto & factory = TableFunctionFactory::instance();
         return factory.get(table_function->name, context)->execute(query.table_function, context);
     }
@@ -71,7 +65,7 @@ StoragePtr InterpreterInsertQuery::getTable(const ASTInsertQuery & query)
     return context.getTable(query.database, query.table);
 }
 
-Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table)
+Block InterpreterInsertQuery::getSampleBlock(const ASTInsertQuery & query, const StoragePtr & table) // NOLINT
 {
     Block table_sample_non_materialized;
     if (query.is_import)
@@ -135,7 +129,7 @@ BlockIO InterpreterInsertQuery::execute()
 
     /// Do not squash blocks if it is a sync INSERT into Distributed, since it lead to double bufferization on client and server side.
     /// Client-side bufferization might cause excessive timeouts (especially in case of big blocks).
-    if (!(context.getSettingsRef().insert_distributed_sync && table->getName() == "Distributed"))
+    if (table->getName() != "Distributed")
     {
         out = std::make_shared<SquashingBlockOutputStream>(
             out,

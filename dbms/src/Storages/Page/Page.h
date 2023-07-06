@@ -17,12 +17,11 @@
 #include <IO/BufferBase.h>
 #include <IO/MemoryReadWriteBuffer.h>
 #include <IO/WriteHelpers.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/PageDefinesBase.h>
 
 #include <map>
 #include <set>
 #include <unordered_map>
-
 
 namespace DB
 {
@@ -32,40 +31,55 @@ inline MemHolder createMemHolder(char * memory, const std::function<void(char *)
     return std::shared_ptr<char>(memory, free);
 }
 
+struct FieldOffsetInsidePage
+{
+    size_t index;
+    size_t offset;
+
+    FieldOffsetInsidePage(size_t index_) // NOLINT(google-explicit-constructor)
+        : index(index_)
+        , offset(0)
+    {}
+    FieldOffsetInsidePage(size_t index_, size_t offset_)
+        : index(index_)
+        , offset(offset_)
+    {}
+
+    bool operator<(const FieldOffsetInsidePage & rhs) const { return index < rhs.index; }
+};
+
 struct Page
 {
 public:
-    struct FieldOffset
+    static Page invalidPage()
     {
-        size_t index;
-        size_t offset;
+        Page page{INVALID_PAGE_U64_ID};
+        page.is_valid = false;
+        return page;
+    }
 
-        FieldOffset(size_t index_) // NOLINT(google-explicit-constructor)
-            : index(index_)
-            , offset(0)
-        {}
-        FieldOffset(size_t index_, size_t offset_)
-            : index(index_)
-            , offset(offset_)
-        {}
+    explicit Page(PageIdU64 page_id_)
+        : page_id(page_id_)
+        , is_valid(true)
+    {}
 
-        bool operator<(const FieldOffset & rhs) const { return index < rhs.index; }
-    };
-
-    PageId page_id;
-    ByteBuffer data;
+    PageIdU64 page_id;
+    std::string_view data;
     MemHolder mem_holder;
     // Field offsets inside this page.
-    std::set<FieldOffset> field_offsets;
+    std::set<FieldOffsetInsidePage> field_offsets;
+
+private:
+    bool is_valid;
 
 public:
-    inline bool isValid() const { return page_id != INVALID_PAGE_ID; }
+    inline bool isValid() const { return is_valid; }
 
-    ByteBuffer getFieldData(size_t index) const
+    std::string_view getFieldData(size_t index) const
     {
-        auto iter = field_offsets.find(FieldOffset(index));
+        auto iter = field_offsets.find(FieldOffsetInsidePage(index));
         if (unlikely(iter == field_offsets.end()))
-            throw Exception(fmt::format("Try to getFieldData with invalid field index [page_id={}] [field_index={}]", page_id, index),
+            throw Exception(fmt::format("Try to getFieldData with invalid field index [page_id={}] [valid={}] [field_index={}]", page_id, is_valid, index),
                             ErrorCodes::LOGICAL_ERROR);
 
         PageFieldOffset beg = iter->offset;
@@ -73,7 +87,8 @@ public:
         PageFieldOffset end = (iter == field_offsets.end() ? data.size() : iter->offset);
         assert(beg <= data.size());
         assert(end <= data.size());
-        return ByteBuffer(data.begin() + beg, data.begin() + end);
+        assert(end >= beg);
+        return std::string_view(data.begin() + beg, end - beg);
     }
 
     inline static PageFieldSizes fieldOffsetsToSizes(const PageFieldOffsetChecksums & field_offsets, size_t data_size)
@@ -97,10 +112,8 @@ public:
 };
 
 using Pages = std::vector<Page>;
-using PageMap = std::map<PageId, Page>;
-using PageHandler = std::function<void(PageId page_id, const Page &)>;
+using PageMapU64 = std::map<PageIdU64, Page>;
 
-// TODO: Move it into V2
 // Indicate the page size && offset in PageFile.
 struct PageEntry
 {
@@ -178,8 +191,6 @@ public:
         return true;
     }
 };
-using PageIdAndEntry = std::pair<PageId, PageEntry>;
-using PageIdAndEntries = std::vector<PageIdAndEntry>;
-
-
+using PageIdU64AndEntry = std::pair<PageIdU64, PageEntry>;
+using PageIdU64AndEntries = std::vector<PageIdU64AndEntry>;
 } // namespace DB

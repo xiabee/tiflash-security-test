@@ -15,15 +15,19 @@
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashException.h>
 #include <Common/TiFlashMetrics.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGDriver.h>
 #include <Flash/Coprocessor/InterpreterDAG.h>
+#include <Flash/Coprocessor/RequestUtils.h>
 #include <Flash/CoprocessorHandler.h>
 #include <Flash/ServiceUtils.h>
+#include <Interpreters/Context.h>
+#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/IStorage.h>
 #include <Storages/Transaction/LockException.h>
 #include <Storages/Transaction/RegionException.h>
-#include <Storages/Transaction/SchemaSyncer.h>
 #include <Storages/Transaction/TMTContext.h>
+#include <TiDB/Schema/SchemaSyncer.h>
 
 #include <ext/scope_guard.h>
 
@@ -53,7 +57,7 @@ CoprocessorHandler::CoprocessorHandler(
     , log(&Poco::Logger::get("CoprocessorHandler"))
 {}
 
-std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> CoprocessorHandler::GenCopKeyRange(
+std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> CoprocessorHandler::genCopKeyRange(
     const ::google::protobuf::RepeatedPtrField<::coprocessor::KeyRange> & ranges)
 {
     std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> key_ranges;
@@ -73,16 +77,18 @@ grpc::Status CoprocessorHandler::execute()
 
     try
     {
+        RUNTIME_CHECK_MSG(!cop_context.db_context.getSharedContextDisagg()->isDisaggregatedComputeMode(), "cannot run cop or batchCop request on tiflash_compute node");
+
         switch (cop_request->tp())
         {
         case COP_REQ_TYPE_DAG:
         {
-            GET_METRIC(tiflash_coprocessor_request_count, type_cop_dag).Increment();
-            GET_METRIC(tiflash_coprocessor_handling_request_count, type_cop_dag).Increment();
-            SCOPE_EXIT({ GET_METRIC(tiflash_coprocessor_handling_request_count, type_cop_dag).Decrement(); });
+            GET_METRIC(tiflash_coprocessor_request_count, type_cop_executing).Increment();
+            GET_METRIC(tiflash_coprocessor_handling_request_count, type_cop_executing).Increment();
+            SCOPE_EXIT({ GET_METRIC(tiflash_coprocessor_handling_request_count, type_cop_executing).Decrement(); });
 
             tipb::DAGRequest dag_request = getDAGRequestFromStringWithRetry(cop_request->data());
-            LOG_FMT_DEBUG(log, "Handling DAG request: {}", dag_request.DebugString());
+            LOG_DEBUG(log, "Handling DAG request: {}", dag_request.DebugString());
             if (dag_request.has_is_rpn_expr() && dag_request.is_rpn_expr())
                 throw TiFlashException(
                     "DAG request with rpn expression is not supported in TiFlash",
@@ -100,19 +106,22 @@ grpc::Status CoprocessorHandler::execute()
                     cop_context.kv_context.region_id(),
                     cop_context.kv_context.region_epoch().version(),
                     cop_context.kv_context.region_epoch().conf_ver(),
-                    GenCopKeyRange(cop_request->ranges()),
+                    genCopKeyRange(cop_request->ranges()),
                     &bypass_lock_ts));
 
-            DAGContext dag_context(dag_request);
-            dag_context.tables_regions_info = std::move(tables_regions_info);
-            dag_context.log = Logger::get("CoprocessorHandler");
-            dag_context.tidb_host = cop_context.db_context.getClientInfo().current_address.toString();
+            DAGContext dag_context(
+                dag_request,
+                std::move(tables_regions_info),
+                RequestUtils::deriveKeyspaceID(cop_request->context()),
+                cop_context.db_context.getClientInfo().current_address.toString(),
+                /*is_batch_cop=*/false,
+                Logger::get("CoprocessorHandler"));
             cop_context.db_context.setDAGContext(&dag_context);
 
             DAGDriver driver(cop_context.db_context, cop_request->start_ts() > 0 ? cop_request->start_ts() : dag_request.start_ts_fallback(), cop_request->schema_ver(), &dag_response);
             driver.execute();
             cop_response->set_data(dag_response.SerializeAsString());
-            LOG_FMT_DEBUG(log, "Handle DAG request done");
+            LOG_DEBUG(log, "Handle DAG request done");
             break;
         }
         case COP_REQ_TYPE_ANALYZE:
@@ -125,22 +134,22 @@ grpc::Status CoprocessorHandler::execute()
     }
     catch (const TiFlashException & e)
     {
-        LOG_FMT_ERROR(log, "{}\n{}", e.standardText(), e.getStackTrace().toString());
+        LOG_ERROR(log, "{}\n{}", e.standardText(), e.getStackTrace().toString());
         GET_METRIC(tiflash_coprocessor_request_error, reason_internal_error).Increment();
         return recordError(grpc::StatusCode::INTERNAL, e.standardText());
     }
     catch (LockException & e)
     {
-        LOG_FMT_WARNING(log, "LockException: region {}, message: {}", cop_request->context().region_id(), e.message());
+        LOG_WARNING(log, "LockException: region {}, message: {}", cop_request->context().region_id(), e.message());
         cop_response->Clear();
         GET_METRIC(tiflash_coprocessor_request_error, reason_meet_lock).Increment();
-        cop_response->set_allocated_locked(e.lock_info.release());
+        cop_response->set_allocated_locked(e.locks[0].second.release());
         // return ok so TiDB has the chance to see the LockException
         return grpc::Status::OK;
     }
     catch (const RegionException & e)
     {
-        LOG_FMT_WARNING(log, "RegionException: region {}, message: {}", cop_request->context().region_id(), e.message());
+        LOG_WARNING(log, "RegionException: region {}, message: {}", cop_request->context().region_id(), e.message());
         cop_response->Clear();
         errorpb::Error * region_err;
         switch (e.status)
@@ -164,25 +173,25 @@ grpc::Status CoprocessorHandler::execute()
     }
     catch (const pingcap::Exception & e)
     {
-        LOG_FMT_ERROR(log, "KV Client Exception: {}", e.message());
+        LOG_ERROR(log, "KV Client Exception: {}", e.message());
         GET_METRIC(tiflash_coprocessor_request_error, reason_kv_client_error).Increment();
         return recordError(grpc::StatusCode::INTERNAL, e.message());
     }
     catch (const Exception & e)
     {
-        LOG_FMT_ERROR(log, "DB Exception: {}\n{}", e.message(), e.getStackTrace().toString());
+        LOG_ERROR(log, "DB Exception: {}\n{}", e.message(), e.getStackTrace().toString());
         GET_METRIC(tiflash_coprocessor_request_error, reason_internal_error).Increment();
         return recordError(tiflashErrorCodeToGrpcStatusCode(e.code()), e.message());
     }
     catch (const std::exception & e)
     {
-        LOG_FMT_ERROR(log, "std exception: {}", e.what());
+        LOG_ERROR(log, "std exception: {}", e.what());
         GET_METRIC(tiflash_coprocessor_request_error, reason_other_error).Increment();
         return recordError(grpc::StatusCode::INTERNAL, e.what());
     }
     catch (...)
     {
-        LOG_FMT_ERROR(log, "other exception");
+        LOG_ERROR(log, "other exception");
         GET_METRIC(tiflash_coprocessor_request_error, reason_other_error).Increment();
         return recordError(grpc::StatusCode::INTERNAL, "other exception");
     }

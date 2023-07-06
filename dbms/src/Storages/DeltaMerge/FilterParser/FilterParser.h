@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/Transaction/Types.h>
 #include <tipb/expression.pb.h>
 
@@ -35,6 +36,7 @@ struct DAGQueryInfo;
 
 namespace DM
 {
+
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
@@ -42,7 +44,7 @@ class FilterParser
 {
 public:
     /// From dag.
-    using AttrCreatorByColumnID = std::function<Attr(const ColumnID)>;
+    using AttrCreatorByColumnID = std::function<Attr(const DB::ColumnID)>;
     static RSOperatorPtr parseDAGQuery(
         const DAGQueryInfo & dag_info,
         const ColumnDefines & columns_to_read,
@@ -72,6 +74,8 @@ public:
 
         Like,
         NotLike,
+
+        IsNull,
     };
 
     static std::unordered_map<tipb::ScalarFuncSig, RSFilterType> scalar_func_rs_filter_map;

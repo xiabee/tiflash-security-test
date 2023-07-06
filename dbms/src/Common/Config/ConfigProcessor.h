@@ -18,6 +18,7 @@
 #include <Poco/ConsoleChannel.h>
 #include <Poco/DirectoryIterator.h>
 #include <Poco/File.h>
+#include <Poco/Logger.h>
 #include <Poco/Path.h>
 #include <Poco/Util/AbstractConfiguration.h>
 #include <common/logger_useful.h>
@@ -61,8 +62,6 @@ public:
     };
 
     LoadedConfig loadConfig();
-
-    void savePreprocessedConfig(const LoadedConfig & loaded_config);
 
 public:
     /// Is the file named as result of config preprocessing, not as original files.

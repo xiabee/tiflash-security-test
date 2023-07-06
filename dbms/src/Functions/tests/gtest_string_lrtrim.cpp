@@ -15,7 +15,6 @@
 #include <Columns/ColumnString.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsString.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -39,16 +38,16 @@ try
 {
     // ltrim(const)
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "x "),
+        createConstColumn<String>(5, "x "),
         executeFunction("tidbLTrim", createConstColumn<Nullable<String>>(5, " x ")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "测试 "),
+        createConstColumn<String>(5, "测试 "),
         executeFunction("tidbLTrim", createConstColumn<Nullable<String>>(5, " 测试 ")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "x x x"),
+        createConstColumn<String>(5, "x x x"),
         executeFunction("tidbLTrim", createConstColumn<Nullable<String>>(5, "x x x")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "测 试 "),
+        createConstColumn<String>(5, "测 试 "),
         executeFunction("tidbLTrim", createConstColumn<Nullable<String>>(5, "测 试 ")));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(5, "x "),
@@ -83,16 +82,16 @@ try
 
     // rtrim(const)
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, " x"),
+        createConstColumn<String>(5, " x"),
         executeFunction("tidbRTrim", createConstColumn<Nullable<String>>(5, " x ")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, " 测试"),
+        createConstColumn<String>(5, " 测试"),
         executeFunction("tidbRTrim", createConstColumn<Nullable<String>>(5, " 测试 ")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "x x x"),
+        createConstColumn<String>(5, "x x x"),
         executeFunction("tidbRTrim", createConstColumn<Nullable<String>>(5, "x x x")));
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(5, "测 试"),
+        createConstColumn<String>(5, "测 试"),
         executeFunction("tidbRTrim", createConstColumn<Nullable<String>>(5, "测 试 ")));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(5, " x"),
@@ -225,10 +224,10 @@ try
              input_iter++, lres_iter++, rres_iter++)
         {
             ASSERT_COLUMN_EQ(
-                createConstColumn<Nullable<String>>(5, *lres_iter),
+                createConstColumn<String>(5, *lres_iter),
                 executeFunction("tidbLTrim", createConstColumn<Nullable<String>>(5, *input_iter)));
             ASSERT_COLUMN_EQ(
-                createConstColumn<Nullable<String>>(5, *rres_iter),
+                createConstColumn<String>(5, *rres_iter),
                 executeFunction("tidbRTrim", createConstColumn<Nullable<String>>(5, *input_iter)));
             ASSERT_COLUMN_EQ(
                 createConstColumn<String>(5, *lres_iter),

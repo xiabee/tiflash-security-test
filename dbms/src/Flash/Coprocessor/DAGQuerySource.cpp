@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Flash/Coprocessor/InterpreterDAG.h>
 #include <Flash/Coprocessor/collectOutputFieldTypes.h>
+#include <Interpreters/Context.h>
 #include <Parsers/makeDummyQuery.h>
 #include <fmt/core.h>
 
 namespace DB
 {
+
 DAGQuerySource::DAGQuerySource(Context & context_)
     : context(context_)
 {
-    const tipb::DAGRequest & dag_request = *getDAGContext().dag_request;
-    if (dag_request.has_root_executor())
+    const auto & dag_request = getDAGContext().dag_request;
+    if (dag_request.isTreeBased())
     {
         QueryBlockIDGenerator id_generator;
-        root_query_block = std::make_shared<DAGQueryBlock>(dag_request.root_executor(), id_generator);
+        root_query_block = std::make_shared<DAGQueryBlock>(dag_request->root_executor(), id_generator);
     }
     else
     {
-        root_query_block = std::make_shared<DAGQueryBlock>(1, dag_request.executors());
+        root_query_block = std::make_shared<DAGQueryBlock>(1, dag_request->executors());
     }
 }
 
@@ -40,17 +43,22 @@ std::tuple<std::string, ASTPtr> DAGQuerySource::parse(size_t)
     // this is a WAR to avoid NPE when the MergeTreeDataSelectExecutor trying
     // to extract key range of the query.
     // todo find a way to enable key range extraction for dag query
-    return {getDAGContext().dag_request->DebugString(), makeDummyQuery()};
+    return {getDAGContext().dummy_query_string, getDAGContext().dummy_ast};
 }
 
 String DAGQuerySource::str(size_t)
 {
-    return getDAGContext().dag_request->DebugString();
+    return getDAGContext().dummy_query_string;
 }
 
 std::unique_ptr<IInterpreter> DAGQuerySource::interpreter(Context &, QueryProcessingStage::Enum)
 {
     return std::make_unique<InterpreterDAG>(context, *this);
+}
+
+DAGContext & DAGQuerySource::getDAGContext() const
+{
+    return *context.getDAGContext();
 }
 
 } // namespace DB

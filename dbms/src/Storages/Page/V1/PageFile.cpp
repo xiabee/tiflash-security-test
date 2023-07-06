@@ -17,10 +17,11 @@
 #include <Common/ProfileEvents.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <IO/WriteHelpers.h>
+#include <boost_wrapper/string_split.h>
 #include <common/logger_useful.h>
 
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/split.hpp>
+#include <span>
 
 #ifndef __APPLE__
 #include <fcntl.h>
@@ -58,7 +59,7 @@ using Checksum = UInt64;
 static const size_t PAGE_META_SIZE = sizeof(PageId) + sizeof(PageTag) + sizeof(PageOffset) + sizeof(PageSize) + sizeof(Checksum);
 
 /// Return <data to write into meta file, data to write into data file>.
-std::pair<ByteBuffer, ByteBuffer> genWriteData( //
+std::pair<std::span<char>, std::span<char>> genWriteData( //
     const WriteBatch & wb,
     PageFile & page_file,
     PageEntriesEdit & edit)
@@ -91,8 +92,8 @@ std::pair<ByteBuffer, ByteBuffer> genWriteData( //
 
     meta_write_bytes += sizeof(Checksum);
 
-    char * meta_buffer = (char *)page_file.alloc(meta_write_bytes);
-    char * data_buffer = (char *)page_file.alloc(data_write_bytes);
+    char * meta_buffer = static_cast<char *>(page_file.alloc(meta_write_bytes));
+    char * data_buffer = static_cast<char *>(page_file.alloc(data_write_bytes));
 
     char * meta_pos = meta_buffer;
     char * data_pos = data_buffer;
@@ -127,17 +128,17 @@ std::pair<ByteBuffer, ByteBuffer> genWriteData( //
             else if (write.type == WriteBatch::WriteType::UPSERT)
                 edit.upsertPage(write.page_id, pc);
 
-            PageUtil::put(meta_pos, (PageId)write.page_id);
-            PageUtil::put(meta_pos, (PageTag)write.tag);
-            PageUtil::put(meta_pos, (PageOffset)page_data_file_off);
-            PageUtil::put(meta_pos, (PageSize)write.size);
-            PageUtil::put(meta_pos, (Checksum)page_checksum);
+            PageUtil::put(meta_pos, write.page_id);
+            PageUtil::put(meta_pos, static_cast<PageTag>(write.tag));
+            PageUtil::put(meta_pos, page_data_file_off);
+            PageUtil::put(meta_pos, write.size);
+            PageUtil::put(meta_pos, page_checksum);
 
             page_data_file_off += write.size;
             break;
         }
         case WriteBatch::WriteType::DEL:
-            PageUtil::put(meta_pos, (PageId)write.page_id);
+            PageUtil::put(meta_pos, write.page_id);
 
             edit.del(write.page_id);
             break;
@@ -284,14 +285,14 @@ void PageFile::Writer::write(const WriteBatch & wb, PageEntriesEdit & edit)
     ProfileEvents::increment(ProfileEvents::PSMWritePages, wb.putWriteCount());
 
     // TODO: investigate if not copy data into heap, write big pages can be faster?
-    ByteBuffer meta_buf, data_buf;
+    std::span<char> meta_buf, data_buf;
     std::tie(meta_buf, data_buf) = PageMetaFormat::genWriteData(wb, page_file, edit);
 
-    SCOPE_EXIT({ page_file.free(meta_buf.begin(), meta_buf.size()); });
-    SCOPE_EXIT({ page_file.free(data_buf.begin(), data_buf.size()); });
+    SCOPE_EXIT({ page_file.free(meta_buf.data(), meta_buf.size()); });
+    SCOPE_EXIT({ page_file.free(data_buf.data(), data_buf.size()); });
 
-    auto write_buf = [&](WritableFilePtr & file, UInt64 offset, ByteBuffer buf) {
-        PageUtil::writeFile(file, offset, buf.begin(), buf.size());
+    auto write_buf = [&](WritableFilePtr & file, UInt64 offset, std::span<char> buf) {
+        PageUtil::writeFile(file, offset, buf.data(), buf.size());
         if (sync_on_write)
             PageUtil::syncFile(file);
     };
@@ -338,7 +339,7 @@ PageMap PageFile::Reader::read(PageIdAndEntries & to_read)
     // 2. Pages with small gaps between them can also read together.
     // 3. Refactor this function to support iterator mode, and then use hint to do data pre-read.
 
-    char * data_buf = (char *)alloc(buf_size);
+    char * data_buf = static_cast<char *>(alloc(buf_size));
     MemHolder mem_holder = createMemHolder(data_buf, [&, buf_size](char * p) { free(p, buf_size); });
 
     char * pos = data_buf;
@@ -359,7 +360,7 @@ PageMap PageFile::Reader::read(PageIdAndEntries & to_read)
 
         Page page;
         page.page_id = page_id;
-        page.data = ByteBuffer(pos, pos + page_cache.size);
+        page.data = std::string_view(pos, page_cache.size);
         page.mem_holder = mem_holder;
         page_map.emplace(page_id, page);
 
@@ -385,7 +386,7 @@ void PageFile::Reader::read(PageIdAndEntries & to_read, const PageHandler & hand
     for (const auto & p : to_read)
         buf_size = std::max(buf_size, p.second.size);
 
-    char * data_buf = (char *)alloc(buf_size);
+    char * data_buf = static_cast<char *>(alloc(buf_size));
     MemHolder mem_holder = createMemHolder(data_buf, [&, buf_size](char * p) { free(p, buf_size); });
 
 
@@ -408,7 +409,7 @@ void PageFile::Reader::read(PageIdAndEntries & to_read, const PageHandler & hand
 
         Page page;
         page.page_id = page_id;
-        page.data = ByteBuffer(data_buf, data_buf + page_cache.size);
+        page.data = std::string_view(data_buf, page_cache.size);
         page.mem_holder = mem_holder;
 
         ++it;
@@ -453,28 +454,29 @@ PageFile::PageFile(PageFileId file_id_, UInt32 level_, const std::string & paren
     }
 }
 
-std::pair<PageFile, PageFile::Type> PageFile::recover(const String & parent_path, const FileProviderPtr & file_provider, const String & page_file_name, Poco::Logger * log)
+std::pair<PageFile, PageFile::Type>
+PageFile::recover(const String & parent_path, const FileProviderPtr & file_provider_, const String & page_file_name, Poco::Logger * log)
 {
     if (!startsWith(page_file_name, folder_prefix_formal) && !startsWith(page_file_name, folder_prefix_temp)
         && !startsWith(page_file_name, folder_prefix_legacy) && !startsWith(page_file_name, folder_prefix_checkpoint))
     {
-        LOG_INFO(log, "Not page file, ignored " + page_file_name);
+        LOG_INFO(log, "Not page file, ignored {}", page_file_name);
         return {{}, Type::Invalid};
     }
     std::vector<std::string> ss;
     boost::split(ss, page_file_name, boost::is_any_of("_"));
     if (ss.size() != 3)
     {
-        LOG_INFO(log, "Unrecognized file, ignored: " + page_file_name);
+        LOG_INFO(log, "Unrecognized file, ignored: {}", page_file_name);
         return {{}, Type::Invalid};
     }
 
     PageFileId file_id = std::stoull(ss[1]);
     UInt32 level = std::stoi(ss[2]);
-    PageFile pf(file_id, level, parent_path, file_provider, Type::Formal, /* is_create */ false, log);
+    PageFile pf(file_id, level, parent_path, file_provider_, Type::Formal, /* is_create */ false, log);
     if (ss[0] == folder_prefix_temp)
     {
-        LOG_INFO(log, "Temporary page file, ignored: " + page_file_name);
+        LOG_INFO(log, "Temporary page file, ignored: {}", page_file_name);
         pf.type = Type::Temp;
         return {pf, Type::Temp};
     }
@@ -484,7 +486,7 @@ std::pair<PageFile, PageFile::Type> PageFile::recover(const String & parent_path
         // ensure meta exist
         if (!Poco::File(pf.metaPath()).exists())
         {
-            LOG_INFO(log, "Broken page without meta file, ignored: " + pf.metaPath());
+            LOG_INFO(log, "Broken page without meta file, ignored: {}", pf.metaPath());
             return {{}, Type::Invalid};
         }
 
@@ -495,15 +497,16 @@ std::pair<PageFile, PageFile::Type> PageFile::recover(const String & parent_path
         // ensure both meta && data exist
         if (!Poco::File(pf.metaPath()).exists())
         {
-            LOG_INFO(log, "Broken page without meta file, ignored: " + pf.metaPath());
+            LOG_INFO(log, "Broken page without meta file, ignored: {}", pf.metaPath());
             return {{}, Type::Invalid};
         }
 
         if (!Poco::File(pf.dataPath()).exists())
         {
-            LOG_INFO(log, "Broken page without data file, ignored: " + pf.dataPath());
+            LOG_INFO(log, "Broken page without data file, ignored: {}", pf.dataPath());
             return {{}, Type::Invalid};
         }
+
         return {pf, Type::Formal};
     }
     else if (ss[0] == folder_prefix_checkpoint)
@@ -511,15 +514,14 @@ std::pair<PageFile, PageFile::Type> PageFile::recover(const String & parent_path
         pf.type = Type::Checkpoint;
         if (!Poco::File(pf.metaPath()).exists())
         {
-            LOG_INFO(log, "Broken page without meta file, ignored: " + pf.metaPath());
+            LOG_INFO(log, "Broken page without meta file, ignored: {}", pf.metaPath());
             return {{}, Type::Invalid};
         }
-        pf.type = Type::Checkpoint;
 
         return {pf, Type::Checkpoint};
     }
 
-    LOG_INFO(log, "Unrecognized file prefix, ignored: " + page_file_name);
+    LOG_INFO(log, "Unrecognized file prefix, ignored: {}", page_file_name);
     return {{}, Type::Invalid};
 }
 
@@ -545,7 +547,7 @@ void PageFile::readAndSetPageMetas(PageEntriesEdit & edit)
     const size_t file_size = file.getSize();
     auto meta_file = file_provider->newRandomAccessFile(path, EncryptionPath(path, ""));
 
-    char * meta_data = (char *)alloc(file_size);
+    char * meta_data = static_cast<char *>(alloc(file_size));
     SCOPE_EXIT({ free(meta_data, file_size); });
     meta_file->pread(meta_data, file_size, 0);
 

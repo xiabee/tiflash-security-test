@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Common/Logger.h>
 #include <Core/Types.h>
 
 #include <memory>
@@ -37,8 +38,8 @@ namespace UserConfig
 ConfigReloaderPtr parseSettings(
     Poco::Util::LayeredConfiguration & config,
     const std::string & config_path,
-    std::unique_ptr<Context> & global_context,
-    Poco::Logger * log);
+    const std::unique_ptr<Context> & global_context,
+    const LoggerPtr & log);
 
 }
 } // namespace DB

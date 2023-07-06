@@ -13,7 +13,10 @@
 // limitations under the License.
 
 #include <Core/Field.h>
+#include <Interpreters/ExpressionActions.h>
 #include <Interpreters/WindowDescription.h>
+
+#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -44,7 +47,7 @@ WindowFrame::FrameType getFrameTypeFromTipb(const tipb::WindowFrameType & type)
         return WindowFrame::FrameType::Groups;
     default:
         throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                        "Unknowed frame type {}",
+                        "Unknown frame type {}",
                         type);
     }
 }
@@ -59,5 +62,54 @@ void WindowDescription::setWindowFrame(const tipb::WindowFrame & frame_)
     frame.end_type = getBoundaryTypeFromTipb(frame_.end());
     frame.end_preceding = (frame_.end().type() == tipb::WindowBoundType::Preceding);
     frame.is_default = false;
+}
+
+void WindowDescription::fillArgColumnNumbers()
+{
+    const auto & before_window_header = before_window->getSampleBlock();
+    for (auto & descr : window_functions_descriptions)
+    {
+        if (descr.arguments.empty())
+        {
+            for (const auto & name : descr.argument_names)
+            {
+                descr.arguments.emplace_back(before_window_header.getPositionByName(name));
+            }
+        }
+    }
+}
+
+String frameTypeToString(const WindowFrame::FrameType & type)
+{
+    switch (type)
+    {
+    case WindowFrame::FrameType::Rows:
+        return "Rows";
+    case WindowFrame::FrameType::Groups:
+        return "Groups";
+    case WindowFrame::FrameType::Ranges:
+        return "Ranges";
+    default:
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                        "Unknown frame type {}",
+                        static_cast<Int32>(type));
+    }
+}
+
+String boundaryTypeToString(const WindowFrame::BoundaryType & type)
+{
+    switch (type)
+    {
+    case WindowFrame::BoundaryType::Unbounded:
+        return "Unbounded";
+    case WindowFrame::BoundaryType::Current:
+        return "Current";
+    case WindowFrame::BoundaryType::Offset:
+        return "Offset";
+    default:
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                        "Unknown boundary type {}",
+                        magic_enum::enum_name(type));
+    }
 }
 } // namespace DB

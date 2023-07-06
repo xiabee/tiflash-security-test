@@ -64,11 +64,11 @@ namespace PS::V3
  * Recyclable record format:
  *
  * +--------------+-----------+-----------+----------------+--- ... ---+
- * |CheckSum (8B) | Size (2B) | Type (1B) | Log number (4B)| Payload   |
+ * |CheckSum (8B) | Size (2B) | Type (1B) | Log number (8B)| Payload   |
  * +--------------+-----------+-----------+----------------+--- ... ---+
  *
  * Same as above, with the addition of
- * Log number = 32bit log file number, so that we can distinguish between
+ * Log number = 64bit log file number, so that we can distinguish between
  * records written by the most recent log writer vs a previous one.
  */
 class LogWriter final : private Allocator<false>
@@ -79,15 +79,15 @@ public:
         const FileProviderPtr & file_provider_,
         Format::LogNumberType log_number_,
         bool recycle_log_files_,
-        bool manual_flush_ = false);
+        bool manual_sync_ = false);
 
     DISALLOW_COPY(LogWriter);
 
     ~LogWriter();
 
-    void addRecord(ReadBuffer & payload, size_t payload_size, const WriteLimiterPtr & write_limiter = nullptr);
+    void addRecord(ReadBuffer & payload, size_t payload_size, const WriteLimiterPtr & write_limiter = nullptr, bool background = false);
 
-    void flush(const WriteLimiterPtr & write_limiter = nullptr, const bool background = false);
+    void sync();
 
     void close();
 
@@ -103,6 +103,8 @@ private:
 
     void resetBuffer();
 
+    void flush(const WriteLimiterPtr & write_limiter = nullptr, bool background = false);
+
 private:
     String path;
     FileProviderPtr file_provider;
@@ -112,14 +114,13 @@ private:
     size_t block_offset; // Current offset in block
     Format::LogNumberType log_number;
     const bool recycle_log_files;
-    // If true, it does not flush after each write. Instead it relies on the upper
-    // layer to manually does the flush by calling ::flush()
-    const bool manual_flush;
+    // If true, the upper layer need manually sync the log file after write by calling LogWriter::sync()
+    const bool manual_sync;
 
     size_t written_bytes = 0;
 
     char * buffer;
-    size_t buffer_size = Format::BLOCK_SIZE;
+    const size_t buffer_size = Format::BLOCK_SIZE;
     WriteBuffer write_buffer;
 };
 } // namespace PS::V3

@@ -15,7 +15,10 @@
 #include <Common/FailPoint.h>
 #include <Flash/Coprocessor/TablesRegionsInfo.h>
 #include <Flash/CoprocessorHandler.h>
+#include <Interpreters/Context.h>
+#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {
@@ -46,6 +49,10 @@ const SingleTableRegions & TablesRegionsInfo::getTableRegionInfoByTableID(Int64 
 static bool needRemoteRead(const RegionInfo & region_info, const TMTContext & tmt_context)
 {
     fiu_do_on(FailPoints::force_no_local_region_for_mpp_task, { return true; });
+    // For tiflash_compute node, all regions will be fetched from tiflash_storage node.
+    // So treat all regions as remote regions.
+    if (tmt_context.getContext().getSharedContextDisagg()->isDisaggregatedComputeMode())
+        return true;
     RegionPtr current_region = tmt_context.getKVStore()->getRegion(region_info.region_id);
     if (current_region == nullptr || current_region->peerState() != raft_serverpb::PeerState::Normal)
         return true;
@@ -58,7 +65,7 @@ static void insertRegionInfoToTablesRegionInfo(const google::protobuf::RepeatedP
     auto & table_region_info = tables_region_infos.getOrCreateTableRegionInfoByTableID(table_id);
     for (const auto & r : regions)
     {
-        RegionInfo region_info(r.region_id(), r.region_epoch().version(), r.region_epoch().conf_ver(), CoprocessorHandler::GenCopKeyRange(r.ranges()), nullptr);
+        RegionInfo region_info(r.region_id(), r.region_epoch().version(), r.region_epoch().conf_ver(), CoprocessorHandler::genCopKeyRange(r.ranges()), nullptr);
         if (region_info.key_ranges.empty())
         {
             throw TiFlashException(

@@ -72,6 +72,12 @@ metapb::Peer RegionMeta::getPeer() const
     return peer;
 }
 
+void RegionMeta::setPeer(metapb::Peer && p)
+{
+    std::lock_guard lock(mutex);
+    peer = p;
+}
+
 raft_serverpb::RaftApplyState RegionMeta::getApplyState() const
 {
     std::lock_guard lock(mutex);
@@ -104,6 +110,12 @@ UInt64 RegionMeta::appliedIndex() const
 {
     std::lock_guard lock(mutex);
     return apply_state.applied_index();
+}
+
+UInt64 RegionMeta::appliedIndexTerm() const
+{
+    std::lock_guard lock(mutex);
+    return applied_term;
 }
 
 RegionMeta::RegionMeta(RegionMeta && rhs)
@@ -247,7 +259,7 @@ RegionMergeResult MetaRaftCommandDelegate::computeRegionMergeResult(
     const metapb::Region & source_region,
     const metapb::Region & target_region)
 {
-    RegionMergeResult res;
+    RegionMergeResult res{};
 
     res.version = std::max(source_region.region_epoch().version(), target_region.region_epoch().version()) + 1;
 
@@ -436,16 +448,27 @@ RegionMeta::RegionMeta(metapb::Peer peer_, metapb::Region region, raft_serverpb:
     region_state.setRegion(std::move(region));
 }
 
-metapb::Region RegionMeta::getMetaRegion() const
+metapb::Region RegionMeta::cloneMetaRegion() const
 {
     std::lock_guard lock(mutex);
     return region_state.getRegion();
 }
 
-raft_serverpb::MergeState RegionMeta::getMergeState() const
+const metapb::Region & RegionMeta::getMetaRegion() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getRegion();
+}
+
+raft_serverpb::MergeState RegionMeta::cloneMergeState() const
 {
     std::lock_guard lock(mutex);
     return region_state.getMergeState();
 }
 
+const raft_serverpb::MergeState & RegionMeta::getMergeState() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getMergeState();
+}
 } // namespace DB

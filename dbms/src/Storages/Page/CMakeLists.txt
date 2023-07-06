@@ -12,14 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(V2)
+include(${TiFlash_SOURCE_DIR}/cmake/dbms_glob_sources.cmake)
 
-# PageStorage Stress test
-if (ENABLE_V3_PAGESTORAGE)
-    add_headers_and_sources(page_stress_testing stress)
-    add_headers_and_sources(page_stress_testing stress/workload)
-    add_executable(page_stress_testing EXCLUDE_FROM_ALL ${page_stress_testing_sources})
-    target_link_libraries(page_stress_testing dbms page_storage_v3)
-    target_include_directories(page_stress_testing PRIVATE stress)
-    target_compile_options(page_stress_testing PRIVATE -Wno-format -lc++) # turn off printf format check
-endif()
+add_subdirectory (./V3/CheckpointFile/Proto)
+
+add_headers_and_sources(page .)
+add_headers_and_sources(page ./V1)
+add_headers_and_sources(page ./V1/mvcc)
+add_headers_and_sources(page ./V1/VersionSet)
+add_headers_and_sources(page ./V2)
+add_headers_and_sources(page ./V2/mvcc)
+add_headers_and_sources(page ./V2/VersionSet)
+add_headers_and_sources(page ./V2/gc)
+add_headers_and_sources(page ./V3)
+add_headers_and_sources(page ./V3/Blob)
+add_headers_and_sources(page ./V3/LogFile)
+add_headers_and_sources(page ./V3/PageDirectory)
+add_headers_and_sources(page ./V3/spacemap)
+add_headers_and_sources(page ./V3/Universal)
+add_headers_and_sources(page ./V3/CheckpointFile)
+add_headers_and_sources(page ./V3/WAL)
+
+add_library(page ${page_headers} ${page_sources})
+target_link_libraries(page PRIVATE dbms)
+
+add_subdirectory(workload)
+add_subdirectory(tools)
+
+if (ENABLE_TESTS)
+    add_subdirectory (V2/tests EXCLUDE_FROM_ALL)
+    add_subdirectory (V3/tests EXCLUDE_FROM_ALL)
+endif ()

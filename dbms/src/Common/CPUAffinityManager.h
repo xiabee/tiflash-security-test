@@ -24,7 +24,6 @@
 
 namespace Poco
 {
-class Logger;
 namespace Util
 {
 class LayeredConfiguration;
@@ -33,6 +32,13 @@ class LayeredConfiguration;
 
 namespace DB
 {
+class Logger;
+using LoggerPtr = std::shared_ptr<Logger>;
+namespace tests
+{
+class CPUAffinityManagerTest_CPUAffinityManager_Test;
+} // namespace tests
+
 struct CPUAffinityConfig
 {
     CPUAffinityConfig()
@@ -86,13 +92,19 @@ public:
     void bindSelfOtherThread() const {}
     void bindSelfGrpcThread() const {}
 
-    std::string toString() const { return "Not Support"; }
+    static std::string toString()
+    {
+        return "Not Support";
+    }
 
     void bindThreadCPUAffinity() const {}
 #endif
 
 private:
 #ifdef __linux__
+    // for unittest
+    friend class DB::tests::CPUAffinityManagerTest_CPUAffinityManager_Test;
+
     void initCPUSet();
     int getCPUCores() const;
     int getQueryCPUCores() const;
@@ -113,8 +125,8 @@ private:
     static std::string getShortFilename(const std::string & path);
     bool isQueryThread(const std::string & name) const;
 
-    cpu_set_t query_cpu_set;
-    cpu_set_t other_cpu_set;
+    cpu_set_t query_cpu_set{};
+    cpu_set_t other_cpu_set{};
 #endif
 
     // unused except Linux
@@ -122,7 +134,7 @@ private:
     MAYBE_UNUSED_MEMBER int cpu_cores;
 
     std::vector<std::string> query_threads;
-    Poco::Logger * log;
+    LoggerPtr log;
 
     CPUAffinityManager();
     // Disable copy and move

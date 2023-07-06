@@ -42,7 +42,6 @@ inline static pid_t getTid()
 
 namespace CurrentMetrics
 {
-extern const Metric BackgroundPoolTask;
 extern const Metric MemoryTrackingInBackgroundProcessingPool;
 } // namespace CurrentMetrics
 
@@ -88,7 +87,7 @@ BackgroundProcessingPool::BackgroundProcessingPool(int size_, std::string thread
     , thread_prefix(thread_prefix_)
     , thread_ids_counter(size_)
 {
-    LOG_FMT_INFO(&Poco::Logger::get("BackgroundProcessingPool"), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
+    LOG_INFO(Logger::get(), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
 
     threads.resize(size);
     for (size_t i = 0; i < size; ++i)
@@ -145,8 +144,58 @@ BackgroundProcessingPool::~BackgroundProcessingPool()
     }
 }
 
+// Try to pop a task from the pool that is ready for execution.
+// For task->multi == false, it ensure the task is only pop for one execution threads.
+// For task->multi == true, it may pop the task multiple times.
+// Return nullptr when the pool is shutting down.
+BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 & rng) noexcept
+{
+    TaskHandle task;
+    Poco::Timestamp min_time;
 
-void BackgroundProcessingPool::threadFunction(size_t thread_idx)
+    std::unique_lock lock(tasks_mutex);
+
+    while (!task && !shutdown)
+    {
+        for (const auto & [task_time, task_handle] : tasks)
+        {
+            // find the first coming task that no thread is running
+            // or can be run by multithreads
+            if (!task_handle->removed
+                && (task_handle->concurrent_executors == 0 || task_handle->multi))
+            {
+                min_time = task_time;
+                task = task_handle;
+                // add the counter to indicate this task is running by one more thread
+                task->concurrent_executors += 1;
+                break;
+            }
+        }
+
+        if (!task)
+        {
+            /// No tasks ready for execution, wait for a while and check again
+            wake_event.wait_for(lock,
+                                std::chrono::duration<double>(
+                                    sleep_seconds + std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
+            continue;
+        }
+
+        Poco::Timestamp current_time;
+        if (min_time > current_time)
+        {
+            // The coming task is not ready for execution yet, wait for a while
+            wake_event.wait_for(lock,
+                                std::chrono::microseconds(
+                                    min_time - current_time + std::uniform_int_distribution<uint64_t>(0, sleep_seconds_random_part * 1000000)(rng)));
+        }
+        // here task != nullptr and is ready for execution
+        return task;
+    }
+    return task;
+}
+
+void BackgroundProcessingPool::threadFunction(size_t thread_idx) noexcept
 {
     {
         const auto name = thread_prefix + std::to_string(thread_idx);
@@ -155,124 +204,75 @@ void BackgroundProcessingPool::threadFunction(size_t thread_idx)
         addThreadId(getTid());
     }
 
-    MemoryTracker memory_tracker;
-    memory_tracker.setMetric(CurrentMetrics::MemoryTrackingInBackgroundProcessingPool);
-    current_memory_tracker = &memory_tracker;
+    // set up the thread local memory tracker
+    auto memory_tracker = MemoryTracker::create();
+    memory_tracker->setNext(root_of_non_query_mem_trackers.get());
+    memory_tracker->setMetric(CurrentMetrics::MemoryTrackingInBackgroundProcessingPool);
+    current_memory_tracker = memory_tracker.get();
 
     pcg64 rng(randomSeed());
     std::this_thread::sleep_for(std::chrono::duration<double>(std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
 
     while (!shutdown)
     {
-        TaskHandle task;
-        // The time to sleep before running next task, `sleep_seconds` by default.
-        Poco::Timespan next_sleep_time_span(sleep_seconds, 0);
+        TaskHandle task = tryPopTask(rng);
+        if (shutdown)
+            break;
+        // not shutting down but a null task pop, should not happen
+        if (task == nullptr)
+        {
+            LOG_ERROR(Logger::get(), "a null task has been pop!");
+            continue;
+        }
 
+        bool done_work = false;
         try
         {
-            Poco::Timestamp min_time;
-
-            {
-                std::unique_lock lock(tasks_mutex);
-
-                if (!tasks.empty())
-                {
-                    for (const auto & time_handle : tasks)
-                    {
-                        if (!time_handle.second->removed)
-                        {
-                            min_time = time_handle.first;
-                            task = time_handle.second;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (shutdown)
-                break;
-
-            if (!task)
-            {
-                std::unique_lock lock(tasks_mutex);
-                wake_event.wait_for(lock,
-                                    std::chrono::duration<double>(
-                                        sleep_seconds + std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
-                continue;
-            }
-
-            /// No tasks ready for execution.
-            Poco::Timestamp current_time;
-            if (min_time > current_time)
-            {
-                std::unique_lock lock(tasks_mutex);
-                wake_event.wait_for(lock,
-                                    std::chrono::microseconds(
-                                        min_time - current_time + std::uniform_int_distribution<uint64_t>(0, sleep_seconds_random_part * 1000000)(rng)));
-            }
-
             std::shared_lock<std::shared_mutex> rlock(task->rwlock);
-
             if (task->removed)
                 continue;
-
-            {
-                CurrentMetrics::Increment metric_increment{CurrentMetrics::BackgroundPoolTask};
-
-                bool done_work = false;
-                if (!task->multi)
-                {
-                    bool expected = false;
-                    if (task->occupied == expected && task->occupied.compare_exchange_strong(expected, true))
-                    {
-                        done_work = task->function();
-                        task->occupied = false;
-                    }
-                    else
-                        done_work = false;
-                }
-                else
-                    done_work = task->function();
-
-                /// If task has done work, it could be executed again immediately.
-                /// If not, add delay before next run.
-                if (done_work)
-                {
-                    next_sleep_time_span = 0;
-                }
-                else if (task->interval_milliseconds != 0)
-                {
-                    // Update `next_sleep_time_span` by user-defined interval if the later one is non-zero
-                    next_sleep_time_span = Poco::Timespan(0, /*microseconds=*/task->interval_milliseconds * 1000);
-                }
-                // else `sleep_seconds` by default
-            }
+            done_work = task->function();
         }
         catch (...)
         {
-            if (task && !task->multi)
-            {
-                std::unique_lock<std::shared_mutex> wlock(task->rwlock);
-                task->occupied = false;
-            }
-
             tryLogCurrentException(__PRETTY_FUNCTION__);
         }
 
         if (shutdown)
             break;
 
-        /// If task has done work, it could be executed again immediately.
-        /// If not, add delay before next run.
-        Poco::Timestamp next_time_to_execute = Poco::Timestamp() + next_sleep_time_span;
+        // Get the time to sleep before the task in the next run.
+        // - If task has done work, it could be executed again immediately.
+        // - If not, add delay before next run.
+        const auto next_sleep_time_span = [](bool done_work, const TaskHandle & t) {
+            if (done_work)
+            {
+                return Poco::Timespan(0, 0);
+            }
+            else if (t->interval_milliseconds != 0)
+            {
+                // Update `next_sleep_time_span` by user-defined interval if the later one is non-zero
+                return Poco::Timespan(0, /*microseconds=*/t->interval_milliseconds * 1000);
+            }
+            else
+            {
+                // else `sleep_seconds` by default
+                return Poco::Timespan(sleep_seconds, 0);
+            }
+        }(done_work, task);
 
         {
             std::unique_lock lock(tasks_mutex);
 
+            // the task has been done in this thread
+            task->concurrent_executors -= 1;
+
             if (task->removed)
                 continue;
 
+            // reschedule this task
             tasks.erase(task->iterator);
+            Poco::Timestamp next_time_to_execute = Poco::Timestamp() + next_sleep_time_span;
             task->iterator = tasks.emplace(next_time_to_execute, task);
         }
     }
@@ -286,7 +286,7 @@ std::vector<pid_t> BackgroundProcessingPool::getThreadIds()
     std::lock_guard lock(thread_ids_mtx);
     if (thread_ids.size() != size)
     {
-        LOG_FMT_ERROR(&Poco::Logger::get("BackgroundProcessingPool"), "thread_ids.size is {}, but {} is required", thread_ids.size(), size);
+        LOG_ERROR(Logger::get(), "thread_ids.size is {}, but {} is required", thread_ids.size(), size);
         throw Exception("Background threads' number not match");
     }
     return thread_ids;

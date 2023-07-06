@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Storages/DeltaMerge/DMContext.h>
+
 #include <utility>
 
 #pragma once
@@ -46,7 +48,7 @@ inline Handle encodeToPK(T v)
 inline size_t getPosByColumnId(const Block & block, ColId col_id)
 {
     size_t pos = 0;
-    for (auto & c : block)
+    for (const auto & c : block)
     {
         if (c.column_id == col_id)
             return pos;
@@ -57,7 +59,7 @@ inline size_t getPosByColumnId(const Block & block, ColId col_id)
 
 inline ColumnWithTypeAndName tryGetByColumnId(const Block & block, ColId col_id)
 {
-    for (auto & c : block)
+    for (const auto & c : block)
     {
         if (c.column_id == col_id)
             return c;
@@ -68,7 +70,7 @@ inline ColumnWithTypeAndName tryGetByColumnId(const Block & block, ColId col_id)
 // TODO: we should later optimize getByColumnId.
 inline const ColumnWithTypeAndName & getByColumnId(const Block & block, ColId col_id)
 {
-    for (auto & c : block)
+    for (const auto & c : block)
     {
         if (c.column_id == col_id)
             return c;
@@ -105,7 +107,7 @@ inline PaddedPODArray<T> const * toColumnVectorDataPtr(const ColumnPtr & column)
 {
     if (column->isColumnConst())
     {
-        auto * const_col = static_cast<const ColumnConst *>(column.get());
+        const auto * const_col = static_cast<const ColumnConst *>(column.get());
 
         const ColumnVector<T> & c = assert_cast<const ColumnVector<T> &>(const_col->getDataColumn());
         return &c.getData();
@@ -191,7 +193,7 @@ inline Block genBlock(const ColumnDefines & column_defines, const Columns & colu
     Block block;
     for (size_t i = 0; i < column_defines.size(); ++i)
     {
-        auto & c = column_defines[i];
+        const auto & c = column_defines[i];
         addColumnToBlock(block, c.id, c.name, c.type, columns[i], c.default_value);
     }
     return block;
@@ -200,7 +202,7 @@ inline Block genBlock(const ColumnDefines & column_defines, const Columns & colu
 inline Block getNewBlockByHeader(const Block & header, const Block & block)
 {
     Block new_block;
-    for (auto & c : header)
+    for (const auto & c : header)
         new_block.insert(block.getByName(c.name));
     return new_block;
 }
@@ -215,7 +217,7 @@ inline ColumnDefines getColumnDefinesFromBlock(const Block & block)
 
 inline bool hasColumn(const ColumnDefines & columns, const ColId & col_id)
 {
-    for (auto & c : columns)
+    for (const auto & c : columns)
     {
         if (c.id == col_id)
             return true;
@@ -231,8 +233,8 @@ inline bool isSameSchema(const Block & a, const Block & b)
         return false;
     for (size_t i = 0; i < a.columns(); ++i)
     {
-        auto & ca = a.getByPosition(i);
-        auto & cb = b.getByPosition(i);
+        const auto & ca = a.getByPosition(i);
+        const auto & cb = b.getByPosition(i);
 
         bool col_ok = ca.column_id == cb.column_id;
         bool name_ok = ca.name == cb.name;
@@ -244,6 +246,9 @@ inline bool isSameSchema(const Block & a, const Block & b)
     }
     return true;
 }
+
+using Digest = UInt256;
+Digest hashSchema(const Block & schema);
 
 /// This method guarantees that the returned valid block is not empty.
 inline Block readNextBlock(const BlockInputStreamPtr & in)

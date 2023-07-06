@@ -13,99 +13,123 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
+#include <Flash/Mpp/TrackedMppDataPacket.h>
+#include <Flash/Mpp/Utils.h>
 #include <fmt/core.h>
 
 namespace DB
 {
 namespace
 {
-inline mpp::MPPDataPacket serializeToPacket(const tipb::SelectResponse & response)
+TrackedMppDataPacketPtr serializePacket(const tipb::SelectResponse & response)
 {
-    mpp::MPPDataPacket packet;
-    if (!response.SerializeToString(packet.mutable_data()))
-        throw Exception(fmt::format("Fail to serialize response, response size: {}", response.ByteSizeLong()));
-    return packet;
+    auto tracked_packet = std::make_shared<TrackedMppDataPacket>(MPPDataPacketV0);
+    tracked_packet->serializeByResponse(response);
+    return tracked_packet;
 }
-
-void checkPacketSize(size_t size)
-{
-    static constexpr size_t max_packet_size = 1u << 31;
-    if (size >= max_packet_size)
-        throw Exception(fmt::format("Packet is too large to send, size : {}", size));
-}
-
 } // namespace
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::clearExecutionSummaries(tipb::SelectResponse & response)
+void MPPTunnelSetBase<Tunnel>::sendExecutionSummary(const tipb::SelectResponse & response)
 {
-    /// can not use response.clear_execution_summaries() because
-    /// TiDB assume all the executor should return execution summary
-    for (int i = 0; i < response.execution_summaries_size(); i++)
+    RUNTIME_CHECK(!tunnels.empty());
+    // for execution summary, only need to send to one tunnel.
+    tunnels[0]->write(serializePacket(response));
+}
+
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::write(TrackedMppDataPacketPtr && data, size_t index)
+{
+    assert(index < tunnels.size());
+    tunnels[index]->write(std::move(data));
+}
+
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::nonBlockingWrite(TrackedMppDataPacketPtr && data, size_t index)
+{
+    assert(index < tunnels.size());
+    tunnels[index]->nonBlockingWrite(std::move(data));
+}
+
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::write(tipb::SelectResponse & response, size_t index)
+{
+    assert(index < tunnels.size());
+    tunnels[index]->write(serializePacket(response));
+}
+
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::nonBlockingWrite(tipb::SelectResponse & response, size_t index)
+{
+    assert(index < tunnels.size());
+    tunnels[index]->nonBlockingWrite(serializePacket(response));
+}
+
+template <typename Tunnel>
+bool MPPTunnelSetBase<Tunnel>::isReadyForWrite() const
+{
+    for (const auto & tunnel : tunnels)
     {
-        auto * mutable_execution_summary = response.mutable_execution_summaries(i);
-        mutable_execution_summary->set_num_produced_rows(0);
-        mutable_execution_summary->set_num_iterations(0);
-        mutable_execution_summary->set_concurrency(0);
+        if (!tunnel->isReadyForWrite())
+            return false;
+    }
+    return true;
+}
+
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::registerTunnel(const MPPTaskId & receiver_task_id, const TunnelPtr & tunnel)
+{
+    RUNTIME_CHECK_MSG(
+        receiver_task_id_to_index_map.find(receiver_task_id) == receiver_task_id_to_index_map.end(),
+        "the tunnel {} has been registered",
+        tunnel->id());
+
+    receiver_task_id_to_index_map[receiver_task_id] = tunnels.size();
+    tunnels.push_back(tunnel);
+    if (!tunnel->isLocal() && !tunnel->isAsync())
+    {
+        ++external_thread_cnt;
+    }
+    if (tunnel->isLocal())
+    {
+        ++local_tunnel_cnt;
     }
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(tipb::SelectResponse & response)
+void MPPTunnelSetBase<Tunnel>::close(const String & reason, bool wait_sender_finish)
 {
-    auto packet = serializeToPacket(response);
-    tunnels[0]->write(packet);
+    for (auto & tunnel : tunnels)
+        tunnel->close(reason, wait_sender_finish);
+}
 
-    if (tunnels.size() > 1)
+template <typename Tunnel>
+void MPPTunnelSetBase<Tunnel>::finishWrite()
+{
+    for (auto & tunnel : tunnels)
     {
-        /// only the last response has execution_summaries
-        if (response.execution_summaries_size() > 0)
-        {
-            clearExecutionSummaries(response);
-            packet = serializeToPacket(response);
-        }
-        for (size_t i = 1; i < tunnels.size(); ++i)
-            tunnels[i]->write(packet);
+        tunnel->writeDone();
     }
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(mpp::MPPDataPacket & packet)
+typename MPPTunnelSetBase<Tunnel>::TunnelPtr MPPTunnelSetBase<Tunnel>::getTunnelByReceiverTaskId(const MPPTaskId & id)
 {
-    checkPacketSize(packet.ByteSizeLong());
-    tunnels[0]->write(packet);
-    auto tunnels_size = tunnels.size();
-    if (tunnels_size > 1)
+    auto it = receiver_task_id_to_index_map.find(id);
+    if (it == receiver_task_id_to_index_map.end())
     {
-        if (!packet.data().empty())
-        {
-            packet.mutable_data()->clear();
-        }
-        for (size_t i = 1; i < tunnels_size; ++i)
-        {
-            tunnels[i]->write(packet);
-        }
+        return nullptr;
     }
+    return tunnels[it->second];
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(tipb::SelectResponse & response, int16_t partition_id)
+bool MPPTunnelSetBase<Tunnel>::isLocal(size_t index) const
 {
-    if (partition_id != 0 && response.execution_summaries_size() > 0)
-        clearExecutionSummaries(response);
-
-    tunnels[partition_id]->write(serializeToPacket(response));
-}
-
-template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(mpp::MPPDataPacket & packet, int16_t partition_id)
-{
-    checkPacketSize(packet.ByteSizeLong());
-    if (partition_id != 0 && !packet.data().empty())
-        packet.mutable_data()->clear();
-
-    tunnels[partition_id]->write(packet);
+    assert(getPartitionNum() > index);
+    return getTunnels()[index]->isLocal();
 }
 
 /// Explicit template instantiations - to avoid code bloat in headers.

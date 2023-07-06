@@ -86,19 +86,19 @@ void NaturalDag::init()
     auto json_str = String((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     Poco::JSON::Parser parser;
     Poco::Dynamic::Var result = parser.parse(json_str);
-    LOG_FMT_INFO(log, "Succeed parsing json file: {}", json_dag_path);
+    LOG_INFO(log, "Succeed parsing json file: {}", json_dag_path);
 
     const auto & obj = result.extract<JSONObjectPtr>();
 
     if (obj->has(CONTINUE_WHEN_ERROR))
     {
         continue_when_error = obj->getValue<bool>(CONTINUE_WHEN_ERROR);
-        LOG_FMT_INFO(log, "Succeed load continue_when_error flag: {}!", continue_when_error);
+        LOG_INFO(log, "Succeed load continue_when_error flag: {}!", continue_when_error);
     }
     loadTables(obj);
-    LOG_FMT_INFO(log, "Succeed loading table data!");
+    LOG_INFO(log, "Succeed loading table data!");
     loadReqAndRsp(obj);
-    LOG_FMT_INFO(log, "Succeed loading req and rsp data!");
+    LOG_INFO(log, "Succeed loading req and rsp data!");
 }
 
 void NaturalDag::loadReqAndRsp(const NaturalDag::JSONObjectPtr & obj)
@@ -146,7 +146,7 @@ void NaturalDag::loadTables(const NaturalDag::JSONObjectPtr & obj)
         table.id = id;
         auto tbl_json = td_json->getObject(std::to_string(id));
         auto meta_json = tbl_json->getObject(TABLE_META);
-        table.meta = TiDB::TableInfo(meta_json);
+        table.meta = TiDB::TableInfo(meta_json, NullspaceID);
         auto regions_json = tbl_json->getArray(TABLE_REGIONS);
         for (const auto & region_json : *regions_json)
         {
@@ -171,7 +171,7 @@ NaturalDag::LoadedRegionInfo NaturalDag::loadRegion(const Poco::Dynamic::Var & r
     String region_end;
     decodeBase64(region_obj->getValue<String>(REGION_END), region_end);
     region.end = RecordKVFormat::encodeAsTiKVKey(region_end);
-    LOG_FMT_INFO(log, "RegionID: {}, RegionStart: {}, RegionEnd: {}", region.id, printAsBytes(region.start), printAsBytes(region.end));
+    LOG_INFO(log, "RegionID: {}, RegionStart: {}, RegionEnd: {}", region.id, printAsBytes(region.start), printAsBytes(region.end));
 
     auto pairs_json = region_obj->getArray(REGION_KEYVALUE_DATA);
     for (const auto & pair_json : *pairs_json)
@@ -208,7 +208,7 @@ void NaturalDag::buildTables(Context & context)
         auto & table = it.second;
         auto meta = table.meta;
         MockTiDB::instance().addTable(db_name, std::move(meta));
-        schema_syncer->syncSchemas(context);
+        schema_syncer->syncSchemas(context, NullspaceID);
         for (auto & region : table.regions)
         {
             metapb::Region region_pb;
@@ -243,7 +243,7 @@ void NaturalDag::buildDatabase(Context & context, SchemaSyncerPtr & schema_synce
         MockTiDB::instance().dropDB(context, db_name, true);
     }
     MockTiDB::instance().newDataBase(db_name);
-    schema_syncer->syncSchemas(context);
+    schema_syncer->syncSchemas(context, NullspaceID);
 }
 
 void NaturalDag::build(Context & context)

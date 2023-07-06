@@ -70,10 +70,12 @@ public:
     UInt64 storeId() const;
 
     UInt64 appliedIndex() const;
+    UInt64 appliedIndexTerm() const;
 
     ImutRegionRangePtr getRange() const;
 
     metapb::Peer getPeer() const;
+    void setPeer(metapb::Peer &&);
 
     UInt64 version() const;
 
@@ -107,11 +109,14 @@ public:
     RegionMetaSnapshot dumpRegionMetaSnapshot() const;
     MetaRaftCommandDelegate & makeRaftCommandDelegate();
 
-    metapb::Region getMetaRegion() const;
-    raft_serverpb::MergeState getMergeState() const;
+    const metapb::Region & getMetaRegion() const;
+    metapb::Region cloneMetaRegion() const;
+    const raft_serverpb::MergeState & getMergeState() const;
+    raft_serverpb::MergeState cloneMergeState() const;
+
+    RegionMeta() = delete;
 
 private:
-    RegionMeta() = delete;
     friend class MetaRaftCommandDelegate;
     friend class tests::RegionKVStoreTest;
 
@@ -157,8 +162,6 @@ class MetaRaftCommandDelegate
     friend class RegionRaftCommandDelegate;
     friend class tests::RegionKVStoreTest;
 
-    MetaRaftCommandDelegate() = delete;
-
     const metapb::Peer & getPeer() const;
     const raft_serverpb::RaftApplyState & applyState() const;
     const RegionState & regionState() const;
@@ -192,6 +195,8 @@ public:
     static RegionMergeResult computeRegionMergeResult(
         const metapb::Region & source_region,
         const metapb::Region & target_region);
+
+    MetaRaftCommandDelegate() = delete;
 };
 
 } // namespace DB

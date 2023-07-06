@@ -16,7 +16,6 @@
 #include <Columns/ColumnString.h>
 #include <Common/Exception.h>
 #include <Functions/FunctionFactory.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <gtest/gtest.h>
@@ -266,6 +265,10 @@ try
     null_or_zero_field.push_back(Field(DecimalField<Decimal128>(0, 0)));
 
     std::vector<Int64> values{10, 2, 20, 8, 10, 0, 30, 8, 16, 4};
+    /// The precision of a non-zero DecimalField<Decimal128> must not less than minDecimalPrecision<Decimal128>
+    /// the decimal_128_factor is used to make sure the precision is big enough
+    Int128 decimal_128_factor = 10000000000;
+    decimal_128_factor *= 1000000000;
 
     const size_t size = 10;
 
@@ -310,7 +313,7 @@ try
             if (col2_type->onlyNull())
                 continue;
             auto c1 = nullable_decimal_type_1->createColumnConst(size, Null());
-            auto c2 = col2_type->createColumnConst(size, Field(DecimalField<Decimal128>(2, 0)));
+            auto c2 = col2_type->createColumnConst(size, Field(DecimalField<Decimal128>(2 * decimal_128_factor, 0)));
             auto col1 = ColumnWithTypeAndName(std::move(c1), nullable_decimal_type_1, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
             auto result = executeFunction(func_name, {col1, col2});
@@ -331,7 +334,7 @@ try
                     continue;
                 if (!col2_value.isNull() && col2_type->onlyNull())
                     continue;
-                auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(100, 2)));
+                auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(100 * decimal_128_factor, 2)));
                 auto c2 = col2_type->createColumnConst(size, col2_value);
                 auto col1 = ColumnWithTypeAndName(std::move(c1), col1_type, "col1");
                 auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
@@ -349,11 +352,11 @@ try
         {
             if (col1_type->onlyNull() || col2_type->onlyNull())
                 continue;
-            auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(1000, 2)));
-            auto c2 = col2_type->createColumnConst(size, Field(DecimalField<Decimal128>(2, 0)));
+            auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(1000 * decimal_128_factor, 2)));
+            auto c2 = col2_type->createColumnConst(size, Field(DecimalField<Decimal128>(2 * decimal_128_factor, 0)));
             auto col1 = ColumnWithTypeAndName(std::move(c1), col1_type, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
-            auto res_col = executeFunction(func_name, {col1, col2}).column;
+            auto res_col = executeFunction(func_name, {col1, col2}, nullptr, false).column;
             ASSERT_TRUE(size == res_col->size());
             Field res_field;
             for (size_t i = 0; i < size; i++)
@@ -384,7 +387,7 @@ try
                     if (col1_type->isNullable() && col1_null_map[i])
                         c1_mutable->insert(Null());
                     else
-                        c1_mutable->insert(Field(DecimalField<Decimal128>(values[i], 2)));
+                        c1_mutable->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 2)));
                 }
                 auto c2 = col2_type->createColumnConst(values.size(), col2_value);
 
@@ -409,9 +412,9 @@ try
                 if (col1_type->isNullable() && col1_null_map[i])
                     c1_mutable->insert(Null());
                 else
-                    c1_mutable->insert(Field(DecimalField<Decimal128>(values[i], 2)));
+                    c1_mutable->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 2)));
             }
-            auto c2 = col2_type->createColumnConst(values.size(), Field(DecimalField<Decimal128>(2, 0)));
+            auto c2 = col2_type->createColumnConst(values.size(), Field(DecimalField<Decimal128>(2 * decimal_128_factor, 0)));
 
             auto col1 = ColumnWithTypeAndName(std::move(c1_mutable), col1_type, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
@@ -450,7 +453,7 @@ try
                 if (col2_type->isNullable() && col2_null_map[i])
                     c2->insert(Null());
                 else
-                    c2->insert(Field(DecimalField<Decimal128>(values[i], 2)));
+                    c2->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 2)));
             }
             auto col1 = ColumnWithTypeAndName(std::move(c1), col1_type, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
@@ -472,14 +475,14 @@ try
                 if (values[i] != 0)
                     value *= values[i];
             }
-            auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(value, 2)));
+            auto c1 = col1_type->createColumnConst(size, Field(DecimalField<Decimal128>(value * decimal_128_factor, 2)));
             auto c2 = col2_type->createColumn();
             for (size_t i = 0; i < values.size(); i++)
             {
                 if (col2_type->isNullable() && col2_null_map[i])
                     c2->insert(Null());
                 else
-                    c2->insert(Field(DecimalField<Decimal128>(values[i], 0)));
+                    c2->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 0)));
             }
             auto col1 = ColumnWithTypeAndName(std::move(c1), col1_type, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
@@ -515,11 +518,11 @@ try
                 if (col1_type->isNullable() && col1_null_map[i])
                     c1->insert(Null());
                 else
-                    c1->insert(Field(DecimalField<Decimal128>(values[i], 2)));
+                    c1->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 2)));
                 if (col2_type->isNullable() && col2_null_map[i])
                     c2->insert(Null());
                 else
-                    c2->insert(Field(DecimalField<Decimal128>(values[i], 0)));
+                    c2->insert(Field(DecimalField<Decimal128>(values[i] * decimal_128_factor, 0)));
             }
             auto col1 = ColumnWithTypeAndName(std::move(c1), col1_type, "col1");
             auto col2 = ColumnWithTypeAndName(std::move(c2), col2_type, "col2");
