@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,11 +14,11 @@
 
 #pragma once
 
-#include <Common/PODArray.h>
+#include <tuple>
+
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
-
-#include <tuple>
+#include <Common/PODArray.h>
 
 
 namespace DB
@@ -50,4 +50,28 @@ struct MarkInCompressedFile
 
 using MarksInCompressedFile = PODArray<MarkInCompressedFile>;
 using MarksInCompressedFilePtr = std::shared_ptr<MarksInCompressedFile>;
-} // namespace DB
+
+struct MarkWithSizeInCompressedFile
+{
+    MarkInCompressedFile mark;
+    size_t mark_size;
+
+    bool operator==(const MarkWithSizeInCompressedFile & rhs) const
+    {
+        return std::tie(mark, mark_size) == std::tie(rhs.mark, rhs.mark_size);
+    }
+    bool operator!=(const MarkWithSizeInCompressedFile & rhs) const
+    {
+        return !(*this == rhs);
+    }
+
+    String toString() const
+    {
+        return "(" + mark.toString() + "," + DB::toString(mark_size) + ")";
+    }
+};
+
+using MarkWithSizesInCompressedFile = PODArray<MarkWithSizeInCompressedFile>;
+using MarkWithSizesInCompressedFilePtr = std::shared_ptr<MarkWithSizesInCompressedFile>;
+
+}

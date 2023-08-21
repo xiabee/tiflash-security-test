@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,15 +37,13 @@ class BackgroundService : boost::noncopyable
 public:
     explicit BackgroundService(TMTContext &);
 
-    void shutdown();
-
     ~BackgroundService();
 
 private:
     TMTContext & tmt;
     BackgroundProcessingPool & background_pool;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
     BackgroundProcessingPool::TaskHandle single_thread_task_handle;
     BackgroundProcessingPool::TaskHandle storage_gc_handle;

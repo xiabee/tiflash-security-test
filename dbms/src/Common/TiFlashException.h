@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -248,12 +248,6 @@ class TiFlashException : public Exception
 public:
     TiFlashException(const std::string & _msg, const TiFlashError & _error)
         : Exception(_msg)
-        , error(_error)
-    {}
-
-    template <typename... Args>
-    TiFlashException(const TiFlashError & _error, const std::string & fmt, Args &&... args)
-        : Exception(FmtBuffer().fmtAppend(fmt::runtime(fmt), std::forward<Args>(args)...).toString())
         , error(_error)
     {}
 

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -108,23 +108,6 @@ public:
         return cnt;
     }
 
-    /** Estimate the cpu time nanoseconds used by block input stream dag.
-      * In this method, streams are divided into two categories:
-      * - thread-runner: Called directly by a thread
-      * - non-thread-runner: Called by a thread-runner or non-thread-runner
-      * Here we should count the execution time of each thread-runner.
-      * Note: Because of more threads than vcore, and blocking relationships between streams,
-      * the result may not be 100% identical to the actual cpu time nanoseconds.
-      */
-    uint64_t estimateCPUTimeNs()
-    {
-        resetCPUTimeCompute();
-        // The first stream of stream dag is thread-runner.
-        return collectCPUTimeNs(/*is_thread_runner=*/true);
-    }
-
-    uint64_t collectCPUTimeNs(bool is_thread_runner);
-
     virtual ~IBlockInputStream() = default;
 
     /** To output the data stream transformation tree (query execution plan).
@@ -167,9 +150,9 @@ public:
 
     virtual void collectNewThreadCount(int & cnt)
     {
-        if (!thread_cnt_collected)
+        if (!collected)
         {
-            thread_cnt_collected = true;
+            collected = true;
             collectNewThreadCountOfThisLevel(cnt);
             for (auto & child : children)
             {
@@ -181,16 +164,11 @@ public:
 
     virtual void collectNewThreadCountOfThisLevel(int &) {}
 
-    virtual void appendInfo(FmtBuffer & /*buffer*/) const {};
-
-protected:
-    virtual uint64_t collectCPUTimeNsImpl(bool /*is_thread_runner*/) { return 0; }
-
-    void resetNewThreadCountCompute()
+    virtual void resetNewThreadCountCompute()
     {
-        if (thread_cnt_collected)
+        if (collected)
         {
-            thread_cnt_collected = false;
+            collected = false;
             for (auto & child : children)
             {
                 if (child)
@@ -199,25 +177,12 @@ protected:
         }
     }
 
-    void resetCPUTimeCompute()
-    {
-        if (cpu_time_ns_collected)
-        {
-            cpu_time_ns_collected = false;
-            for (auto & child : children)
-            {
-                if (child)
-                    child->resetCPUTimeCompute();
-            }
-        }
-    }
+    virtual void appendInfo(FmtBuffer & /*buffer*/) const {};
 
 protected:
     BlockInputStreams children;
     mutable std::shared_mutex children_mutex;
-    // flags to avoid duplicated collecting, since some InputStream is shared by multiple inputStreams
-    bool thread_cnt_collected = false;
-    bool cpu_time_ns_collected = false;
+    bool collected = false; // a flag to avoid duplicated collecting, since some InputStream is shared by multiple inputStreams
 
 private:
     TableLockHolders table_locks;

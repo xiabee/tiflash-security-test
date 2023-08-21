@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -338,16 +338,15 @@ int benchEntry(const std::vector<std::string> & opts)
         size_t write_records = 0;
         auto settings = DB::Settings();
         auto db_context = env.getContext();
-        auto path_pool = std::make_shared<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
-        auto storage_pool = std::make_shared<DB::DM::StoragePool>(*db_context, NullspaceID, /*ns_id*/ 1, *path_pool, "test.t1");
+        auto path_pool = std::make_unique<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
+        auto storage_pool = std::make_unique<DB::DM::StoragePool>(*db_context, /*ns_id*/ 1, *path_pool, "test.t1");
         auto dm_settings = DB::DM::DeltaMergeStore::Settings{};
         auto dm_context = std::make_unique<DB::DM::DMContext>( //
             *db_context,
-            path_pool,
-            storage_pool,
+            *path_pool,
+            *storage_pool,
             /*min_version_*/ 0,
-            NullspaceID,
-            /*physical_table_id*/ 1,
+            dm_settings.not_compress_columns,
             false,
             1,
             db_context->getSettingsRef());
@@ -357,7 +356,7 @@ int benchEntry(const std::vector<std::string> & opts)
         for (size_t i = 0; i < repeat; ++i)
         {
             using namespace std::chrono;
-            dmfile = DB::DM::DMFile::create(1, workdir, opt);
+            dmfile = DB::DM::DMFile::create(1, workdir, false, opt);
             auto start = high_resolution_clock::now();
             {
                 auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfile, *defines);

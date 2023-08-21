@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ namespace DM
 {
 namespace tests
 {
-TEST(RowKeyFilterTest, FilterSortedBlock)
+TEST(RowKeyFilter_test, FilterSortedBlock)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -36,7 +36,7 @@ TEST(RowKeyFilterTest, FilterSortedBlock)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilterTest, FilterUnsortedBlock)
+TEST(RowKeyFilter_test, FilterUnsortedBlock)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -49,7 +49,7 @@ TEST(RowKeyFilterTest, FilterUnsortedBlock)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilterTest, FilterSortedBlockCommonHandle)
+TEST(RowKeyFilter_test, FilterSortedBlockCommonHandle)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -70,7 +70,7 @@ TEST(RowKeyFilterTest, FilterSortedBlockCommonHandle)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilterTest, FilterUnsortedBlockCommonHandle)
+TEST(RowKeyFilter_test, FilterUnsortedBlockCommonHandle)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;

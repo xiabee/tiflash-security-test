@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -251,7 +251,7 @@ RSOperatorPtr parseTiExpr(const tipb::Expr & expr,
 {
     assert(isFunctionExpr(expr));
 
-    RSOperatorPtr op = EMPTY_RS_OPERATOR;
+    RSOperatorPtr op = EMPTY_FILTER;
     if (unlikely(isAggFunctionExpr(expr)))
     {
         op = createUnsupported(expr.ShortDebugString(), "agg function: " + tipb::ExprType_Name(expr.tp()), false);
@@ -392,29 +392,21 @@ RSOperatorPtr FilterParser::parseDAGQuery(const DAGQueryInfo & dag_info,
                                           FilterParser::AttrCreatorByColumnID && creator,
                                           const LoggerPtr & log)
 {
-    RSOperatorPtr op = EMPTY_RS_OPERATOR;
-    if (dag_info.filters.empty() && dag_info.pushed_down_filters.empty())
+    RSOperatorPtr op = EMPTY_FILTER;
+    if (dag_info.filters.empty())
         return op;
 
-    if (dag_info.filters.size() == 1 && dag_info.pushed_down_filters.empty())
+    if (dag_info.filters.size() == 1)
     {
-        op = cop::tryParse(dag_info.filters[0], columns_to_read, creator, dag_info.timezone_info, log);
-    }
-    else if (dag_info.pushed_down_filters.size() == 1 && dag_info.filters.empty())
-    {
-        op = cop::tryParse(dag_info.pushed_down_filters[0], columns_to_read, creator, dag_info.timezone_info, log);
+        op = cop::tryParse(*dag_info.filters[0], columns_to_read, creator, dag_info.timezone_info, log);
     }
     else
     {
         /// By default, multiple conditions with operator "and"
         RSOperators children;
-        children.reserve(dag_info.filters.size() + dag_info.pushed_down_filters.size());
-        for (const auto & filter : dag_info.filters)
+        for (size_t i = 0; i < dag_info.filters.size(); ++i)
         {
-            children.emplace_back(cop::tryParse(filter, columns_to_read, creator, dag_info.timezone_info, log));
-        }
-        for (const auto & filter : dag_info.pushed_down_filters)
-        {
+            const auto & filter = *dag_info.filters[i];
             children.emplace_back(cop::tryParse(filter, columns_to_read, creator, dag_info.timezone_info, log));
         }
         op = createAnd(children);

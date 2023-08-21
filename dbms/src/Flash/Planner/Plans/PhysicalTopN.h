@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Core/SortDescription.h>
-#include <Flash/Planner/Plans/PhysicalUnary.h>
+#include <Flash/Planner/plans/PhysicalUnary.h>
 #include <Interpreters/ExpressionActions.h>
 #include <tipb/executor.pb.h>
 
@@ -34,13 +34,12 @@ public:
     PhysicalTopN(
         const String & executor_id_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const PhysicalPlanNodePtr & child_,
         const SortDescription & order_descr_,
         const ExpressionActionsPtr & before_sort_actions_,
         size_t limit_)
-        : PhysicalUnary(executor_id_, PlanType::TopN, schema_, fine_grained_shuffle_, req_id, child_)
+        : PhysicalUnary(executor_id_, PlanType::TopN, schema_, req_id, child_)
         , order_descr(order_descr_)
         , before_sort_actions(before_sort_actions_)
         , limit(limit_)
@@ -50,14 +49,8 @@ public:
 
     const Block & getSampleBlock() const override;
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
-        PipelineExecGroupBuilder & group_builder,
-        Context & context,
-        size_t concurrency) override;
-
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
     SortDescription order_descr;
     ExpressionActionsPtr before_sort_actions;

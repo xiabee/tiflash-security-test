@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -211,13 +211,13 @@ ColumnPtr ColumnTuple::permute(const Permutation & perm, size_t limit) const
     return ColumnTuple::create(new_columns);
 }
 
-ColumnPtr ColumnTuple::replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const
+ColumnPtr ColumnTuple::replicate(const Offsets & offsets) const
 {
     const size_t tuple_size = columns.size();
     Columns new_columns(tuple_size);
 
     for (size_t i = 0; i < tuple_size; ++i)
-        new_columns[i] = columns[i]->replicateRange(start_row, end_row, offsets);
+        new_columns[i] = columns[i]->replicate(offsets);
 
     return ColumnTuple::create(new_columns);
 }

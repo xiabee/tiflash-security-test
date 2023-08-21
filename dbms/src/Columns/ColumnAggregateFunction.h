@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -114,6 +114,10 @@ public:
     /// Take shared ownership of Arena, that holds memory for states of aggregate functions.
     void addArena(ArenaPtr arena_);
 
+    /** Transform column with states of aggregate functions to column with final result values.
+      */
+    MutableColumnPtr convertToValues() const;
+
     std::string getName() const override { return "AggregateFunction(" + func->getName() + ")"; }
     const char * getFamilyName() const override { return "AggregateFunction"; }
 
@@ -134,18 +138,6 @@ public:
 
     void insertFrom(const IColumn & src, size_t n) override;
 
-    void insertManyFrom(const IColumn & src_, size_t n, size_t length) override
-    {
-        for (size_t i = 0; i < length; ++i)
-            insertFrom(src_, n);
-    }
-
-    void insertDisjunctFrom(const IColumn & src_, const std::vector<size_t> & position_vec) override
-    {
-        for (auto position : position_vec)
-            insertFrom(src_, position);
-    }
-
     void insertFrom(ConstAggregateDataPtr __restrict place);
 
     /// Merge state at last row with specified state in another column.
@@ -159,12 +151,6 @@ public:
 
     void insertDefault() override;
 
-    void insertManyDefaults(size_t length) override
-    {
-        for (size_t i = 0; i < length; ++i)
-            insertDefault();
-    }
-
     StringRef serializeValueIntoArena(size_t n, Arena & dst, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
 
     const char * deserializeAndInsertFromArena(const char * src_arena, const TiDB::TiDBCollatorPtr &) override;
@@ -177,8 +163,6 @@ public:
 
     size_t byteSize() const override;
 
-    size_t estimateByteSizeForSpill() const override;
-
     size_t allocatedBytes() const override;
 
     void insertRangeFrom(const IColumn & from, size_t start, size_t length) override;
@@ -189,7 +173,7 @@ public:
 
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
 
-    ColumnPtr replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const override;
+    ColumnPtr replicate(const Offsets & offsets) const override;
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override;
 

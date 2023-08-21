@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,11 +20,6 @@
 namespace DB
 {
 using DecodedTiKVKeyPtr = std::shared_ptr<DecodedTiKVKey>;
-namespace DM
-{
-class ScanContext;
-using ScanContextPtr = std::shared_ptr<ScanContext>;
-} // namespace DM
 
 struct RegionQueryInfo
 {
@@ -60,16 +55,16 @@ struct MvccQueryInfo
 
     const bool resolve_locks;
 
+    Float32 concurrent = 1.0;
+
     using RegionsQueryInfo = std::vector<RegionQueryInfo>;
     RegionsQueryInfo regions_query_info;
 
     using ReadIndexRes = std::unordered_map<RegionID, UInt64>;
     ReadIndexRes read_index_res;
 
-    DM::ScanContextPtr scan_context;
-
 public:
-    explicit MvccQueryInfo(bool resolve_locks_ = false, UInt64 read_tso_ = 0, DM::ScanContextPtr scan_ctx = nullptr);
+    explicit MvccQueryInfo(bool resolve_locks_ = false, UInt64 read_tso_ = 0);
 };
 
 } // namespace DB

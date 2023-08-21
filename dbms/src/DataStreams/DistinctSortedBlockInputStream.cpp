@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,14 +19,11 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int SET_SIZE_LIMIT_EXCEEDED;
+    extern const int SET_SIZE_LIMIT_EXCEEDED;
 }
 
 DistinctSortedBlockInputStream::DistinctSortedBlockInputStream(
-    const BlockInputStreamPtr & input,
-    const SizeLimits & set_size_limits,
-    size_t limit_hint_,
-    const Names & columns)
+    const BlockInputStreamPtr & input, const SizeLimits & set_size_limits, size_t limit_hint_, const Names & columns)
     : description(input->getSortDescription())
     , columns_names(columns)
     , limit_hint(limit_hint_)
@@ -64,15 +61,14 @@ Block DistinctSortedBlockInputStream::readImpl()
         bool has_new_data = false;
         switch (data.type)
         {
-            using enum ClearableSetVariants::Type;
-        case EMPTY:
-            break;
-#define M(NAME)                                                                                         \
-    case NAME:                                                                                          \
-        has_new_data = buildFilter(*data.NAME, column_ptrs, clearing_hint_columns, filter, rows, data); \
-        break;
-            APPLY_FOR_SET_VARIANTS(M)
-#undef M
+            case ClearableSetVariants::Type::EMPTY:
+                break;
+    #define M(NAME) \
+            case ClearableSetVariants::Type::NAME: \
+                has_new_data = buildFilter(*data.NAME, column_ptrs, clearing_hint_columns, filter, rows, data); \
+                break;
+        APPLY_FOR_SET_VARIANTS(M)
+    #undef M
         }
 
         /// Just go to the next block if there isn't any new record in the current one.
@@ -146,7 +142,7 @@ ColumnRawPtrs DistinctSortedBlockInputStream::getKeyColumns(const Block & block)
 
     for (size_t i = 0; i < columns; ++i)
     {
-        const auto & column = columns_names.empty()
+        auto & column = columns_names.empty()
             ? block.safeGetByPosition(i).column
             : block.getByName(columns_names[i]).column;
 
@@ -162,9 +158,9 @@ ColumnRawPtrs DistinctSortedBlockInputStream::getClearingColumns(const Block & b
 {
     ColumnRawPtrs clearing_hint_columns;
     clearing_hint_columns.reserve(description.size());
-    for (const auto & sort_column_description : description)
+    for(const auto & sort_column_description : description)
     {
-        const auto * const sort_column_ptr = block.safeGetByPosition(sort_column_description.column_number).column.get();
+        const auto sort_column_ptr = block.safeGetByPosition(sort_column_description.column_number).column.get();
         const auto it = std::find(key_columns.cbegin(), key_columns.cend(), sort_column_ptr);
         if (it != key_columns.cend()) /// if found in key_columns
             clearing_hint_columns.emplace_back(sort_column_ptr);
@@ -186,4 +182,4 @@ bool DistinctSortedBlockInputStream::rowsEqual(const ColumnRawPtrs & lhs, size_t
     return true;
 }
 
-} // namespace DB
+}

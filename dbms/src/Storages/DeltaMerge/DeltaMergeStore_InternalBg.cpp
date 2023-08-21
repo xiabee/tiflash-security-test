@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/FailPoint.h>
 #include <Common/SyncPoint/SyncPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Encryption/FileProvider.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/GCOptions.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/PathPool.h>
 #include <Storages/Transaction/TMTContext.h>
 
@@ -81,7 +77,7 @@ public:
         options.only_list_can_gc = true;
         for (auto & root_path : delegate.listPaths())
         {
-            std::set<PageIdU64> ids_under_path;
+            std::set<PageId> ids_under_path;
             auto file_ids_in_current_path = DMFile::listAllInPath(file_provider, root_path, options);
             path_and_ids_vec.emplace_back(root_path, std::move(file_ids_in_current_path));
         }
@@ -108,7 +104,7 @@ public:
         , logger(std::move(log))
     {}
 
-    void operator()(const ExternalPageCallbacks::PathAndIdsVec & path_and_ids_vec, const std::set<PageIdU64> & valid_ids)
+    void operator()(const ExternalPageCallbacks::PathAndIdsVec & path_and_ids_vec, const std::set<PageId> & valid_ids)
     {
         // If the StoragePathPool is invalid or shutdown flag is set,
         // meaning we call `remover` after shutdowning or dropping the table,
@@ -175,99 +171,15 @@ public:
     }
 };
 
-// A callback class for find out the DMFiles on S3 referenced by this store.
-class S3DMFileGcScanner final
-{
-private:
-    // !!! Warning !!!
-    // Should only keep a weak ref of storage path pool since
-    // this callback instance may still valid inside the PageStorage
-    // even after the DeltaMerge storage is shutdown or released.
-    std::weak_ptr<StoragePathPool> path_pool_weak_ref;
-
-public:
-    explicit S3DMFileGcScanner(std::weak_ptr<StoragePathPool> path_pool_)
-        : path_pool_weak_ref(std::move(path_pool_))
-    {}
-
-    ExternalPageCallbacks::PathAndIdsVec operator()()
-    {
-        ExternalPageCallbacks::PathAndIdsVec path_and_ids_vec;
-
-        // If the StoragePathPool is invalid or shutdown flag is set,
-        // meaning we call `scanner` after shutdowning or dropping the table,
-        // simply return an empty list is OK.
-        auto path_pool = path_pool_weak_ref.lock();
-        if (!path_pool || path_pool->isShutdown())
-            return path_and_ids_vec;
-
-        auto delegate = path_pool->getStableDiskDelegator();
-        auto local_page_ids = delegate.getAllRemoteDTFilesForGC();
-        // path here is useless, just pass empty string here.
-        path_and_ids_vec.emplace_back("", std::move(local_page_ids));
-        return path_and_ids_vec;
-    }
-};
-
-// A callback class for removing the reference to DMFiles on S3 from local delegator.
-// The actual GC of DMFiles on S3 is managed by other class.
-class S3DMFileGcRemover final
-{
-private:
-    // !!! Warning !!!
-    // Should only keep a weak ref of storage path pool since
-    // this callback instance may still valid inside the PageStorage
-    // even after the DeltaMerge storage is shutdown or released.
-    std::weak_ptr<StoragePathPool> path_pool_weak_ref;
-    LoggerPtr logger;
-
-public:
-    explicit S3DMFileGcRemover(std::weak_ptr<StoragePathPool> path_pool_, LoggerPtr log)
-        : path_pool_weak_ref(std::move(path_pool_))
-        , logger(std::move(log))
-    {}
-
-    void operator()(const ExternalPageCallbacks::PathAndIdsVec & path_and_ids_vec, const std::set<PageIdU64> & valid_ids)
-    {
-        // If the StoragePathPool is invalid or shutdown flag is set,
-        // meaning we call `remover` after shutdowning or dropping the table,
-        // we must skip because the `valid_ids` is not reliable!
-        auto path_pool = path_pool_weak_ref.lock();
-        if (!path_pool || path_pool->isShutdown())
-            return;
-
-        auto delegate = path_pool->getStableDiskDelegator();
-        for (const auto & [path, ids] : path_and_ids_vec)
-        {
-            for (auto id : ids)
-            {
-                if (!valid_ids.count(id))
-                {
-                    delegate.removeRemoteDTFile(id);
-                    LOG_DEBUG(logger, "GC removed remote DM file [id={}]", id);
-                }
-            }
-        }
-    }
-};
-
 void DeltaMergeStore::setUpBackgroundTask(const DMContextPtr & dm_context)
 {
     // Callbacks for cleaning outdated DTFiles. Note that there is a chance
     // that callbacks is called after the `DeltaMergeStore` shutdown or dropped,
     // we must make the callbacks safe.
     ExternalPageCallbacks callbacks;
-    callbacks.prefix = storage_pool->getNamespaceID();
-    if (auto data_store = dm_context->db_context.getSharedContextDisagg()->remote_data_store; !data_store)
-    {
-        callbacks.scanner = LocalDMFileGcScanner(std::weak_ptr<StoragePathPool>(path_pool), global_context.getFileProvider());
-        callbacks.remover = LocalDMFileGcRemover(std::weak_ptr<StoragePathPool>(path_pool), global_context.getFileProvider(), log);
-    }
-    else
-    {
-        callbacks.scanner = S3DMFileGcScanner(std::weak_ptr<StoragePathPool>(path_pool));
-        callbacks.remover = S3DMFileGcRemover(std::weak_ptr<StoragePathPool>(path_pool), log);
-    }
+    callbacks.ns_id = storage_pool->getNamespaceId();
+    callbacks.scanner = LocalDMFileGcScanner(std::weak_ptr<StoragePathPool>(path_pool), global_context.getFileProvider());
+    callbacks.remover = LocalDMFileGcRemover(std::weak_ptr<StoragePathPool>(path_pool), global_context.getFileProvider(), log);
     // remember to unregister it when shutdown
     storage_pool->startup(std::move(callbacks));
 

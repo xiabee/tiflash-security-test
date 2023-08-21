@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@
 constexpr bool tiflash_use_avx2_compile_flag = true;
 
 // if cpp source file is compiled with flag `-mavx2`, it's recommended to use inline function for better performance.
-#include <common/avx2_byte_count.h>
 #include <common/avx2_mem_utils.h>
 #include <common/avx2_strstr.h>
 
@@ -60,9 +59,6 @@ bool avx2_mem_equal(const char * p1, const char * p2, size_t n);
 
 // same function like `std::memcmp`
 int avx2_mem_cmp(const char * p1, const char * p2, size_t n);
-
-// return count of target byte
-uint64_t avx2_byte_count(const char * src, size_t size, char target);
 
 } // namespace mem_utils
 

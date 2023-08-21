@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -75,7 +75,6 @@ public:
     ImutRegionRangePtr getRange() const;
 
     metapb::Peer getPeer() const;
-    void setPeer(metapb::Peer &&);
 
     UInt64 version() const;
 
@@ -109,10 +108,8 @@ public:
     RegionMetaSnapshot dumpRegionMetaSnapshot() const;
     MetaRaftCommandDelegate & makeRaftCommandDelegate();
 
-    const metapb::Region & getMetaRegion() const;
-    metapb::Region cloneMetaRegion() const;
-    const raft_serverpb::MergeState & getMergeState() const;
-    raft_serverpb::MergeState cloneMergeState() const;
+    metapb::Region getMetaRegion() const;
+    raft_serverpb::MergeState getMergeState() const;
 
     RegionMeta() = delete;
 

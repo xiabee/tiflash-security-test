@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,8 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-#include <Storages/DeltaMerge/DMContext.h>
 
 #include <utility>
 
@@ -246,9 +244,6 @@ inline bool isSameSchema(const Block & a, const Block & b)
     }
     return true;
 }
-
-using Digest = UInt256;
-Digest hashSchema(const Block & schema);
 
 /// This method guarantees that the returned valid block is not empty.
 inline Block readNextBlock(const BlockInputStreamPtr & in)

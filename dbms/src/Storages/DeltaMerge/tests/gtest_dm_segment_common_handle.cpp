@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <Storages/PathPool.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/InputStreamTestUtils.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 
@@ -36,7 +33,7 @@ namespace tests
 class SegmentCommonHandleTest : public DB::base::TiFlashStorageTestBasic
 {
 public:
-    SegmentCommonHandleTest() = default;
+    SegmentCommonHandleTest() {}
 
 public:
     static void SetUpTestCase() {}
@@ -54,8 +51,8 @@ protected:
     SegmentPtr reload(ColumnDefinesPtr cols = {}, DB::Settings && db_settings = DB::Settings())
     {
         TiFlashStorageTestBasic::reload(std::move(db_settings));
-        path_pool = std::make_shared<StoragePathPool>(db_context->getPathPool().withTable("test", "t", false));
-        storage_pool = std::make_shared<StoragePool>(*db_context, NullspaceID, /*table_id*/ 100, *path_pool, "test.t1");
+        path_pool = std::make_unique<StoragePathPool>(db_context->getPathPool().withTable("test", "t", false));
+        storage_pool = std::make_unique<StoragePool>(*db_context, /*table_id*/ 100, *path_pool, "test.t1");
         storage_pool->restore();
         if (!cols)
             cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
@@ -71,11 +68,10 @@ protected:
         *table_columns_ = *columns;
 
         dm_context_ = std::make_unique<DMContext>(*db_context,
-                                                  path_pool,
-                                                  storage_pool,
+                                                  *path_pool,
+                                                  *storage_pool,
                                                   /*min_version_*/ 0,
-                                                  NullspaceID,
-                                                  /*physical_table_id*/ 100,
+                                                  settings.not_compress_columns,
                                                   is_common_handle,
                                                   rowkey_column_size,
                                                   db_context->getSettingsRef());
@@ -87,8 +83,8 @@ protected:
 
 private:
     /// all these var lives as ref in dm_context
-    std::shared_ptr<StoragePathPool> path_pool;
-    std::shared_ptr<StoragePool> storage_pool;
+    std::unique_ptr<StoragePathPool> path_pool;
+    std::unique_ptr<StoragePool> storage_pool;
     ColumnDefinesPtr table_columns_;
     DM::DeltaMergeStore::Settings settings;
     /// dm_context
@@ -283,7 +279,8 @@ try
 CATCH
 
 class SegmentDeletion_Common_Handle_test : public SegmentCommonHandleTest
-    , public testing::WithParamInterface<std::tuple<bool, bool>>
+    , //
+                                           public testing::WithParamInterface<std::tuple<bool, bool>>
 {
 };
 

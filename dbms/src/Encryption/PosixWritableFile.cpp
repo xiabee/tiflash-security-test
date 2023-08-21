@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -89,11 +89,6 @@ ssize_t PosixWritableFile::pwrite(char * buf, size_t size, off_t offset) const
     if (write_limiter)
         write_limiter->request(size);
     return ::pwrite(fd, buf, size, offset);
-}
-
-off_t PosixWritableFile::seek(off_t offset, int whence) const
-{
-    return ::lseek(fd, offset, whence);
 }
 
 void PosixWritableFile::doOpenFile(bool truncate_when_exists_, int flags, mode_t mode)

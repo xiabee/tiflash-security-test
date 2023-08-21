@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,12 @@ namespace DB
 namespace tests
 {
 
-TEST(TypeMappingTest, DataTypeToColumnInfo)
+TEST(TypeMapping_test, ColumnInfoToDataType)
+{
+    // TODO fill this test
+}
+
+TEST(TypeMapping_test, DataTypeToColumnInfo)
 try
 {
     String name = "col";
@@ -62,19 +67,12 @@ try
                 {
                     ASSERT_EQ(column_info.tp, TiDB::TypeLongLong) << actual_test_type;
                 }
-
-                auto data_type = getDataTypeByColumnInfo(column_info);
-                ASSERT_EQ(data_type->getName(), actual_test_type);
             }
         }
     }
 
     column_info = reverseGetColumnInfo(NameAndTypePair{name, typeFromString("String")}, 1, default_field, true);
     ASSERT_EQ(column_info.tp, TiDB::TypeString);
-    auto data_type = getDataTypeByColumnInfo(column_info);
-    ASSERT_EQ(data_type->getName(), "String");
-
-    // TODO: test decimal, datetime, enum
 }
 CATCH
 

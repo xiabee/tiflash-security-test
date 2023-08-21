@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
 #include <Common/MemoryTracker.h>
-#include <Common/TiFlashMetrics.h>
 #include <Common/formatReadable.h>
 #include <IO/WriteHelpers.h>
 #include <common/likely.h>
@@ -128,7 +127,6 @@ void MemoryTracker::alloc(Int64 size, bool check_memory_limit)
         if (is_rss_too_large
             || unlikely(current_limit && will_be > current_limit))
         {
-            DB::GET_METRIC(tiflash_memory_exceed_quota_count).Increment();
             amount.fetch_sub(size, std::memory_order_relaxed);
 
             DB::FmtBuffer fmt_buf;

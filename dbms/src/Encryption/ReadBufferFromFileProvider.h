@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,24 @@
 
 #pragma once
 
-#include <Encryption/EncryptionPath.h>
-#include <Encryption/FileProvider_fwd.h>
-#include <IO/ReadBufferFromRandomAccessFile.h>
+#include <Common/CurrentMetrics.h>
+#include <Encryption/FileProvider.h>
+#include <IO/ReadBuffer.h>
+#include <IO/ReadBufferFromFileBase.h>
+#include <IO/ReadBufferFromFileDescriptor.h>
+
+namespace CurrentMetrics
+{
+extern const Metric OpenFileForRead;
+}
 
 namespace DB
 {
-
-class ReadLimiter;
-using ReadLimiterPtr = std::shared_ptr<ReadLimiter>;
-
-/**
- * Note: This class maybe removed in the future, use ReadBufferFromRandomAccessFile instead if possible
- */
-class ReadBufferFromFileProvider : public ReadBufferFromRandomAccessFile
+class ReadBufferFromFileProvider : public ReadBufferFromFileDescriptor
 {
+protected:
+    bool nextImpl() override;
+
 public:
     ReadBufferFromFileProvider(
         const FileProviderPtr & file_provider_,
@@ -39,5 +42,21 @@ public:
         int flags = -1,
         char * existing_memory = nullptr,
         size_t alignment = 0);
+
+    ReadBufferFromFileProvider(ReadBufferFromFileProvider &&) = default;
+
+    ~ReadBufferFromFileProvider() override;
+
+    void close();
+
+    std::string getFileName() const override { return file->getFileName(); }
+
+    int getFD() const override { return file->getFd(); }
+
+private:
+    off_t doSeekInFile(off_t offset, int whence) override;
+
+private:
+    RandomAccessFilePtr file;
 };
 } // namespace DB

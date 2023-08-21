@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,12 +17,10 @@
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/Plans/PhysicalTopN.h>
+#include <Flash/Planner/plans/PhysicalTopN.h>
 #include <Interpreters/Context.h>
-#include <Operators/LocalSortTransformOp.h>
 
 namespace DB
 {
@@ -42,7 +40,7 @@ PhysicalPlanNodePtr PhysicalTopN::build(
     }
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
-    ExpressionActionsPtr before_sort_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
+    ExpressionActionsPtr before_sort_actions = PhysicalPlanHelper::newActions(child->getSampleBlock(), context);
 
     auto order_columns = analyzer.buildOrderColumns(before_sort_actions, top_n.order_by());
     SortDescription order_descr = getSortDescription(order_columns, top_n.order_by());
@@ -50,7 +48,6 @@ PhysicalPlanNodePtr PhysicalTopN::build(
     auto physical_top_n = std::make_shared<PhysicalTopN>(
         executor_id,
         child->getSchema(),
-        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         order_descr,
@@ -59,24 +56,13 @@ PhysicalPlanNodePtr PhysicalTopN::build(
     return physical_top_n;
 }
 
-void PhysicalTopN::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalTopN::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->buildBlockInputStream(pipeline, context, max_streams);
+    child->transform(pipeline, context, max_streams);
 
     executeExpression(pipeline, before_sort_actions, log, "before TopN");
 
     orderStreams(pipeline, max_streams, order_descr, limit, false, context, log);
-}
-
-void PhysicalTopN::buildPipelineExecGroup(
-    PipelineExecutorStatus & exec_status,
-    PipelineExecGroupBuilder & group_builder,
-    Context & context,
-    size_t /*concurrency*/)
-{
-    executeExpression(exec_status, group_builder, before_sort_actions, log);
-
-    executeLocalSort(exec_status, group_builder, order_descr, limit, context, log);
 }
 
 void PhysicalTopN::finalize(const Names & parent_require)

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ int inspectServiceMain(DB::Context & context, const InspectArgs & args)
     auto dmfile = DB::DM::DMFile::restore(fp, args.file_id, 0, args.workdir, DB::DM::DMFile::ReadMetaMode::all());
 
     LOG_INFO(logger, "bytes on disk: {}", dmfile->getBytesOnDisk());
+    LOG_INFO(logger, "single file: {}", dmfile->isSingleFileMode());
 
     // if the DMFile has a config file, there may be additional debugging information
     // we also log the content of dmfile checksum config
@@ -80,38 +81,43 @@ int inspectServiceMain(DB::Context & context, const InspectArgs & args)
     if (args.check)
     {
         // for directory mode file, we can consume each file to check its integrity.
-        auto prefix = fmt::format("{}/dmf_{}", args.workdir, args.file_id);
-        auto file = Poco::File{prefix};
-        std::vector<std::string> sub;
-        file.list(sub);
-        for (auto & i : sub)
+        if (!dmfile->isSingleFileMode())
         {
-            if (endsWith(i, ".mrk") || endsWith(i, ".dat") || endsWith(i, ".idx") || i == "pack")
+            auto prefix = args.workdir + "/dmf_" + DB::toString(args.file_id);
+            auto file = Poco::File{prefix};
+            std::vector<std::string> sub;
+            file.list(sub);
+            for (auto & i : sub)
             {
-                auto full_path = fmt::format("{}/{}", prefix, i);
-                LOG_INFO(logger, "checking full_path is {}: ", full_path);
-                if (dmfile->getConfiguration())
+                if (endsWith(i, ".mrk") || endsWith(i, ".dat") || endsWith(i, ".idx") || i == "pack")
                 {
-                    consume(*DB::createReadBufferFromFileBaseByFileProvider(
-                        fp,
-                        full_path,
-                        DB::EncryptionPath(full_path, i),
-                        dmfile->getConfiguration()->getChecksumFrameLength(),
-                        nullptr,
-                        dmfile->getConfiguration()->getChecksumAlgorithm(),
-                        dmfile->getConfiguration()->getChecksumFrameLength()));
+                    auto full_path = prefix;
+                    full_path += "/";
+                    full_path += i;
+                    LOG_INFO(logger, "checking {}: ", i);
+                    if (dmfile->getConfiguration())
+                    {
+                        consume(*DB::createReadBufferFromFileBaseByFileProvider(
+                            fp,
+                            full_path,
+                            DB::EncryptionPath(full_path, i),
+                            dmfile->getConfiguration()->getChecksumFrameLength(),
+                            nullptr,
+                            dmfile->getConfiguration()->getChecksumAlgorithm(),
+                            dmfile->getConfiguration()->getChecksumFrameLength()));
+                    }
+                    else
+                    {
+                        consume(*DB::createReadBufferFromFileBaseByFileProvider(
+                            fp,
+                            full_path,
+                            DB::EncryptionPath(full_path, i),
+                            DBMS_DEFAULT_BUFFER_SIZE,
+                            0,
+                            nullptr));
+                    }
+                    LOG_INFO(logger, "[success]");
                 }
-                else
-                {
-                    consume(*DB::createReadBufferFromFileBaseByFileProvider(
-                        fp,
-                        full_path,
-                        DB::EncryptionPath(full_path, i),
-                        DBMS_DEFAULT_BUFFER_SIZE,
-                        0,
-                        nullptr));
-                }
-                LOG_INFO(logger, "[success]");
             }
         }
         // for both directory file and single mode file, we can read out all blocks from the file.

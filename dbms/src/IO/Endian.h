@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,11 +18,6 @@
 
 namespace DB
 {
-inline constexpr bool isLittleEndian()
-{
-    return (boost::endian::order::native == boost::endian::order::little);
-}
-
 /// Requires:
 ///   T is non-bool integral or scoped enumeration type
 template <typename T>

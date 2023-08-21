@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -133,7 +133,7 @@ void LogWriter::addRecord(ReadBuffer & payload, const size_t payload_size, const
         catch (...)
         {
             auto message = getCurrentExceptionMessage(true);
-            LOG_FATAL(Logger::get(), "Write physical record failed with message: {}", message);
+            LOG_FATAL(&Poco::Logger::get("LogWriter"), "Write physical record failed with message: {}", message);
             std::terminate();
         }
         payload.ignore(fragment_length);

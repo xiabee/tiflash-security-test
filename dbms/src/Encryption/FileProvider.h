@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <Core/Types.h>
 #include <Encryption/BlockAccessCipherStream.h>
-#include <Encryption/FileProvider_fwd.h>
 #include <Encryption/KeyManager.h>
 #include <Encryption/RandomAccessFile.h>
 #include <Encryption/WritableFile.h>
@@ -112,4 +111,5 @@ private:
     bool encryption_enabled;
 };
 
+using FileProviderPtr = std::shared_ptr<FileProvider>;
 } // namespace DB

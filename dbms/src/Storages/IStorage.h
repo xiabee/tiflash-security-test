@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,7 +61,7 @@ class IStorage : public std::enable_shared_from_this<IStorage>
     , public ITableDeclaration
 {
 public:
-    /// The main name of the table type (for example, StorageDeltaMerge).
+    /// The main name of the table type (for example, StorageMergeTree).
     virtual std::string getName() const = 0;
 
     /** The name of the table.

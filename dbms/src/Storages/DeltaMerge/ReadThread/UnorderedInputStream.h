@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <Common/FailPoint.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
-#include <DataStreams/SegmentReadTransformAction.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReadTaskScheduler.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
 
@@ -40,15 +39,15 @@ public:
         const String & req_id)
         : task_pool(task_pool_)
         , header(toEmptyBlock(columns_to_read_))
-        , action(header, extra_table_id_index, physical_table_id)
+        , extra_table_id_index(extra_table_id_index)
+        , physical_table_id(physical_table_id)
         , log(Logger::get(req_id))
         , ref_no(0)
         , task_pool_added(false)
-
     {
         if (extra_table_id_index != InvalidColumnID)
         {
-            const auto & extra_table_id_col_define = getExtraTableIDColumnDefine();
+            auto & extra_table_id_col_define = getExtraTableIDColumnDefine();
             ColumnWithTypeAndName col{extra_table_id_col_define.type->createColumn(), extra_table_id_col_define.type, extra_table_id_col_define.name, extra_table_id_col_define.id, extra_table_id_col_define.default_value};
             header.insert(extra_table_id_index, col);
         }
@@ -56,7 +55,7 @@ public:
         LOG_DEBUG(log, "Created, pool_id={} ref_no={}", task_pool->poolId(), ref_no);
     }
 
-    ~UnorderedInputStream() override
+    ~UnorderedInputStream()
     {
         task_pool->decreaseUnorderedInputStreamRefCount();
         LOG_DEBUG(log, "Destroy, pool_id={} ref_no={}", task_pool->poolId(), ref_no);
@@ -88,13 +87,23 @@ protected:
             task_pool->popBlock(res);
             if (res)
             {
-                if (action.transform(res))
+                if (extra_table_id_index != InvalidColumnID)
                 {
-                    return res;
+                    auto & extra_table_id_col_define = getExtraTableIDColumnDefine();
+                    ColumnWithTypeAndName col{{}, extra_table_id_col_define.type, extra_table_id_col_define.name, extra_table_id_col_define.id};
+                    size_t row_number = res.rows();
+                    auto col_data = col.type->createColumnConst(row_number, Field(physical_table_id));
+                    col.column = std::move(col_data);
+                    res.insert(extra_table_id_index, std::move(col));
+                }
+                if (!res.rows())
+                {
+                    continue;
                 }
                 else
                 {
-                    continue;
+                    total_rows += res.rows();
+                    return res;
                 }
             }
             else
@@ -107,7 +116,7 @@ protected:
 
     void readSuffixImpl() override
     {
-        LOG_DEBUG(log, "Finish read from storage, pool_id={} ref_no={} rows={}", task_pool->poolId(), ref_no, action.totalRows());
+        LOG_DEBUG(log, "Finish read from storage, pool_id={} ref_no={} rows={}", task_pool->poolId(), ref_no, total_rows);
     }
 
     void addReadTaskPoolToScheduler()
@@ -123,11 +132,13 @@ protected:
 private:
     SegmentReadTaskPoolPtr task_pool;
     Block header;
-    SegmentReadTransformAction action;
-
+    // position of the ExtraPhysTblID column in column_names parameter in the StorageDeltaMerge::read function.
+    const int extra_table_id_index;
     bool done = false;
+    TableID physical_table_id;
     LoggerPtr log;
     int64_t ref_no;
+    size_t total_rows = 0;
     bool task_pool_added;
 };
 } // namespace DB::DM

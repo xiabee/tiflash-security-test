@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -69,7 +69,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
 
             ProfileEvents::increment(ProfileEvents::DMCleanReadRows, rows);
 
-            return getNewBlock(cur_raw_block);
+            return getNewBlockByHeader(header, cur_raw_block);
         }
 
         filter.resize(rows);
@@ -393,27 +393,23 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
         if (passed_count == rows)
         {
             ++complete_passed;
-            return getNewBlock(cur_raw_block);
+            return getNewBlockByHeader(header, cur_raw_block);
         }
 
         if (return_filter)
         {
             // The caller of this method should do the filtering, we just need to return the original block.
             res_filter = &filter;
-            return getNewBlock(cur_raw_block);
+            return getNewBlockByHeader(header, cur_raw_block);
         }
         else
         {
             Block res;
-            if (cur_raw_block.segmentRowIdCol() == nullptr)
+            for (const auto & c : header)
             {
-                res = select_by_colid_action.filterAndTransform(cur_raw_block, filter, passed_count);
-            }
-            else
-            {
-                // `DMVersionFilterBlockInputStream` is the last stage for generating segment row id.
-                // In the way we use it, the other columns are not used subsequently.
-                res.setSegmentRowIdCol(cur_raw_block.segmentRowIdCol()->filter(filter, passed_count));
+                auto & column = cur_raw_block.getByName(c.name);
+                column.column = column.column->filter(filter, passed_count);
+                res.insert(std::move(column));
             }
             return res;
         }

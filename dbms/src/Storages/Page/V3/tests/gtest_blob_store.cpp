@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,18 +17,16 @@
 #include <Encryption/RateLimiter.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <Poco/Logger.h>
-#include <Storages/Page/PageConstants.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V3/BlobStore.h>
-#include <Storages/Page/V3/PageDefines.h>
 #include <Storages/Page/V3/PageDirectory.h>
 #include <Storages/Page/V3/PageEntriesEdit.h>
 #include <Storages/Page/V3/PageEntry.h>
 #include <Storages/Page/V3/tests/entries_helper.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/WriteBatch.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/MockDiskDelegator.h>
 #include <TestUtils/MockReadLimiter.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
 namespace DB::FailPoints
@@ -38,8 +36,7 @@ extern const char exception_after_large_write_exceed[];
 
 namespace DB::PS::V3::tests
 {
-using u128::PageEntriesEdit;
-using BlobStore = BlobStore<u128::BlobStoreTrait>;
+
 constexpr size_t path_num = 3;
 
 class BlobStoreTest : public DB::base::TiFlashStorageTestBasic
@@ -84,7 +81,7 @@ protected:
 TEST_F(BlobStoreTest, Restore)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     config.file_limit_size = 2560;
     auto blob_store = BlobStore(getCurrentTestName(), file_provider, delegator, config);
 
@@ -157,13 +154,13 @@ CATCH
 TEST_F(BlobStoreTest, RestoreWithInvalidBlob)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     config.file_limit_size = 1024;
 
     // Generate blob [1,2,3]
     auto write_blob_datas = [](BlobStore & blob_store) {
         WriteBatch write_batch;
-        PageIdU64 page_id = 55;
+        PageId page_id = 55;
         size_t buff_size = 1024;
         char c_buff[buff_size];
         memset(c_buff, 0x1, buff_size);
@@ -320,9 +317,9 @@ CATCH
 
 TEST_F(BlobStoreTest, testWriteRead)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
 
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     size_t buff_nums = 21;
     size_t buff_size = 123;
 
@@ -404,9 +401,9 @@ TEST_F(BlobStoreTest, testWriteRead)
 
 TEST_F(BlobStoreTest, testWriteReadWithIOLimiter)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
 
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     size_t wb_nums = 5;
     size_t buff_size = 10ul * 1024;
     const size_t rate_target = buff_size - 1;
@@ -515,11 +512,11 @@ TEST_F(BlobStoreTest, testWriteReadWithIOLimiter)
 TEST_F(BlobStoreTest, testWriteReadWithFiled)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
 
-    PageIdU64 page_id1 = 50;
-    PageIdU64 page_id2 = 51;
-    PageIdU64 page_id3 = 53;
+    PageId page_id1 = 50;
+    PageId page_id2 = 51;
+    PageId page_id3 = 53;
 
     size_t buff_size = 120;
     WriteBatch wb;
@@ -582,9 +579,9 @@ CATCH
 
 TEST_F(BlobStoreTest, testFeildOffsetWriteRead)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
 
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     size_t buff_size = 20;
     size_t buff_nums = 5;
     PageFieldSizes field_sizes = {1, 2, 3, 4, 5, 2, 1, 1, 1};
@@ -653,10 +650,10 @@ TEST_F(BlobStoreTest, testFeildOffsetWriteRead)
 TEST_F(BlobStoreTest, testWrite)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     auto blob_store = BlobStore(getCurrentTestName(), file_provider, delegator, config);
 
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     const size_t buff_size = 1024;
     WriteBatch wb;
     {
@@ -760,7 +757,7 @@ CATCH
 // BlobStore allow (page size > blob_file_limit)
 TEST_F(BlobStoreTest, DISABLED_testWriteOutOfLimitSize)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     size_t buff_size = 100;
 
     {
@@ -828,10 +825,10 @@ TEST_F(BlobStoreTest, DISABLED_testWriteOutOfLimitSize)
 
 TEST_F(BlobStoreTest, testBlobStoreGcStats)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     size_t buff_size = 1024;
     size_t buff_nums = 10;
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     auto blob_store = BlobStore(getCurrentTestName(), file_provider, delegator, config);
     std::list<size_t> remove_entries_idx1 = {1, 3, 4, 7, 9};
     std::list<size_t> remove_entries_idx2 = {6, 8};
@@ -924,10 +921,10 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats)
 
 TEST_F(BlobStoreTest, testBlobStoreGcStats2)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
     size_t buff_size = 1024;
     size_t buff_nums = 10;
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
     auto blob_store = BlobStore(getCurrentTestName(), file_provider, delegator, config);
     std::list<size_t> remove_entries_idx = {0, 1, 2, 3, 4, 5, 6, 7};
 
@@ -983,8 +980,8 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats2)
 
 TEST_F(BlobStoreTest, GC)
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
-    PageIdU64 page_id = 50;
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
+    PageId page_id = 50;
     size_t buff_nums = 21;
     size_t buff_size = 123;
 
@@ -1008,12 +1005,12 @@ TEST_F(BlobStoreTest, GC)
     PageEntriesEdit edit = blob_store.write(std::move(wb), nullptr);
     ASSERT_EQ(edit.size(), buff_nums);
 
-    PageDirectory<u128::PageDirectoryTrait>::GcEntries versioned_pageid_entries;
+    PageIdAndVersionedEntries versioned_pageid_entries;
     for (const auto & record : edit.getRecords())
     {
         versioned_pageid_entries.emplace_back(buildV3Id(TEST_NAMESPACE_ID, page_id), 1, record.entry);
     }
-    PageDirectory<u128::PageDirectoryTrait>::GcEntriesMap gc_context;
+    std::map<BlobFileId, PageIdAndVersionedEntries> gc_context;
     gc_context[1] = versioned_pageid_entries;
 
     // Before we do BlobStore we need change BlobFile0 to Read-Only
@@ -1048,9 +1045,9 @@ TEST_F(BlobStoreTest, GC)
 TEST_F(BlobStoreTest, GCMigirateBigData)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
     size_t buff_nums = 20;
     size_t buff_size = 20;
 
@@ -1061,7 +1058,7 @@ try
 
     WriteBatch wb;
 
-    PageDirectory<u128::PageDirectoryTrait>::GcEntriesMap gc_context;
+    std::map<BlobFileId, PageIdAndVersionedEntries> gc_context;
 
     for (size_t i = 0; i < buff_nums; ++i)
     {
@@ -1078,7 +1075,7 @@ try
         ASSERT_EQ(records.size(), 1);
         if (gc_context.find(records[0].entry.file_id) == gc_context.end())
         {
-            PageDirectory<u128::PageDirectoryTrait>::GcEntries versioned_pageid_entries;
+            PageIdAndVersionedEntries versioned_pageid_entries;
             versioned_pageid_entries.emplace_back(page_id, 1, records[0].entry);
             gc_context[records[0].entry.file_id] = std::move(versioned_pageid_entries);
         }
@@ -1099,9 +1096,9 @@ CATCH
 TEST_F(BlobStoreTest, ReadByFieldReadInfos)
 try
 {
-    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
     size_t buff_nums = 20;
     size_t buff_size = 20;
 
@@ -1136,8 +1133,8 @@ try
     auto page_map = blob_store.read(read_infos);
     for (size_t i = 0; i < buff_nums; ++i)
     {
-        PageIdU64 reading_id = fixed_page_id + i;
-        Page page = page_map.at(reading_id);
+        PageId reading_id = fixed_page_id + i;
+        Page page = page_map[reading_id];
         ASSERT_EQ(page.fieldSize(), 5);
     }
 }
@@ -1147,8 +1144,8 @@ TEST_F(BlobStoreTest, LargeWrite)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
 
     BlobConfig test_config;
     test_config.file_limit_size = 4 * MB;
@@ -1345,8 +1342,8 @@ TEST_F(BlobStoreTest, LargeWriteWithFields)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
 
     BlobConfig test_config;
     test_config.file_limit_size = 4 * MB;
@@ -1399,7 +1396,7 @@ try
             BlobStore::FieldReadInfos to_read{
                 BlobStore::FieldReadInfo(buildV3Id(TEST_NAMESPACE_ID, page_id), records[0].entry, {0, 1, 2, 3, 4, 5, 6, 7, 8}),
             };
-            BlobStore::PageMap page_map = blob_store.read(to_read, nullptr);
+            PageMap page_map = blob_store.read(to_read, nullptr);
             ASSERT_NE(page_map.find(page_id), page_map.end());
             ASSERT_EQ(page_map.at(page_id).fieldSize(), to_read[0].fields.size());
         }
@@ -1409,7 +1406,7 @@ try
             BlobStore::FieldReadInfos to_read{
                 BlobStore::FieldReadInfo(buildV3Id(TEST_NAMESPACE_ID, page_id), records[0].entry, {0, 1, 2, 3, 4, 5, 6}),
             };
-            BlobStore::PageMap page_map = blob_store.read(to_read, nullptr);
+            PageMap page_map = blob_store.read(to_read, nullptr);
             ASSERT_NE(page_map.find(page_id), page_map.end());
             ASSERT_EQ(page_map.at(page_id).fieldSize(), to_read[0].fields.size());
         }
@@ -1419,7 +1416,7 @@ try
             BlobStore::FieldReadInfos to_read{
                 BlobStore::FieldReadInfo(buildV3Id(TEST_NAMESPACE_ID, page_id), records[0].entry, {1, 2, 3, 5, 6, 8}),
             };
-            BlobStore::PageMap page_map = blob_store.read(to_read, nullptr);
+            PageMap page_map = blob_store.read(to_read, nullptr);
             ASSERT_NE(page_map.find(page_id), page_map.end());
             ASSERT_EQ(page_map.at(page_id).fieldSize(), to_read[0].fields.size());
         }
@@ -1434,8 +1431,8 @@ TEST_F(BlobStoreTest, LargeWriteWithFailed)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
 
     BlobConfig test_config;
     test_config.file_limit_size = 4 * MB;
@@ -1513,8 +1510,8 @@ TEST_F(BlobStoreTest, LargeWriteRemove)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
 
     BlobConfig config_with_small_file_limit_size;
     config_with_small_file_limit_size.file_limit_size = 400;
@@ -1545,8 +1542,8 @@ TEST_F(BlobStoreTest, LargeWriteRegisterPath)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 fixed_page_id = 50;
-    PageIdU64 page_id = fixed_page_id;
+    PageId fixed_page_id = 50;
+    PageId page_id = fixed_page_id;
 
     BlobConfig config_with_small_file_limit_size;
     config_with_small_file_limit_size.file_limit_size = 400;
@@ -1585,7 +1582,7 @@ TEST_F(BlobStoreTest, TestRestartWithSmallerFileLimitSize)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 page_id = 50;
+    PageId page_id = 50;
 
     BlobConfig config_with_small_file_limit_size;
     config_with_small_file_limit_size.file_limit_size = 800;
@@ -1655,9 +1652,9 @@ TEST_F(BlobStoreTest, LargeWriteGC)
 try
 {
     const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-    PageIdU64 page_id1 = 50;
-    PageIdU64 page_id2 = 51;
-    PageIdU64 page_id3 = 52;
+    PageId page_id1 = 50;
+    PageId page_id2 = 51;
+    PageId page_id3 = 52;
 
     BlobConfig config_with_small_file_limit_size;
     config_with_small_file_limit_size.file_limit_size = 800;
@@ -1708,8 +1705,8 @@ try
 
         const auto & blob_need_gc2 = blob_store.getGCStats();
         ASSERT_EQ(blob_need_gc2.size(), 1);
-        PageDirectory<u128::PageDirectoryTrait>::GcEntriesMap gc_context;
-        PageDirectory<u128::PageDirectoryTrait>::GcEntries versioned_pageid_entries;
+        std::map<BlobFileId, PageIdAndVersionedEntries> gc_context;
+        PageIdAndVersionedEntries versioned_pageid_entries;
         versioned_pageid_entries.emplace_back(page_id2, 1, entry_from_write2);
         gc_context[1] = versioned_pageid_entries;
         PageEntriesEdit gc_edit = blob_store.gc(gc_context, 500);

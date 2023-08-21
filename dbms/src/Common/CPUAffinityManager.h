@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 
 namespace Poco
 {
+class Logger;
 namespace Util
 {
 class LayeredConfiguration;
@@ -32,13 +33,10 @@ class LayeredConfiguration;
 
 namespace DB
 {
-class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
 namespace tests
 {
 class CPUAffinityManagerTest_CPUAffinityManager_Test;
-} // namespace tests
-
+}
 struct CPUAffinityConfig
 {
     CPUAffinityConfig()
@@ -134,7 +132,7 @@ private:
     MAYBE_UNUSED_MEMBER int cpu_cores;
 
     std::vector<std::string> query_threads;
-    LoggerPtr log;
+    Poco::Logger * log;
 
     CPUAffinityManager();
     // Disable copy and move

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <DataStreams/OneBlockInputStream.h>
-#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
 #include <Storages/DeltaMerge/Segment.h>
@@ -34,7 +33,8 @@ extern DMFilePtr writeIntoNewDMFile(DMContext & dm_context,
                                     const ColumnDefinesPtr & schema_snap,
                                     const BlockInputStreamPtr & input_stream,
                                     UInt64 file_id,
-                                    const String & parent_path);
+                                    const String & parent_path,
+                                    DMFileBlockOutputStream::Flags flags);
 
 namespace tests
 {
@@ -49,7 +49,6 @@ void SimplePKTestBasic::reload()
                                               false,
                                               "test",
                                               DB::base::TiFlashStorageTestBasic::getCurrentFullTestName(),
-                                              NullspaceID,
                                               101,
                                               true,
                                               *cols,
@@ -315,7 +314,8 @@ ExternalDTFileInfo genDMFile(DeltaMergeStorePtr store, DMContext & context, cons
         std::make_shared<ColumnDefines>(store->getTableColumns()),
         input_stream,
         file_id,
-        store_path);
+        store_path,
+        /* flags */ {});
 
     store->preIngestFile(store_path, file_id, dmfile->getBytesOnDisk());
 

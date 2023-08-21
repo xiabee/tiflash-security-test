@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Debug/MockExecutor/AstToPBUtils.h>
 #include <Debug/MockExecutor/ExecutorBinder.h>
 #include <Debug/MockExecutor/TableScanBinder.h>
 #include <Storages/MutableSupport.h>
@@ -99,7 +98,6 @@ ExecutorBinderPtr compileTableScan(size_t & executor_index, TableInfo & table_in
     for (const auto & column_info : table_info.columns)
     {
         ColumnInfo ci;
-        ci.id = column_info.id;
         ci.tp = column_info.tp;
         ci.flag = column_info.flag;
         ci.flen = column_info.flen;
@@ -115,7 +113,6 @@ ExecutorBinderPtr compileTableScan(size_t & executor_index, TableInfo & table_in
     {
         ColumnInfo ci;
         ci.tp = TiDB::TypeLongLong;
-        ci.id = TiDBPkColumnID;
         ci.setPriKeyFlag();
         ci.setNotNullFlag();
         ts_output.emplace_back(std::make_pair(MutableSupport::tidb_pk_column_name, std::move(ci)));

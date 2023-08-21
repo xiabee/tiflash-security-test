@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,14 +16,11 @@
 
 #include <Storages/DeltaMerge/ScanContext.h>
 #include <common/types.h>
-#include <tipb/select.pb.h>
 
 #include <memory>
 
 namespace DB
 {
-
-struct BaseRuntimeStatistics;
 /// do not need be thread safe since it is only used in single thread env
 struct ExecutionSummary
 {
@@ -32,14 +29,11 @@ struct ExecutionSummary
     UInt64 num_iterations = 0;
     UInt64 concurrency = 0;
 
-    DM::ScanContextPtr scan_context = std::make_shared<DB::DM::ScanContext>();
+    std::unique_ptr<DB::DM::ScanContext> scan_context = std::make_unique<DB::DM::ScanContext>();
 
     ExecutionSummary() = default;
 
-    void merge(const ExecutionSummary & other);
-    void merge(const tipb::ExecutorExecutionSummary & other);
-    void fill(const BaseRuntimeStatistics & other);
-    void init(const tipb::ExecutorExecutionSummary & other);
+    void merge(const ExecutionSummary & other, bool streaming_call);
 };
 
 } // namespace DB

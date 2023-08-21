@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -70,12 +70,6 @@ metapb::Peer RegionMeta::getPeer() const
 {
     std::lock_guard lock(mutex);
     return peer;
-}
-
-void RegionMeta::setPeer(metapb::Peer && p)
-{
-    std::lock_guard lock(mutex);
-    peer = p;
 }
 
 raft_serverpb::RaftApplyState RegionMeta::getApplyState() const
@@ -448,27 +442,16 @@ RegionMeta::RegionMeta(metapb::Peer peer_, metapb::Region region, raft_serverpb:
     region_state.setRegion(std::move(region));
 }
 
-metapb::Region RegionMeta::cloneMetaRegion() const
+metapb::Region RegionMeta::getMetaRegion() const
 {
     std::lock_guard lock(mutex);
     return region_state.getRegion();
 }
 
-const metapb::Region & RegionMeta::getMetaRegion() const
-{
-    std::lock_guard lock(mutex);
-    return region_state.getRegion();
-}
-
-raft_serverpb::MergeState RegionMeta::cloneMergeState() const
+raft_serverpb::MergeState RegionMeta::getMergeState() const
 {
     std::lock_guard lock(mutex);
     return region_state.getMergeState();
 }
 
-const raft_serverpb::MergeState & RegionMeta::getMergeState() const
-{
-    std::lock_guard lock(mutex);
-    return region_state.getMergeState();
-}
 } // namespace DB

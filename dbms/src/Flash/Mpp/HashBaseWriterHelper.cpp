@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Mpp/HashBaseWriterHelper.h>
-#include <Storages/Transaction/TypeMapping.h>
 
 namespace DB::HashBaseWriterHelper
 {
@@ -144,6 +142,15 @@ void scatterColumns(const Block & input_block,
     }
 }
 
+DB::TrackedMppDataPacketPtrs createPackets(size_t partition_num)
+{
+    DB::TrackedMppDataPacketPtrs tracked_packets;
+    tracked_packets.reserve(partition_num);
+    for (size_t i = 0; i < partition_num; ++i)
+        tracked_packets.emplace_back(std::make_shared<TrackedMppDataPacket>());
+    return tracked_packets;
+}
+
 void scatterColumnsForFineGrainedShuffle(const Block & block,
                                          const std::vector<Int64> & partition_col_ids,
                                          const TiDB::TiDBCollators & collators,
@@ -169,19 +176,6 @@ void scatterColumnsForFineGrainedShuffle(const Block & block,
         const auto & column = block.getByPosition(i).column;
         column->scatterTo(scattered[i], selector);
     }
-}
-
-HashPartitionWriterHelperV1::HashPartitionWriterHelperV1(const std::vector<tipb::FieldType> & field_types)
-{
-    for (const auto & field_type : field_types)
-    {
-        expected_types.emplace_back(getDataTypeByFieldTypeForComputingLayer(field_type));
-    }
-}
-void HashPartitionWriterHelperV1::checkBlock(const Block & block) const
-{
-    DB::assertBlockSchema(expected_types, block, "HashPartitionWriterHelper");
-    block.checkNumberOfRows();
 }
 
 } // namespace DB::HashBaseWriterHelper

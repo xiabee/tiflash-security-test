@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 
 #include <Common/FailPoint.h>
 #include <IO/WriteHelpers.h>
+#include <Interpreters/Context.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/V2/PageStorage.h>
 #include <Storages/Page/V2/gc/DataCompactor.h>
@@ -58,7 +59,8 @@ try
     };
 #endif
 
-    const auto file_provider = TiFlashTestEnv::getDefaultFileProvider();
+    auto ctx = TiFlashTestEnv::getContext(DB::Settings());
+    const auto file_provider = ctx.getFileProvider();
     PSDiskDelegatorPtr delegate = std::make_shared<DB::tests::MockDiskDelegatorMulti>(test_paths);
 
     auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");

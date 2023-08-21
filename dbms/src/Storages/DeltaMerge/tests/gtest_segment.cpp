@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include <Common/SyncPoint/Ctl.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
 #include <Storages/DeltaMerge/tests/gtest_segment_test_basic.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -214,8 +213,21 @@ try
     ASSERT_EQ(segments.size(), 1);
 
     /// make sure all column file in delta value space is deleted
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr || storage_pool->log_storage_v2 != nullptr);
+    if (storage_pool->log_storage_v3)
+    {
+        storage_pool->log_storage_v3->gc(/* not_skip */ true);
+        storage_pool->data_storage_v3->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1);
+    }
+    if (storage_pool->log_storage_v2)
+    {
+        storage_pool->log_storage_v2->gc(/* not_skip */ true);
+        storage_pool->data_storage_v2->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v2->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v2->getNumberOfPages(), 1);
+    }
 }
 CATCH
 
@@ -231,7 +243,7 @@ try
 
         // Start a segment merge and suspend it before applyMerge
         auto sp_seg_split_apply = SyncPointCtl::enableInScope("before_Segment::applySplit");
-        PageIdU64 new_seg_id;
+        PageId new_seg_id;
         auto th_seg_split = std::async([&]() {
             auto new_seg_id_opt = splitSegment(DELTA_MERGE_FIRST_SEGMENT_ID, Segment::SplitMode::Auto, /* check_rows */ false);
             ASSERT_TRUE(new_seg_id_opt.has_value());
@@ -261,8 +273,21 @@ try
     ASSERT_EQ(segments.size(), 1);
 
     /// make sure all column file in delta value space is deleted
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr || storage_pool->log_storage_v2 != nullptr);
+    if (storage_pool->log_storage_v3)
+    {
+        storage_pool->log_storage_v3->gc(/* not_skip */ true);
+        storage_pool->data_storage_v3->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1);
+    }
+    if (storage_pool->log_storage_v2)
+    {
+        storage_pool->log_storage_v2->gc(/* not_skip */ true);
+        storage_pool->data_storage_v2->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v2->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v2->getNumberOfPages(), 1);
+    }
 }
 CATCH
 
@@ -308,8 +333,21 @@ try
     ASSERT_EQ(segments.size(), 1);
 
     /// make sure all column file in delta value space is deleted
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr || storage_pool->log_storage_v2 != nullptr);
+    if (storage_pool->log_storage_v3)
+    {
+        storage_pool->log_storage_v3->gc(/* not_skip */ true);
+        storage_pool->data_storage_v3->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1);
+    }
+    if (storage_pool->log_storage_v2)
+    {
+        storage_pool->log_storage_v2->gc(/* not_skip */ true);
+        storage_pool->data_storage_v2->gc(/* not_skip */ true);
+        ASSERT_EQ(storage_pool->log_storage_v2->getNumberOfPages(), 0);
+        ASSERT_EQ(storage_pool->data_storage_v2->getNumberOfPages(), 1);
+    }
 }
 CATCH
 
@@ -349,12 +387,12 @@ try
         auto segment = segments[DELTA_MERGE_FIRST_SEGMENT_ID];
         auto delta = segment->getDelta();
         auto mem_table_set = delta->getMemTableSet();
-        WriteBatches wbs(*dm_context->storage_pool);
+        WriteBatches wbs(dm_context->storage_pool);
         auto lock = segment->mustGetUpdateLock();
         auto [memory_cf, persisted_cf] = delta->cloneAllColumnFiles(lock, *dm_context, segment->getRowKeyRange(), wbs);
         ASSERT_FALSE(memory_cf.empty());
         ASSERT_TRUE(persisted_cf.empty());
-        ColumnFileSchemaPtr last_schema;
+        BlockPtr last_schema;
         for (const auto & column_file : memory_cf)
         {
             if (auto * t_file = column_file->tryToTinyFile(); t_file)
@@ -532,7 +570,23 @@ try
 
     {
         /// make sure all column file in delta value space is deleted
-        ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
+        ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr || storage_pool->log_storage_v2 != nullptr);
+        if (storage_pool->log_storage_v3)
+        {
+            storage_pool->log_storage_v3->gc(/* not_skip */ true);
+            storage_pool->data_storage_v3->gc(/* not_skip */ true);
+            EXPECT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+        }
+        if (storage_pool->log_storage_v2)
+        {
+            storage_pool->log_storage_v2->gc(/* not_skip */ true);
+            storage_pool->data_storage_v2->gc(/* not_skip */ true);
+            EXPECT_EQ(storage_pool->log_storage_v2->getNumberOfPages(), 0);
+        }
+
+        const auto file_usage = storage_pool->log_storage_reader->getFileUsageStatistics();
+        LOG_DEBUG(log, "All delta-merged, log valid size on disk: {}", file_usage.total_valid_size);
+        EXPECT_EQ(file_usage.total_valid_size, 0);
     }
 }
 CATCH

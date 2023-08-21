@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 #include <IO/WriteHelpers.h>
 #include <common/types.h>
 
-#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -70,7 +69,7 @@ struct LogLUT
 private:
     static constexpr size_t M = 1 << ((static_cast<unsigned int>(K) <= 12) ? K : 12);
 
-    double log_table[M + 1]{};
+    double log_table[M + 1];
 };
 
 template <UInt8 K>
@@ -234,7 +233,7 @@ struct TrailingZerosCounter<UInt32>
 {
     static int apply(UInt32 val)
     {
-        return std::countr_zero(val);
+        return __builtin_ctz(val);
     }
 };
 
@@ -243,7 +242,7 @@ struct TrailingZerosCounter<UInt64>
 {
     static int apply(UInt64 val)
     {
-        return std::countr_zero(val);
+        return __builtin_ctzll(val);
     }
 };
 
@@ -440,7 +439,7 @@ private:
     void update(HashValueType bucket, UInt8 rank)
     {
         typename RankStore::Locus content = rank_store[bucket];
-        auto cur_rank = static_cast<UInt8>(content);
+        UInt8 cur_rank = static_cast<UInt8>(content);
 
         if (rank > cur_rank)
         {

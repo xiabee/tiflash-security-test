@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -704,7 +704,7 @@ IOLimitTuner::IOLimitTuner(
     , bg_read_stat(std::move(bg_read_stat_))
     , fg_read_stat(std::move(fg_read_stat_))
     , io_config(io_config_)
-    , log(Logger::get())
+    , log(Logger::get("IOLimitTuner"))
 {}
 
 IOLimitTuner::TuneResult IOLimitTuner::tune() const
@@ -712,7 +712,7 @@ IOLimitTuner::TuneResult IOLimitTuner::tune() const
     auto msg = fmt::format("limiter {} write {} read {}", limiterCount(), writeLimiterCount(), readLimiterCount());
     if (limiterCount() < 2)
     {
-        // LOG_DEBUG(log, "{} NOT need to tune.", msg);
+        LOG_INFO(log, "{} NOT need to tune.", msg);
         return {0, 0, false, 0, 0, false};
     }
     LOG_INFO(log, "{} need to tune.", msg);

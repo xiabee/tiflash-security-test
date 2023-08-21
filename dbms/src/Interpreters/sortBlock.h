@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ namespace DB
 void sortBlock(Block & block, const SortDescription & description, size_t limit = 0);
 
 
-/** Used only in StorageDeltaMerge to sort the data with INSERT.
+/** Used only in StorageMergeTree to sort the data with INSERT.
   * Sorting is stable. This is important for keeping the order of rows in the CollapsingMergeTree engine
   *  - because based on the order of rows it is determined whether to delete or leave groups of rows when collapsing.
   * Collations are not supported. Partial sorting is not supported.

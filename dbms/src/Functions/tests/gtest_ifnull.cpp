@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Columns/ColumnConst.h>
 #include <Common/Exception.h>
 #include <Common/MyDuration.h>
 #include <DataTypes/getLeastSupertype.h>
+#include <Functions/FunctionsDateTime.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/convertFieldToType.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -39,7 +42,7 @@ protected:
             {nullptr, type_1, ""},
             {nullptr, type_2, ""},
         };
-        return getReturnTypeForFunction(*context, "ifNull", input_columns);
+        return getReturnTypeForFunction(context, "ifNull", input_columns);
     }
     template <class IntegerType>
     ColumnWithTypeAndName createIntegerColumnInternal(const std::vector<Int64> & signed_input, const std::vector<UInt64> unsigned_input, const std::vector<Int32> & null_map)

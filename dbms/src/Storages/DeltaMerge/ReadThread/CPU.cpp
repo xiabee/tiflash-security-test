@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,11 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include <Common/Exception.h>
-#include <Common/Logger.h>
 #include <Poco/DirectoryIterator.h>
 #include <Poco/File.h>
+#include <Poco/Logger.h>
 #include <Storages/DeltaMerge/ReadThread/CPU.h>
 #include <common/logger_useful.h>
 
@@ -94,7 +93,7 @@ std::vector<std::vector<int>> getLinuxNumaNodes()
     return numa_nodes;
 }
 
-std::vector<std::vector<int>> getNumaNodes(const LoggerPtr & log)
+std::vector<std::vector<int>> getNumaNodes(Poco::Logger * log)
 {
 #ifndef __APPLE__ // Apple macbooks does not support NUMA
     try

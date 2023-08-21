@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,20 +15,18 @@
 #include <Common/CurrentMetrics.h>
 #include <Common/SyncPoint/SyncPoint.h>
 #include <DataStreams/OneBlockInputStream.h>
-#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/StoragePool.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/DeltaMerge/tests/gtest_dm_simple_pk_test_basic.h>
-#include <Storages/PathPool.h>
 #include <Storages/Transaction/TMTContext.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/InputStreamTestUtils.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 
@@ -54,7 +52,8 @@ extern DMFilePtr writeIntoNewDMFile(DMContext & dm_context, //
                                     const ColumnDefinesPtr & schema_snap,
                                     const BlockInputStreamPtr & input_stream,
                                     UInt64 file_id,
-                                    const String & parent_path);
+                                    const String & parent_path,
+                                    DMFileBlockOutputStream::Flags flags);
 namespace tests
 {
 class SegmentTest : public DB::base::TiFlashStorageTestBasic
@@ -78,8 +77,8 @@ protected:
     SegmentPtr reload(const ColumnDefinesPtr & pre_define_columns = {}, DB::Settings && db_settings = DB::Settings())
     {
         TiFlashStorageTestBasic::reload(std::move(db_settings));
-        storage_path_pool = std::make_shared<StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
-        storage_pool = std::make_shared<StoragePool>(*db_context, NullspaceID, /*ns_id*/ 100, *storage_path_pool, "test.t1");
+        storage_path_pool = std::make_unique<StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
+        storage_pool = std::make_unique<StoragePool>(*db_context, /*ns_id*/ 100, *storage_path_pool, "test.t1");
         storage_pool->restore();
         ColumnDefinesPtr cols = (!pre_define_columns) ? DMTestEnv::getDefaultColumns() : pre_define_columns;
         setColumns(cols);
@@ -93,11 +92,10 @@ protected:
         *table_columns = *columns;
 
         dm_context = std::make_unique<DMContext>(*db_context,
-                                                 storage_path_pool,
-                                                 storage_pool,
+                                                 *storage_path_pool,
+                                                 *storage_pool,
                                                  /*min_version_*/ 0,
-                                                 NullspaceID,
-                                                 /*physical_table_id*/ 100,
+                                                 settings.not_compress_columns,
                                                  false,
                                                  1,
                                                  db_context->getSettingsRef());
@@ -109,8 +107,8 @@ protected:
 
 protected:
     /// all these var lives as ref in dm_context
-    std::shared_ptr<StoragePathPool> storage_path_pool;
-    std::shared_ptr<StoragePool> storage_pool;
+    std::unique_ptr<StoragePathPool> storage_path_pool;
+    std::unique_ptr<StoragePool> storage_pool;
     ColumnDefinesPtr table_columns;
     DM::DeltaMergeStore::Settings settings;
     /// dm_context
@@ -1040,15 +1038,18 @@ public:
         SegmentTest::SetUp();
     }
 
-    std::pair<RowKeyRange, PageIdU64s> genDMFile(DMContext & context, const Block & block)
+    std::pair<RowKeyRange, PageIds> genDMFile(DMContext & context, const Block & block)
     {
-        auto delegator = context.path_pool->getStableDiskDelegator();
-        auto file_id = context.storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
+        auto delegator = context.path_pool.getStableDiskDelegator();
+        auto file_id = context.storage_pool.newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
         auto input_stream = std::make_shared<OneBlockInputStream>(block);
         auto store_path = delegator.choosePath();
 
+        DMFileBlockOutputStream::Flags flags;
+        flags.setSingleFile(DMTestEnv::getPseudoRandomNumber() % 2);
+
         auto dmfile
-            = writeIntoNewDMFile(context, std::make_shared<ColumnDefines>(*tableColumns()), input_stream, file_id, store_path);
+            = writeIntoNewDMFile(context, std::make_shared<ColumnDefines>(*tableColumns()), input_stream, file_id, store_path, flags);
 
         delegator.addDTFile(file_id, dmfile->getBytesOnDisk(), store_path);
 
@@ -1080,7 +1081,7 @@ try
                 break;
             case SegmentTestMode::V2_FileOnly:
             {
-                auto delegate = dmContext().path_pool->getStableDiskDelegator();
+                auto delegate = dmContext().path_pool.getStableDiskDelegator();
                 auto file_provider = dmContext().db_context.getFileProvider();
                 auto [range, file_ids] = genDMFile(dmContext(), block);
                 auto file_id = file_ids[0];
@@ -1111,7 +1112,7 @@ try
     // Test split
     SegmentPtr other_segment;
     {
-        WriteBatches wbs(*dmContext().storage_pool);
+        WriteBatches wbs(dmContext().storage_pool);
         auto segment_snap = segment->createSnapshot(dmContext(), true, CurrentMetrics::DT_SnapshotOfSegmentSplit);
         ASSERT_FALSE(!segment_snap);
 
@@ -1120,8 +1121,8 @@ try
         auto split_info = segment->prepareSplit(dmContext(), tableColumns(), segment_snap, wbs);
 
         wbs.writeLogAndData();
-        split_info->my_stable->enableDMFilesGC(dmContext());
-        split_info->other_stable->enableDMFilesGC(dmContext());
+        split_info->my_stable->enableDMFilesGC();
+        split_info->other_stable->enableDMFilesGC();
 
         auto lock = segment->mustGetUpdateLock();
         std::tie(segment, other_segment) = segment->applySplit(lock, dmContext(), segment_snap, wbs, split_info.value());
@@ -1139,7 +1140,7 @@ try
 
     // Test merge
     {
-        WriteBatches wbs(*dmContext().storage_pool);
+        WriteBatches wbs(dmContext().storage_pool);
 
         auto left_snap = segment->createSnapshot(dmContext(), true, CurrentMetrics::DT_SnapshotOfSegmentMerge);
         auto right_snap = other_segment->createSnapshot(dmContext(), true, CurrentMetrics::DT_SnapshotOfSegmentMerge);
@@ -1151,7 +1152,7 @@ try
         auto merged_stable = Segment::prepareMerge(dmContext(), tableColumns(), {segment, other_segment}, {left_snap, right_snap}, wbs);
 
         wbs.writeLogAndData();
-        merged_stable->enableDMFilesGC(dmContext());
+        merged_stable->enableDMFilesGC();
 
         std::vector<Segment::Lock> locks;
         locks.emplace_back(segment->mustGetUpdateLock());
@@ -1518,12 +1519,9 @@ try
         const auto & dmfile = dmfiles[0];
         auto file_path = dmfile->path();
         // check property file exists and then delete it
-        if (!dmfile->useMetaV2())
-        {
-            ASSERT_EQ(Poco::File(file_path + "/property").exists(), true);
-            Poco::File(file_path + "/property").remove();
-            ASSERT_EQ(Poco::File(file_path + "/property").exists(), false);
-        }
+        ASSERT_EQ(Poco::File(file_path + "/property").exists(), true);
+        Poco::File(file_path + "/property").remove();
+        ASSERT_EQ(Poco::File(file_path + "/property").exists(), false);
         // clear PackProperties to force it to calculate from scratch
         dmfile->getPackProperties().clear_property();
         ASSERT_EQ(dmfile->getPackProperties().property_size(), 0);

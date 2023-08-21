@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -116,17 +116,13 @@ struct TrackedMppDataPacket
         packet = data;
     }
 
-    explicit TrackedMppDataPacket(int64_t version)
+    explicit TrackedMppDataPacket()
         : mem_tracker_wrapper(current_memory_tracker)
-    {
-        packet.set_version(version);
-    }
+    {}
 
-    explicit TrackedMppDataPacket(MemoryTracker * memory_tracker, int64_t version)
+    explicit TrackedMppDataPacket(MemoryTracker * memory_tracker)
         : mem_tracker_wrapper(memory_tracker)
-    {
-        packet.set_version(version);
-    }
+    {}
 
     TrackedMppDataPacket(const mpp::MPPDataPacket & data, size_t size, MemoryTracker * memory_tracker)
         : mem_tracker_wrapper(size, memory_tracker)

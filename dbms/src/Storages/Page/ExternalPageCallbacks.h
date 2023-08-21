@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,27 +14,25 @@
 
 #pragma once
 
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 
 #include <vector>
 
 namespace DB
 {
-template <typename Prefix>
-struct ExternalPageCallbacksT
+
+struct ExternalPageCallbacks
 {
     // `scanner` for scanning available external page ids on disks.
     // `remover` will be called with living normal page ids after gc run a round, user should remove those
     //           external pages(files) in `pending_external_pages` but not in `valid_normal_pages`
-    using PathAndIdsVec = std::vector<std::pair<String, std::set<PageIdU64>>>;
+    using PathAndIdsVec = std::vector<std::pair<String, std::set<PageId>>>;
     using ExternalPagesScanner = std::function<PathAndIdsVec()>;
     using ExternalPagesRemover
-        = std::function<void(const PathAndIdsVec & pending_external_pages, const std::set<PageIdU64> & valid_normal_pages)>;
+        = std::function<void(const PathAndIdsVec & pending_external_pages, const std::set<PageId> & valid_normal_pages)>;
     ExternalPagesScanner scanner = nullptr;
     ExternalPagesRemover remover = nullptr;
-    Prefix prefix{};
+    NamespaceId ns_id = MAX_NAMESPACE_ID;
 };
 
-using ExternalPageCallbacks = ExternalPageCallbacksT<NamespaceID>;
-using UniversalExternalPageCallbacks = ExternalPageCallbacksT<String>;
 } // namespace DB

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
 
 #pragma once
 
-#include <Interpreters/Context_fwd.h>
+#include <Flash/Coprocessor/DAGContext.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/IQuerySource.h>
 
 namespace DB
 {
-class DAGContext;
-
 class PlanQuerySource : public IQuerySource
 {
 public:
@@ -30,8 +29,8 @@ public:
     String str(size_t max_query_size) override;
     std::unique_ptr<IInterpreter> interpreter(Context & context, QueryProcessingStage::Enum stage) override;
 
-    DAGContext & getDAGContext() const;
-    const tipb::DAGRequest & getDAGRequest() const;
+    DAGContext & getDAGContext() const { return *context.getDAGContext(); }
+    const tipb::DAGRequest & getDAGRequest() const { return *getDAGContext().dag_request; }
 
 private:
     Context & context;

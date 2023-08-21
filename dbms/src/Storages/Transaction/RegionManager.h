@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,14 +55,14 @@ struct RegionManager : SharedMutexLockWrap
         RegionsRangeIndex & index;
     };
 
-    RegionReadLock genReadLock() const
+    RegionReadLock genRegionReadLock() const
     {
-        return {genSharedLock(), regions, region_range_index};
+        return {genReadLockGuard(), regions, region_range_index};
     }
 
-    RegionWriteLock genWriteLock()
+    RegionWriteLock genRegionWriteLock()
     {
-        return {genUniqueLock(), regions, region_range_index};
+        return {genWriteLockGuard(), regions, region_range_index};
     }
 
     /// Encapsulate the task lock for region

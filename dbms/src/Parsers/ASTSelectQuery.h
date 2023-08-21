@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ public:
     ASTPtr prewhere_expression;
     ASTPtr where_expression;
     ASTPtr group_expression_list;
+    bool group_by_with_totals = false;
     ASTPtr having_expression;
     ASTPtr order_expression_list;
     ASTPtr limit_by_value;

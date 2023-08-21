@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 #include <Common/Stopwatch.h>
 #include <Storages/Transaction/Types.h>
 
-namespace DB
+namespace Poco
 {
 class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
+}
+
+namespace DB
+{
 class Context;
 
 class GCManager
@@ -35,10 +38,10 @@ public:
 private:
     Context & global_context;
 
-    KeyspaceTableID next_keyspace_table_id = KeyspaceTableID{NullspaceID, InvalidTableID};
+    TableID next_table_id = InvalidTableID;
 
     AtomicStopwatch gc_check_stop_watch;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 } // namespace DB

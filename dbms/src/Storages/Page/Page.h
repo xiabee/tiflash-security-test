@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,11 +17,12 @@
 #include <IO/BufferBase.h>
 #include <IO/MemoryReadWriteBuffer.h>
 #include <IO/WriteHelpers.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 
 #include <map>
 #include <set>
 #include <unordered_map>
+
 
 namespace DB
 {
@@ -51,35 +52,30 @@ struct FieldOffsetInsidePage
 struct Page
 {
 public:
-    static Page invalidPage()
+    // only take the low u64, ignoring the high u64(NamespaceId)
+    explicit Page(const PageIdV3Internal & page_id_v3_)
+        : page_id(page_id_v3_.low)
     {
-        Page page{INVALID_PAGE_U64_ID};
-        page.is_valid = false;
-        return page;
     }
 
-    explicit Page(PageIdU64 page_id_)
-        : page_id(page_id_)
-        , is_valid(true)
+    Page()
+        : page_id(INVALID_PAGE_ID)
     {}
 
-    PageIdU64 page_id;
-    std::string_view data;
+    PageId page_id;
+    ByteBuffer data;
     MemHolder mem_holder;
     // Field offsets inside this page.
     std::set<FieldOffsetInsidePage> field_offsets;
 
-private:
-    bool is_valid;
-
 public:
-    inline bool isValid() const { return is_valid; }
+    inline bool isValid() const { return page_id != INVALID_PAGE_ID; }
 
-    std::string_view getFieldData(size_t index) const
+    ByteBuffer getFieldData(size_t index) const
     {
         auto iter = field_offsets.find(FieldOffsetInsidePage(index));
         if (unlikely(iter == field_offsets.end()))
-            throw Exception(fmt::format("Try to getFieldData with invalid field index [page_id={}] [valid={}] [field_index={}]", page_id, is_valid, index),
+            throw Exception(fmt::format("Try to getFieldData with invalid field index [page_id={}] [field_index={}]", page_id, index),
                             ErrorCodes::LOGICAL_ERROR);
 
         PageFieldOffset beg = iter->offset;
@@ -87,8 +83,7 @@ public:
         PageFieldOffset end = (iter == field_offsets.end() ? data.size() : iter->offset);
         assert(beg <= data.size());
         assert(end <= data.size());
-        assert(end >= beg);
-        return std::string_view(data.begin() + beg, end - beg);
+        return ByteBuffer(data.begin() + beg, data.begin() + end);
     }
 
     inline static PageFieldSizes fieldOffsetsToSizes(const PageFieldOffsetChecksums & field_offsets, size_t data_size)
@@ -112,8 +107,9 @@ public:
 };
 
 using Pages = std::vector<Page>;
-using PageMapU64 = std::map<PageIdU64, Page>;
+using PageMap = std::map<PageId, Page>;
 
+// TODO: Move it into V2
 // Indicate the page size && offset in PageFile.
 struct PageEntry
 {
@@ -191,6 +187,8 @@ public:
         return true;
     }
 };
-using PageIdU64AndEntry = std::pair<PageIdU64, PageEntry>;
-using PageIdU64AndEntries = std::vector<PageIdU64AndEntry>;
+using PageIdAndEntry = std::pair<PageId, PageEntry>;
+using PageIdAndEntries = std::vector<PageIdAndEntry>;
+
+
 } // namespace DB

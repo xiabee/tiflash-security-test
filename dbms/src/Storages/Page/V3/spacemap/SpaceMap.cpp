@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ bool SpaceMap::checkSpace(UInt64 offset, size_t size) const
 
 void SpaceMap::logDebugString()
 {
-    LOG_DEBUG(Logger::get(), toDebugString());
+    LOG_DEBUG(log, toDebugString());
 }
 
 bool SpaceMap::markFree(UInt64 offset, size_t length)
@@ -97,6 +97,7 @@ SpaceMap::SpaceMap(UInt64 start_, UInt64 end_, SpaceMapType type_)
     : type(type_)
     , start(start_)
     , end(end_)
+    , log(&Poco::Logger::get("SpaceMap"))
 {
 }
 

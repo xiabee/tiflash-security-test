@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,21 +55,12 @@ struct RegionPtrWithBlock;
 struct RegionPtrWithSnapshotFiles;
 class RegionScanFilter;
 using RegionScanFilterPtr = std::shared_ptr<RegionScanFilter>;
-struct CheckpointInfo;
-using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
 
 using SafeTS = UInt64;
 enum : SafeTS
 {
-    InvalidSafeTS = std::numeric_limits<UInt64>::max(),
+    InvalidSafeTS = std::numeric_limits<UInt64>::max()
 };
-
-using TsoShiftBits = UInt64;
-enum : TsoShiftBits
-{
-    TsoPhysicalShiftBits = 18,
-};
-
 class RegionTable : private boost::noncopyable
 {
 public:
@@ -98,8 +89,8 @@ public:
         InternalRegions regions;
     };
 
-    using TableMap = std::unordered_map<KeyspaceTableID, Table, boost::hash<KeyspaceTableID>>;
-    using RegionInfoMap = std::unordered_map<RegionID, KeyspaceTableID>;
+    using TableMap = std::unordered_map<TableID, Table>;
+    using RegionInfoMap = std::unordered_map<RegionID, TableID>;
 
     // safe ts is maintained by check_leader RPC (https://github.com/tikv/tikv/blob/1ea26a2ac8761af356cc5c0825eb89a0b8fc9749/components/resolved_ts/src/advance.rs#L262),
     // leader_safe_ts is the safe_ts in leader, leader will send <applied_index, safe_ts> to learner to advance safe_ts of learner, and TiFlash will record the safe_ts into safe_ts_map in check_leader RPC.
@@ -159,18 +150,12 @@ public:
 
     void removeRegion(RegionID region_id, bool remove_data, const RegionTaskLock &);
 
-    // Find all regions with data, call writeBlockByRegionAndFlush with try_persist = true.
-    // This function is only for debug.
     bool tryFlushRegions();
+    RegionDataReadInfoList tryFlushRegion(RegionID region_id, bool try_persist = false);
+    RegionDataReadInfoList tryFlushRegion(const RegionPtrWithBlock & region, bool try_persist);
 
-    // Protects writeBlockByRegionAndFlush and ensures it's executed by only one thread at the same time.
-    // Only one thread can do this at the same time.
-    // The original name for this function is tryFlushRegion.
-    RegionDataReadInfoList tryWriteBlockByRegionAndFlush(RegionID region_id, bool try_persist = false);
-    RegionDataReadInfoList tryWriteBlockByRegionAndFlush(const RegionPtrWithBlock & region, bool try_persist);
-
-    void handleInternalRegionsByTable(KeyspaceID keyspace_id, TableID table_id, std::function<void(const InternalRegions &)> && callback) const;
-    std::vector<std::pair<RegionID, RegionPtr>> getRegionsByTable(KeyspaceID keyspace_id, TableID table_id) const;
+    void handleInternalRegionsByTable(TableID table_id, std::function<void(const InternalRegions &)> && callback) const;
+    std::vector<std::pair<RegionID, RegionPtr>> getRegionsByTable(TableID table_id) const;
 
     /// Write the data of the given region into the table with the given table ID, fill the data list for outer to remove.
     /// Will trigger schema sync on read error for only once,
@@ -197,29 +182,26 @@ public:
     /// extend range for possible InternalRegion or add one.
     void extendRegionRange(RegionID region_id, const RegionRangeKeys & region_range_keys);
 
+
     void updateSafeTS(UInt64 region_id, UInt64 leader_safe_ts, UInt64 self_safe_ts);
 
     // unit: ms. If safe_ts diff is larger than 2min, we think the data synchronization progress is far behind the leader.
     static const UInt64 SafeTsDiffThreshold = 2 * 60 * 1000;
     bool isSafeTSLag(UInt64 region_id, UInt64 * leader_safe_ts, UInt64 * self_safe_ts);
 
-    UInt64 getSelfSafeTS(UInt64 region_id);
 
 private:
     friend class MockTiDB;
     friend class StorageDeltaMerge;
 
-    Table & getOrCreateTable(KeyspaceID keyspace_id, TableID table_id);
-    void removeTable(KeyspaceID keyspace_id, TableID table_id);
+    Table & getOrCreateTable(TableID table_id);
+    void removeTable(TableID table_id);
     InternalRegion & getOrInsertRegion(const Region & region);
     InternalRegion & insertRegion(Table & table, const RegionRangeKeys & region_range_keys, RegionID region_id);
     InternalRegion & insertRegion(Table & table, const Region & region);
-    InternalRegion & doGetInternalRegion(KeyspaceTableID ks_tb_id, RegionID region_id);
+    InternalRegion & doGetInternalRegion(TableID table_id, RegionID region_id);
 
-    // Try write the committed kvs into cache of columnar DeltaMergeStore.
-    // Flush the cache if try_persist is set to true.
-    // The original name for this method is flushRegion.
-    RegionDataReadInfoList writeBlockByRegionAndFlush(const RegionPtrWithBlock & region, bool try_persist) const;
+    RegionDataReadInfoList flushRegion(const RegionPtrWithBlock & region, bool try_persist) const;
     bool shouldFlush(const InternalRegion & region) const;
     RegionID pickRegionToFlush();
 
@@ -306,24 +288,6 @@ struct RegionPtrWithSnapshotFiles
 
     const Base & base;
     const std::vector<DM::ExternalDTFileInfo> external_files;
-};
-
-// A wrap of RegionPtr, with checkpoint info to be ingested
-struct RegionPtrWithCheckpointInfo
-{
-    using Base = RegionPtr;
-
-    RegionPtrWithCheckpointInfo(const Base & base_, CheckpointInfoPtr checkpoint_info_);
-
-    /// to be compatible with usage as RegionPtr.
-    Base::element_type * operator->() const { return base.operator->(); }
-    const Base::element_type & operator*() const { return base.operator*(); }
-
-    /// make it could be cast into RegionPtr implicitly.
-    operator const Base &() const { return base; }
-
-    const Base & base;
-    CheckpointInfoPtr checkpoint_info;
 };
 
 } // namespace DB

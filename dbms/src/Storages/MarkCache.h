@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,12 +36,13 @@ struct MarksWeightFunction
 {
     size_t operator()(const MarksInCompressedFile & marks) const
     {
-        return marks.allocated_bytes();
+        /// NOTE Could add extra 100 bytes for overhead of std::vector, cache structures and allocator.
+        return marks.size() * sizeof(MarkInCompressedFile);
     }
 };
 
 
-/** Cache of 'marks' for StorageDeltaMerge.
+/** Cache of 'marks' for StorageMergeTree.
   * Marks is an index structure that addresses ranges in column file, corresponding to ranges of primary key.
   */
 class MarkCache : public LRUCache<String, MarksInCompressedFile, std::hash<String>, MarksWeightFunction>

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,13 +24,9 @@ extern "C" {
 
 #include <pthread.h>
 
-// We can not remove this function before manually designating the signal stack.
-// However, the returned value could be set to 16KiB, so that we can save many VSZ.
-// Morever, though we can use SIGSTKSZ to define the size of signal stack,
-// it's too small to collect enough information.
 size_t __pthread_get_minstack(const pthread_attr_t * attr)
 {
-    return 16384;
+    return 1048576;        /// This is a guess. Don't sure it is correct.
 }
 
 #include <signal.h>

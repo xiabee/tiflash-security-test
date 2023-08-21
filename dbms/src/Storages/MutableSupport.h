@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -50,6 +50,15 @@ public:
         for (auto & it : names)
             if (block.has(it))
                 block.erase(it);
+    }
+
+    bool shouldWiden(const NameAndTypePair & column)
+    {
+        DataTypePtr t
+            = column.type->isNullable() ? dynamic_cast<const DataTypeNullable *>(column.type.get())->getNestedType() : column.type;
+        return (column.name != MutableSupport::version_column_name && column.name != MutableSupport::delmark_column_name
+                && column.name != MutableSupport::tidb_pk_column_name)
+            && t->isInteger() && !(typeid_cast<const DataTypeInt64 *>(t.get()) || typeid_cast<const DataTypeUInt64 *>(t.get()));
     }
 
     static const String mmt_storage_name;

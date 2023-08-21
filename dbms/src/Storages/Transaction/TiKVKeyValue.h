@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +27,11 @@ struct StringObject : std::string
 public:
     using Base = std::string;
 
+    struct Hash
+    {
+        std::size_t operator()(const StringObject & x) const { return std::hash<Base>()(x); }
+    };
+
     StringObject() = default;
     StringObject(Base && str_)
         : Base(std::move(str_))
@@ -41,12 +46,6 @@ public:
         : Base(str)
     {}
     static StringObject copyFrom(const Base & str) { return StringObject(str); }
-
-    template <bool a, typename = std::enable_if_t<a == is_key>>
-    static StringObject<is_key> copyFromObj(const StringObject<a> & other)
-    {
-        return StringObject(other.data(), other.dataSize());
-    }
 
     DISALLOW_COPY(StringObject);
     StringObject & operator=(StringObject && a)
@@ -101,15 +100,11 @@ struct DecodedTiKVKey : std::string
         (Base &)* this = (Base &&) obj;
         return *this;
     }
-
-    KeyspaceID getKeyspaceID() const;
-    std::string_view getUserKey() const;
-    static std::string makeKeyspacePrefix(KeyspaceID keyspace_id);
 };
 
 static_assert(sizeof(DecodedTiKVKey) == sizeof(std::string));
 
-struct RawTiDBPK : private std::shared_ptr<const std::string>
+struct RawTiDBPK : std::shared_ptr<const std::string>
 {
     using Base = std::shared_ptr<const std::string>;
 
@@ -121,9 +116,6 @@ struct RawTiDBPK : private std::shared_ptr<const std::string>
     bool operator==(const RawTiDBPK & y) const { return (**this) == (*y); }
     bool operator!=(const RawTiDBPK & y) const { return !((*this) == y); }
     bool operator<(const RawTiDBPK & y) const { return (**this) < (*y); }
-    bool operator>(const RawTiDBPK & y) const { return (**this) > (*y); }
-    const std::string * operator->() const { return get(); }
-    const std::string & operator*() const { return *get(); }
 
     RawTiDBPK(const Base & o)
         : Base(o)
@@ -148,15 +140,3 @@ private:
 };
 
 } // namespace DB
-
-namespace std
-{
-template <bool is_key>
-struct hash<DB::StringObject<is_key>>
-{
-    size_t operator()(const DB::StringObject<is_key> & k) const
-    {
-        return std::hash<std::string>()(k);
-    }
-};
-} // namespace std

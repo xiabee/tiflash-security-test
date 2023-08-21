@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
 #include <Common/FailPoint.h>
 #include <Flash/Coprocessor/TablesRegionsInfo.h>
 #include <Flash/CoprocessorHandler.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/TMTContext.h>
 
@@ -49,10 +47,6 @@ const SingleTableRegions & TablesRegionsInfo::getTableRegionInfoByTableID(Int64 
 static bool needRemoteRead(const RegionInfo & region_info, const TMTContext & tmt_context)
 {
     fiu_do_on(FailPoints::force_no_local_region_for_mpp_task, { return true; });
-    // For tiflash_compute node, all regions will be fetched from tiflash_storage node.
-    // So treat all regions as remote regions.
-    if (tmt_context.getContext().getSharedContextDisagg()->isDisaggregatedComputeMode())
-        return true;
     RegionPtr current_region = tmt_context.getKVStore()->getRegion(region_info.region_id);
     if (current_region == nullptr || current_region->peerState() != raft_serverpb::PeerState::Normal)
         return true;

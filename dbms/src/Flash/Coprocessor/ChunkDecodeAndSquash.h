@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,11 +27,7 @@ public:
     CHBlockChunkDecodeAndSquash(const Block & header, size_t rows_limit_);
     ~CHBlockChunkDecodeAndSquash() = default;
     std::optional<Block> decodeAndSquash(const String &);
-    std::optional<Block> decodeAndSquashV1(std::string_view);
     std::optional<Block> flush();
-
-private:
-    std::optional<Block> decodeAndSquashV1Impl(ReadBuffer & istr);
 
 private:
     CHBlockChunkCodec codec;

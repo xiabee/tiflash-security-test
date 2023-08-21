@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -288,7 +288,7 @@ void MockTiDBTable::dbgFuncCleanUpRegions(DB::Context & context, const DB::ASTs 
     auto & region_table = context.getTMTContext().getRegionTable();
     {
         {
-            auto manage_lock = kvstore->genRegionMgrReadLock();
+            auto manage_lock = kvstore->genRegionReadLock();
             for (const auto & e : manage_lock.regions)
                 regions.emplace_back(e.first);
         }

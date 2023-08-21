@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,15 +19,16 @@
 
 #include <boost/noncopyable.hpp>
 #include <memory>
-#include <shared_mutex>
-#include <unordered_map>
+
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB
 {
 class Context;
 class BackgroundProcessingPool;
-class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
 
 class IAST;
 using ASTPtr = std::shared_ptr<IAST>;
@@ -44,18 +45,14 @@ public:
     ~SchemaSyncService();
 
 private:
-    bool syncSchemas(KeyspaceID keyspace_id);
-    void removeCurrentVersion(KeyspaceID keyspace_id);
+    bool syncSchemas();
 
     struct GCContext
     {
         Timestamp last_gc_safe_point = 0;
     } gc_context;
 
-    bool gc(Timestamp gc_safe_point, KeyspaceID keyspace_id);
-
-    void addKeyspaceGCTasks();
-    void removeKeyspaceGCTasks();
+    bool gc(Timestamp gc_safe_point);
 
 private:
     Context & context;
@@ -65,11 +62,7 @@ private:
     BackgroundProcessingPool & background_pool;
     BackgroundProcessingPool::TaskHandle handle;
 
-    mutable std::shared_mutex ks_map_mutex;
-    // Handles for each keyspace schema sync task.
-    std::unordered_map<KeyspaceID, BackgroundProcessingPool::TaskHandle> ks_handle_map;
-
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 
 using SchemaSyncServicePtr = std::shared_ptr<SchemaSyncService>;

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ using RSOperatorPtr = std::shared_ptr<RSOperator>;
 using RSOperators = std::vector<RSOperatorPtr>;
 using Fields = std::vector<Field>;
 
-inline static const RSOperatorPtr EMPTY_RS_OPERATOR{};
+inline static const RSOperatorPtr EMPTY_FILTER{};
 
 struct RSCheckParam
 {

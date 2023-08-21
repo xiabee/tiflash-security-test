@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 #include <Columns/ColumnConst.h>
 #include <Common/Exception.h>
 #include <Functions/FunctionsDateTime.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -36,7 +37,7 @@ TEST_F(TestUnixTimestamp, TestInputType)
 try
 {
     /// set timezone to UTC
-    context->getTimezoneInfo().resetByTimezoneName("UTC");
+    context.getTimezoneInfo().resetByTimezoneName("UTC");
 
     std::vector<DataTypeMyDate::FieldType> date_data{
         /// zero date
@@ -151,7 +152,7 @@ TEST_F(TestUnixTimestamp, TestTimezone)
 try
 {
     /// name based timezone
-    context->getTimezoneInfo().resetByTimezoneName("Asia/Shanghai");
+    context.getTimezoneInfo().resetByTimezoneName("Asia/Shanghai");
     std::vector<DataTypeMyDateTime::FieldType> date_time_data{
         /// min-max valid timestamp
         MyDateTime(1970, 1, 1, 8, 0, 0, 0).toPackedUInt(),
@@ -182,7 +183,7 @@ try
         createColumn<Decimal64>(std::make_tuple(12, 0), date_time_decimal_result),
         executeFunction(func_name_dec, createColumn<MyDateTime>(date_time_data)));
 
-    context->getTimezoneInfo().resetByTimezoneName("America/Santiago");
+    context.getTimezoneInfo().resetByTimezoneName("America/Santiago");
     date_time_data = {
         /// min-max valid timestamp
         MyDateTime(1969, 12, 31, 21, 0, 0, 0).toPackedUInt(),
@@ -200,13 +201,13 @@ try
         MyDateTime(2022, 4, 2, 23, 59, 59, 0).toPackedUInt(),
         MyDateTime(2022, 4, 3, 0, 0, 0, 0).toPackedUInt(),
         /// When local standard time is about to reach
-        /// Sunday, 5 September 2021, 00:00:00 clocks are turned forward 1 hour to
-        /// Sunday, 5 September 2021, 01:00:00 local daylight time instead.
-        MyDateTime(2021, 9, 4, 23, 59, 59, 0).toPackedUInt(),
-        MyDateTime(2021, 9, 5, 1, 0, 0, 0).toPackedUInt(),
+        /// Sunday, 4 September 2022, 00:00:00 clocks are turned forward 1 hour to
+        /// Sunday, 4 September 2022, 01:00:00 local daylight time instead.
+        MyDateTime(2022, 9, 3, 23, 59, 59, 0).toPackedUInt(),
+        MyDateTime(2022, 9, 4, 1, 0, 0, 0).toPackedUInt(),
     };
-    date_time_int_result = {0, 1, 2147483647ull, 0, 1648951199ull, 1648954800ull, 1648958399ull, 1648958400ull, 1630814399ull, 1630814400ull};
-    date_time_decimal_result = {"0", "1", "2147483647", "0", "1648951199", "1648954800", "1648958399", "1648958400", "1630814399", "1630814400"};
+    date_time_int_result = {0, 1, 2147483647ull, 0, 1648951199ull, 1648954800ull, 1648958399ull, 1648958400ull, 1662263999ull, 1662264000ull};
+    date_time_decimal_result = {"0", "1", "2147483647", "0", "1648951199", "1648954800", "1648958399", "1648958400", "1662263999", "1662264000"};
     ASSERT_COLUMN_EQ(
         createColumn<UInt64>(date_time_int_result),
         executeFunction(func_name_int, createColumn<MyDateTime>(date_time_data)));
@@ -215,7 +216,7 @@ try
         executeFunction(func_name_dec, createColumn<MyDateTime>(date_time_data)));
 
     /// offset based timezone
-    context->getTimezoneInfo().resetByTimezoneOffset(28800);
+    context.getTimezoneInfo().resetByTimezoneOffset(28800);
     date_time_data = {
         /// min-max valid timestamp
         MyDateTime(1970, 1, 1, 8, 0, 0, 0).toPackedUInt(),
@@ -232,7 +233,7 @@ try
         createColumn<Decimal64>(std::make_tuple(12, 0), date_time_decimal_result),
         executeFunction(func_name_dec, createColumn<MyDateTime>(date_time_data)));
 
-    context->getTimezoneInfo().resetByTimezoneOffset(-10800);
+    context.getTimezoneInfo().resetByTimezoneOffset(-10800);
     date_time_data = {
         /// min-max valid timestamp
         MyDateTime(1969, 12, 31, 21, 0, 0, 0).toPackedUInt(),

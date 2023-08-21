@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,18 +40,6 @@
     M(ExternalAggregationUncompressedBytes)    \
                                                \
     M(ContextLock)                             \
-    M(CreatedHTTPConnections)                  \
-    M(DNSError)                                \
-    M(S3ReadMicroseconds)                      \
-    M(S3WriteMicroseconds)                     \
-    M(S3ReadRequestsCount)                     \
-    M(S3WriteRequestsCount)                    \
-    M(S3ReadRequestsErrors)                    \
-    M(S3WriteRequestsErrors)                   \
-    M(S3ReadRequestsThrottling)                \
-    M(S3WriteRequestsThrottling)               \
-    M(S3ReadRequestsRedirects)                 \
-    M(S3WriteRequestsRedirects)                \
                                                \
     M(RWLockAcquiredReadLocks)                 \
     M(RWLockAcquiredWriteLocks)                \
@@ -124,24 +112,7 @@
                                                \
     M(ChecksumDigestBytes)                     \
                                                \
-    M(RaftWaitIndexTimeout)                    \
-                                               \
-    M(S3WriteBytes)                            \
-    M(S3ReadBytes)                             \
-    M(S3CreateMultipartUpload)                 \
-    M(S3UploadPart)                            \
-    M(S3CompleteMultipartUpload)               \
-    M(S3PutObject)                             \
-    M(S3GetObject)                             \
-    M(S3HeadObject)                            \
-    M(S3ListObjects)                           \
-    M(S3DeleteObject)                          \
-    M(S3CopyObject)                            \
-    M(S3GetObjectRetry)                        \
-    M(S3PutObjectRetry)                        \
-    M(FileCacheHit)                            \
-    M(FileCacheMiss)                           \
-    M(FileCacheEvict)
+    M(RaftWaitIndexTimeout)
 
 namespace ProfileEvents
 {

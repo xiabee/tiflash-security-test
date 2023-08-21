@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,17 @@
 
 #pragma once
 
-#include <Encryption/EncryptionPath.h>
-#include <Encryption/FileProvider_fwd.h>
-#include <IO/WriteBufferFromWritableFile.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/WritableFile.h>
+#include <IO/WriteBufferFromFileDescriptor.h>
 
 namespace DB
 {
-
-class WriteLimiter;
-using WriteLimiterPtr = std::shared_ptr<WriteLimiter>;
-
-/**
- * Note: This class maybe removed in the future, use WriteBufferFromWritableFile instead if possible
- */
-class WriteBufferFromFileProvider : public WriteBufferFromWritableFile
+class WriteBufferFromFileProvider : public WriteBufferFromFileDescriptor
 {
+protected:
+    void nextImpl() override;
+
 public:
     WriteBufferFromFileProvider(
         const FileProviderPtr & file_provider_,
@@ -41,6 +37,17 @@ public:
         mode_t mode = 0666,
         char * existing_memory = nullptr,
         size_t alignment = 0);
+
+    ~WriteBufferFromFileProvider() override;
+
+    void close() override;
+
+    std::string getFileName() const override { return file->getFileName(); }
+
+    int getFD() const override { return file->getFd(); }
+
+private:
+    WritableFilePtr file;
 };
 
 } // namespace DB

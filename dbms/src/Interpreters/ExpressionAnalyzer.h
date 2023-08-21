@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -262,7 +262,7 @@ private:
                                       NameSet & required_joined_columns);
 
     /// columns - the columns that are present before the transformations begin.
-    static void initChain(ExpressionActionsChain & chain, const NamesAndTypesList & columns);
+    void initChain(ExpressionActionsChain & chain, const NamesAndTypesList & columns) const;
 
     void assertSelect() const;
     void assertAggregation() const;

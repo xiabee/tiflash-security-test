@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,13 +13,15 @@
 // limitations under the License.
 
 #include <DataStreams/JSONCompactRowOutputStream.h>
+
 #include <IO/WriteHelpers.h>
 
 
 namespace DB
 {
 
-JSONCompactRowOutputStream::JSONCompactRowOutputStream(WriteBuffer & ostr_, const Block & sample_, bool write_statistics_, const FormatSettingsJSON & settings_)
+JSONCompactRowOutputStream::JSONCompactRowOutputStream(WriteBuffer & ostr_, const Block & sample_,
+                                                       bool write_statistics_, const FormatSettingsJSON & settings_)
     : JSONRowOutputStream(ostr_, sample_, write_statistics_, settings_)
 {
 }
@@ -52,6 +54,30 @@ void JSONCompactRowOutputStream::writeRowEndDelimiter()
     field_number = 0;
     ++row_count;
 }
+
+
+void JSONCompactRowOutputStream::writeTotals()
+{
+    if (totals)
+    {
+        writeCString(",\n", *ostr);
+        writeChar('\n', *ostr);
+        writeCString("\t\"totals\": [", *ostr);
+
+        size_t totals_columns = totals.columns();
+        for (size_t i = 0; i < totals_columns; ++i)
+        {
+            if (i != 0)
+                writeChar(',', *ostr);
+
+            const ColumnWithTypeAndName & column = totals.safeGetByPosition(i);
+            column.type->serializeTextJSON(*column.column.get(), 0, *ostr, settings);
+        }
+
+        writeChar(']', *ostr);
+    }
+}
+
 
 static void writeExtremesElement(const char * title, const Block & extremes, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON & settings)
 {
@@ -91,4 +117,4 @@ void JSONCompactRowOutputStream::writeExtremes()
 }
 
 
-} // namespace DB
+}

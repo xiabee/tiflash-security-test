@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,11 +30,10 @@ public:
         const String & executor_id_,
         const PlanType & type_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const PhysicalPlanNodePtr & left_,
         const PhysicalPlanNodePtr & right_)
-        : PhysicalPlanNode(executor_id_, type_, schema_, fine_grained_shuffle_, req_id)
+        : PhysicalPlanNode(executor_id_, type_, schema_, req_id)
         , left(left_)
         , right(right_)
     {
@@ -46,6 +45,15 @@ public:
     {
         RUNTIME_ASSERT(i <= 1, log, "child_index({}) shouldn't >= childrenSize({})", i, childrenSize());
         return i == 0 ? left : right;
+    }
+
+    void setChild(size_t i, const PhysicalPlanNodePtr & new_child) override
+    {
+        RUNTIME_ASSERT(i <= 1, log, "child_index({}) shouldn't >= childrenSize({})", i, childrenSize());
+        RUNTIME_ASSERT(new_child, log, "new_child for child_index({}) shouldn't be nullptr", i);
+        RUNTIME_ASSERT(new_child.get() != this, log, "new_child for child_index({}) shouldn't be itself", i);
+        auto & child = i == 0 ? left : right;
+        child = new_child;
     }
 
     size_t childrenSize() const override { return 2; };

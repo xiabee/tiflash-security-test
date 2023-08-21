@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,15 +14,10 @@
 
 #pragma once
 
-#include <Storages/Transaction/TypeMapping.h>
-#include <common/types.h>
-#include <tipb/executor.pb.h>
+#include <Flash/Coprocessor/DAGContext.h>
 
 namespace DB
 {
-class DAGContext;
-using ColumnInfos = std::vector<TiDB::ColumnInfo>;
-
 /// TiDBTableScan is a wrap to hide the difference of `TableScan` and `PartitionTableScan`
 class TiDBTableScan
 {
@@ -39,7 +34,7 @@ public:
     {
         return columns.size();
     }
-    const ColumnInfos & getColumns() const
+    const google::protobuf::RepeatedPtrField<tipb::ColumnInfo> & getColumns() const
     {
         return columns;
     }
@@ -66,21 +61,11 @@ public:
         return is_fast_scan;
     }
 
-    const tipb::Executor * getTableScanPB() const
-    {
-        return table_scan;
-    }
-
-    const google::protobuf::RepeatedPtrField<tipb::Expr> & getPushedDownFilters() const
-    {
-        return pushed_down_filters;
-    }
-
 private:
     const tipb::Executor * table_scan;
     String executor_id;
     bool is_partition_table_scan;
-    const ColumnInfos columns;
+    const google::protobuf::RepeatedPtrField<tipb::ColumnInfo> & columns;
     /// logical_table_id is the table id for a TiDB' table, while if the
     /// TiDB table is partition, each partition is a physical table, and
     /// the partition's table id is the physical table id.
@@ -90,12 +75,6 @@ private:
     /// physical_table_ids contains the table ids of its partitions
     std::vector<Int64> physical_table_ids;
     Int64 logical_table_id;
-
-    /// pushed_down_filter_conditions is the filter conditions that are
-    /// pushed down to table scan by late materialization.
-    /// They will be executed on Storage layer.
-    const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters;
-
     bool keep_order;
     bool is_fast_scan;
 };

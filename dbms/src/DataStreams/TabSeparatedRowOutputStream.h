@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,19 +41,23 @@ public:
 
     void flush() override;
 
+    void setTotals(const Block & totals_) override { totals = totals_; }
     void setExtremes(const Block & extremes_) override { extremes = extremes_; }
 
     /// https://www.iana.org/assignments/media-types/text/tab-separated-values
     String getContentType() const override { return "text/tab-separated-values; charset=UTF-8"; }
 
 protected:
+    void writeTotals();
     void writeExtremes();
 
     WriteBuffer & ostr;
     const Block sample;
     bool with_names;
     bool with_types;
+    Block totals;
     Block extremes;
 };
 
-} // namespace DB
+}
+

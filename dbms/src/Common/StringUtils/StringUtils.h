@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -86,16 +86,6 @@ std::string getOrdinalSuffix(T n)
 inline bool isASCII(char c)
 {
     return static_cast<unsigned char>(c) < 0x80;
-}
-
-inline bool isUpperAlphaASCII(char c)
-{
-    return (c >= 'A' && c <= 'Z');
-}
-
-inline bool isLowerAplhaASCII(char c)
-{
-    return (c >= 'a' && c <= 'z');
 }
 
 inline bool isAlphaASCII(char c)

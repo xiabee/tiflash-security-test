@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -93,12 +93,7 @@ private:
 std::unique_ptr<KeyGenerator> KeyGenerator::create(const WorkloadOptions & opts)
 {
     const auto & dist = opts.write_key_distribution;
-    const auto & testing_type = opts.testing_type;
-    if (testing_type == "s3_bench")
-    {
-        return std::make_unique<UniformDistributionKeyGenerator>(1 * 1024 * 1024, 100 * 1024 * 1024);
-    }
-    else if (dist == "uniform")
+    if (dist == "uniform")
     {
         return std::make_unique<UniformDistributionKeyGenerator>(opts.max_key_count);
     }

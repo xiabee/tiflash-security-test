@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,10 +24,10 @@ bool TiKVRangeKeyCmp::operator()(const TiKVRangeKey & x, const TiKVRangeKey & y)
 
 void RegionsRangeIndex::add(const RegionPtr & new_region)
 {
-    auto new_region_range = new_region->getRange();
-    const auto & new_range_keys = new_region_range->comparableKeys();
-    auto begin_it = split(new_range_keys.first);
-    auto end_it = split(new_range_keys.second);
+    auto region_range = new_region->getRange();
+    const auto & new_range = region_range->comparableKeys();
+    auto begin_it = split(new_range.first);
+    auto end_it = split(new_range.second);
     if (begin_it == end_it)
         throw Exception(
             std::string(__PRETTY_FUNCTION__) + ": range of region " + toString(new_region->id()) + " is empty",
@@ -88,11 +88,6 @@ void RegionsRangeIndex::clear()
     root.clear();
     min_it = root.emplace(TiKVRangeKey::makeTiKVRangeKey<true>(TiKVKey()), IndexNode{}).first;
     max_it = root.emplace(TiKVRangeKey::makeTiKVRangeKey<false>(TiKVKey()), IndexNode{}).first;
-}
-
-void RegionsRangeIndex::tryMergeEmpty()
-{
-    tryMergeEmpty(root.begin());
 }
 
 void RegionsRangeIndex::tryMergeEmpty(RootMap::iterator remove_it)

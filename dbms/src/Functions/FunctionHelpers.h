@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -186,7 +186,6 @@ std::unique_ptr<IGetVecHelper<T>> IGetVecHelper<T>::getHelper(const ColumnConst 
     return std::unique_ptr<IGetVecHelper<T>>{new GetConstVecHelper<T>{p}};
 }
 
-static Field FIELD_NULL = toField(Null{});
 static Field FIELD_INT8_1 = toField(Int8(1));
 static Field FIELD_INT8_0 = toField(Int8(0));
 

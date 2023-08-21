@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,8 @@
 #pragma once
 
 #include <DataStreams/IBlockInputStream.h>
-#include <Flash/Coprocessor/FilterConditions.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Planner/Plans/PhysicalLeaf.h>
+#include <Flash/Planner/plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
@@ -41,41 +40,17 @@ public:
         const NamesAndTypes & schema_,
         const String & req_id,
         const Block & sample_block_,
-        const BlockInputStreams & mock_streams_,
-        Int64 table_id_);
+        const BlockInputStreams & mock_streams_);
 
     void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
-        PipelineExecGroupBuilder & group_builder,
-        Context & context,
-        size_t concurrency) override;
-
-    void initStreams(Context & context);
-
-    // for delta-merge test
-    bool setFilterConditions(Context & context, const String & filter_executor_id, const tipb::Selection & selection);
-
-    bool hasFilterConditions() const;
-
-    const String & getFilterConditionsId() const;
-
-    Int64 getLogicalTableID() const;
-
-    void updateStreams(Context & context);
-
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/) override;
+    void transformImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/) override;
 
-private:
-    FilterConditions filter_conditions;
     Block sample_block;
 
     BlockInputStreams mock_streams;
-
-    const Int64 table_id;
 };
 } // namespace DB

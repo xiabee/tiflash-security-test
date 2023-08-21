@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -140,11 +140,6 @@ inline void readStringBinary(std::string & s, ReadBuffer & buf, size_t MAX_STRIN
     buf.readStrict(&s[0], size);
 }
 
-// Corresponding to `writeString(const char * data, size_t size, WriteBuffer & buf)`.
-inline void readString(char * data, size_t size, ReadBuffer & buf)
-{
-    buf.readStrict(data, size);
-}
 
 inline StringRef readStringBinaryInto(Arena & arena, ReadBuffer & buf)
 {

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ public:
                     buildDefaultRowsFrame(),
                     fine_grained_shuffle_stream_count);
         tipb::DAGRequest req;
-        MPPInfo mpp_info(0, 0, 0, 0, -1, -1, {}, std::unordered_map<String, std::vector<Int64>>{});
+        MPPInfo mpp_info(0, -1, -1, {}, std::unordered_map<String, std::vector<Int64>>{});
         builder.getRoot()->toTiPBExecutor(req.mutable_root_executor(), /*collator_id=*/0, mpp_info, TiFlashTestEnv::getContext());
         assert(req.root_executor().tp() == tipb::TypeWindow);
         window = req.root_executor().window();

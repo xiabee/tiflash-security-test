@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,12 +17,7 @@
 #include <Server/ServerInfo.h>
 #include <Storages/DeltaMerge/ReadThread/WorkQueue.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
-
-namespace DB
-{
-class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
-} // namespace DB
+#include <common/logger_useful.h>
 
 namespace DB::DM
 {
@@ -48,7 +43,7 @@ private:
 
     WorkQueue<MergedTaskPtr> task_queue;
     std::vector<SegmentReaderUPtr> readers;
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 
 // SegmentReaderPoolManager is a NUMA-aware singleton that manages several SegmentReaderPool objects.
@@ -64,7 +59,7 @@ public:
         static SegmentReaderPoolManager pool_manager;
         return pool_manager;
     }
-    void init(UInt32 logical_cpu_cores, double read_thread_count_scale);
+    void init(const ServerInfo & server_info);
     ~SegmentReaderPoolManager();
     DISALLOW_COPY_AND_MOVE(SegmentReaderPoolManager);
 
@@ -79,7 +74,7 @@ private:
     SegmentReaderPoolManager();
     std::vector<std::unique_ptr<SegmentReaderPool>> reader_pools;
     std::unordered_set<std::thread::id> reader_ids;
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 
 } // namespace DB::DM

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,11 +42,6 @@ int avx2_mem_cmp(const char * p1, const char * p2, size_t n)
 const char * avx2_memchr(const char * src, size_t n, char target)
 {
     return details::avx2_memchr(src, n, target);
-}
-
-uint64_t avx2_byte_count(const char * src, size_t size, char target)
-{
-    return details::avx2_byte_count(src, size, target);
 }
 
 } // namespace mem_utils

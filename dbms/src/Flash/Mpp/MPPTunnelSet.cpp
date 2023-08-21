@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <Flash/Coprocessor/DAGContext.h>
+#include <Common/FailPoint.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
 #include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <Flash/Mpp/Utils.h>
@@ -23,10 +23,18 @@ namespace DB
 {
 namespace
 {
+void checkPacketSize(size_t size)
+{
+    static constexpr size_t max_packet_size = 1u << 31;
+    if (unlikely(size >= max_packet_size))
+        throw Exception(fmt::format("Packet is too large to send, size : {}", size));
+}
+
 TrackedMppDataPacketPtr serializePacket(const tipb::SelectResponse & response)
 {
-    auto tracked_packet = std::make_shared<TrackedMppDataPacket>(MPPDataPacketV0);
+    auto tracked_packet = std::make_shared<TrackedMppDataPacket>();
     tracked_packet->serializeByResponse(response);
+    checkPacketSize(tracked_packet->getPacket().ByteSizeLong());
     return tracked_packet;
 }
 } // namespace
@@ -40,61 +48,42 @@ void MPPTunnelSetBase<Tunnel>::sendExecutionSummary(const tipb::SelectResponse &
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(TrackedMppDataPacketPtr && data, size_t index)
+void MPPTunnelSetBase<Tunnel>::write(tipb::SelectResponse & response)
 {
-    assert(index < tunnels.size());
-    tunnels[index]->write(std::move(data));
+    // for root mpp task, only one tunnel will connect to tidb/tispark.
+    RUNTIME_CHECK(1 == tunnels.size());
+    tunnels.back()->write(serializePacket(response));
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::nonBlockingWrite(TrackedMppDataPacketPtr && data, size_t index)
+void MPPTunnelSetBase<Tunnel>::broadcastOrPassThroughWrite(TrackedMppDataPacketPtr && packet)
 {
-    assert(index < tunnels.size());
-    tunnels[index]->nonBlockingWrite(std::move(data));
+    checkPacketSize(packet->getPacket().ByteSizeLong());
+    RUNTIME_CHECK(!tunnels.empty());
+    // TODO avoid copy packet for broadcast.
+    for (size_t i = 1; i < tunnels.size(); ++i)
+        tunnels[i]->write(packet->copy());
+    tunnels[0]->write(std::move(packet));
 }
 
 template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::write(tipb::SelectResponse & response, size_t index)
+void MPPTunnelSetBase<Tunnel>::partitionWrite(TrackedMppDataPacketPtr && packet, int16_t partition_id)
 {
-    assert(index < tunnels.size());
-    tunnels[index]->write(serializePacket(response));
-}
-
-template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::nonBlockingWrite(tipb::SelectResponse & response, size_t index)
-{
-    assert(index < tunnels.size());
-    tunnels[index]->nonBlockingWrite(serializePacket(response));
-}
-
-template <typename Tunnel>
-bool MPPTunnelSetBase<Tunnel>::isReadyForWrite() const
-{
-    for (const auto & tunnel : tunnels)
-    {
-        if (!tunnel->isReadyForWrite())
-            return false;
-    }
-    return true;
+    checkPacketSize(packet->getPacket().ByteSizeLong());
+    tunnels[partition_id]->write(std::move(packet));
 }
 
 template <typename Tunnel>
 void MPPTunnelSetBase<Tunnel>::registerTunnel(const MPPTaskId & receiver_task_id, const TunnelPtr & tunnel)
 {
-    RUNTIME_CHECK_MSG(
-        receiver_task_id_to_index_map.find(receiver_task_id) == receiver_task_id_to_index_map.end(),
-        "the tunnel {} has been registered",
-        tunnel->id());
+    if (receiver_task_id_to_index_map.find(receiver_task_id) != receiver_task_id_to_index_map.end())
+        throw Exception(fmt::format("the tunnel {} has been registered", tunnel->id()));
 
     receiver_task_id_to_index_map[receiver_task_id] = tunnels.size();
     tunnels.push_back(tunnel);
     if (!tunnel->isLocal() && !tunnel->isAsync())
     {
         ++external_thread_cnt;
-    }
-    if (tunnel->isLocal())
-    {
-        ++local_tunnel_cnt;
     }
 }
 
@@ -123,13 +112,6 @@ typename MPPTunnelSetBase<Tunnel>::TunnelPtr MPPTunnelSetBase<Tunnel>::getTunnel
         return nullptr;
     }
     return tunnels[it->second];
-}
-
-template <typename Tunnel>
-bool MPPTunnelSetBase<Tunnel>::isLocal(size_t index) const
-{
-    assert(getPartitionNum() > index);
-    return getTunnels()[index]->isLocal();
 }
 
 /// Explicit template instantiations - to avoid code bloat in headers.

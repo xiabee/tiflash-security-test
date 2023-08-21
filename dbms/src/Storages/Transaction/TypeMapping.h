@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,8 +36,6 @@ DataTypePtr getDataTypeByColumnInfoForComputingLayer(const ColumnInfo & column_i
 
 DataTypePtr getDataTypeByFieldType(const tipb::FieldType & field_type);
 DataTypePtr getDataTypeByFieldTypeForComputingLayer(const tipb::FieldType & field_type);
-
-DataTypePtr getDataTypeByColumnInfoForDisaggregatedStorageLayer(const ColumnInfo & column_info);
 
 TiDB::CodecFlag getCodecFlagByFieldType(const tipb::FieldType & field_type);
 

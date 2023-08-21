@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,10 @@
 // limitations under the License.
 
 #pragma once
-
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/UnifiedLogFormatter.h>
 #include <Encryption/DataKeyManager.h>
 #include <Encryption/MockKeyManager.h>
-#include <Interpreters/Context.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/File.h>
 #include <Poco/FormattingChannel.h>
@@ -88,7 +86,8 @@ class ImitativeEnv
     DB::ContextPtr createImitativeContext(const std::string & workdir, bool encryption = false)
     {
         // set itself as global context
-        global_context = DB::Context::createGlobal();
+        global_context = std::make_unique<DB::Context>(DB::Context::createGlobal());
+        global_context->setGlobalContext(*global_context);
         global_context->setApplicationType(DB::Context::ApplicationType::LOCAL);
 
         global_context->initializeTiFlashMetrics();
@@ -109,6 +108,7 @@ class ImitativeEnv
             /*main_data_paths*/ {path},
             /*latest_data_paths*/ {path},
             /*kvstore_paths*/ Strings{},
+            /*enable_raft_compatible_mode*/ true,
             global_context->getPathCapacity(),
             global_context->getFileProvider());
         TiFlashRaftConfig raft_config;
@@ -127,7 +127,7 @@ class ImitativeEnv
     static void setupLogger()
     {
         Poco::AutoPtr<Poco::ConsoleChannel> channel = new Poco::ConsoleChannel(std::cout);
-        Poco::AutoPtr<Poco::Formatter> formatter(new UnifiedLogFormatter<true>());
+        Poco::AutoPtr<UnifiedLogFormatter> formatter(new UnifiedLogFormatter());
         Poco::AutoPtr<Poco::FormattingChannel> formatting_channel(new Poco::FormattingChannel(formatter, channel));
         Poco::Logger::root().setChannel(formatting_channel);
         Poco::Logger::root().setLevel("trace");

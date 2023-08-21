@@ -1,4 +1,4 @@
-# Copyright 2022 PingCAP, Ltd.
+# Copyright 2023 PingCAP, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,12 @@
 # limitations under the License.
 
 include_directories (${CMAKE_CURRENT_BINARY_DIR})
+
+add_executable (system_numbers system_numbers.cpp)
+target_link_libraries (system_numbers dbms clickhouse_storages_system)
+
+add_executable (storage_log storage_log.cpp)
+target_link_libraries (storage_log dbms)
 
 add_executable (hit_log hit_log.cpp)
 target_link_libraries (hit_log dbms)

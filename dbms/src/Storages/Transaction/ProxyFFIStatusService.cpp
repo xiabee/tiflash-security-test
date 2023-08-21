@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,17 +13,12 @@
 // limitations under the License.
 
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
-#include <RaftStoreProxyFFI/ProxyFFI.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/ProxyFFI.h>
 #include <Storages/Transaction/ProxyFFICommon.h>
 #include <Storages/Transaction/RegionTable.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <fmt/core.h>
-
-#include <boost/algorithm/string.hpp>
-#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -36,36 +31,11 @@ HttpRequestRes HandleHttpRequestSyncStatus(
 {
     HttpRequestStatus status = HttpRequestStatus::Ok;
     TableID table_id = 0;
-    pingcap::pd::KeyspaceID keyspace_id = NullspaceID;
     {
-        auto * log = &Poco::Logger::get("HandleHttpRequestSyncStatus");
-        LOG_TRACE(log, "handling sync status request, path: {}, api_name: {}", path, api_name);
-
-        // Try to handle sync status request with old schema.
-        // Old schema: /{table_id}
-        // New schema: /keyspace/{keyspace_id}/table/{table_id}
-        auto query = path.substr(api_name.size());
-        std::vector<std::string> query_parts;
-        boost::split(query_parts, query, boost::is_any_of("/"));
-        if (query_parts.size() != 1 && (query_parts.size() != 4 || query_parts[0] != "keyspace" || query_parts[2] != "table"))
-        {
-            LOG_ERROR(log, "invalid SyncStatus request: {}", query);
-            status = HttpRequestStatus::ErrorParam;
-            return HttpRequestRes{.status = status, .res = CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}}};
-        }
-
-
+        std::string table_id_str(path.substr(api_name.size()));
         try
         {
-            if (query_parts.size() == 4)
-            {
-                keyspace_id = std::stoll(query_parts[1]);
-                table_id = std::stoll(query_parts[3]);
-            }
-            else
-            {
-                table_id = std::stoll(query_parts[0]);
-            }
+            table_id = std::stoll(table_id_str);
         }
         catch (...)
         {
@@ -73,7 +43,7 @@ HttpRequestRes HandleHttpRequestSyncStatus(
         }
 
         if (status != HttpRequestStatus::Ok)
-            return HttpRequestRes{.status = status, .res = CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}}};
+            return HttpRequestRes{.status = status, .res = CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}}};
     }
 
     std::stringstream ss;
@@ -87,11 +57,10 @@ HttpRequestRes HandleHttpRequestSyncStatus(
     static const std::chrono::minutes PRINT_LOG_INTERVAL = std::chrono::minutes{5};
     static Timepoint last_print_log_time = Clock::now();
     // if storage is not created in ch, flash replica should not be available.
-    // TODO(iosmanthus): TiDB should support tiflash replica.
-    if (tmt.getStorages().get(keyspace_id, table_id))
+    if (tmt.getStorages().get(table_id))
     {
         RegionTable & region_table = tmt.getRegionTable();
-        region_table.handleInternalRegionsByTable(keyspace_id, table_id, [&](const RegionTable::InternalRegions & regions) {
+        region_table.handleInternalRegionsByTable(table_id, [&](const RegionTable::InternalRegions & regions) {
             region_list.reserve(regions.size());
             bool can_log = Clock::now() > last_print_log_time + PRINT_LOG_INTERVAL;
             FmtBuffer lag_regions_log;
@@ -129,7 +98,6 @@ HttpRequestRes HandleHttpRequestSyncStatus(
         .res = CppStrWithView{.inner = GenRawCppPtr(s, RawCppPtrTypeImpl::String), .view = BaseBuffView{s->data(), s->size()}}};
 }
 
-// Return store status of this tiflash node
 HttpRequestRes HandleHttpRequestStoreStatus(
     EngineStoreServerWrap * server,
     std::string_view,
@@ -145,44 +113,11 @@ HttpRequestRes HandleHttpRequestStoreStatus(
             .view = BaseBuffView{name->data(), name->size()}}};
 }
 
-HttpRequestRes HandleHttpRequestRemoteStoreSync(
-    EngineStoreServerWrap * server,
-    std::string_view,
-    const std::string &,
-    std::string_view,
-    std::string_view)
-{
-    auto & global_ctx = server->tmt->getContext();
-    if (!global_ctx.getSharedContextDisagg()->isDisaggregatedStorageMode())
-    {
-        auto * body = RawCppString::New(fmt::format(
-            R"json({{"message":"can not sync remote store on a node with disagg_mode={}"}})json",
-            magic_enum::enum_name(global_ctx.getSharedContextDisagg()->disaggregated_mode)));
-        return HttpRequestRes{
-            .status = HttpRequestStatus::ErrorParam,
-            .res = CppStrWithView{
-                .inner = GenRawCppPtr(body, RawCppPtrTypeImpl::String),
-                .view = BaseBuffView{body->data(), body->size()}},
-        };
-    }
-
-    bool flag_set = global_ctx.trySyncAllDataToRemoteStore();
-    auto * body = RawCppString::New(fmt::format(R"json({{"message":"flag_set={}"}})json", flag_set));
-    return HttpRequestRes{
-        .status = flag_set ? HttpRequestStatus::Ok : HttpRequestStatus::ErrorParam,
-        .res = CppStrWithView{
-            .inner = GenRawCppPtr(body, RawCppPtrTypeImpl::String),
-            .view = BaseBuffView{body->data(), body->size()}},
-    };
-}
-
 using HANDLE_HTTP_URI_METHOD = HttpRequestRes (*)(EngineStoreServerWrap *, std::string_view, const std::string &, std::string_view, std::string_view);
 
 static const std::map<std::string, HANDLE_HTTP_URI_METHOD> AVAILABLE_HTTP_URI = {
     {"/tiflash/sync-status/", HandleHttpRequestSyncStatus},
-    {"/tiflash/store-status", HandleHttpRequestStoreStatus},
-    {"/tiflash/sync-remote-store", HandleHttpRequestRemoteStoreSync},
-};
+    {"/tiflash/store-status", HandleHttpRequestStoreStatus}};
 
 uint8_t CheckHttpUriAvailable(BaseBuffView path_)
 {
@@ -206,7 +141,7 @@ HttpRequestRes HandleHttpRequest(EngineStoreServerWrap * server, BaseBuffView pa
             return method(server, path, str, std::string_view(query.data, query.len), std::string_view(body.data, body.len));
         }
     }
-    return HttpRequestRes{.status = HttpRequestStatus::ErrorParam, .res = CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}}};
+    return HttpRequestRes{.status = HttpRequestStatus::ErrorParam, .res = CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}}};
 }
 
 } // namespace DB

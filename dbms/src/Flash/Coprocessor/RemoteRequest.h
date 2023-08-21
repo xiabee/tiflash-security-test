@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
 
 #pragma once
 
-#include <Flash/Coprocessor/FilterConditions.h>
-#include <Flash/Coprocessor/RegionInfo.h>
+#include <Flash/Coprocessor/PushDownFilter.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 #include <Storages/Transaction/TiDB.h>
 
@@ -45,20 +44,16 @@ struct RemoteRequest
         , schema(std::move(schema_))
         , key_ranges(std::move(key_ranges_))
     {}
-
+    tipb::DAGRequest dag_request;
+    DAGSchema schema;
+    /// the sorted key ranges
+    std::vector<pingcap::coprocessor::KeyRange> key_ranges;
     static RemoteRequest build(
         const RegionRetryList & retry_regions,
         DAGContext & dag_context,
         const TiDBTableScan & table_scan,
         const TiDB::TableInfo & table_info,
-        const FilterConditions & filter_conditions,
+        const PushDownFilter & push_down_filter,
         const LoggerPtr & log);
-    static std::vector<pingcap::coprocessor::KeyRange> buildKeyRanges(const RegionRetryList & retry_regions);
-    static std::string printRetryRegions(const RegionRetryList & retry_regions, TableID table_id);
-
-    tipb::DAGRequest dag_request;
-    DAGSchema schema;
-    /// the sorted key ranges
-    std::vector<pingcap::coprocessor::KeyRange> key_ranges;
 };
 } // namespace DB

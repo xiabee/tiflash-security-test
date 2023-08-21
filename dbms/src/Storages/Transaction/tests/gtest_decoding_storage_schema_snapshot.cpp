@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ namespace DB::tests
 {
 static TableInfo getTableInfoByJson(const String & json_table_info)
 {
-    return TableInfo(json_table_info, NullspaceID);
+    return TableInfo(json_table_info);
 }
 TEST(DecodingStorageSchemaSnapshotTest, CheckPKInfosUnderClusteredIndex)
 {

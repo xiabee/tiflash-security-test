@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 #include <DataStreams/SquashingBlockOutputStream.h>
 #include <DataStreams/TiRemoteBlockInputStream.h>
 #include <DataStreams/UnionBlockInputStream.h>
+#include <Flash/Coprocessor/DAGBlockOutputStream.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/DAGQueryBlockInterpreter.h>
 #include <Flash/tests/WindowTestUtil.h>
@@ -125,7 +126,7 @@ struct MockReceiverContext
         return {index, index, -1};
     }
 
-    std::shared_ptr<Reader> makeSyncReader(const Request & request)
+    std::shared_ptr<Reader> makeReader(const Request & request)
     {
         return std::make_shared<Reader>(queues[request.send_task_id]);
     }

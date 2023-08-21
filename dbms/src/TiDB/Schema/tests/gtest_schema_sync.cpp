@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,11 +13,9 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <Common/FailPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Databases/IDatabase.h>
 #include <Debug/MockTiDB.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/InterpreterDropQuery.h>
 #include <Parsers/ASTDropQuery.h>
 #include <Parsers/IAST.h>
@@ -41,6 +39,7 @@ extern const char force_context_path[];
 } // namespace FailPoints
 namespace tests
 {
+
 class SchemaSyncTest : public ::testing::Test
 {
 public:
@@ -98,7 +97,7 @@ public:
         auto schema_syncer = flash_ctx.getSchemaSyncer();
         try
         {
-            schema_syncer->syncSchemas(global_ctx, NullspaceID);
+            schema_syncer->syncSchemas(global_ctx);
         }
         catch (Exception & e)
         {
@@ -125,7 +124,7 @@ public:
     {
         auto & flash_ctx = global_ctx.getTMTContext();
         auto & flash_storages = flash_ctx.getStorages();
-        auto tbl = flash_storages.get(NullspaceID, table_id);
+        auto tbl = flash_storages.get(table_id);
         RUNTIME_CHECK_MSG(tbl, "Can not find table in TiFlash instance! table_id={}", table_id);
         return tbl;
     }
@@ -137,7 +136,7 @@ public:
         auto & flash_ctx = global_ctx.getTMTContext();
         auto & flash_storages = flash_ctx.getStorages();
         auto mock_tbl = MockTiDB::instance().getTableByName(db_name, tbl_name);
-        auto tbl = flash_storages.get(NullspaceID, mock_tbl->id());
+        auto tbl = flash_storages.get(mock_tbl->id());
         RUNTIME_CHECK_MSG(tbl, "Can not find table in TiFlash instance! db_name={}, tbl_name={}", db_name, tbl_name);
         return tbl;
     }
@@ -169,7 +168,7 @@ public:
 private:
     static void recreateMetadataPath()
     {
-        String path = TiFlashTestEnv::getContext()->getPath();
+        String path = TiFlashTestEnv::getContext().getPath();
         auto p = path + "/metadata/";
         TiFlashTestEnv::tryRemovePath(p, /*recreate=*/true);
         p = path + "/data/";
@@ -179,17 +178,6 @@ private:
 protected:
     Context & global_ctx;
 };
-
-TEST_F(SchemaSyncTest, SchemaDiff)
-try
-{
-    // Note that if we want to add new fields here, please firstly check if it is present.
-    // Otherwise it will break when doing upgrading test.
-    SchemaDiff diff;
-    std::string data = "{\"version\":40,\"type\":31,\"schema_id\":69,\"table_id\":71,\"old_table_id\":0,\"old_schema_id\":0,\"affected_options\":null}";
-    ASSERT_NO_THROW(diff.deserialize(data));
-}
-CATCH
 
 TEST_F(SchemaSyncTest, RenameTables)
 try

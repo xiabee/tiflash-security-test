@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Encryption/FileProvider_fwd.h>
 #include <Storages/Page/V3/LogFile/LogFilename.h>
 #include <Storages/Page/V3/LogFile/LogReader.h>
 #include <Storages/Page/V3/WALStore.h>
@@ -26,6 +25,9 @@ namespace ErrorCodes
 {
 extern const int CORRUPTED_DATA;
 }
+
+class FileProvider;
+using FileProviderPtr = std::shared_ptr<FileProvider>;
 
 namespace PS::V3
 {

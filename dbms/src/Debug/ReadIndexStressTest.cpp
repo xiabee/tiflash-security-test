@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -164,9 +164,9 @@ ReadIndexStressTest::TimeCost ReadIndexStressTest::run(
     const auto & kvstore = *tmt.getKVStore();
     size_t timeout_ms = 10 * 1000;
     const auto wrap_time_cost = [&](std::function<void()> && f) {
-        auto start_time = std::chrono::steady_clock::now();
+        auto start_time = Clock::now();
         f();
-        auto end_time = std::chrono::steady_clock ::now();
+        auto end_time = Clock ::now();
         auto time_cost = std::chrono::duration_cast<TimeCost>(end_time - start_time);
         LOG_INFO(logger, "time cost {}", time_cost);
         return time_cost;

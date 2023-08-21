@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ public:
         // init all pages in PageStorage
         if (options.init_pages)
         {
-            static constexpr PageIdU64 MAX_PAGE_ID_DEFAULT = 1000;
+            static constexpr PageId MAX_PAGE_ID_DEFAULT = 1000;
             initPages(MAX_PAGE_ID_DEFAULT);
             LOG_INFO(StressEnv::logger, "All pages have been init.");
         }

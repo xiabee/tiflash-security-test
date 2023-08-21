@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 #include <Common/Logger.h>
 #include <Core/BlockGen.h>
 #include <DataTypes/DataTypeEnum.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/convertFieldToType.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
@@ -30,7 +29,6 @@
 #include <ctime>
 #include <ext/scope_guard.h>
 #include <memory>
-
 namespace DB
 {
 namespace DM
@@ -50,7 +48,7 @@ protected:
 
     void SetUp() override
     {
-        context = DMTestEnv::getContext();
+        context = std::make_unique<Context>(DMTestEnv::getContext());
         if (!context->getMinMaxIndexCache())
         {
             context->setMinMaxIndexCache(5368709120);
@@ -65,7 +63,7 @@ protected:
 private:
 protected:
     // a ptr to context, we can reload context with different settings if need.
-    ContextPtr context;
+    std::unique_ptr<Context> context;
 };
 
 Attr attr(String type)
@@ -79,7 +77,6 @@ Attr pkAttr()
     return Attr{col.name, col.id, col.type};
 }
 
-
 bool checkMatch(
     const String & test_case,
     Context & context,
@@ -90,11 +87,6 @@ bool checkMatch(
     bool check_pk = false)
 {
     String name = "DMMinMaxIndexTest_" + test_case;
-    // We cannot restore tables with the same table id multiple times in a single run.
-    // Because we don't update max_page_id for PS instance at run time.
-    // And when restoring table, it will use the max_page_id from PS as the start point for allocating page id.
-    // So if we restore the same table multiple times in a single run, it may write different data using the same page id.
-    static int next_table_id = 100;
 
     auto clean_up = [&]() {
         context.dropMinMaxIndexCache();
@@ -116,14 +108,12 @@ bool checkMatch(
     Block header = toEmptyBlock(table_columns);
     Block block = genBlock(header, block_tuples);
 
-    // max page id is only updated at restart, so we need recreate page v3 before recreate table
     DeltaMergeStorePtr store = std::make_shared<DeltaMergeStore>(
         context,
         false,
         "test_database",
         name,
-        NullspaceID,
-        /*table_id*/ next_table_id++,
+        /*table_id*/ 100,
         true,
         table_columns,
         getExtraHandleColumnDefine(is_common_handle),
@@ -135,7 +125,7 @@ bool checkMatch(
     store->mergeDeltaAll(context);
 
     const ColumnDefine & col_to_read = check_pk ? getExtraHandleColumnDefine(is_common_handle) : cd;
-    auto streams = store->read(context, context.getSettingsRef(), {col_to_read}, {all_range}, 1, std::numeric_limits<UInt64>::max(), std::make_shared<PushDownFilter>(filter), name, false);
+    auto streams = store->read(context, context.getSettingsRef(), {col_to_read}, {all_range}, 1, std::numeric_limits<UInt64>::max(), filter, name, false);
     auto rows = getInputStreamNRows(streams[0]);
     store->drop();
 

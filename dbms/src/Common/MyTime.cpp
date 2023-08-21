@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -2647,7 +2647,7 @@ std::optional<UInt64> MyDateTimeParser::parseAsPackedUInt(const StringRef & str_
         if (!f(ctx, my_time))
         {
 #ifndef NDEBUG
-            LOG_TRACE(Logger::get(),
+            LOG_TRACE(&Poco::Logger::get("MyDateTimeParser"),
                       "parse error, [str={}] [format={}] [parse_pos={}]",
                       ctx.view.toString(),
                       format,

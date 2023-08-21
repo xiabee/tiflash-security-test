@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -88,7 +88,7 @@ ColumnFileSetReader::ColumnFileSetReader(
         total_rows += f->getRows();
         column_file_rows.push_back(f->getRows());
         column_file_rows_end.push_back(total_rows);
-        column_file_readers.push_back(f->getReader(context, snapshot->getDataProvider(), col_defs));
+        column_file_readers.push_back(f->getReader(context, snapshot->getStorageSnapshot(), col_defs));
     }
 }
 
@@ -122,7 +122,7 @@ Block ColumnFileSetReader::readPKVersion(size_t offset, size_t limit)
     return block;
 }
 
-size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range, std::vector<UInt32> * row_ids)
+size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range)
 {
     // Note that DeltaMergeBlockInputStream could ask for rows with larger index than total_delta_rows,
     // because DeltaIndex::placed_rows could be larger than total_delta_rows.
@@ -157,19 +157,7 @@ size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t off
             continue;
 
         auto & column_file_reader = column_file_readers[file_index];
-        auto [read_offset, read_rows] = column_file_reader->readRows(output_columns, rows_start_in_file, rows_in_file_limit, range);
-        actual_read += read_rows;
-        if (row_ids != nullptr)
-        {
-            auto rows_before_cur_file = file_index == 0 ? 0 : column_file_rows_end[file_index - 1];
-            auto start_row_id = read_offset + rows_before_cur_file;
-            auto row_ids_offset = row_ids->size();
-            row_ids->resize(row_ids->size() + read_rows);
-            for (size_t i = 0; i < read_rows; ++i)
-            {
-                (*row_ids)[row_ids_offset + i] = start_row_id + i;
-            }
-        }
+        actual_read += column_file_reader->readRows(output_columns, rows_start_in_file, rows_in_file_limit, range);
     }
     return actual_read;
 }

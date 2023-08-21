@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 #pragma once
 
 #include <DataStreams/IBlockInputStream.h>
-#include <Flash/Planner/Plans/PhysicalLeaf.h>
+#include <Flash/Planner/plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
@@ -23,7 +23,7 @@ namespace DB
 /**
  * A physical plan node that generates MockExchangeReceiverInputStream.
  * Used in gtest to test execution logic.
- * Only available with `context.isExecutorTest() == true || context.isInterpreterTest() == true`.
+ * Only available with `context.isExecutorTest() == true`.
  */
 class PhysicalMockExchangeReceiver : public PhysicalLeaf
 {
@@ -32,13 +32,11 @@ public:
         Context & context,
         const String & executor_id,
         const LoggerPtr & log,
-        const tipb::ExchangeReceiver & exchange_receiver,
-        const FineGrainedShuffle & fine_grained_shuffle);
+        const tipb::ExchangeReceiver & exchange_receiver);
 
     PhysicalMockExchangeReceiver(
         const String & executor_id_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const Block & sample_block_,
         const BlockInputStreams & mock_streams,
@@ -50,14 +48,8 @@ public:
 
     size_t getSourceNum() const { return source_num; };
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
-        PipelineExecGroupBuilder & group_builder,
-        Context & /*context*/,
-        size_t /*concurrency*/) override;
-
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/) override;
+    void transformImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/) override;
 
 private:
     Block sample_block;

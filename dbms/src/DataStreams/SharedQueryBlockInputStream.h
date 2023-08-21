@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -181,20 +181,6 @@ protected:
         }
         if (!exception_msg.empty())
             throw Exception(exception_msg);
-    }
-
-    uint64_t collectCPUTimeNsImpl(bool /*is_thread_runner*/) override
-    {
-        // `SharedQueryBlockInputStream` does not count its own execute time,
-        // whether `SharedQueryBlockInputStream` is `thread-runner` or not,
-        // because `SharedQueryBlockInputStream` basically does not use cpu, only `condition_cv.wait`.
-        uint64_t cpu_time_ns = 0;
-        forEachChild([&](IBlockInputStream & child) {
-            // Each of SharedQueryBlockInputStream's children is a thread-runner.
-            cpu_time_ns += child.collectCPUTimeNs(true);
-            return false;
-        });
-        return cpu_time_ns;
     }
 
 private:

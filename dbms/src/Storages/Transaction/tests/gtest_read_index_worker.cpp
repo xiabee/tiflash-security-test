@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -82,10 +82,10 @@ void ReadIndexTest::testError()
                 auto resp = future->poll();
                 ASSERT(!resp);
             }
-            ASSERT_EQ(proxy_instance.read_index_tasks.size(), 1);
+            ASSERT_EQ(proxy_instance.tasks.size(), 1);
 
             // force response region error `data_is_not_ready`
-            proxy_instance.read_index_tasks.front()->update(false, true);
+            proxy_instance.tasks.front()->update(false, true);
 
             for (auto & future : futures)
             {
@@ -129,10 +129,10 @@ void ReadIndexTest::testError()
                 auto resp = future->poll();
                 ASSERT(!resp);
             }
-            ASSERT_EQ(proxy_instance.read_index_tasks.size(), 1);
+            ASSERT_EQ(proxy_instance.tasks.size(), 1);
 
             // force response to have lock
-            proxy_instance.read_index_tasks.front()->update(true, false);
+            proxy_instance.tasks.front()->update(true, false);
 
             proxy_instance.runOneRound();
             for (auto & future : futures)
@@ -381,9 +381,9 @@ void ReadIndexTest::testNormal()
             std::vector<kvrpcpb::ReadIndexRequest> reqs;
 
             reqs = {make_read_index_reqs(5, 12), make_read_index_reqs(1, 12), make_read_index_reqs(2, 12)};
-            auto start = std::chrono::steady_clock::now();
+            Timepoint start = Clock::now();
             auto resps = manager->batchReadIndex(reqs, 20);
-            auto time_cost = std::chrono::steady_clock::now() - start;
+            auto time_cost = Clock::now() - start;
             ASSERT_GE(time_cost, std::chrono::milliseconds{20}); // meet timeout
             ASSERT_EQ(resps[0].first.read_index(), 669);
             ASSERT_EQ(resps[1].first.region_error().has_region_not_found(), true); // timeout to region error not found
@@ -445,7 +445,7 @@ void ReadIndexTest::testNormal()
         }
     }
     over = true;
-    proxy_instance.wakeNotifier();
+    proxy_instance.wake();
     proxy_runner.join();
     manager.reset();
     ASSERT(GCMonitor::instance().checkClean());
@@ -588,7 +588,7 @@ void ReadIndexTest::testBatch()
         }
         manager->runOneRoundAll();
         {
-            auto & t = proxy_instance.read_index_tasks.back();
+            auto & t = proxy_instance.tasks.back();
             ASSERT_EQ(t->req.start_ts(), 10);
             t->update(); // only response ts `10`
         }

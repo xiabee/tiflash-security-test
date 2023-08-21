@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -549,7 +549,7 @@ Int64 concurrentRangeOperate(
 
     {
         TMTContext & tmt = context.getTMTContext();
-        for (auto && [_, r] : tmt.getRegionTable().getRegionsByTable(NullspaceID, table_info.id))
+        for (auto && [_, r] : tmt.getRegionTable().getRegionsByTable(table_info.id))
         {
             std::ignore = _;
             if (r == nullptr)

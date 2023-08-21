@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -104,14 +104,22 @@ struct EnumType<DataTypeEnum16> : public std::true_type
 template <typename T>
 inline constexpr bool IsEnumType = EnumType<T>::value;
 
-template <typename T>
+template <typename T, bool should_widen>
 std::enable_if_t<!IsSignedType<T> && !IsDecimalType<T> && !IsEnumType<T> && !std::is_same_v<T, DataTypeMyDateTime>, DataTypePtr>
 getDataTypeByColumnInfoBase(const ColumnInfo &, const T *)
 {
-    return std::make_shared<T>();
+    DataTypePtr t = std::make_shared<T>();
+
+    if (should_widen)
+    {
+        auto widen = t->widen();
+        t.swap(widen);
+    }
+
+    return t;
 }
 
-template <typename T>
+template <typename T, bool should_widen>
 std::enable_if_t<IsSignedType<T>, DataTypePtr> getDataTypeByColumnInfoBase(const ColumnInfo & column_info, const T *)
 {
     DataTypePtr t = nullptr;
@@ -121,27 +129,57 @@ std::enable_if_t<IsSignedType<T>, DataTypePtr> getDataTypeByColumnInfoBase(const
     else
         t = std::make_shared<T>();
 
+    if (should_widen)
+    {
+        auto widen = t->widen();
+        t.swap(widen);
+    }
+
     return t;
 }
 
-template <typename T>
+template <typename T, bool should_widen>
 std::enable_if_t<IsDecimalType<T>, DataTypePtr> getDataTypeByColumnInfoBase(const ColumnInfo & column_info, const T *)
 {
-    return createDecimal(column_info.flen, column_info.decimal);
+    DataTypePtr t = createDecimal(column_info.flen, column_info.decimal);
+
+    if (should_widen)
+    {
+        auto widen = t->widen();
+        t.swap(widen);
+    }
+
+    return t;
 }
 
 
-template <typename T>
+template <typename T, bool should_widen>
 std::enable_if_t<std::is_same_v<T, DataTypeMyDateTime>, DataTypePtr> getDataTypeByColumnInfoBase(const ColumnInfo & column_info, const T *)
 {
     // In some cases, TiDB will set the decimal to -1, change -1 to 6 to avoid error
-    return std::make_shared<T>(column_info.decimal == -1 ? 6 : column_info.decimal);
+    DataTypePtr t = std::make_shared<T>(column_info.decimal == -1 ? 6 : column_info.decimal);
+
+    if (should_widen)
+    {
+        auto widen = t->widen();
+        t.swap(widen);
+    }
+
+    return t;
 }
 
-template <typename T>
+template <typename T, bool should_widen>
 std::enable_if_t<IsEnumType<T>, DataTypePtr> getDataTypeByColumnInfoBase(const ColumnInfo & column_info, const T *)
 {
-    return std::make_shared<T>(column_info.elems);
+    DataTypePtr t = std::make_shared<T>(column_info.elems);
+
+    if (should_widen)
+    {
+        auto widen = t->widen();
+        t.swap(widen);
+    }
+
+    return t;
 }
 
 TypeMapping::TypeMapping()
@@ -149,24 +187,17 @@ TypeMapping::TypeMapping()
 #ifdef M
 #error "Please undefine macro M first."
 #endif
-#define M(tt, v, cf, ct)                                                                        \
-    type_map[TiDB::Type##tt] = [](const ColumnInfo & column_info) {                             \
-        return getDataTypeByColumnInfoBase<DataType##ct>(column_info, (DataType##ct *)nullptr); \
-    };
+#define M(tt, v, cf, ct, w) \
+    type_map[TiDB::Type##tt] = std::bind(getDataTypeByColumnInfoBase<DataType##ct, w>, std::placeholders::_1, (DataType##ct *)nullptr);
     COLUMN_TYPES(M)
 #undef M
 }
 
-// Get the basic data type according to column_info.
-// This method ignores the nullable flag.
 DataTypePtr TypeMapping::getDataType(const ColumnInfo & column_info)
 {
     return type_map[column_info.tp](column_info);
 }
 
-// Get the data type according to column_info, respecting
-// the nullable flag.
-// This does not support the "duration" type.
 DataTypePtr getDataTypeByColumnInfo(const ColumnInfo & column_info)
 {
     DataTypePtr base = TypeMapping::instance().getDataType(column_info);
@@ -178,8 +209,6 @@ DataTypePtr getDataTypeByColumnInfo(const ColumnInfo & column_info)
     return base;
 }
 
-// Get the data type according to column_info.
-// This support the duration type that only will be generated when executing
 DataTypePtr getDataTypeByColumnInfoForComputingLayer(const ColumnInfo & column_info)
 {
     DataTypePtr base = TypeMapping::instance().getDataType(column_info);
@@ -188,16 +217,6 @@ DataTypePtr getDataTypeByColumnInfoForComputingLayer(const ColumnInfo & column_i
     {
         base = std::make_shared<DataTypeMyDuration>(column_info.decimal);
     }
-    if (!column_info.hasNotNullFlag())
-    {
-        return std::make_shared<DataTypeNullable>(base);
-    }
-    return base;
-}
-
-DataTypePtr getDataTypeByColumnInfoForDisaggregatedStorageLayer(const ColumnInfo & column_info)
-{
-    DataTypePtr base = TypeMapping::instance().getDataType(column_info);
     if (!column_info.hasNotNullFlag())
     {
         return std::make_shared<DataTypeNullable>(base);
@@ -233,10 +252,10 @@ void setDecimalPrecScale(const T * decimal_type, ColumnInfo & column_info)
 void fillTiDBColumnInfo(const String & family_name, const ASTPtr & parameters, ColumnInfo & column_info);
 void fillTiDBColumnInfo(const ASTPtr & type, ColumnInfo & column_info)
 {
-    const auto * func = typeid_cast<const ASTFunction *>(type.get());
+    auto * func = typeid_cast<const ASTFunction *>(type.get());
     if (func != nullptr)
         return fillTiDBColumnInfo(func->name, func->arguments, column_info);
-    const auto * ident = typeid_cast<const ASTIdentifier *>(type.get());
+    auto * ident = typeid_cast<const ASTIdentifier *>(type.get());
     if (ident != nullptr)
         return fillTiDBColumnInfo(ident->name, {}, column_info);
     throw Exception("Failed to get TiDB data type");
@@ -355,7 +374,7 @@ ColumnInfo reverseGetColumnInfo(const NameAndTypePair & column, ColumnID id, con
     }
     else
     {
-        const auto * nullable_type = checkAndGetDataType<DataTypeNullable>(nested_type);
+        auto nullable_type = checkAndGetDataType<DataTypeNullable>(nested_type);
         nested_type = nullable_type->getNestedType().get();
     }
 
@@ -424,28 +443,28 @@ ColumnInfo reverseGetColumnInfo(const NameAndTypePair & column, ColumnID id, con
         column_info.setUnsignedFlag();
 
     // Fill flen and decimal for decimal.
-    if (const auto * decimal_type32 = checkAndGetDataType<DataTypeDecimal<Decimal32>>(nested_type))
+    if (auto decimal_type32 = checkAndGetDataType<DataTypeDecimal<Decimal32>>(nested_type))
         setDecimalPrecScale(decimal_type32, column_info);
-    else if (const auto * decimal_type64 = checkAndGetDataType<DataTypeDecimal<Decimal64>>(nested_type))
+    else if (auto decimal_type64 = checkAndGetDataType<DataTypeDecimal<Decimal64>>(nested_type))
         setDecimalPrecScale(decimal_type64, column_info);
-    else if (const auto * decimal_type128 = checkAndGetDataType<DataTypeDecimal<Decimal128>>(nested_type))
+    else if (auto decimal_type128 = checkAndGetDataType<DataTypeDecimal<Decimal128>>(nested_type))
         setDecimalPrecScale(decimal_type128, column_info);
-    else if (const auto * decimal_type256 = checkAndGetDataType<DataTypeDecimal<Decimal256>>(nested_type))
+    else if (auto decimal_type256 = checkAndGetDataType<DataTypeDecimal<Decimal256>>(nested_type))
         setDecimalPrecScale(decimal_type256, column_info);
 
     // Fill decimal for date time.
-    if (const auto * type = checkAndGetDataType<DataTypeMyDateTime>(nested_type))
+    if (auto type = checkAndGetDataType<DataTypeMyDateTime>(nested_type))
         column_info.decimal = type->getFraction();
 
     // Fill decimal for duration.
-    if (const auto * type = checkAndGetDataType<DataTypeMyDuration>(nested_type))
+    if (auto type = checkAndGetDataType<DataTypeMyDuration>(nested_type))
         column_info.decimal = type->getFsp();
 
     // Fill elems for enum.
     if (checkDataType<DataTypeEnum16>(nested_type))
     {
-        const auto * enum16_type = checkAndGetDataType<DataTypeEnum16>(nested_type);
-        for (const auto & element : enum16_type->getValues())
+        auto enum16_type = checkAndGetDataType<DataTypeEnum16>(nested_type);
+        for (auto & element : enum16_type->getValues())
         {
             column_info.elems.emplace_back(element.first, element.second);
         }

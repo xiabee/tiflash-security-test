@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 #include <Encryption/WriteReadableFile.h>
 #include <Storages/Page/PageUtil.h>
 #include <Storages/Page/V3/Blob/BlobFile.h>
-#include <Storages/PathPool.h>
 
 namespace DB
 {

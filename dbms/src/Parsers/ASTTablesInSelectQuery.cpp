@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -155,10 +155,10 @@ void ASTTableJoin::formatImplBeforeTable(const FormatSettings & settings, Format
     case Kind::Inner:
         settings.ostr << "INNER JOIN";
         break;
-    case Kind::LeftOuter:
+    case Kind::Left:
         settings.ostr << "LEFT JOIN";
         break;
-    case Kind::RightOuter:
+    case Kind::Right:
         settings.ostr << "RIGHT JOIN";
         break;
     case Kind::Full:

@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Interpreters/Context.h>
 #include <TestUtils/ExecutorTestUtils.h>
 
 namespace DB::tests
@@ -36,14 +35,16 @@ public:
 
     void executeWithConcurrencyAndBlockSize(const std::shared_ptr<tipb::DAGRequest> & request, const ColumnsWithTypeAndName & expect_columns)
     {
+        WRAP_FOR_DIS_ENABLE_PLANNER_BEGIN
         std::vector<size_t> block_sizes{1, 2, 3, 4, DEFAULT_BLOCK_SIZE};
         for (auto block_size : block_sizes)
         {
-            context.context->setSetting("max_block_size", Field(static_cast<UInt64>(block_size)));
+            context.context.setSetting("max_block_size", Field(static_cast<UInt64>(block_size)));
             ASSERT_COLUMNS_EQ_R(expect_columns, executeStreams(request));
             ASSERT_COLUMNS_EQ_UR(expect_columns, executeStreams(request, 2));
             ASSERT_COLUMNS_EQ_UR(expect_columns, executeStreams(request, max_concurrency_level));
         }
+        WRAP_FOR_DIS_ENABLE_PLANNER_END
     }
 
     void executeFunctionAndAssert(

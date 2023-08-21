@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,11 @@
 
 #pragma once
 
-#include <Core/Block.h>
-#include <common/types.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <tipb/select.pb.h>
 
 namespace DB
 {
-class DAGContext;
-
 class DAGResponseWriter
 {
 public:
@@ -31,14 +28,6 @@ public:
     /// prepared with sample block
     virtual void prepare(const Block &){};
     virtual void write(const Block & block) = 0;
-
-    // For async writer, `isReadyForWrite` need to be called before calling `write`.
-    // ```
-    // while (!isReadyForWrite()) {}
-    // write(block);
-    // ```
-    virtual bool isReadyForWrite() const { throw Exception("Unsupport"); }
-
     /// flush cached blocks for batch writer
     virtual void flush() = 0;
     virtual ~DAGResponseWriter() = default;

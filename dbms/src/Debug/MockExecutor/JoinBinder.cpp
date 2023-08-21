@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Debug/MockExecutor/AstToPB.h>
-#include <Debug/MockExecutor/AstToPBUtils.h>
 #include <Debug/MockExecutor/ExchangeReceiverBinder.h>
 #include <Debug/MockExecutor/ExchangeSenderBinder.h>
 #include <Debug/MockExecutor/ExecutorBinder.h>
 #include <Debug/MockExecutor/JoinBinder.h>
-#include <Flash/Coprocessor/DAGCodec.h>
-#include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 
 namespace DB::mock
@@ -140,14 +136,12 @@ bool JoinBinder::toTiPBExecutor(tipb::Executor * tipb_executor, int32_t collator
 {
     tipb_executor->set_tp(tipb::ExecType::TypeJoin);
     tipb_executor->set_executor_id(name);
-    tipb_executor->set_fine_grained_shuffle_stream_count(fine_grained_shuffle_stream_count);
 
     tipb::Join * join = tipb_executor->mutable_join();
 
     join->set_join_type(tp);
     join->set_join_exec_type(tipb::JoinExecType::TypeHashJoin);
-    join->set_inner_idx(inner_index);
-    join->set_is_null_aware_semi_join(is_null_aware_semi_join);
+    join->set_inner_idx(1);
 
     for (const auto & key : join_cols)
     {
@@ -225,16 +219,16 @@ void JoinBinder::toMPPSubPlan(size_t & executor_index, const DAGProperties & pro
     }
 
     std::shared_ptr<ExchangeSenderBinder> left_exchange_sender
-        = std::make_shared<ExchangeSenderBinder>(executor_index, children[0]->output_schema, tipb::Hash, left_partition_keys, fine_grained_shuffle_stream_count);
+        = std::make_shared<ExchangeSenderBinder>(executor_index, children[0]->output_schema, tipb::Hash, left_partition_keys);
     left_exchange_sender->children.push_back(children[0]);
     std::shared_ptr<ExchangeSenderBinder> right_exchange_sender
-        = std::make_shared<ExchangeSenderBinder>(executor_index, children[1]->output_schema, tipb::Hash, right_partition_keys, fine_grained_shuffle_stream_count);
+        = std::make_shared<ExchangeSenderBinder>(executor_index, children[1]->output_schema, tipb::Hash, right_partition_keys);
     right_exchange_sender->children.push_back(children[1]);
 
     std::shared_ptr<ExchangeReceiverBinder> left_exchange_receiver
-        = std::make_shared<ExchangeReceiverBinder>(executor_index, children[0]->output_schema, fine_grained_shuffle_stream_count);
+        = std::make_shared<ExchangeReceiverBinder>(executor_index, children[0]->output_schema);
     std::shared_ptr<ExchangeReceiverBinder> right_exchange_receiver
-        = std::make_shared<ExchangeReceiverBinder>(executor_index, children[1]->output_schema, fine_grained_shuffle_stream_count);
+        = std::make_shared<ExchangeReceiverBinder>(executor_index, children[1]->output_schema);
     children[0] = left_exchange_receiver;
     children[1] = right_exchange_receiver;
 
@@ -290,17 +284,14 @@ ExecutorBinderPtr compileJoin(size_t & executor_index,
                               const ASTs & left_conds,
                               const ASTs & right_conds,
                               const ASTs & other_conds,
-                              const ASTs & other_eq_conds_from_in,
-                              uint64_t fine_grained_shuffle_stream_count,
-                              bool is_null_aware_semi_join,
-                              int64_t inner_index)
+                              const ASTs & other_eq_conds_from_in)
 {
     DAGSchema output_schema;
 
     buildLeftSideJoinSchema(output_schema, left->output_schema, tp);
     buildRightSideJoinSchema(output_schema, right->output_schema, tp);
 
-    auto join = std::make_shared<mock::JoinBinder>(executor_index, output_schema, tp, join_cols, left_conds, right_conds, other_conds, other_eq_conds_from_in, fine_grained_shuffle_stream_count, is_null_aware_semi_join, inner_index);
+    auto join = std::make_shared<mock::JoinBinder>(executor_index, output_schema, tp, join_cols, left_conds, right_conds, other_conds, other_eq_conds_from_in);
     join->children.push_back(left);
     join->children.push_back(right);
 
@@ -323,10 +314,10 @@ ExecutorBinderPtr compileJoin(size_t & executor_index, ExecutorBinderPtr left, E
     case ASTTableJoin::Kind::Inner:
         tp = tipb::JoinType::TypeInnerJoin;
         break;
-    case ASTTableJoin::Kind::LeftOuter:
+    case ASTTableJoin::Kind::Left:
         tp = tipb::JoinType::TypeLeftOuterJoin;
         break;
-    case ASTTableJoin::Kind::RightOuter:
+    case ASTTableJoin::Kind::Right:
         tp = tipb::JoinType::TypeRightOuterJoin;
         break;
     default:

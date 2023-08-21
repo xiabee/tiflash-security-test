@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,6 @@ extern const int LOGICAL_ERROR;
 }
 
 std::atomic<Timestamp> PDClientHelper::cached_gc_safe_point = 0;
-std::atomic<std::chrono::time_point<std::chrono::steady_clock>> PDClientHelper::safe_point_last_update_time;
+std::atomic<std::chrono::time_point<std::chrono::system_clock>> PDClientHelper::safe_point_last_update_time;
 
 } // namespace DB

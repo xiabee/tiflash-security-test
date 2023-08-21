@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,12 +17,11 @@
 #include <Flash/Coprocessor/DAGStorageInterpreter.h>
 #include <Flash/Coprocessor/GenSchemaAndColumn.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
-#include <Flash/Coprocessor/StorageDisaggregatedInterpreter.h>
+#include <Flash/Coprocessor/MockSourceStream.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/Plans/PhysicalTableScan.h>
+#include <Flash/Planner/plans/PhysicalTableScan.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 
 namespace DB
 {
@@ -32,7 +31,7 @@ PhysicalTableScan::PhysicalTableScan(
     const String & req_id,
     const TiDBTableScan & tidb_table_scan_,
     const Block & sample_block_)
-    : PhysicalLeaf(executor_id_, PlanType::TableScan, schema_, FineGrainedShuffle{}, req_id)
+    : PhysicalLeaf(executor_id_, PlanType::TableScan, schema_, req_id)
     , tidb_table_scan(tidb_table_scan_)
     , sample_block(sample_block_)
 {}
@@ -42,7 +41,7 @@ PhysicalPlanNodePtr PhysicalTableScan::build(
     const LoggerPtr & log,
     const TiDBTableScan & table_scan)
 {
-    auto schema = genNamesAndTypesForTableScan(table_scan);
+    auto schema = genNamesAndTypes(table_scan, "table_scan");
     auto physical_table_scan = std::make_shared<PhysicalTableScan>(
         executor_id,
         schema,
@@ -52,26 +51,14 @@ PhysicalPlanNodePtr PhysicalTableScan::build(
     return physical_table_scan;
 }
 
-void PhysicalTableScan::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalTableScan::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    assert(pipeline.streams.empty());
+    assert(pipeline.streams.empty() && pipeline.streams_with_non_joined_data.empty());
 
-    if (context.getSharedContextDisagg()->isDisaggregatedComputeMode())
-    {
-        StorageDisaggregatedInterpreter disaggregated_tiflash_interpreter(context, tidb_table_scan, filter_conditions, max_streams);
-        disaggregated_tiflash_interpreter.execute(pipeline);
-        buildProjection(pipeline, disaggregated_tiflash_interpreter.analyzer->getCurrentInputColumns());
-    }
-    else
-    {
-        DAGStorageInterpreter storage_interpreter(context, tidb_table_scan, filter_conditions, max_streams);
-        storage_interpreter.execute(pipeline);
-        buildProjection(pipeline, storage_interpreter.analyzer->getCurrentInputColumns());
-    }
-}
+    DAGStorageInterpreter storage_interpreter(context, tidb_table_scan, push_down_filter, max_streams);
+    storage_interpreter.execute(pipeline);
 
-void PhysicalTableScan::buildProjection(DAGPipeline & pipeline, const NamesAndTypes & storage_schema)
-{
+    const auto & storage_schema = storage_interpreter.analyzer->getCurrentInputColumns();
     RUNTIME_CHECK(
         storage_schema.size() == schema.size(),
         storage_schema.size(),
@@ -90,7 +77,7 @@ void PhysicalTableScan::buildProjection(DAGPipeline & pipeline, const NamesAndTy
     }
     /// In order to keep BlockInputStream's schema consistent with PhysicalPlan's schema.
     /// It is worth noting that the column uses the name as the unique identifier in the Block, so the column name must also be consistent.
-    ExpressionActionsPtr schema_project = generateProjectExpressionActions(pipeline.firstStream(), schema_project_cols);
+    ExpressionActionsPtr schema_project = generateProjectExpressionActions(pipeline.firstStream(), context, schema_project_cols);
     executeExpression(pipeline, schema_project, log, "table scan schema projection");
 }
 
@@ -104,27 +91,27 @@ const Block & PhysicalTableScan::getSampleBlock() const
     return sample_block;
 }
 
-bool PhysicalTableScan::setFilterConditions(const String & filter_executor_id, const tipb::Selection & selection)
+bool PhysicalTableScan::pushDownFilter(const String & filter_executor_id, const tipb::Selection & selection)
 {
-    /// Since there is at most one selection on the table scan, setFilterConditions() will only be called at most once.
-    /// So in this case hasFilterConditions() is always false.
-    if (unlikely(hasFilterConditions()))
+    /// Since there is at most one selection on the table scan, pushDownFilter will only be called at most once.
+    /// So in this case hasPushDownFilter() is always false.
+    if (unlikely(hasPushDownFilter()))
     {
         return false;
     }
 
-    filter_conditions = FilterConditions::filterConditionsFrom(filter_executor_id, selection);
+    push_down_filter = PushDownFilter::pushDownFilterFrom(filter_executor_id, selection);
     return true;
 }
 
-bool PhysicalTableScan::hasFilterConditions() const
+bool PhysicalTableScan::hasPushDownFilter() const
 {
-    return filter_conditions.hasValue();
+    return push_down_filter.hasValue();
 }
 
-const String & PhysicalTableScan::getFilterConditionsId() const
+const String & PhysicalTableScan::getPushDownFilterId() const
 {
-    assert(hasFilterConditions());
-    return filter_conditions.executor_id;
+    assert(hasPushDownFilter());
+    return push_down_filter.executor_id;
 }
 } // namespace DB

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -119,7 +119,8 @@ public:
         ++s;
     }
 
-    void insertData(const char *, size_t) override
+    void insertData(const char *, size_t)
+        override
     {
         ++s;
     }
@@ -130,24 +131,9 @@ public:
         ++s;
     }
 
-    void insertManyFrom(const IColumn &, size_t, size_t length) override
-    {
-        s += length;
-    }
-
-    void insertDisjunctFrom(const IColumn &, const std::vector<size_t> & position_vec) override
-    {
-        s += position_vec.size();
-    }
-
     void insertDefault() override
     {
         ++s;
-    }
-
-    void insertManyDefaults(size_t length) override
-    {
-        s += length;
     }
 
     void popBack(size_t n) override
@@ -185,7 +171,7 @@ public:
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
 
     ColumnPtr filter(const Filter & filt, ssize_t result_size_hint) const override;
-    ColumnPtr replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const override;
+    ColumnPtr replicate(const Offsets & offsets) const override;
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
     void getPermutation(bool reverse, size_t limit, int nan_direction_hint, Permutation & res) const override;
 

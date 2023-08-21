@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -97,7 +97,7 @@ void IBlockInputStream::dumpTree(FmtBuffer & buffer, size_t indent, size_t multi
     for (const auto & child : children)
         ++multipliers[child->getTreeID()];
 
-    for (const auto & child : children)
+    for (auto & child : children)
     {
         String id = child->getTreeID();
         size_t & subtree_multiplier = multipliers[id];
@@ -109,12 +109,4 @@ void IBlockInputStream::dumpTree(FmtBuffer & buffer, size_t indent, size_t multi
     }
 }
 
-uint64_t IBlockInputStream::collectCPUTimeNs(bool is_thread_runner)
-{
-    if (cpu_time_ns_collected)
-        return 0;
-
-    cpu_time_ns_collected = true;
-    return collectCPUTimeNsImpl(is_thread_runner);
-}
 } // namespace DB

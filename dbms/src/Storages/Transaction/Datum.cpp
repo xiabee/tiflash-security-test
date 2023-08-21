@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -79,8 +79,7 @@ struct DatumOp<tp, typename std::enable_if<tp == TypeEnum>::type>
     static bool overflow(const Field &, const ColumnInfo &) { return false; }
 };
 
-DatumFlat::DatumFlat(const DB::Field & field, TP tp)
-    : DatumBase(field, tp)
+DatumFlat::DatumFlat(const DB::Field & field, TP tp) : DatumBase(field, tp)
 {
     if (orig.isNull())
         return;
@@ -90,7 +89,7 @@ DatumFlat::DatumFlat(const DB::Field & field, TP tp)
 #ifdef M
 #error "Please undefine macro M first."
 #endif
-#define M(tt, v, cf, ct)                          \
+#define M(tt, v, cf, ct, w)                       \
     case Type##tt:                                \
         DatumOp<Type##tt>::unflatten(orig, copy); \
         break;
@@ -99,10 +98,7 @@ DatumFlat::DatumFlat(const DB::Field & field, TP tp)
     }
 }
 
-bool DatumFlat::invalidNull(const ColumnInfo & column_info)
-{
-    return column_info.hasNotNullFlag() && orig.isNull();
-}
+bool DatumFlat::invalidNull(const ColumnInfo & column_info) { return column_info.hasNotNullFlag() && orig.isNull(); }
 
 bool DatumFlat::overflow(const ColumnInfo & column_info)
 {
@@ -114,8 +110,8 @@ bool DatumFlat::overflow(const ColumnInfo & column_info)
 #ifdef M
 #error "Please undefine macro M first."
 #endif
-#define M(tt, v, cf, ct) \
-    case Type##tt:       \
+#define M(tt, v, cf, ct, w) \
+    case Type##tt:          \
         return DatumOp<Type##tt>::overflow(field(), column_info);
         COLUMN_TYPES(M)
 #undef M
@@ -124,8 +120,7 @@ bool DatumFlat::overflow(const ColumnInfo & column_info)
     throw DB::Exception("Shouldn't reach here", DB::ErrorCodes::LOGICAL_ERROR);
 }
 
-DatumBumpy::DatumBumpy(const DB::Field & field, TP tp)
-    : DatumBase(field, tp)
+DatumBumpy::DatumBumpy(const DB::Field & field, TP tp) : DatumBase(field, tp)
 {
     if (orig.isNull())
         return;
@@ -135,7 +130,7 @@ DatumBumpy::DatumBumpy(const DB::Field & field, TP tp)
 #ifdef M
 #error "Please undefine macro M first."
 #endif
-#define M(tt, v, cf, ct)                        \
+#define M(tt, v, cf, ct, w)                     \
     case Type##tt:                              \
         DatumOp<Type##tt>::flatten(orig, copy); \
         break;

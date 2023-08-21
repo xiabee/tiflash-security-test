@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,35 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <AggregateFunctions/AggregateFunctionFactory.h>
-#include <Debug/MockExecutor/AggregationBinder.h>
-#include <Debug/MockExecutor/AstToPB.h>
-#include <Debug/MockExecutor/AstToPBUtils.h>
-#include <Debug/MockExecutor/ExchangeReceiverBinder.h>
-#include <Debug/MockExecutor/ExchangeSenderBinder.h>
-#include <Debug/MockExecutor/ExecutorBinder.h>
-#include <Debug/MockExecutor/JoinBinder.h>
-#include <Debug/MockExecutor/LimitBinder.h>
-#include <Debug/MockExecutor/ProjectBinder.h>
-#include <Debug/MockExecutor/SelectionBinder.h>
-#include <Debug/MockExecutor/SortBinder.h>
-#include <Debug/MockExecutor/TableScanBinder.h>
-#include <Debug/MockExecutor/TopNBinder.h>
-#include <Debug/MockExecutor/WindowBinder.h>
 #include <Debug/dbgQueryCompiler.h>
-#include <Interpreters/Context.h>
-#include <Parsers/ASTAsterisk.h>
-#include <Parsers/ASTFunction.h>
-#include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTLiteral.h>
-#include <Parsers/ASTOrderByElement.h>
-#include <Parsers/ASTSelectQuery.h>
-#include <Parsers/ASTTablesInSelectQuery.h>
-#include <Parsers/IAST.h>
-#include <Parsers/ParserSelectQuery.h>
-#include <Parsers/parseQuery.h>
-#include <Server/MockComputeClient.h>
-#include <Storages/MutableSupport.h>
 
 namespace DB
 {

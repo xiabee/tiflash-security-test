@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,12 +21,9 @@
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/Transaction/TiDB.h>
 
-namespace DB
+namespace DB::DM::tests
 {
-namespace DM
-{
-namespace tests
-{
+
 TEST(ConvertColumnTypeTest, CastNumeric)
 {
     {
@@ -179,6 +176,45 @@ TEST(ConvertColumnTypeTest, CastNumeric)
     }
 }
 
+TEST(ConvertColumnTypeTest, CastMyDateTime)
+try
+{
+    {
+        const Strings to_types = {"MyDateTime(1)", "MyDateTime(3)", "MyDateTime(6)"};
+
+        DataTypePtr disk_data_type = typeFromString("MyDateTime(0)");
+        MutableColumnPtr disk_col = disk_data_type->createColumn();
+        disk_col->insert(Field(static_cast<UInt64>(MyDateTime(2023, 7, 17, 15, 39, 29, 20).toPackedUInt())));
+        disk_col->insert(Field(static_cast<UInt64>(MyDateTime(2020, 2, 29, 15, 39, 29, 20).toPackedUInt())));
+
+        for (const String & to_type : to_types)
+        {
+            ColumnDefine read_define(0, "c", typeFromString(to_type));
+            auto memory_column = convertColumnByColumnDefineIfNeed(disk_data_type, disk_col->getPtr(), read_define);
+
+            UInt64 val1 = memory_column->getUInt(0);
+            MyDateTime myval(val1);
+            EXPECT_EQ(myval.year, 2023);
+            EXPECT_EQ(myval.month, 7);
+            EXPECT_EQ(myval.day, 17);
+            EXPECT_EQ(myval.hour, 15);
+            EXPECT_EQ(myval.minute, 39);
+            EXPECT_EQ(myval.second, 29);
+            EXPECT_EQ(myval.micro_second, 20);
+
+            UInt64 val2 = memory_column->getUInt(1);
+            MyDateTime myval2(val2);
+            EXPECT_EQ(myval2.year, 2020);
+            EXPECT_EQ(myval2.month, 2);
+            EXPECT_EQ(myval2.day, 29);
+            EXPECT_EQ(myval2.hour, 15);
+            EXPECT_EQ(myval2.minute, 39);
+            EXPECT_EQ(myval2.second, 29);
+        }
+    }
+}
+CATCH
+
 TEST(ConvertColumnTypeTest, CastNullableToNotNull)
 {
     const Strings to_types = {"Int8", "Int16", "Int32", "Int64"};
@@ -301,7 +337,7 @@ try
 ,"comment":"","id":627,"name":{"L":"t","O":"t"},"partition":null,"pk_is_handle":false,"schema_version":252,"state":5,"tiflash_replica":{"Count":0},"update_timestamp":422031263342264329
 })json";
 
-    TiDB::TableInfo table_info(json_table_info, NullspaceID);
+    TiDB::TableInfo table_info(json_table_info);
     const auto & columns = table_info.columns;
     EXPECT_EQ(columns.size(), 5);
 
@@ -440,6 +476,4 @@ try
 }
 CATCH
 
-} // namespace tests
-} // namespace DM
-} // namespace DB
+} // namespace DB::DM::tests

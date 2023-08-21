@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,8 +18,6 @@
 #include <Columns/FilterDescription.h>
 #include <Common/typeid_cast.h>
 #include <DataStreams/FilterTransformAction.h>
-
-#include <algorithm>
 
 namespace DB
 {
@@ -70,7 +68,7 @@ ExpressionActionsPtr FilterTransformAction::getExperssion() const
     return expression;
 }
 
-bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, bool return_filter)
+bool FilterTransformAction::transform(Block & block)
 {
     if (unlikely(!block))
         return true;
@@ -78,11 +76,7 @@ bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, boo
     expression->execute(block);
 
     if (constant_filter_description.always_true)
-    {
-        if (return_filter)
-            res_filter = nullptr;
         return true;
-    }
 
     size_t columns = block.columns();
     size_t rows = block.rows();
@@ -101,10 +95,11 @@ bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, boo
         return true;
     }
 
+    IColumn::Filter * filter;
+    ColumnPtr filter_holder;
+
     if (constant_filter_description.always_true)
     {
-        if (return_filter)
-            res_filter = nullptr;
         return true;
     }
     else
@@ -114,13 +109,33 @@ bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, boo
         filter_holder = filter_and_holder.data_holder;
     }
 
-    if (return_filter)
+    /** Let's find out how many rows will be in result.
+      * To do this, we filter out the first non-constant column
+      *  or calculate number of set bytes in the filter.
+      */
+    size_t first_non_constant_column = 0;
+    for (size_t i = 0; i < columns; ++i)
     {
-        res_filter = filter;
-        return true;
+        if (!block.safeGetByPosition(i).column->isColumnConst())
+        {
+            first_non_constant_column = i;
+
+            if (first_non_constant_column != filter_column)
+                break;
+        }
     }
 
-    size_t filtered_rows = countBytesInFilter(*filter);
+    size_t filtered_rows = 0;
+    if (first_non_constant_column != filter_column)
+    {
+        ColumnWithTypeAndName & current_column = block.safeGetByPosition(first_non_constant_column);
+        current_column.column = current_column.column->filter(*filter, -1);
+        filtered_rows = current_column.column->size();
+    }
+    else
+    {
+        filtered_rows = countBytesInFilter(*filter);
+    }
 
     /// If the current block is completely filtered out, let's move on to the next one.
     if (filtered_rows == 0)
@@ -151,6 +166,9 @@ bool FilterTransformAction::transform(Block & block, FilterPtr & res_filter, boo
             current_column.column = current_column.type->createColumnConst(filtered_rows, UInt64(1));
             continue;
         }
+
+        if (i == first_non_constant_column)
+            continue;
 
         if (current_column.column->isColumnConst())
             current_column.column = current_column.column->cut(0, filtered_rows);

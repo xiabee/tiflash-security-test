@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Client/Connection.h>
+#include <Common/HTMLForm.h>
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <IO/ReadBufferFromFile.h>
@@ -194,7 +195,7 @@ public:
         , params(params_)
     {}
 
-    void handlePart(const Poco::Net::MessageHeader & header, std::istream & stream) override
+    void handlePart(const Poco::Net::MessageHeader & header, std::istream & stream)
     {
         /// The buffer is initialized here, not in the virtual function initReadBuffer
         read_buffer = std::make_unique<ReadBufferFromIStream>(stream);

@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 #include <Common/Logger.h>
 #include <DataStreams/MockExchangeSenderInputStream.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
-#include <Flash/Planner/Plans/PhysicalMockExchangeSender.h>
+#include <Flash/Planner/plans/PhysicalMockExchangeSender.h>
 #include <Interpreters/Context.h>
 
 namespace DB
@@ -30,7 +30,6 @@ PhysicalPlanNodePtr PhysicalMockExchangeSender::build(
     auto physical_mock_exchange_sender = std::make_shared<PhysicalMockExchangeSender>(
         executor_id,
         child->getSchema(),
-        FineGrainedShuffle{},
         log->identifier(),
         child);
     // executeUnion will be call after sender.transform, so don't need to restore concurrency.
@@ -38,9 +37,9 @@ PhysicalPlanNodePtr PhysicalMockExchangeSender::build(
     return physical_mock_exchange_sender;
 }
 
-void PhysicalMockExchangeSender::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalMockExchangeSender::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->buildBlockInputStream(pipeline, context, max_streams);
+    child->transform(pipeline, context, max_streams);
 
     pipeline.transform([&](auto & stream) { stream = std::make_shared<MockExchangeSenderInputStream>(stream, log->identifier()); });
 }

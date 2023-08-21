@@ -1,4 +1,4 @@
-# Copyright 2022 PingCAP, Ltd.
+# Copyright 2023 PingCAP, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -159,17 +159,21 @@ endif ()
 # Region for specialized CPU flags tuning
 
 check_then_add_sources_compile_flag (
+    TIFLASH_ENABLE_AVX_SUPPORT
+    "-mavx2"
+    src/mem_utils_avx2.cpp
+    src/crc64_avx2.cpp
+    src/avx2_mem_utils_impl.cpp
+)
+check_then_add_sources_compile_flag (
     TIFLASH_COMPILER_VPCLMULQDQ_SUPPORT
     "-mvpclmulqdq;-Wno-ignored-attributes"
     src/crc64_avx2.cpp
     src/crc64_avx512.cpp
 )
-
 check_then_add_sources_compile_flag (
-    TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT
-    "${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}"
-    src/mem_utils_avx2.cpp
-    src/crc64_avx2.cpp
+    TIFLASH_COMPILER_MOVBE_SUPPORT
+    "-mmovbe" 
     src/avx2_mem_utils_impl.cpp
 )
 

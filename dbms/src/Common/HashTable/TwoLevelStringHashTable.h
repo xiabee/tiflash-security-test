@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -132,19 +132,13 @@ public:
             if ((reinterpret_cast<uintptr_t>(p) & 2048) == 0)
             {
                 memcpy(&n[0], p, 8);
-                if constexpr (DB::isLittleEndian())
-                    n[0] &= (-1ULL >> s);
-                else
-                    n[0] &= (-1ULL << s);
+                n[0] &= -1ul >> s;
             }
             else
             {
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[0], lp, 8);
-                if constexpr (DB::isLittleEndian())
-                    n[0] >>= s;
-                else
-                    n[0] <<= s;
+                n[0] >>= s;
             }
             auto res = hash(k8);
             auto buck = getBucketFromHash(res);
@@ -156,10 +150,7 @@ public:
             memcpy(&n[0], p, 8);
             const char * lp = x.data + x.size - 8;
             memcpy(&n[1], lp, 8);
-            if constexpr (DB::isLittleEndian())
-                n[1] >>= s;
-            else
-                n[1] <<= s;
+            n[1] >>= s;
             auto res = hash(k16);
             auto buck = getBucketFromHash(res);
             keyHolderDiscardKey(key_holder);
@@ -170,10 +161,7 @@ public:
             memcpy(&n[0], p, 16);
             const char * lp = x.data + x.size - 8;
             memcpy(&n[2], lp, 8);
-            if constexpr (DB::isLittleEndian())
-                n[2] >>= s;
-            else
-                n[2] <<= s;
+            n[2] >>= s;
             auto res = hash(k24);
             auto buck = getBucketFromHash(res);
             keyHolderDiscardKey(key_holder);

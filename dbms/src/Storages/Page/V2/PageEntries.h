@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/Config.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/V2/PageDefines.h>
+#include <Storages/Page/PageDefines.h>
 #include <common/likely.h>
 #include <common/logger_useful.h>
 

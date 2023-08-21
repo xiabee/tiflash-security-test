@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -116,7 +116,7 @@ void dbgFuncTryFlushRegion(Context & context, const ASTs & args, DBGInvoker::Pri
     auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[0]).value));
 
     TMTContext & tmt = context.getTMTContext();
-    tmt.getRegionTable().tryWriteBlockByRegionAndFlush(region_id);
+    tmt.getRegionTable().tryFlushRegion(region_id);
 
     output(fmt::format("region_table try flush region {}", region_id));
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/BlockUtils.h>
-#include <DataStreams/BlocksListBlockInputStream.h>
-#include <DataStreams/SquashingBlockInputStream.h>
-#include <Debug/DAGProperties.h>
 #include <Debug/dbgFuncCoprocessorUtils.h>
-#include <Flash/Coprocessor/ArrowChunkCodec.h>
-#include <Flash/Coprocessor/CHBlockChunkCodec.h>
-#include <Flash/Coprocessor/ChunkCodec.h>
-#include <Flash/Coprocessor/DAGContext.h>
-#include <Flash/Coprocessor/DefaultChunkCodec.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/sortBlock.h>
-#include <Poco/StringTokenizer.h>
-#include <Storages/Transaction/KVStore.h>
-#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {

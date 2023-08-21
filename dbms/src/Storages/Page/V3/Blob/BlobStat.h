@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 #pragma once
 
 #include <Common/Logger.h>
+#include <Storages/Page/Page.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V3/Blob/BlobConfig.h>
 #include <Storages/Page/V3/PageEntry.h>
 #include <Storages/Page/V3/spacemap/SpaceMap.h>
@@ -173,7 +175,6 @@ private:
 #endif
     void restoreByEntry(const PageEntryV3 & entry);
     void restore();
-    template <typename>
     friend class PageDirectoryFactory;
 
 #ifndef DBMS_PUBLIC_GTEST

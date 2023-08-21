@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,15 +20,16 @@
 #include <Poco/Logger.h>
 #include <Poco/Path.h>
 #include <Poco/Runnable.h>
+#include <Poco/ThreadPool.h>
 #include <Poco/Timer.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/V2/PageDefines.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V2/PageFile.h>
 #include <Storages/Page/V2/PageStorage.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/WriteBatch.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/PathPool.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 
@@ -47,7 +48,7 @@ class PageStorageMultiPathsTest : public DB::base::TiFlashStorageTestBasic
 {
 public:
     PageStorageMultiPathsTest()
-        : file_provider{DB::tests::TiFlashTestEnv::getDefaultFileProvider()}
+        : file_provider{DB::tests::TiFlashTestEnv::getContext().getFileProvider()}
     {}
 
     static void SetUpTestCase() {}

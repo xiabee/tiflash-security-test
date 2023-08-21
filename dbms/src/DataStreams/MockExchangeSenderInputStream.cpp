@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,16 @@ MockExchangeSenderInputStream::MockExchangeSenderInputStream(
     : log(Logger::get(req_id))
 {
     children.push_back(input);
+}
+
+Block MockExchangeSenderInputStream::getTotals()
+{
+    if (auto * child = dynamic_cast<IProfilingBlockInputStream *>(&*children.back()))
+    {
+        totals = child->getTotals();
+    }
+
+    return totals;
 }
 
 Block MockExchangeSenderInputStream::getHeader() const

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,11 +29,6 @@ struct DAGProperties
     bool use_broadcast_join = false;
     Int32 mpp_partition_num = 1;
     Timestamp start_ts = DEFAULT_MAX_READ_TSO;
-    UInt64 query_ts = 0;
-    UInt64 server_id = 1;
-    UInt64 local_query_id = 1;
-    Int64 task_id = 1;
-
     Int32 mpp_timeout = 10;
 };
 } // namespace DB

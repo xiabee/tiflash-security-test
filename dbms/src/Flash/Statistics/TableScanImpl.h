@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ public:
 
 private:
     TableScanDetail local_table_scan_detail{true};
-    TableScanDetail remote_table_scan_detail{false};
+    TableScanDetail cop_table_scan_detail{false};
 
 protected:
     void appendExtraJson(FmtBuffer &) const override;

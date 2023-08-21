@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@
 
 namespace ProfileEvents
 {
-extern const Event FileFSync;
+// no need to update sync, since write buffers inherit that directly from `WriteBufferFromFileDescriptor`
 extern const Event WriteBufferFromFileDescriptorWrite;
 extern const Event WriteBufferFromFileDescriptorWriteBytes;
 extern const Event ReadBufferFromFileDescriptorRead;
@@ -33,13 +33,9 @@ extern const Event ReadBufferFromFileDescriptorReadBytes;
 extern const Event ReadBufferFromFileDescriptorReadFailed;
 extern const Event Seek;
 } // namespace ProfileEvents
+
 namespace DB
 {
-namespace ErrorCodes
-{
-extern const int CANNOT_FSYNC;
-} // namespace ErrorCodes
-
 /**
  * A frame consists of a header and a body that conforms the following structure:
  *
@@ -148,21 +144,6 @@ private:
     off_t getMaterializedBytes() override
     {
         return materialized_bytes + ((offset() != 0) ? (sizeof(ChecksumFrame<Backend>) + offset()) : 0);
-    }
-
-    void sync() override
-    {
-        next();
-
-        ProfileEvents::increment(ProfileEvents::FileFSync);
-        int res = out->fsync();
-        if (-1 == res)
-            throwFromErrno("Cannot fsync " + getFileName(), ErrorCodes::CANNOT_FSYNC);
-    }
-
-    void close() override
-    {
-        out->close();
     }
 
 public:

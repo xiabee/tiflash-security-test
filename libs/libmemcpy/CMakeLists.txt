@@ -1,4 +1,4 @@
-# Copyright 2022 PingCAP, Ltd.
+# Copyright 2023 PingCAP, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,11 +39,7 @@ else ()
     list (APPEND memcpy_sources memcpy.cpp)
 endif()
 
-check_then_add_sources_compile_flag (
-    TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT
-    "${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}"
-    ${memcpy_sources}
-)
+add_sources_compile_flag_avx2 (${memcpy_sources})
 
 add_library (memcpy STATIC ${memcpy_sources})
 target_include_directories(memcpy PUBLIC ${TiFlash_SOURCE_DIR}/libs/libcommon/include)

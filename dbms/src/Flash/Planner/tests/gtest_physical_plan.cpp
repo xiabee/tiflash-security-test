@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ public:
     {
         ExecutorTest::initializeContext();
 
+        context.context.setExecutorTest();
+
         context.addMockTable({"test_db", "test_table"},
                              {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
                              {toNullableVec<String>("s1", {"banana", {}, "banana"}),
@@ -43,9 +45,7 @@ public:
         context.addExchangeReceiver("exchange2",
                                     {{"partition", TiDB::TP::TypeLongLong}, {"order", TiDB::TP::TypeLongLong}},
                                     {toNullableVec<Int64>("partition", {1, 1, 1, 1, 2, 2, 2, 2}),
-                                     toNullableVec<Int64>("order", {1, 1, 2, 2, 1, 1, 2, 2})},
-                                    1,
-                                    {{"partition", TiDB::TP::TypeLongLong}});
+                                     toNullableVec<Int64>("order", {1, 1, 2, 2, 1, 1, 2, 2})});
 
         context.addExchangeReceiver("exchange3",
                                     {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeLongLong}, {"s4", TiDB::TP::TypeLongLong}},
@@ -55,11 +55,11 @@ public:
                                      toNullableVec<Int64>("s4", {1, 1, {}})});
 
         context.addExchangeReceiver("exchange_r_table",
-                                    {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
+                                    {{"s1", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
                                     {toNullableVec<String>("s", {"banana", "banana"}),
                                      toNullableVec<String>("join_c", {"apple", "banana"})});
         context.addExchangeReceiver("exchange_l_table",
-                                    {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
+                                    {{"s1", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
                                     {toNullableVec<String>("s", {"banana", "banana"}),
                                      toNullableVec<String>("join_c", {"apple", "banana"})});
 
@@ -97,9 +97,10 @@ public:
         size_t max_streams = 1;
 
         DAGContext dag_context(*request, "executor_test", max_streams);
-        TiFlashTestEnv::setUpTestContext(*context.context, &dag_context, context.mockStorage(), TestType::EXECUTOR_TEST);
+        context.context.setDAGContext(&dag_context);
+        context.context.setMockStorage(context.mockStorage());
 
-        PhysicalPlan physical_plan{*context.context, log->identifier()};
+        PhysicalPlan physical_plan{context.context, log->identifier()};
         assert(request);
         physical_plan.build(request.get());
         physical_plan.outputAndOptimize();
@@ -109,8 +110,8 @@ public:
         BlockInputStreamPtr final_stream;
         {
             DAGPipeline pipeline;
-            physical_plan.buildBlockInputStream(pipeline, *context.context, max_streams);
-            executeCreatingSets(pipeline, *context.context, max_streams, log);
+            physical_plan.transform(pipeline, context.context, max_streams);
+            executeCreatingSets(pipeline, context.context, max_streams, log);
             final_stream = pipeline.firstStream();
             FmtBuffer fb;
             final_stream->dumpTree(fb);
@@ -213,7 +214,8 @@ try
 Expression: <final projection>
  Expression: <expr after aggregation>
   Aggregating
-   MockExchangeReceiver)",
+   Concat
+    MockExchangeReceiver)",
         {toNullableVec<String>({{}, "banana"}),
          toNullableVec<String>({{}, "banana"})});
 }
@@ -403,7 +405,7 @@ CreatingSets
     MockExchangeReceiver
  Expression: <final projection>
   Expression: <remove useless column after join>
-   HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
+   HashJoinProbe: <join probe, join_executor_id = Join_2>
     Expression: <append join key and join filters for probe side>
      Expression: <final projection>
       MockExchangeReceiver)",
@@ -430,7 +432,7 @@ CreatingSets
     MockExchangeReceiver
  Expression: <final projection>
   Expression: <remove useless column after join>
-   HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
+   HashJoinProbe: <join probe, join_executor_id = Join_2>
     Expression: <append join key and join filters for probe side>
      Expression: <final projection>
       MockExchangeReceiver)",
@@ -455,12 +457,16 @@ CreatingSets
   Expression: <append join key and join filters for build side>
    Expression: <final projection>
     MockExchangeReceiver
- Expression: <final projection>
-  Expression: <remove useless column after join>
-   HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
-    Expression: <append join key and join filters for probe side>
-     Expression: <final projection>
-      MockExchangeReceiver)",
+ Union: <for test>
+  Expression: <final projection>
+   Expression: <remove useless column after join>
+    HashJoinProbe: <join probe, join_executor_id = Join_2>
+     Expression: <append join key and join filters for probe side>
+      Expression: <final projection>
+       MockExchangeReceiver
+  Expression: <final projection>
+   Expression: <remove useless column after join>
+    NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<String>({"banana", "banana"}),
              toNullableVec<String>({"apple", "banana"}),
              toNullableVec<String>({"banana", "banana"}),
@@ -498,23 +504,33 @@ CreatingSets
   Expression: <append join key and join filters for build side>
    Expression: <final projection>
     MockTableScan
- HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
-  Expression: <append join key and join filters for build side>
-   Expression: <final projection>
-    Expression: <remove useless column after join>
-     HashJoinProbe: <join probe, join_executor_id = Join_5, scan_hash_map_after_probe = true>
-      Expression: <append join key and join filters for probe side>
-       Expression: <final projection>
-        MockTableScan
- Expression: <final projection>
-  Expression: <remove useless column after join>
-   HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
+ Union: <for join>
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
+   Expression: <append join key and join filters for build side>
     Expression: <final projection>
      Expression: <remove useless column after join>
-      HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = true>
+      HashJoinProbe: <join probe, join_executor_id = Join_5>
        Expression: <append join key and join filters for probe side>
         Expression: <final projection>
-         MockTableScan)",
+         MockTableScan
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      NonJoined: <add stream with non_joined_data if full_or_right_join>
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_6>
+    Union: <final union for non_joined_data>
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       HashJoinProbe: <join probe, join_executor_id = Join_4>
+        Expression: <append join key and join filters for probe side>
+         Expression: <final projection>
+          MockTableScan
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<Int32>({3, 3, 0}),
              toNullableVec<Int32>({2, 2, 0}),
              toNullableVec<Int32>({2, 2, 0}),
@@ -558,23 +574,33 @@ CreatingSets
   Expression: <append join key and join filters for build side>
    Expression: <final projection>
     MockTableScan
- HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
-  Expression: <append join key and join filters for build side>
-   Expression: <final projection>
-    Expression: <remove useless column after join>
-     HashJoinProbe: <join probe, join_executor_id = Join_5, scan_hash_map_after_probe = true>
-      Expression: <append join key and join filters for probe side>
-       Expression: <final projection>
-        MockTableScan
- Expression: <final projection>
-  Expression: <remove useless column after join>
-   HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
+ Union: <for join>
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
+   Expression: <append join key and join filters for build side>
     Expression: <final projection>
      Expression: <remove useless column after join>
-      HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = true>
+      HashJoinProbe: <join probe, join_executor_id = Join_5>
        Expression: <append join key and join filters for probe side>
         Expression: <final projection>
-         MockTableScan)",
+         MockTableScan
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      NonJoined: <add stream with non_joined_data if full_or_right_join>
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_6>
+    Union: <final union for non_joined_data>
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       HashJoinProbe: <join probe, join_executor_id = Join_4>
+        Expression: <append join key and join filters for probe side>
+         Expression: <final projection>
+          MockTableScan
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<Int32>({3, 3, 0}),
              toNullableVec<Int32>({2, 2, 0}),
              toNullableVec<Int32>({2, 2, 0}),

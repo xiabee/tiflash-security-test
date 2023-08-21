@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,16 +15,13 @@
 #pragma once
 
 #include <Flash/Coprocessor/ChunkCodec.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 #include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <common/types.h>
 
 namespace DB
 {
-class DAGContext;
-enum class CompressionMethod;
-enum MPPDataPacketVersion : int64_t;
-
 template <class ExchangeWriterPtr>
 class HashPartitionWriter : public DAGResponseWriter
 {
@@ -34,20 +31,14 @@ public:
         std::vector<Int64> partition_col_ids_,
         TiDB::TiDBCollators collators_,
         Int64 batch_send_min_limit_,
-        DAGContext & dag_context_,
-        MPPDataPacketVersion data_codec_version_,
-        tipb::CompressionMode compression_mode_);
+        DAGContext & dag_context_);
     void write(const Block & block) override;
-    bool isReadyForWrite() const override;
     void flush() override;
 
 private:
-    void writeImpl(const Block & block);
-    void writeImplV1(const Block & block);
-    void partitionAndWriteBlocks();
-    void partitionAndWriteBlocksV1();
+    void partitionAndEncodeThenWriteBlocks();
 
-    void writePartitionBlocks(std::vector<Blocks> & partition_blocks);
+    void writePackets(TrackedMppDataPacketPtrs & packets);
 
 private:
     Int64 batch_send_min_limit;
@@ -57,11 +48,7 @@ private:
     TiDB::TiDBCollators collators;
     size_t rows_in_blocks;
     uint16_t partition_num;
-    // support data compression
-    int64_t mem_size_in_blocks{};
-    DataTypes expected_types;
-    MPPDataPacketVersion data_codec_version;
-    CompressionMethod compression_method{};
+    std::unique_ptr<ChunkCodecStream> chunk_codec_stream;
 };
 
 } // namespace DB

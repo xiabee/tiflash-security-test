@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #include <RaftStoreProxyFFI/ColumnFamily.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/SSTFilesToBlockInputStream.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 
 #include <memory>
 #include <string_view>
@@ -74,6 +74,7 @@ public:
         ChildStream child_,
         StorageDeltaMergePtr storage_,
         DecodingStorageSchemaSnapshotConstPtr schema_snap_,
+        TiDB::SnapshotApplyMethod method_,
         FileConvertJobType job_type_,
         UInt64 split_after_rows_,
         UInt64 split_after_size_,
@@ -111,6 +112,7 @@ private:
     ChildStream child;
     StorageDeltaMergePtr storage;
     DecodingStorageSchemaSnapshotConstPtr schema_snap;
+    const TiDB::SnapshotApplyMethod method;
     const FileConvertJobType job_type;
     const UInt64 split_after_rows;
     const UInt64 split_after_size;
@@ -165,12 +167,12 @@ public:
         return mock_data->read();
     }
 
-    static std::tuple<size_t, size_t, size_t, UInt64> getMvccStatistics()
+    std::tuple<size_t, size_t, size_t, UInt64> getMvccStatistics() const
     {
         return {};
     }
 
-    static SSTFilesToBlockInputStream::ProcessKeys getProcessKeys()
+    SSTFilesToBlockInputStream::ProcessKeys getProcessKeys() const
     {
         return {};
     }

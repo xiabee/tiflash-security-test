@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <DataStreams/JSONRowOutputStream.h>
-#include <IO/WriteBufferValidUTF8.h>
 #include <IO/WriteHelpers.h>
+#include <IO/WriteBufferValidUTF8.h>
+#include <DataStreams/JSONRowOutputStream.h>
 
 
 namespace DB
 {
 
 JSONRowOutputStream::JSONRowOutputStream(WriteBuffer & ostr_, const Block & sample_, bool write_statistics_, const FormatSettingsJSON & settings_)
-    : dst_ostr(ostr_)
-    , write_statistics(write_statistics_)
-    , settings(settings_)
+    : dst_ostr(ostr_), write_statistics(write_statistics_), settings(settings_)
 {
     NamesAndTypesList columns(sample_.getNamesAndTypesList());
     fields.assign(columns.begin(), columns.end());
@@ -118,6 +116,7 @@ void JSONRowOutputStream::writeSuffix()
     writeChar('\n', *ostr);
     writeCString("\t]", *ostr);
 
+    writeTotals();
     writeExtremes();
 
     writeCString(",\n\n", *ostr);
@@ -143,6 +142,35 @@ void JSONRowOutputStream::writeRowsBeforeLimitAtLeast()
         writeIntText(rows_before_limit, *ostr);
     }
 }
+
+void JSONRowOutputStream::writeTotals()
+{
+    if (totals)
+    {
+        writeCString(",\n", *ostr);
+        writeChar('\n', *ostr);
+        writeCString("\t\"totals\":\n", *ostr);
+        writeCString("\t{\n", *ostr);
+
+        size_t totals_columns = totals.columns();
+        for (size_t i = 0; i < totals_columns; ++i)
+        {
+            const ColumnWithTypeAndName & column = totals.safeGetByPosition(i);
+
+            if (i != 0)
+                writeCString(",\n", *ostr);
+
+            writeCString("\t\t", *ostr);
+            writeJSONString(column.name, *ostr);
+            writeCString(": ", *ostr);
+            column.type->serializeTextJSON(*column.column.get(), 0, *ostr, settings);
+        }
+
+        writeChar('\n', *ostr);
+        writeCString("\t}", *ostr);
+    }
+}
+
 
 static void writeExtremesElement(const char * title, const Block & extremes, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON & settings)
 {
@@ -213,4 +241,4 @@ void JSONRowOutputStream::writeStatistics()
     writeCString("\t}", *ostr);
 }
 
-} // namespace DB
+}

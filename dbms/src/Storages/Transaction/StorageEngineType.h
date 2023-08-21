@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,5 +30,27 @@ enum class StorageEngine
     // indicate other engine type in ClickHouse
     UNSUPPORTED_ENGINES = 128,
 };
+
+enum class SnapshotApplyMethod : std::int32_t
+{
+    DEPRECATED_Block = 1,
+    // Invalid if the storage engine is not DeltaTree
+    DTFile_Directory,
+    DTFile_Single,
+};
+
+inline const std::string applyMethodToString(SnapshotApplyMethod method)
+{
+    switch (method)
+    {
+    case SnapshotApplyMethod::DTFile_Directory:
+        return "file1";
+    case SnapshotApplyMethod::DTFile_Single:
+        return "file2";
+    default:
+        return "unknown(" + std::to_string(static_cast<std::int32_t>(method)) + ")";
+    }
+    return "unknown";
+}
 
 } // namespace TiDB

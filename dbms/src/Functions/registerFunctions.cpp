@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -44,11 +44,6 @@ void registerFunctionsStringMath(FunctionFactory &);
 void registerFunctionsDuration(FunctionFactory &);
 void registerFunctionsRegexp(FunctionFactory &);
 void registerFunctionsJson(FunctionFactory &);
-void registerFunctionsIsIPAddr(FunctionFactory &);
-void registerFunctionsRegexpLike(FunctionFactory &);
-void registerFunctionsRegexpInstr(FunctionFactory &);
-void registerFunctionsRegexpSubstr(FunctionFactory &);
-void registerFunctionsRegexpReplace(FunctionFactory &);
 
 
 void registerFunctions()
@@ -76,12 +71,8 @@ void registerFunctions()
     registerFunctionsNull(factory);
     registerFunctionsStringMath(factory);
     registerFunctionsDuration(factory);
-    registerFunctionsRegexpLike(factory);
-    registerFunctionsRegexpInstr(factory);
-    registerFunctionsRegexpSubstr(factory);
-    registerFunctionsRegexpReplace(factory);
+    registerFunctionsRegexp(factory);
     registerFunctionsJson(factory);
-    registerFunctionsIsIPAddr(factory);
 }
 
 } // namespace DB

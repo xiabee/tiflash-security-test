@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,8 @@
 
 #include <Common/FmtUtils.h>
 #include <Flash/Statistics/traverseExecutors.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/TiFlashTestException.h>
-#include <common/types.h>
-
 namespace DB
 {
 namespace tests

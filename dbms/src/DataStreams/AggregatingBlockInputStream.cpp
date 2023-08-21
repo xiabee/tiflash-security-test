@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,6 @@
 
 #include <DataStreams/AggregatingBlockInputStream.h>
 #include <DataStreams/MergingAggregatedMemoryEfficientBlockInputStream.h>
-#include <DataStreams/MergingAndConvertingBlockInputStream.h>
-#include <DataStreams/NullBlockInputStream.h>
 
 namespace DB
 {
@@ -36,23 +34,13 @@ Block AggregatingBlockInputStream::readImpl()
             return this->isCancelled();
         };
         aggregator.setCancellationHook(hook);
-        aggregator.initThresholdByAggregatedDataVariantsSize(1);
 
-        aggregator.execute(children.back(), *data_variants);
+        aggregator.execute(children.back(), *data_variants, file_provider);
 
-        if (!aggregator.hasSpilledData())
+        if (!aggregator.hasTemporaryFiles())
         {
             ManyAggregatedDataVariants many_data{data_variants};
-            auto merging_buckets = aggregator.mergeAndConvertToBlocks(many_data, final, 1);
-            if (!merging_buckets)
-            {
-                impl = std::make_unique<NullBlockInputStream>(aggregator.getHeader(final));
-            }
-            else
-            {
-                RUNTIME_CHECK(1 == merging_buckets->getConcurrency());
-                impl = std::make_unique<MergingAndConvertingBlockInputStream>(merging_buckets, 0, log->identifier());
-            }
+            impl = aggregator.mergeAndConvertToBlocks(many_data, final, 1);
         }
         else
         {
@@ -64,11 +52,23 @@ Block AggregatingBlockInputStream::readImpl()
             {
                 /// Flush data in the RAM to disk also. It's easier than merging on-disk and RAM data.
                 if (!data_variants->empty())
-                    aggregator.spill(*data_variants);
+                    aggregator.writeToTemporaryFile(*data_variants, file_provider);
             }
-            aggregator.finishSpill();
-            LOG_INFO(log, "Begin restore data from disk for aggregation.");
-            BlockInputStreams input_streams = aggregator.restoreSpilledData();
+
+            const auto & files = aggregator.getTemporaryFiles();
+            BlockInputStreams input_streams;
+            for (const auto & file : files.files)
+            {
+                temporary_inputs.emplace_back(std::make_unique<TemporaryFileStream>(file->path(), file_provider));
+                input_streams.emplace_back(temporary_inputs.back()->block_in);
+            }
+
+            LOG_TRACE(log,
+                      "Will merge {} temporary files of size {:.2f} MiB compressed, {:.2f} MiB uncompressed.",
+                      files.files.size(),
+                      (files.sum_size_compressed / 1048576.0),
+                      (files.sum_size_uncompressed / 1048576.0));
+
             impl = std::make_unique<MergingAggregatedMemoryEfficientBlockInputStream>(input_streams, params, final, 1, 1, log->identifier());
         }
     }

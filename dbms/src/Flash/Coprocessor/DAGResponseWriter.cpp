@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Ltd.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 
 namespace DB
@@ -32,7 +31,7 @@ DAGResponseWriter::DAGResponseWriter(
         && dag_context.encode_type != tipb::EncodeType::TypeDefault)
     {
         throw TiFlashException(
-            "Only Default/Arrow/CHBlock encode type is supported in DAGResponseWriter.",
+            "Only Default/Arrow/CHBlock encode type is supported in DAGBlockOutputStream.",
             Errors::Coprocessor::Unimplemented);
     }
 }
