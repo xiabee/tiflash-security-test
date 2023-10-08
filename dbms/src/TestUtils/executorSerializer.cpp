@@ -16,7 +16,7 @@
 #include <Common/TiFlashException.h>
 #include <Flash/Coprocessor/DAGCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <TestUtils/executorSerializer.h>
+#include <TestUtils/ExecutorSerializer.h>
 #include <tipb/executor.pb.h>
 #include <tipb/expression.pb.h>
 namespace DB::tests
@@ -80,11 +80,13 @@ void serializeExpression(const tipb::Expr & expr, FmtBuffer & buf)
         buf.joinStr(
             expr.children().begin(),
             expr.children().end(),
-            [&](const auto & ex, FmtBuffer &) {
-                serializeExpression(ex, buf);
-            },
+            [&](const auto & ex, FmtBuffer &) { serializeExpression(ex, buf); },
             ", ");
         buf.append(")");
+    }
+    else if (isLiteralExpr(expr))
+    {
+        buf.fmtAppend("<{}, {}>", decodeLiteral(expr).toString(), getFieldTypeName(expr.field_type().tp()));
     }
     else
     {
@@ -99,9 +101,7 @@ void serializeSelection(const String & executor_id, const tipb::Selection & sel,
     buf.joinStr(
         sel.conditions().begin(),
         sel.conditions().end(),
-        [&](const auto & expr, FmtBuffer &) {
-            serializeExpression(expr, buf);
-        },
+        [&](const auto & expr, FmtBuffer &) { serializeExpression(expr, buf); },
         " and ");
     buf.append("}\n");
 }
@@ -117,9 +117,7 @@ void serializeProjection(const String & executor_id, const tipb::Projection & pr
     buf.joinStr(
         proj.exprs().begin(),
         proj.exprs().end(),
-        [&](const auto & expr, FmtBuffer &) {
-            serializeExpression(expr, buf);
-        },
+        [&](const auto & expr, FmtBuffer &) { serializeExpression(expr, buf); },
         ", ");
     buf.append("}\n");
 }
@@ -130,17 +128,13 @@ void serializeAggregation(const String & executor_id, const tipb::Aggregation & 
     buf.joinStr(
         agg.group_by().begin(),
         agg.group_by().end(),
-        [&](const auto & group_by, FmtBuffer &) {
-            serializeExpression(group_by, buf);
-        },
+        [&](const auto & group_by, FmtBuffer &) { serializeExpression(group_by, buf); },
         ", ");
     buf.append("}, agg_func: {");
     buf.joinStr(
         agg.agg_func().begin(),
         agg.agg_func().end(),
-        [&](const auto & func, FmtBuffer &) {
-            serializeExpression(func, buf);
-        },
+        [&](const auto & func, FmtBuffer &) { serializeExpression(func, buf); },
         ", ");
     buf.append("}\n");
 }
@@ -160,9 +154,59 @@ void serializeTopN(const String & executor_id, const tipb::TopN & top_n, FmtBuff
     buf.fmtAppend("}}, limit: {}\n", top_n.limit());
 }
 
+void serializeExpand2Source(const String & executor_id, const tipb::Expand2 & expand2, FmtBuffer & buf)
+{
+    buf.fmtAppend("{} | expand projection: ", executor_id);
+    buf.append("[");
+    buf.joinStr(
+        expand2.proj_exprs().begin(),
+        expand2.proj_exprs().end(),
+        [](const auto & item, FmtBuffer & buf1) {
+            // for every level-projection, make it as string too.
+            buf1.append("[");
+            buf1.joinStr(
+                item.exprs().begin(),
+                item.exprs().end(),
+                [](const auto & item2, FmtBuffer & buf2) { serializeExpression(item2, buf2); },
+                ", ");
+            buf1.append("]");
+        },
+        ", ");
+    buf.append("]\n");
+}
+
+void serializeExpandSource(const String & executor_id, const tipb::Expand & expand, FmtBuffer & buf)
+{
+    buf.fmtAppend("{} | expanded_by: [", executor_id);
+    for (const auto & grouping_set : expand.grouping_sets())
+    {
+        buf.append("<");
+        for (const auto & grouping_exprs : grouping_set.grouping_exprs())
+        {
+            buf.append("{");
+            for (auto i = 0; i < grouping_exprs.grouping_expr().size(); ++i)
+            {
+                if (i != 0)
+                {
+                    buf.append(",");
+                }
+                auto expr = grouping_exprs.grouping_expr().Get(i);
+                serializeExpression(expr, buf);
+            }
+            buf.append("}");
+        }
+        buf.append(">");
+    }
+    buf.append("]\n");
+}
+
 void serializeJoin(const String & executor_id, const tipb::Join & join, FmtBuffer & buf)
 {
-    buf.fmtAppend("{} | {}, {}. left_join_keys: {{", executor_id, getJoinTypeName(join.join_type()), getJoinExecTypeName(join.join_exec_type()));
+    buf.fmtAppend(
+        "{} | {}, {}. left_join_keys: {{",
+        executor_id,
+        getJoinTypeName(join.join_type()),
+        getJoinExecTypeName(join.join_exec_type()));
     toString(join.left_join_keys(), buf);
     buf.append("}, right_join_keys: {");
     toString(join.right_join_keys(), buf);
@@ -209,20 +253,26 @@ void serializeWindow(const String & executor_id, const tipb::Window & window [[m
     buf.joinStr(
         window.func_desc().begin(),
         window.func_desc().end(),
-        [&](const auto & func, FmtBuffer &) {
-            serializeExpression(func, buf);
-        },
+        [&](const auto & func, FmtBuffer &) { serializeExpression(func, buf); },
         ", ");
     if (window.has_frame())
     {
         buf.append("}, frame: {");
         if (window.frame().has_start())
         {
-            buf.fmtAppend("start<{}, {}, {}>", window.frame().start().type(), window.frame().start().unbounded(), window.frame().start().offset());
+            buf.fmtAppend(
+                "start<{}, {}, {}>",
+                window.frame().start().type(),
+                window.frame().start().unbounded(),
+                window.frame().start().offset());
         }
         if (window.frame().has_end())
         {
-            buf.fmtAppend(", end<{}, {}, {}>", window.frame().end().type(), window.frame().end().unbounded(), window.frame().end().offset());
+            buf.fmtAppend(
+                ", end<{}, {}, {}>",
+                window.frame().end().type(),
+                window.frame().end().unbounded(),
+                window.frame().end().offset());
         }
     }
     buf.append("}\n");
@@ -282,6 +332,12 @@ void ExecutorSerializer::serializeListStruct(const tipb::DAGRequest * dag_reques
         case tipb::ExecType::TypeLimit:
             serializeLimit("Limit", executor.limit(), buf);
             break;
+        case tipb::ExecType::TypeExpand:
+            serializeExpandSource("Expand", executor.expand(), buf);
+            break;
+        case tipb::ExecType::TypeExpand2:
+            serializeExpand2Source(executor.executor_id(), executor.expand2(), buf);
+            break;
         default:
             throw TiFlashException("Should not reach here", Errors::Coprocessor::Internal);
         }
@@ -301,7 +357,9 @@ void ExecutorSerializer::serializeTreeStruct(const tipb::Executor & root_executo
             serializeTableScan(executor.executor_id(), executor.tbl_scan(), buf);
             break;
         case tipb::ExecType::TypePartitionTableScan:
-            throw TiFlashException("Partition table scan executor is not supported", Errors::Coprocessor::Unimplemented); // todo support partition table scan executor.
+            throw TiFlashException(
+                "Partition table scan executor is not supported",
+                Errors::Coprocessor::Unimplemented); // todo support partition table scan executor.
         case tipb::ExecType::TypeJoin:
             serializeJoin(executor.executor_id(), executor.join(), buf);
             break;
@@ -338,6 +396,12 @@ void ExecutorSerializer::serializeTreeStruct(const tipb::Executor & root_executo
             break;
         case tipb::ExecType::TypeWindow:
             serializeWindow(executor.executor_id(), executor.window(), buf);
+            break;
+        case tipb::ExecType::TypeExpand:
+            serializeExpandSource(executor.executor_id(), executor.expand(), buf);
+            break;
+        case tipb::ExecType::TypeExpand2:
+            serializeExpand2Source(executor.executor_id(), executor.expand2(), buf);
             break;
         default:
             throw TiFlashException("Should not reach here", Errors::Coprocessor::Internal);

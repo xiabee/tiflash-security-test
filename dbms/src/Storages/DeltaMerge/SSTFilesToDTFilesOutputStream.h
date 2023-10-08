@@ -18,7 +18,7 @@
 #include <RaftStoreProxyFFI/ColumnFamily.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/SSTFilesToBlockInputStream.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/PageDefinesBase.h>
 
 #include <memory>
 #include <string_view>
@@ -74,10 +74,11 @@ public:
         ChildStream child_,
         StorageDeltaMergePtr storage_,
         DecodingStorageSchemaSnapshotConstPtr schema_snap_,
-        TiDB::SnapshotApplyMethod method_,
         FileConvertJobType job_type_,
         UInt64 split_after_rows_,
         UInt64 split_after_size_,
+        UInt64 region_id_,
+        std::shared_ptr<std::atomic_bool> abort_flag_,
         Context & context);
     ~SSTFilesToDTFilesOutputStream();
 
@@ -92,6 +93,11 @@ public:
 
     // Try to cleanup the files in `ingest_files` quickly.
     void cancel();
+
+    bool isAbort() const { return abort_flag->load(std::memory_order_seq_cst); }
+
+    size_t getTotalCommittedBytes() const { return total_committed_bytes; }
+    size_t getTotalBytesOnDisk() const { return total_bytes_on_disk; }
 
 private:
     /**
@@ -112,10 +118,11 @@ private:
     ChildStream child;
     StorageDeltaMergePtr storage;
     DecodingStorageSchemaSnapshotConstPtr schema_snap;
-    const TiDB::SnapshotApplyMethod method;
     const FileConvertJobType job_type;
     const UInt64 split_after_rows;
     const UInt64 split_after_size;
+    const UInt64 region_id;
+    std::shared_ptr<std::atomic_bool> abort_flag;
     Context & context;
     LoggerPtr log;
 
@@ -135,6 +142,7 @@ private:
      */
     size_t total_committed_rows = 0;
     size_t total_committed_bytes = 0;
+    size_t total_bytes_on_disk = 0;
 
     Stopwatch watch;
 };
@@ -147,35 +155,17 @@ public:
         , mock_region(mock_region_)
     {}
 
-    void readPrefix()
-    {
-        mock_data->readPrefix();
-    }
+    void readPrefix() { mock_data->readPrefix(); }
 
-    void readSuffix()
-    {
-        mock_data->readSuffix();
-    }
+    void readSuffix() { mock_data->readSuffix(); }
 
-    RegionPtr getRegion() const
-    {
-        return mock_region;
-    }
+    RegionPtr getRegion() const { return mock_region; }
 
-    Block read()
-    {
-        return mock_data->read();
-    }
+    Block read() { return mock_data->read(); }
 
-    std::tuple<size_t, size_t, size_t, UInt64> getMvccStatistics() const
-    {
-        return {};
-    }
+    static std::tuple<size_t, size_t, size_t, UInt64> getMvccStatistics() { return {}; }
 
-    SSTFilesToBlockInputStream::ProcessKeys getProcessKeys() const
-    {
-        return {};
-    }
+    static SSTFilesToBlockInputStream::ProcessKeys getProcessKeys() { return {}; }
 
 protected:
     BlockInputStreamPtr mock_data;

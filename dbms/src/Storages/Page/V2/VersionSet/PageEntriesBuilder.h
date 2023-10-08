@@ -16,7 +16,7 @@
 
 #include <Storages/Page/V2/PageEntries.h>
 #include <Storages/Page/V2/VersionSet/PageEntriesEdit.h>
-#include <Storages/Page/WriteBatch.h>
+#include <Storages/Page/WriteBatchImpl.h>
 
 namespace DB::PS::V2
 {
@@ -42,22 +42,13 @@ public:
         current_version->copyEntries(*old_version);
     }
 
-    ~PageEntriesBuilder()
-    {
-        old_version->release();
-    }
+    ~PageEntriesBuilder() { old_version->release(); }
 
     void apply(const PageEntriesEdit & edit);
 
-    void gcApply(PageEntriesEdit & edit)
-    {
-        gcApplyTemplate(current_version, edit, current_version);
-    }
+    void gcApply(PageEntriesEdit & edit) { gcApplyTemplate(current_version, edit, current_version); }
 
-    PageEntries * build()
-    {
-        return current_version;
-    }
+    PageEntries * build() { return current_version; }
 
 public:
     template <typename OldVersionType, typename VersionType>

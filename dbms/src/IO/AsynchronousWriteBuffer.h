@@ -30,7 +30,7 @@ class AsynchronousWriteBuffer : public WriteBuffer
 private:
     WriteBuffer & out; /// The main buffer, responsible for writing data.
     std::vector<char> memory; /// A piece of memory for duplicating the buffer.
-    ThreadPool pool; /// For asynchronous data writing.
+    legacy::ThreadPool pool; /// For asynchronous data writing.
     bool started; /// Has an asynchronous data write started?
 
     /// Swap the main and duplicate buffers.
@@ -85,10 +85,7 @@ public:
     }
 
     /// That is executed in a separate thread
-    void thread()
-    {
-        out.next();
-    }
+    void thread() { out.next(); }
 };
 
 } // namespace DB

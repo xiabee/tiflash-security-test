@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/FailPoint.h>
 #include <Common/ProfileEvents.h>
+#include <Common/Stopwatch.h>
+#include <Common/SyncPoint/SyncPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
+#include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/DeltaMerge/SSTFilesToDTFilesOutputStream.h>
+#include <Storages/KVStore/Decode/PartitionStreams.h>
+#include <Storages/KVStore/FFI/ProxyFFI.h>
+#include <Storages/KVStore/FFI/SSTReader.h>
+#include <Storages/KVStore/KVStore.h>
+#include <Storages/KVStore/Region.h>
+#include <Storages/KVStore/TMTContext.h>
 #include <Storages/StorageDeltaMerge.h>
-#include <Storages/Transaction/PartitionStreams.h>
-#include <Storages/Transaction/ProxyFFI.h>
-#include <Storages/Transaction/SSTReader.h>
-#include <Storages/Transaction/TMTContext.h>
 #include <common/logger_useful.h>
 
 #include <magic_enum.hpp>
@@ -39,22 +46,23 @@ SSTFilesToDTFilesOutputStream<ChildStream>::SSTFilesToDTFilesOutputStream( //
     ChildStream child_,
     StorageDeltaMergePtr storage_,
     DecodingStorageSchemaSnapshotConstPtr schema_snap_,
-    TiDB::SnapshotApplyMethod method_,
     FileConvertJobType job_type_,
     UInt64 split_after_rows_,
     UInt64 split_after_size_,
+    UInt64 region_id_,
+    std::shared_ptr<std::atomic_bool> abort_flag_,
     Context & context_)
     : child(std::move(child_))
     , storage(std::move(storage_))
     , schema_snap(std::move(schema_snap_))
-    , method(method_)
     , job_type(job_type_)
     , split_after_rows(split_after_rows_)
     , split_after_size(split_after_size_)
+    , region_id(region_id_)
+    , abort_flag(abort_flag_)
     , context(context_)
     , log(Logger::get(log_prefix_))
-{
-}
+{}
 
 template <typename ChildStream>
 SSTFilesToDTFilesOutputStream<ChildStream>::~SSTFilesToDTFilesOutputStream() = default;
@@ -76,26 +84,36 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::writeSuffix()
     finalizeDTFileStream();
 
     const auto process_keys = child->getProcessKeys();
-    if (job_type == FileConvertJobType::ApplySnapshot)
+    switch (job_type)
     {
-        GET_METRIC(tiflash_raft_command_duration_seconds, type_apply_snapshot_predecode_sst2dt).Observe(watch.elapsedSeconds());
+    case FileConvertJobType::ApplySnapshot:
+    {
+        GET_METRIC(tiflash_raft_command_duration_seconds, type_apply_snapshot_predecode_sst2dt)
+            .Observe(watch.elapsedSeconds());
         // Note that number of keys in different cf will be aggregated into one metrics
         GET_METRIC(tiflash_raft_process_keys, type_apply_snapshot).Increment(process_keys.total());
+        break;
     }
-    else
+    case FileConvertJobType::IngestSST:
     {
+        GET_METRIC(tiflash_raft_command_duration_seconds, type_ingest_sst_sst2dt).Observe(watch.elapsedSeconds());
         // Note that number of keys in different cf will be aggregated into one metrics
         GET_METRIC(tiflash_raft_process_keys, type_ingest_sst).Increment(process_keys.total());
+        break;
+    }
     }
 
     LOG_INFO(
         log,
-        "Transformed snapshot in SSTFile to DTFiles, region={} job_type={} cost_ms={} rows={} bytes={} write_cf_keys={} default_cf_keys={} lock_cf_keys={} dt_files=[{}]",
+        "Transformed snapshot in SSTFile to DTFiles,"
+        " region={} job_type={} cost_ms={} rows={} bytes={} bytes_on_disk={}"
+        " write_cf_keys={} default_cf_keys={} lock_cf_keys={} dt_files=[{}]",
         child->getRegion()->toString(true),
         magic_enum::enum_name(job_type),
         watch.elapsedMilliseconds(),
         total_committed_rows,
         total_committed_bytes,
+        total_bytes_on_disk,
         process_keys.write_cf,
         process_keys.default_cf,
         process_keys.lock_cf,
@@ -109,6 +127,43 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::writeSuffix()
                 ",");
             return fmt_buf.toString();
         }());
+
+    // We could create an async task once a DMFile is generated in `finalizeDTFileStream`
+    // to take more resources to shorten the time of IngestSST/ApplySnapshot.
+    auto remote_data_store = context.getSharedContextDisagg()->remote_data_store;
+    if (remote_data_store)
+    {
+        Stopwatch upload_watch;
+        const StoreID store_id = context.getTMTContext().getKVStore()->getStoreID();
+        const auto table_info = storage->getTableInfo();
+        for (const auto & file : ingest_files)
+        {
+            Remote::DMFileOID oid{
+                .store_id = store_id,
+                .keyspace_id = table_info.keyspace_id,
+                .table_id = table_info.id,
+                .file_id = file->fileId()};
+            remote_data_store->putDMFile(file, oid, /*remove_local*/ true);
+        }
+        const auto elapsed_seconds = upload_watch.elapsedSeconds();
+        LOG_INFO(
+            log,
+            "Upload snapshot DTFiles done, region={} store_id={} n_dt_files={} cost={:.3f}s",
+            child->getRegion()->toString(true),
+            store_id,
+            ingest_files.size(),
+            elapsed_seconds);
+        switch (job_type)
+        {
+        case FileConvertJobType::ApplySnapshot:
+            GET_METRIC(tiflash_raft_command_duration_seconds, type_apply_snapshot_predecode_upload)
+                .Observe(elapsed_seconds);
+            break;
+        case FileConvertJobType::IngestSST:
+            GET_METRIC(tiflash_raft_command_duration_seconds, type_ingest_sst_upload).Observe(elapsed_seconds);
+            break;
+        }
+    }
 }
 
 template <typename ChildStream>
@@ -124,21 +179,13 @@ bool SSTFilesToDTFilesOutputStream<ChildStream>::newDTFileStream()
         return false;
     }
 
-    DMFileBlockOutputStream::Flags flags{};
-    switch (method)
-    {
-    case TiDB::SnapshotApplyMethod::DTFile_Directory:
-        flags.setSingleFile(false);
-        break;
-    case TiDB::SnapshotApplyMethod::DTFile_Single:
-        flags.setSingleFile(true);
-        break;
-    default:
-        break;
-    }
-
-    auto dt_file = DMFile::create(file_id, parent_path, flags.isSingleFile(), storage->createChecksumConfig(flags.isSingleFile()));
-    dt_stream = std::make_unique<DMFileBlockOutputStream>(context, dt_file, *(schema_snap->column_defines), flags);
+    auto dt_file = DMFile::create(
+        file_id,
+        parent_path,
+        storage->createChecksumConfig(),
+        context.getGlobalContext().getSettingsRef().dt_small_file_size_threshold,
+        context.getGlobalContext().getSettingsRef().dt_merged_file_max_size);
+    dt_stream = std::make_unique<DMFileBlockOutputStream>(context, dt_file, *(schema_snap->column_defines));
     dt_stream->writePrefix();
     ingest_files.emplace_back(dt_file);
     ingest_files_range.emplace_back(std::nullopt);
@@ -147,8 +194,8 @@ bool SSTFilesToDTFilesOutputStream<ChildStream>::newDTFileStream()
 
     LOG_DEBUG(
         log,
-        "Create new DTFile for snapshot data, region={} file_idx={} file={}",
-        child->getRegion()->toString(true),
+        "Create new DTFile for snapshot data, region_id={} file_idx={} file={}",
+        child->getRegion()->id(),
         ingest_files.size() - 1,
         dt_file->path());
 
@@ -167,14 +214,19 @@ bool SSTFilesToDTFilesOutputStream<ChildStream>::finalizeDTFileStream()
     dt_stream->writeSuffix();
     auto dt_file = dt_stream->getFile();
     assert(!dt_file->canGC()); // The DTFile should not be able to gc until it is ingested.
-    // Add the DTFile to StoragePathPool so that we can restore it later
     const auto bytes_written = dt_file->getBytesOnDisk();
+    total_bytes_on_disk += bytes_written;
+
+    // If remote data store is not enabled, add the DTFile to StoragePathPool so that we can restore it later
+    // Else just add it's size to disk delegator
     storage->getStore()->preIngestFile(dt_file->parentPath(), dt_file->fileId(), bytes_written);
+
     dt_stream.reset();
 
     LOG_INFO(
         log,
-        "Finished writing DTFile from snapshot data, region={} file_idx={} file_rows={} file_bytes={} data_range={} file_bytes_on_disk={} file={}",
+        "Finished writing DTFile from snapshot data, region={} file_idx={} file_rows={} file_bytes={} data_range={} "
+        "file_bytes_on_disk={} file={}",
         child->getRegion()->toString(true),
         ingest_files.size() - 1,
         committed_rows_this_dt_file,
@@ -197,6 +249,11 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::write()
     size_t cur_deleted_rows = 0;
     while (true)
     {
+        if (abort_flag->load(std::memory_order_seq_cst))
+        {
+            break;
+        }
+        SYNC_FOR("before_SSTFilesToDTFilesOutputStream::handle_one");
         Block block = child->read();
         if (!block)
             break;
@@ -219,8 +276,9 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::write()
 
             if (unlikely(block.rows() > 1 && !isAlreadySorted(block, sort)))
             {
-                const String error_msg
-                    = fmt::format("The block decoded from SSTFile is not sorted by primary key and version {}", child->getRegion()->toString(true));
+                const String error_msg = fmt::format(
+                    "The block decoded from SSTFile is not sorted by primary key and version {}",
+                    child->getRegion()->toString(true));
                 LOG_ERROR(log, error_msg);
                 FieldVisitorToString visitor;
                 const size_t nrows = block.rows();
@@ -260,8 +318,9 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::write()
         total_committed_bytes += bytes;
         committed_rows_this_dt_file += rows;
         committed_bytes_this_dt_file += bytes;
-        auto should_split_dt_file = ((split_after_rows > 0 && committed_rows_this_dt_file >= split_after_rows) || //
-                                     (split_after_size > 0 && committed_bytes_this_dt_file >= split_after_size));
+        auto should_split_dt_file
+            = ((split_after_rows > 0 && committed_rows_this_dt_file >= split_after_rows) || //
+               (split_after_size > 0 && committed_bytes_this_dt_file >= split_after_size));
         if (should_split_dt_file)
             finalizeDTFileStream();
     }
@@ -270,10 +329,7 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::write()
 template <typename ChildStream>
 std::vector<ExternalDTFileInfo> SSTFilesToDTFilesOutputStream<ChildStream>::outputFiles() const
 {
-    RUNTIME_CHECK(
-        ingest_files.size() == ingest_files_range.size(),
-        ingest_files.size(),
-        ingest_files_range.size());
+    RUNTIME_CHECK(ingest_files.size() == ingest_files_range.size(), ingest_files.size(), ingest_files_range.size());
 
     auto files = std::vector<ExternalDTFileInfo>{};
     files.reserve(ingest_files.size());
@@ -295,18 +351,26 @@ std::vector<ExternalDTFileInfo> SSTFilesToDTFilesOutputStream<ChildStream>::outp
 template <typename ChildStream>
 void SSTFilesToDTFilesOutputStream<ChildStream>::cancel()
 {
-    // Try a lightweight cleanup the file generated by this stream (marking them able to be GC-ed).
     for (auto & file : ingest_files)
     {
         try
         {
-            file->enableGC();
+            // If DMFile has pre-ingested, remove it.
+            storage->getStore()->removePreIngestFile(file->fileId(), /*throw_on_not_exist*/ false);
+            // Remove local DMFile.
+            file->remove(context.getFileProvider());
         }
         catch (...)
         {
-            tryLogCurrentException(log, fmt::format("ignore exception while canceling SST files to DeltaTree files stream [file={}]", file->path()));
+            tryLogCurrentException(
+                log,
+                fmt::format(
+                    "ignore exception while canceling SST files to DeltaTree files stream [file={}]",
+                    file->path()));
         }
     }
+    ingest_files.clear();
+    ingest_files_range.clear();
 }
 
 template <typename ChildStream>
@@ -322,9 +386,10 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::updateRangeFromNonEmptyBlock(Bl
     auto & current_file_range = ingest_files_range.back();
 
     auto const block_start = rowkey_column.getRowKeyValue(0);
-    auto const block_end = rowkey_column.getRowKeyValue(pk_col.column->size() - 1) //
+    auto const block_end = rowkey_column
+                               .getRowKeyValue(pk_col.column->size() - 1) //
                                .toRowKeyValue()
-                               .toPrefixNext(); // because range is right-open.
+                               .toNext(); // because range is right-open.
 
     // Note: The underlying stream ensures that one row key will not fall into two blocks (when there are multiple versions).
     // So we will never have overlapped range.

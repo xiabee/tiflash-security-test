@@ -17,7 +17,7 @@
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
 namespace DB
@@ -33,15 +33,9 @@ namespace tests
 class SimplePKTestBasic : public DB::base::TiFlashStorageTestBasic
 {
 public:
-    void SetUp() override
-    {
-        reload();
-    }
+    void SetUp() override { reload(); }
 
-    void TearDown() override
-    {
-        TiFlashStorageTestBasic::TearDown();
-    }
+    void TearDown() override { TiFlashStorageTestBasic::TearDown(); }
 
 public:
     // Lightweight wrappers
