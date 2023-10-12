@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Exception.h>
 #include <IO/Operators.h>
-#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
+#include <IO/WriteBufferFromString.h>
+
+#include <Common/Exception.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
 #include <string>
@@ -55,3 +56,4 @@ TEST(WriteBufferFromOwnString, TestFinalize_LongBuffer)
 
 } // namespace tests
 } // namespace DB
+

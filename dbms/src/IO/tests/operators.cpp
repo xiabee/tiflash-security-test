@@ -21,7 +21,8 @@ int main(int, char **)
 {
     {
         DB::WriteBufferFromFileDescriptor buf(STDOUT_FILENO);
-        buf << "Hello, world!" << '\n'
+        buf
+            << "Hello, world!" << '\n'
             << DB::escape << "Hello, world!" << '\n'
             << DB::quote << "Hello, world!" << '\n'
             << DB::double_quote << "Hello, world!" << '\n'

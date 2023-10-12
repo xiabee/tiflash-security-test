@@ -18,11 +18,12 @@
 #include <DataStreams/IBlockInputStream.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Interpreters/Context_fwd.h>
+#include <Operators/Operator.h>
 #include <Storages/IStorage.h>
-#include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
-#include <Storages/KVStore/Decode/TiKVHandle.h>
-#include <Storages/KVStore/StorageEngineType.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
+#include <Storages/Transaction/StorageEngineType.h>
+#include <Storages/Transaction/TiKVHandle.h>
+#include <Storages/Transaction/Types.h>
 
 
 namespace TiDB
@@ -71,13 +72,7 @@ public:
 
     virtual void flushCache(const Context & /*context*/) {}
 
-    virtual bool flushCache(
-        const Context & /*context*/,
-        const DM::RowKeyRange & /*range_to_flush*/,
-        [[maybe_unused]] bool try_until_succeed)
-    {
-        return true;
-    }
+    virtual bool flushCache(const Context & /*context*/, const DM::RowKeyRange & /*range_to_flush*/, [[maybe_unused]] bool try_until_succeed = true) { return true; }
 
     // Get the statistics of this table.
     // Used by `manage table xxx status` in ch-client
@@ -106,7 +101,9 @@ public:
     Timestamp getTombstone() const { return tombstone; }
     void setTombstone(Timestamp tombstone_) { IManageableStorage::tombstone = tombstone_; }
 
-    virtual void updateTombstone(
+    /// Apply AlterCommands synced from TiDB should use `alterFromTiDB` instead of `alter(...)`
+    /// Once called, table_info is guaranteed to be persisted, regardless commands being empty or not.
+    virtual void alterFromTiDB(
         const TableLockHolder &,
         const AlterCommands & commands,
         const String & database_name,
@@ -115,15 +112,6 @@ public:
         const Context & context)
         = 0;
 
-    virtual void alterSchemaChange(
-        const TableLockHolder &,
-        TiDB::TableInfo & table_info,
-        const String & database_name,
-        const String & table_name,
-        const Context & context)
-        = 0;
-
-    virtual DM::ColumnDefines getStoreColumnDefines() const = 0;
     /// Rename the table.
     ///
     /// Renaming a name in a file with metadata, the name in the list of tables in the RAM, is done separately.
@@ -147,9 +135,7 @@ public:
 
     virtual void modifyASTStorage(ASTStorage * /*storage*/, const TiDB::TableInfo & /*table_info*/)
     {
-        throw Exception(
-            "Method modifyASTStorage is not supported by storage " + getName(),
-            ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method modifyASTStorage is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /// Remove this storage from TMTContext. Should be called after its metadata and data have been removed from disk.
@@ -178,21 +164,28 @@ public:
     ///     and `releaseDecodingBlock` need to be called when the block is free
     /// when `need_block` is false, it will just return an nullptr
     /// This method must be called under the protection of table structure lock
-    virtual std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
-        const TableStructureLockHolder & /* table_structure_lock */,
-        bool /* need_block */)
+    virtual std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(const TableStructureLockHolder & /* table_structure_lock */, bool /* need_block */)
     {
-        throw Exception(
-            "Method getDecodingSchemaSnapshot is not supported by storage " + getName(),
-            ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method getDecodingSchemaSnapshot is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     };
 
-    /// The `block_decoding_schema_epoch` is just an internal version for `DecodingStorageSchemaSnapshot`,
+    /// The `block_decoding_schema_version` is just an internal version for `DecodingStorageSchemaSnapshot`,
     /// And it has no relation with the table schema version.
-    virtual void releaseDecodingBlock(Int64 /* block_decoding_schema_epoch */, BlockUPtr /* block */)
+    virtual void releaseDecodingBlock(Int64 /* block_decoding_schema_version */, BlockUPtr /* block */)
+    {
+        throw Exception("Method getDecodingSchemaSnapshot is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
+    }
+
+    virtual SourceOps readSourceOps(
+        PipelineExecutorStatus &,
+        const Names &,
+        const SelectQueryInfo &,
+        const Context &,
+        size_t,
+        unsigned)
     {
         throw Exception(
-            "Method getDecodingSchemaSnapshot is not supported by storage " + getName(),
+            fmt::format("Method readSourceOps is not supported by storage {}", getName()),
             ErrorCodes::NOT_IMPLEMENTED);
     }
 

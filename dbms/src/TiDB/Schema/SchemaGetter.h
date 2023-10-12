@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Storages/KVStore/TiKVHelpers/KeyspaceSnapshot.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/KeyspaceSnapshot.h>
+#include <Storages/Transaction/TiDB.h>
 #include <common/logger_useful.h>
 
 #include <optional>
@@ -92,17 +92,12 @@ enum class SchemaActionType : Int8
     ActionReorganizePartition = 64,
     ActionAlterTTLInfo = 65,
     ActionAlterTTLRemove = 67,
-    ActionCreateResourceGroup = 68,
-    ActionAlterResourceGroup = 69,
-    ActionDropResourceGroup = 70,
-    ActionAlterTablePartitioning = 71,
-    ActionRemovePartitioning = 72,
 
 
-    // If we support new type from TiDB.
+    // If we supporte new type from TiDB.
     // MaxRecognizedType also needs to be changed.
     // It should always be equal to the maximum supported type + 1
-    MaxRecognizedType = 73,
+    MaxRecognizedType = 68,
 };
 
 struct AffectedOption
@@ -146,7 +141,8 @@ struct SchemaGetter
         : snap(keyspace_id_, cluster_, tso_)
         , keyspace_id(keyspace_id_)
         , log(Logger::get())
-    {}
+    {
+    }
 
     Int64 getVersion();
 
@@ -165,8 +161,6 @@ struct SchemaGetter
     TiDB::DBInfoPtr getDatabase(DatabaseID db_id);
 
     TiDB::TableInfoPtr getTableInfo(DatabaseID db_id, TableID table_id);
-
-    std::tuple<TiDB::DBInfoPtr, TiDB::TableInfoPtr> getDatabaseAndTableInfo(DatabaseID db_id, TableID table_id);
 
     std::vector<TiDB::DBInfoPtr> listDBs();
 

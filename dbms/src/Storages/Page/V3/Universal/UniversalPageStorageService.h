@@ -47,7 +47,7 @@ public:
         PSDiskDelegatorPtr delegator,
         const PageStorageConfig & config);
 
-    bool gc() const;
+    bool gc();
 
     bool uploadCheckpoint();
 
@@ -64,22 +64,15 @@ public:
         const DM::Remote::IDataStorePtr & remote_store,
         bool force_sync_data);
 
-    static UniversalPageStorageServicePtr createForTest(
+    static UniversalPageStorageServicePtr
+    createForTest(
         Context & context,
         const String & name,
         PSDiskDelegatorPtr delegator,
         const PageStorageConfig & config);
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#else
-public:
-#endif
     explicit UniversalPageStorageService(Context & global_context_);
-    // If the TiFlash process restart unexpectedly, some local checkpoint files can be left,
-    // remove these files when the process restarting.
-    void removeAllLocalCheckpointFiles() const;
-    Poco::Path getCheckpointLocalDir(UInt64 seq) const;
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -96,13 +89,13 @@ public:
     UniversalPageStoragePtr uni_page_storage;
     BackgroundProcessingPool::TaskHandle gc_handle;
 
+    std::atomic<Timepoint> last_try_gc_time = Clock::now();
+
     LoggerPtr log;
 
     // A standalone thread pool to avoid checkpoint uploading being affected by
     // other background tasks unexpectly.
     std::unique_ptr<BackgroundProcessingPool> checkpoint_pool;
     BackgroundProcessingPool::TaskHandle remote_checkpoint_handle;
-
-    inline static const String checkpoint_dirname_prefix = "checkpoint_upload_";
 };
 } // namespace DB

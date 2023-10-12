@@ -141,11 +141,7 @@
     M(S3PutObjectRetry)                        \
     M(FileCacheHit)                            \
     M(FileCacheMiss)                           \
-    M(FileCacheEvict)                          \
-    M(S3PutDMFile)                             \
-    M(S3PutDMFileRetry)                        \
-    M(S3WriteDMFileBytes)                      \
-    M(DTDeltaIndexError)
+    M(FileCacheEvict)
 
 namespace ProfileEvents
 {

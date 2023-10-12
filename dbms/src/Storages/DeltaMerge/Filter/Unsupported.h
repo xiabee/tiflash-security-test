@@ -16,9 +16,10 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 class Unsupported : public RSOperator
 {
     String content;
@@ -47,10 +48,9 @@ public:
             R"(","is_not":")" + DB::toString(is_not) + "\"}";
     }
 
-    RSResults roughCheck(size_t /*start_pack*/, size_t pack_count, const RSCheckParam & /*param*/) override
-    {
-        return RSResults(pack_count, Some);
-    }
+    RSResult roughCheck(size_t /*pack_id*/, const RSCheckParam & /*param*/) override { return Some; }
 };
 
-} // namespace DB::DM
+} // namespace DM
+
+} // namespace DB

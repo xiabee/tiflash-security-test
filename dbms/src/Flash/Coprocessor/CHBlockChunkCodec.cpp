@@ -16,7 +16,6 @@
 #include <DataStreams/IBlockInputStream.h>
 #include <DataStreams/NativeBlockInputStream.h>
 #include <DataTypes/DataTypeFactory.h>
-#include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <IO/ReadBufferFromString.h>
@@ -50,7 +49,8 @@ public:
     DataTypes expected_types;
 };
 
-CHBlockChunkCodec::CHBlockChunkCodec(const Block & header_)
+CHBlockChunkCodec::CHBlockChunkCodec(
+    const Block & header_)
     : header(header_)
 {
     for (const auto & column : header)
@@ -170,13 +170,10 @@ Block CHBlockChunkCodec::decodeImpl(ReadBuffer & istr, size_t reserve_size)
 
         /// Data
         MutableColumnPtr read_column = column.type->createColumn();
-        if (column.type->haveMaximumSizeOfValue())
-        {
-            if (reserve_size > 0)
-                read_column->reserve(std::max(rows, reserve_size));
-            else if (rows)
-                read_column->reserve(rows);
-        }
+        if (reserve_size > 0)
+            read_column->reserve(std::max(rows, reserve_size));
+        else if (rows)
+            read_column->reserve(rows);
 
         if (rows) /// If no rows, nothing to read.
             readData(*column.type, *read_column, istr, rows);

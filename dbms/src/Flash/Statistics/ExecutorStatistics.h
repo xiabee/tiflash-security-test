@@ -16,11 +16,13 @@
 
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
+#include <Common/TiFlashException.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Statistics/ExecutorStatisticsBase.h>
-#include <Flash/Statistics/transformProfiles.h>
 #include <common/types.h>
+#include <fmt/core.h>
+#include <fmt/format.h>
 #include <tipb/executor.pb.h>
 
 #include <memory>
@@ -28,6 +30,8 @@
 
 namespace DB
 {
+class DAGContext;
+
 template <typename ExecutorImpl>
 class ExecutorStatistics : public ExecutorStatisticsBase
 {
@@ -41,7 +45,10 @@ public:
         type = ExecutorImpl::type;
     }
 
-    void setChild(const String & child_id) override { children.push_back(child_id); }
+    void setChild(const String & child_id) override
+    {
+        children.push_back(child_id);
+    }
 
     void setChildren(const std::vector<String> & children_) override
     {
@@ -51,18 +58,20 @@ public:
     String toJson() const override
     {
         FmtBuffer fmt_buffer;
-        fmt_buffer.fmtAppend(R"({{"id":"{}","type":"{}","children":[)", executor_id, type);
+        fmt_buffer.fmtAppend(
+            R"({{"id":"{}","type":"{}","children":[)",
+            executor_id,
+            type);
         fmt_buffer.joinStr(
             children.cbegin(),
             children.cend(),
             [](const String & child, FmtBuffer & bf) { bf.fmtAppend(R"("{}")", child); },
             ",");
         fmt_buffer.fmtAppend(
-            R"(],"outbound_rows":{},"outbound_blocks":{},"outbound_bytes":{},"outbound_allocated_bytes":{},"execution_time_ns":{})",
+            R"(],"outbound_rows":{},"outbound_blocks":{},"outbound_bytes":{},"execution_time_ns":{})",
             base.rows,
             base.blocks,
             base.bytes,
-            base.allocated_bytes,
             base.execution_time_ns);
         if constexpr (ExecutorImpl::has_extra_info)
         {
@@ -75,31 +84,32 @@ public:
 
     void collectRuntimeDetail() override
     {
-        switch (dag_context.getExecutionMode())
+        const auto & profile_streams_map = dag_context.getProfileStreamsMap();
+        auto it = profile_streams_map.find(executor_id);
+        if (it != profile_streams_map.end())
         {
-        case ExecutionMode::None:
-            break;
-        case ExecutionMode::Stream:
-            transformProfileForStream(dag_context, executor_id, [&](const IProfilingBlockInputStream & p_stream) {
-                base.append(p_stream.getProfileInfo());
-            });
-            // Special handling of join build time is only required for streams.
-            collectJoinBuildTime();
-            break;
-        case ExecutionMode::Pipeline:
-            transformProfileForPipeline(dag_context, executor_id, [&](const OperatorProfileInfo & profile_info) {
-                base.append(profile_info);
-            });
-            break;
+            for (const auto & input_stream : it->second)
+            {
+                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(input_stream.get()); p_stream)
+                {
+                    const auto & profile_info = p_stream->getProfileInfo();
+                    base.append(profile_info);
+                }
+            }
         }
 
         if constexpr (ExecutorImpl::has_extra_info)
         {
             collectExtraRuntimeDetail();
         }
+
+        collectJoinBuildTime();
     }
 
-    static bool isMatch(const tipb::Executor * executor) { return ExecutorImpl::isMatch(executor); }
+    static bool isMatch(const tipb::Executor * executor)
+    {
+        return ExecutorImpl::isMatch(executor);
+    }
 
 protected:
     String executor_id;
@@ -130,8 +140,7 @@ protected:
                     UInt64 time = 0;
                     for (const auto & join_build_stream : it->second.join_build_streams)
                     {
-                        if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(join_build_stream.get());
-                            p_stream)
+                        if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(join_build_stream.get()); p_stream)
                             time = std::max(time, p_stream->getProfileInfo().execution_time);
                     }
                     process_time_for_join_build += time;

@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Common/MPMCQueue.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
@@ -38,98 +37,6 @@
 
 #pragma GCC diagnostic pop
 
-
-namespace pingcap
-{
-namespace common
-{
-
-template <typename T>
-class CopIterMPMCQueue : public IMPMCQueue<T>
-{
-public:
-    explicit CopIterMPMCQueue(Int64 max_size)
-        : queue(max_size)
-    {}
-
-    ~CopIterMPMCQueue() override = default;
-
-    MPMCQueueResult tryPush(T && t) override
-    {
-        switch (queue.tryPush(std::move(t)))
-        {
-        case DB::MPMCQueueResult::OK:
-            return MPMCQueueResult::OK;
-        case DB::MPMCQueueResult::FINISHED:
-            return MPMCQueueResult::FINISHED;
-        case DB::MPMCQueueResult::CANCELLED:
-            return MPMCQueueResult::CANCELLED;
-        case DB::MPMCQueueResult::FULL:
-            return MPMCQueueResult::FULL;
-        default:
-            __builtin_unreachable();
-        }
-    }
-
-    MPMCQueueResult push(T && t) override
-    {
-        switch (queue.push(std::move(t)))
-        {
-        case DB::MPMCQueueResult::OK:
-            return MPMCQueueResult::OK;
-        case DB::MPMCQueueResult::FINISHED:
-            return MPMCQueueResult::FINISHED;
-        case DB::MPMCQueueResult::CANCELLED:
-            return MPMCQueueResult::CANCELLED;
-        default:
-            __builtin_unreachable();
-        }
-    }
-
-    MPMCQueueResult tryPop(T & t) override
-    {
-        switch (queue.tryPop(t))
-        {
-        case DB::MPMCQueueResult::OK:
-            return MPMCQueueResult::OK;
-        case DB::MPMCQueueResult::FINISHED:
-            return MPMCQueueResult::FINISHED;
-        case DB::MPMCQueueResult::CANCELLED:
-            return MPMCQueueResult::CANCELLED;
-        case DB::MPMCQueueResult::EMPTY:
-            return MPMCQueueResult::EMPTY;
-        default:
-            __builtin_unreachable();
-        }
-    }
-
-    MPMCQueueResult pop(T & t) override
-    {
-        switch (queue.pop(t))
-        {
-        case DB::MPMCQueueResult::OK:
-            return MPMCQueueResult::OK;
-        case DB::MPMCQueueResult::FINISHED:
-            return MPMCQueueResult::FINISHED;
-        case DB::MPMCQueueResult::CANCELLED:
-            return MPMCQueueResult::CANCELLED;
-        default:
-            __builtin_unreachable();
-        }
-    }
-
-    bool cancel() override { return queue.cancel(); }
-
-    bool finish() override { return queue.finish(); }
-
-private:
-    DB::MPMCQueue<T> queue;
-};
-
-} // namespace common
-} // namespace pingcap
-
-using CopIterQueue = pingcap::common::CopIterMPMCQueue<pingcap::coprocessor::ResponseIter::Result>;
 
 namespace DB
 {
@@ -156,8 +63,7 @@ struct CoprocessorReaderResult
     {}
 };
 
-/// This is an adapter for pingcap::coprocessor::ResponseIter, so it can be used in TiRemoteBlockInputStream
-/// Note that CoprocessorReader may be used concurrently.
+/// this is an adapter for pingcap::coprocessor::ResponseIter, so it can be used in TiRemoteBlockInputStream
 class CoprocessorReader
 {
 public:
@@ -165,35 +71,23 @@ public:
     static constexpr auto name = "CoprocessorReader";
 
 private:
-    const DAGSchema schema;
-    const bool has_enforce_encode_type;
-    const size_t concurrency;
-    const bool enable_cop_stream;
+    DAGSchema schema;
+    bool has_enforce_encode_type;
     pingcap::coprocessor::ResponseIter resp_iter;
 
 public:
     CoprocessorReader(
         const DAGSchema & schema_,
         pingcap::kv::Cluster * cluster,
-        std::vector<pingcap::coprocessor::CopTask> && tasks,
+        std::vector<pingcap::coprocessor::CopTask> tasks,
         bool has_enforce_encode_type_,
-        size_t concurrency_,
-        bool enable_cop_stream_,
-        size_t queue_size,
-        UInt64 cop_timeout,
+        int concurrency,
         const pingcap::kv::LabelFilter & tiflash_label_filter_)
         : schema(schema_)
         , has_enforce_encode_type(has_enforce_encode_type_)
-        , concurrency(concurrency_)
-        , enable_cop_stream(enable_cop_stream_)
-        , resp_iter(
-              std::make_unique<CopIterQueue>(queue_size),
-              std::move(tasks),
-              cluster,
-              concurrency_,
-              &Poco::Logger::get("pingcap/coprocessor"),
-              cop_timeout,
-              tiflash_label_filter_)
+        , resp_iter(std::move(tasks), cluster, concurrency, &Poco::Logger::get("pingcap/coprocessor"), tiflash_label_filter_)
+        , collected(false)
+        , concurrency_(concurrency)
     {}
 
     const DAGSchema & getOutputSchema() const { return schema; }
@@ -201,14 +95,13 @@ public:
     // `open` will call the resp_iter's `open` to send coprocessor request.
     void open()
     {
-        if (enable_cop_stream)
-            resp_iter.open<true>();
-        else
-            resp_iter.open<false>();
+        resp_iter.open();
+        opened = true;
     }
 
     // `cancel` will call the resp_iter's `cancel` to abort the data receiving and prevent the next retry.
     void cancel() { resp_iter.cancel(); }
+
 
     static DecodeDetail decodeChunks(
         const std::shared_ptr<tipb::SelectResponse> & resp,
@@ -222,7 +115,7 @@ public:
             return detail;
 
         detail.packet_bytes = resp->ByteSizeLong();
-        for (int i = 0; i < chunk_size; ++i)
+        for (int i = 0; i < chunk_size; i++)
         {
             Block block;
             const tipb::Chunk & chunk = resp->chunks(i);
@@ -253,28 +146,17 @@ public:
         return detail;
     }
 
-    std::pair<pingcap::coprocessor::ResponseIter::Result, bool> nonBlockingNext()
+    // stream_id, decoder_ptr are only meaningful for ExchagneReceiver.
+    CoprocessorReaderResult nextResult(std::queue<Block> & block_queue, const Block & header, size_t /*stream_id*/, std::unique_ptr<CHBlockChunkDecodeAndSquash> & /*decoder_ptr*/)
     {
-        return resp_iter.nonBlockingNext();
-    }
+        RUNTIME_CHECK(opened == true);
 
-    CoprocessorReaderResult toResult(
-        std::pair<pingcap::coprocessor::ResponseIter::Result, bool> & result_pair,
-        std::queue<Block> & block_queue,
-        const Block & header)
-    {
-        auto && [result, has_next] = result_pair;
-
+        auto && [result, has_next] = resp_iter.next();
         if (!result.error.empty())
             return {nullptr, true, result.error.message(), false};
 
         if (!has_next)
-        {
-            if (result.finished)
-                return {nullptr, false, "", true};
-            else
-                return {nullptr, false, "", false};
-        }
+            return {nullptr, false, "", true};
 
         auto resp = std::make_shared<tipb::SelectResponse>();
         if (resp->ParseFromString(result.data()))
@@ -283,16 +165,13 @@ public:
             {
                 return {nullptr, true, resp->error().DebugString(), false};
             }
-            else if (
-                has_enforce_encode_type && resp->encode_type() != tipb::EncodeType::TypeCHBlock
-                && resp->chunks_size() > 0)
+            else if (has_enforce_encode_type && resp->encode_type() != tipb::EncodeType::TypeCHBlock && resp->chunks_size() > 0)
             {
-                return {
-                    nullptr,
-                    true,
-                    "Encode type of coprocessor response is not CHBlock, "
-                    "maybe the version of some TiFlash node in the cluster is not match with this one",
-                    false};
+                return {nullptr,
+                        true,
+                        "Encode type of coprocessor response is not CHBlock, "
+                        "maybe the version of some TiFlash node in the cluster is not match with this one",
+                        false};
             }
             auto detail = decodeChunks(resp, block_queue, header, schema);
             return {resp, false, "", false, detail};
@@ -303,27 +182,14 @@ public:
         }
     }
 
-    // stream_id, decoder_ptr are only meaningful for ExchangeReceiver.
-    CoprocessorReaderResult nextResult(
-        std::queue<Block> & block_queue,
-        const Block & header,
-        size_t /*stream_id*/,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & /*decoder_ptr*/)
-    {
-        auto && result_pair = resp_iter.next();
+    size_t getSourceNum() const { return 1; }
 
-        return toResult(result_pair, block_queue, header);
-    }
-
-    static size_t getSourceNum() { return 1; }
-
-    size_t getConcurrency() const { return concurrency; }
-
-    bool enableCopStream() const { return enable_cop_stream; }
+    int getExternalThreadCnt() const { return concurrency_; }
 
     void close() {}
+
+    bool collected = false;
+    int concurrency_;
+    bool opened = false;
 };
-
-using CoprocessorReaderPtr = std::shared_ptr<CoprocessorReader>;
-
 } // namespace DB

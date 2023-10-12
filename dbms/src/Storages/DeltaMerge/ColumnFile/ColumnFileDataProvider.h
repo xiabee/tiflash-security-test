@@ -42,7 +42,9 @@ public:
 
     /// Read tiny data. When fields are provided, only read fields. Otherwise read all data.
     /// For example, When disagg WN responds the page to the disagg RN, all data will be read.
-    virtual Page readTinyData(PageId, const std::optional<std::vector<size_t>> & fields = std::nullopt) const = 0;
+    virtual Page readTinyData(
+        PageId,
+        const std::optional<std::vector<size_t>> & fields = std::nullopt) const = 0;
 
     /// Get the total data size without reading the data.
     virtual size_t getTinyDataSize(PageId) const = 0;
@@ -69,7 +71,9 @@ public:
         return std::make_shared<ColumnFileDataProviderLocalStoragePool>(storage_snap);
     }
 
-    Page readTinyData(PageId page_id, const std::optional<std::vector<size_t>> & fields) const override;
+    Page readTinyData(
+        PageId page_id,
+        const std::optional<std::vector<size_t>> & fields) const override;
 
     size_t getTinyDataSize(PageId page_id) const override;
 };
@@ -80,12 +84,17 @@ public:
 class ColumnFileDataProviderNop : public IColumnFileDataProvider
 {
 public:
-    Page readTinyData(PageId, const std::optional<std::vector<size_t>> &) const override
+    Page readTinyData(
+        PageId,
+        const std::optional<std::vector<size_t>> &) const override
     {
         RUNTIME_CHECK_MSG(false, "ColumnFileDataProviderNop cannot read");
     }
 
-    size_t getTinyDataSize(PageId) const override { RUNTIME_CHECK_MSG(false, "ColumnFileDataProviderNop cannot read"); }
+    size_t getTinyDataSize(PageId) const override
+    {
+        RUNTIME_CHECK_MSG(false, "ColumnFileDataProviderNop cannot read");
+    }
 };
 
 } // namespace DB::DM

@@ -17,7 +17,7 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDataProvider.h>
 #include <Storages/DeltaMerge/Remote/RNDataProvider_fwd.h>
 #include <Storages/DeltaMerge/Remote/RNLocalPageCache_fwd.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 
 namespace DB::DM::Remote
 {
@@ -43,7 +43,9 @@ public:
         , ks_table_id(ks_table_id_)
     {}
 
-    Page readTinyData(PageId page_id, const std::optional<std::vector<size_t>> & fields) const override;
+    Page readTinyData(
+        PageId page_id,
+        const std::optional<std::vector<size_t>> & fields) const override;
 
     size_t getTinyDataSize(PageId page_id) const override;
 };

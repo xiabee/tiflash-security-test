@@ -16,7 +16,7 @@
 
 namespace DB
 {
-void ExchangeReceiverSourceOp::operateSuffixImpl()
+void ExchangeReceiverSourceOp::operateSuffix()
 {
     LOG_DEBUG(log, "finish read {} rows from exchange", total_rows);
 }
@@ -43,12 +43,14 @@ OperatorStatus ExchangeReceiverSourceOp::readImpl(Block & block)
         auto await_status = awaitImpl();
         if (await_status == OperatorStatus::HAS_OUTPUT)
         {
-            assert(receive_status != ReceiveStatus::empty);
-            auto result
-                = exchange_receiver
-                      ->toExchangeReceiveResult(stream_id, receive_status, recv_msg, block_queue, header, decoder_ptr);
-            recv_msg = nullptr;
-            receive_status = ReceiveStatus::empty;
+            assert(recv_res);
+            assert(recv_res->recv_status != ReceiveStatus::empty);
+            auto result = exchange_receiver->toExchangeReceiveResult(
+                *recv_res,
+                block_queue,
+                header,
+                decoder_ptr);
+            recv_res.reset();
 
             if (result.meet_error)
             {
@@ -66,15 +68,7 @@ OperatorStatus ExchangeReceiverSourceOp::readImpl(Block & block)
                 return OperatorStatus::HAS_OUTPUT;
             }
 
-            /// only the last response contains execution summaries
-            if (result.resp != nullptr)
-                io_profile_info->remote_execution_summary.add(*result.resp);
-
             const auto & decode_detail = result.decode_detail;
-            auto & connection_profile_info = io_profile_info->connection_profile_infos[result.call_index];
-            connection_profile_info.packets += decode_detail.packets;
-            connection_profile_info.bytes += decode_detail.packet_bytes;
-
             total_rows += decode_detail.rows;
             LOG_TRACE(
                 log,
@@ -89,26 +83,23 @@ OperatorStatus ExchangeReceiverSourceOp::readImpl(Block & block)
             block = popFromBlockQueue();
             return OperatorStatus::HAS_OUTPUT;
         }
+        assert(!recv_res);
         return await_status;
     }
 }
 
 OperatorStatus ExchangeReceiverSourceOp::awaitImpl()
 {
-    if unlikely (!block_queue.empty())
+    if (!block_queue.empty() || recv_res)
         return OperatorStatus::HAS_OUTPUT;
-    if unlikely (receive_status != ReceiveStatus::empty)
-        return OperatorStatus::HAS_OUTPUT;
-
-    assert(!recv_msg);
-    receive_status = exchange_receiver->tryReceive(stream_id, recv_msg);
-    switch (receive_status)
+    recv_res.emplace(exchange_receiver->nonBlockingReceive(stream_id));
+    switch (recv_res->recv_status)
     {
     case ReceiveStatus::ok:
-        assert(recv_msg);
+        assert(recv_res->recv_msg);
         return OperatorStatus::HAS_OUTPUT;
     case ReceiveStatus::empty:
-        assert(!recv_msg);
+        recv_res.reset();
         return OperatorStatus::WAITING;
     case ReceiveStatus::eof:
         return OperatorStatus::HAS_OUTPUT;

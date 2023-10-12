@@ -60,7 +60,10 @@ public:
         CurrentMetrics::add(CurrentMetrics::PSMVCCNumSnapshots);
     }
 
-    ~PageDirectorySnapshot() override { CurrentMetrics::sub(CurrentMetrics::PSMVCCNumSnapshots); }
+    ~PageDirectorySnapshot() override
+    {
+        CurrentMetrics::sub(CurrentMetrics::PSMVCCNumSnapshots);
+    }
 
     double elapsedSeconds() const
     {
@@ -79,148 +82,25 @@ private:
 };
 using PageDirectorySnapshotPtr = std::shared_ptr<PageDirectorySnapshot>;
 
-// This is not a thread safe class
-// It must be used with outer synchronization
-class MultiVersionRefCount
-{
-public:
-    MultiVersionRefCount() = default;
-
-    MultiVersionRefCount(const MultiVersionRefCount & other)
-    {
-        if (other.versioned_ref_counts)
-        {
-            versioned_ref_counts = std::make_unique<std::vector<std::pair<PageVersion, Int64>>>();
-            for (const auto & [ver, ref_count] : *(other.versioned_ref_counts))
-            {
-                versioned_ref_counts->emplace_back(ver, ref_count);
-            }
-        }
-        else
-        {
-            versioned_ref_counts = nullptr;
-        }
-    }
-
-    void restoreFrom(const PageVersion & ver, Int64 ref_count)
-    {
-        // versioned_ref_counts being nullptr always means ref count 1
-        RUNTIME_CHECK(ref_count > 0);
-        RUNTIME_CHECK(!versioned_ref_counts);
-        if (ref_count == 1)
-        {
-            return;
-        }
-        versioned_ref_counts = std::make_unique<std::vector<std::pair<PageVersion, Int64>>>();
-        // empty `versioned_ref_counts` means ref count 1, so the ref count delta here is ref_count - 1
-        versioned_ref_counts->emplace_back(ver, ref_count - 1);
-    }
-
-    void incrRefCount(const PageVersion & ver, Int64 ref_count_delta)
-    {
-        if (!versioned_ref_counts)
-        {
-            versioned_ref_counts = std::make_unique<std::vector<std::pair<PageVersion, Int64>>>();
-        }
-        versioned_ref_counts->emplace_back(ver, ref_count_delta);
-    }
-
-    void decrRefCountInSnap(UInt64 snap_seq, Int64 deref_count_delta)
-    {
-        if (snap_seq == 0)
-        {
-            // When `snap_seq` is 0, it means the deref operation is caused by rewritting a ref page to a normal page.
-            // Actually we can collapse versioned_ref_counts here too because there should be no other gc happend concurrently.
-            // But collpase it when `snap_seq` is not zero should be enough. So we just do an append here.
-            versioned_ref_counts->emplace_back(PageVersion(0, 0), -deref_count_delta);
-        }
-        else
-        {
-            auto new_versioned_ref_counts = std::make_unique<std::vector<std::pair<PageVersion, Int64>>>();
-            Int64 ref_count_delta_in_snap = -deref_count_delta;
-            for (const auto & [ver, ref_count_delta] : *versioned_ref_counts)
-            {
-                if (ver.sequence <= snap_seq)
-                {
-                    ref_count_delta_in_snap += ref_count_delta;
-                }
-                else
-                {
-                    new_versioned_ref_counts->emplace_back(ver, ref_count_delta);
-                }
-            }
-            if (ref_count_delta_in_snap == 0)
-            {
-                if (new_versioned_ref_counts->empty())
-                {
-                    versioned_ref_counts = nullptr;
-                }
-                else
-                {
-                    // There could be some new ref count created after `snap_seq`, we need to
-                    // keep the newly added ref counts
-                    versioned_ref_counts.swap(new_versioned_ref_counts);
-                }
-                return;
-            }
-            RUNTIME_CHECK(ref_count_delta_in_snap > 0, deref_count_delta, ref_count_delta_in_snap);
-            new_versioned_ref_counts->emplace_back(PageVersion(snap_seq, 0), ref_count_delta_in_snap);
-            versioned_ref_counts.swap(new_versioned_ref_counts);
-        }
-    }
-
-    Int64 getRefCountInSnap(UInt64 snap_seq) const
-    {
-        if (!versioned_ref_counts)
-        {
-            return 1;
-        }
-        return std::accumulate(
-            versioned_ref_counts->begin(),
-            versioned_ref_counts->end(),
-            1,
-            [&](Int64 acc, const auto & ver_ref_count) {
-                return acc + (ver_ref_count.first.sequence <= snap_seq ? ver_ref_count.second : 0);
-            });
-    }
-
-    Int64 getLatestRefCount() const
-    {
-        if (!versioned_ref_counts)
-        {
-            return 1;
-        }
-        return std::accumulate(
-            versioned_ref_counts->begin(),
-            versioned_ref_counts->end(),
-            1,
-            [](Int64 acc, const auto & ver_ref_count) { return acc + ver_ref_count.second; });
-    }
-
-#ifndef DBMS_PUBLIC_GTEST
-private:
-#endif
-    // store the ref count delta for each version, empty means ref count 1
-    std::unique_ptr<std::vector<std::pair<PageVersion, Int64>>> versioned_ref_counts;
-};
-
 struct EntryOrDelete
 {
     bool is_delete = true;
-    MultiVersionRefCount being_ref_count;
+    Int64 being_ref_count = 1;
     PageEntryV3 entry;
 
     static EntryOrDelete newDelete()
     {
         return EntryOrDelete{
             .is_delete = true,
+            .being_ref_count = 1, // meaningless
             .entry = {}, // meaningless
         };
-    };
+    }
     static EntryOrDelete newNormalEntry(const PageEntryV3 & entry)
     {
         return EntryOrDelete{
             .is_delete = false,
+            .being_ref_count = 1,
             .entry = entry,
         };
     }
@@ -233,14 +113,13 @@ struct EntryOrDelete
         };
     }
 
-    static EntryOrDelete newFromRestored(PageEntryV3 entry, const PageVersion & ver, Int64 being_ref_count)
+    static EntryOrDelete newFromRestored(PageEntryV3 entry, Int64 being_ref_count)
     {
-        auto result = EntryOrDelete{
+        return EntryOrDelete{
             .is_delete = false,
+            .being_ref_count = being_ref_count,
             .entry = entry,
         };
-        result.being_ref_count.restoreFrom(ver, being_ref_count);
-        return result;
     }
 
     bool isDelete() const { return is_delete; }
@@ -273,11 +152,15 @@ public:
         , create_ver(0)
         , delete_ver(0)
         , ori_page_id{}
+        , being_ref_count(1)
     {}
 
     bool isExternalPage() const { return type == EditRecordType::VAR_EXTERNAL; }
 
-    [[nodiscard]] PageLock acquireLock() const { return std::lock_guard(m); }
+    [[nodiscard]] PageLock acquireLock() const
+    {
+        return std::lock_guard(m);
+    }
 
     void createNewEntry(const PageVersion & ver, const PageEntryV3 & entry);
 
@@ -285,7 +168,7 @@ public:
     // Return a PageId, if the page id is valid, it means it rewrite a RefPage into
     // a normal Page. Caller must call `derefAndClean` to decrease the ref-count of
     // the returing page id.
-    [[nodiscard]] PageId createUpsertEntry(const PageVersion & ver, const PageEntryV3 & entry, bool strict_check);
+    [[nodiscard]] PageId createUpsertEntry(const PageVersion & ver, const PageEntryV3 & entry);
 
     bool createNewRef(const PageVersion & ver, const PageId & ori_page_id);
 
@@ -299,9 +182,10 @@ public:
 
     std::shared_ptr<PageId> fromRestored(const typename PageEntriesEdit::EditRecord & rec);
 
-    std::tuple<ResolveResult, PageId, PageVersion> resolveToPageId(UInt64 seq, bool ignore_delete, PageEntryV3 * entry);
+    std::tuple<ResolveResult, PageId, PageVersion>
+    resolveToPageId(UInt64 seq, bool ignore_delete, PageEntryV3 * entry);
 
-    Int64 incrRefCount(const PageVersion & target_ver, const PageVersion & ref_ver);
+    Int64 incrRefCount(const PageVersion & ver);
 
     std::optional<PageEntryV3> getEntry(UInt64 seq) const;
 
@@ -373,7 +257,7 @@ public:
             is_deleted,
             delete_ver,
             ori_page_id,
-            being_ref_count.getLatestRefCount(),
+            being_ref_count,
             entries.size());
     }
     template <typename T>
@@ -400,7 +284,7 @@ private:
     // Original page id, valid when type == VAR_REF
     PageId ori_page_id;
     // Being ref counter, valid when type == VAR_EXTERNAL
-    MultiVersionRefCount being_ref_count;
+    Int64 being_ref_count;
     // A shared ptr to a holder, valid when type == VAR_EXTERNAL
     std::shared_ptr<PageId> external_holder;
 };
@@ -429,10 +313,7 @@ public:
     using PageIdAndEntries = std::vector<PageIdAndEntry>;
 
 public:
-    explicit PageDirectory(
-        String storage_name,
-        WALStorePtr && wal,
-        UInt64 max_persisted_log_files_ = MAX_PERSISTED_LOG_FILES);
+    explicit PageDirectory(String storage_name, WALStorePtr && wal, UInt64 max_persisted_log_files_ = MAX_PERSISTED_LOG_FILES);
 
     PageDirectorySnapshotPtr createSnapshot(const String & tracing_id = "") const;
 
@@ -451,15 +332,12 @@ public:
     {
         return std::get<0>(getByIDsImpl(page_ids, toConcreteSnapshot(snap), /*throw_on_not_exist=*/true));
     }
-    std::pair<PageIdAndEntries, PageIds> getByIDsOrNull(
-        const PageIds & page_ids,
-        const DB::PageStorageSnapshotPtr & snap) const
+    std::pair<PageIdAndEntries, PageIds> getByIDsOrNull(const PageIds & page_ids, const DB::PageStorageSnapshotPtr & snap) const
     {
         return getByIDsImpl(page_ids, toConcreteSnapshot(snap), /*throw_on_not_exist=*/false);
     }
 
-    PageId getNormalPageId(const PageId & page_id, const DB::PageStorageSnapshotPtr & snap_, bool throw_on_not_exist)
-        const;
+    PageId getNormalPageId(const PageId & page_id, const DB::PageStorageSnapshotPtr & snap_, bool throw_on_not_exist) const;
 
     UInt64 getMaxIdAfterRestart() const;
 
@@ -478,33 +356,29 @@ public:
     std::unordered_set<String> apply(PageEntriesEdit && edit, const WriteLimiterPtr & write_limiter = nullptr);
 
     // return ignored entries, and the corresponding space in BlobFile should be reclaimed
-    PageEntries updateLocalCacheForRemotePages(
-        PageEntriesEdit && edit,
-        const DB::PageStorageSnapshotPtr & snap_,
-        const WriteLimiterPtr & write_limiter = nullptr);
+    PageEntries updateLocalCacheForRemotePages(PageEntriesEdit && edit, const DB::PageStorageSnapshotPtr & snap_, const WriteLimiterPtr & write_limiter = nullptr);
 
-    std::pair<GcEntriesMap, PageSize> getEntriesByBlobIds(const std::vector<BlobFileId> & blob_ids) const;
-
-    using PageTypeAndBlobIds = std::map<PageType, std::vector<BlobFileId>>;
-    using PageTypeAndGcInfo = std::vector<std::tuple<PageType, GcEntriesMap, PageSize>>;
-    PageTypeAndGcInfo getEntriesByBlobIdsForDifferentPageTypes(const PageTypeAndBlobIds & page_type_and_blob_ids) const;
+    std::pair<GcEntriesMap, PageSize>
+    getEntriesByBlobIds(const std::vector<BlobFileId> & blob_ids) const;
 
     void gcApply(PageEntriesEdit && migrated_edit, const WriteLimiterPtr & write_limiter = nullptr);
 
-    bool tryDumpSnapshot(const WriteLimiterPtr & write_limiter = nullptr, bool force = false);
+    /// When create PageDirectory for dump snapshot, we should keep the last valid var_entry when it is deleted.
+    /// Because there may be some upsert entry in later wal files, and we should keep the valid var_entry and the delete entry to delete the later upsert entry.
+    /// And we don't restore the entries in blob store, because this PageDirectory is just read only for its entries.
+    bool tryDumpSnapshot(const ReadLimiterPtr & read_limiter = nullptr, const WriteLimiterPtr & write_limiter = nullptr, bool force = false);
 
     size_t copyCheckpointInfoFromEdit(const PageEntriesEdit & edit);
 
+    // Perform a GC for in-memory entries and return the removed entries.
+    // If `return_removed_entries` is false, then just return an empty set.
     struct InMemGCOption
     {
-        // If true, gcInMemEntries will return the removed entries.
-        // If false, just return an empty set to reduce the memory
-        // and CPU overhead.
+        // if true collect the removed entries and return
         bool need_removed_entries = true;
         // collect the valid size of remote ids if not nullptr
         RemoteFileValidSizes * remote_valid_sizes = nullptr;
     };
-    // Perform a GC for in-memory entries
     PageEntries gcInMemEntries(const InMemGCOption & options);
 
     // Get the external id that is not deleted or being ref by another id by
@@ -542,7 +416,10 @@ public:
 
     // `writers` should be used under the protection of apply_mutex
     // So don't use this function in production code
-    size_t getWritersQueueSizeForTest() { return writers.size(); }
+    size_t getWritersQueueSizeForTest()
+    {
+        return writers.size();
+    }
 
     // No copying and no moving
     DISALLOW_COPY_AND_MOVE(PageDirectory);
@@ -553,12 +430,9 @@ public:
     friend class PageStorageControlV3;
 
 private:
-    PageIdAndEntry getByIDImpl(const PageId & page_id, const PageDirectorySnapshotPtr & snap, bool throw_on_not_exist)
-        const;
-    std::pair<PageIdAndEntries, PageIds> getByIDsImpl(
-        const PageIds & page_ids,
-        const PageDirectorySnapshotPtr & snap,
-        bool throw_on_not_exist) const;
+    PageIdAndEntry getByIDImpl(const PageId & page_id, const PageDirectorySnapshotPtr & snap, bool throw_on_not_exist) const;
+    std::pair<PageIdAndEntries, PageIds>
+    getByIDsImpl(const PageIds & page_ids, const PageDirectorySnapshotPtr & snap, bool throw_on_not_exist) const;
 
 private:
     // Only `std::map` is allow for `MVCCMap`. Cause `std::map::insert` ensure that
@@ -573,7 +447,8 @@ private:
         const typename PageEntriesEdit::EditRecord & rec,
         const PageVersion & version);
 
-    static inline PageDirectorySnapshotPtr toConcreteSnapshot(const DB::PageStorageSnapshotPtr & ptr)
+    static inline PageDirectorySnapshotPtr
+    toConcreteSnapshot(const DB::PageStorageSnapshotPtr & ptr)
     {
         return std::static_pointer_cast<PageDirectorySnapshot>(ptr);
     }
@@ -631,19 +506,6 @@ private:
     LoggerPtr log;
 };
 
-
-namespace details
-{
-template <typename Trait>
-UInt64 getMaxSequenceForRecord(const String & record)
-{
-    auto edit = Trait::Serializer::deserializeFrom(record, nullptr);
-    const auto & records = edit.getRecords();
-    RUNTIME_CHECK(!records.empty(), record.size());
-    return records.back().version.sequence;
-}
-} // namespace details
-
 namespace u128
 {
 struct PageDirectoryTrait
@@ -676,7 +538,10 @@ using VersionedPageEntriesPtr = std::shared_ptr<VersionedPageEntries>;
 template <>
 struct fmt::formatter<DB::PS::V3::EntryOrDelete>
 {
-    static constexpr auto parse(format_parse_context & ctx) { return ctx.begin(); }
+    static constexpr auto parse(format_parse_context & ctx)
+    {
+        return ctx.begin();
+    }
 
     template <typename FormatContext>
     auto format(const DB::PS::V3::EntryOrDelete & entry, FormatContext & ctx) const
@@ -686,6 +551,6 @@ struct fmt::formatter<DB::PS::V3::EntryOrDelete>
             "{{is_delete:{}, entry:{}, being_ref_count:{}}}",
             entry.is_delete,
             entry.entry,
-            entry.being_ref_count.getLatestRefCount());
+            entry.being_ref_count);
     }
 };

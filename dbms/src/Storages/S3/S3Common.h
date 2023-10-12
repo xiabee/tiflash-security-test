@@ -43,11 +43,7 @@ namespace DB::S3
 
 inline String S3ErrorMessage(const Aws::S3::S3Error & e)
 {
-    return fmt::format(
-        " s3error={} s3msg={} request_id={}",
-        magic_enum::enum_name(e.GetErrorType()),
-        e.GetMessage(),
-        e.GetRequestId());
+    return fmt::format(" s3error={} s3msg={} request_id={}", magic_enum::enum_name(e.GetErrorType()), e.GetMessage(), e.GetRequestId());
 }
 
 template <typename... Args>
@@ -112,9 +108,6 @@ public:
 
     bool isEnabled() const;
 
-    void disable() { config.disable(); }
-    void enable() { config.enable(false, log); }
-
     void init(const StorageS3Config & config_, bool mock_s3_ = false);
 
     void setKVCluster(pingcap::kv::Cluster * kv_cluster_)
@@ -162,11 +155,7 @@ Aws::S3::Model::HeadObjectOutcome headObject(const TiFlashS3Client & client, con
 
 bool objectExists(const TiFlashS3Client & client, const String & key);
 
-void uploadFile(
-    const TiFlashS3Client & client,
-    const String & local_fname,
-    const String & remote_fname,
-    int max_retry_times = 3);
+void uploadFile(const TiFlashS3Client & client, const String & local_fname, const String & remote_fname, int max_retry_times = 3);
 
 constexpr std::string_view TaggingObjectIsDeleted = "tiflash_deleted=true";
 bool ensureLifecycleRuleExist(const TiFlashS3Client & client, Int32 expire_days);
@@ -175,17 +164,10 @@ bool ensureLifecycleRuleExist(const TiFlashS3Client & client, Int32 expire_days)
  * tagging is the tag-set for the object. The tag-set must be encoded as URL Query
  * parameters. (For example, "Key1=Value1")
  */
-void uploadEmptyFile(
-    const TiFlashS3Client & client,
-    const String & key,
-    const String & tagging = "",
-    int max_retry_times = 3);
+void uploadEmptyFile(const TiFlashS3Client & client, const String & key, const String & tagging = "", int max_retry_times = 3);
 
 void downloadFile(const TiFlashS3Client & client, const String & local_fname, const String & remote_fname);
-void downloadFileByS3RandomAccessFile(
-    std::shared_ptr<TiFlashS3Client> client,
-    const String & local_fname,
-    const String & remote_fname);
+void downloadFileByS3RandomAccessFile(std::shared_ptr<TiFlashS3Client> client, const String & local_fname, const String & remote_fname);
 
 void rewriteObjectWithTagging(const TiFlashS3Client & client, const String & key, const String & tagging);
 
@@ -217,7 +199,9 @@ struct ObjectInfo
     Int64 size = 0;
     Aws::Utils::DateTime last_modification_time;
 };
-ObjectInfo tryGetObjectInfo(const TiFlashS3Client & client, const String & key);
+ObjectInfo tryGetObjectInfo(
+    const TiFlashS3Client & client,
+    const String & key);
 
 void deleteObject(const TiFlashS3Client & client, const String & key);
 

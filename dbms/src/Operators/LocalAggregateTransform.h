@@ -14,66 +14,42 @@
 
 #pragma once
 
-#include <Core/FineGrainedOperatorSpillContext.h>
 #include <Operators/AggregateContext.h>
 #include <Operators/Operator.h>
 
 namespace DB
 {
+enum class LocalAggStatus
+{
+    build,
+    convert,
+};
+
 /// Only do build and convert at the current operator, no sharing of objects with other operators.
 class LocalAggregateTransform : public TransformOp
 {
 public:
     LocalAggregateTransform(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id,
-        const Aggregator::Params & params_,
-        const std::shared_ptr<FineGrainedOperatorSpillContext> & fine_grained_spill_context);
+        const Aggregator::Params & params_);
 
-    String getName() const override { return "LocalAggregateTransform"; }
+    String getName() const override
+    {
+        return "LocalAggregateTransform";
+    }
 
 protected:
     OperatorStatus transformImpl(Block & block) override;
 
     OperatorStatus tryOutputImpl(Block & block) override;
 
-    OperatorStatus executeIOImpl() override;
-
     void transformHeaderImpl(Block & header_) override;
-
-private:
-    OperatorStatus tryFromBuildToSpill();
-
-    OperatorStatus fromBuildToConvergent(Block & block);
-
-    OperatorStatus fromBuildToFinalSpillOrRestore();
 
 private:
     Aggregator::Params params;
     AggregateContext agg_context;
 
-    /**
-     * spill◄────►build────┬─────────────►restore
-     *              │      │                 ▲
-     *              │      └───►final_spill──┘
-     *              ▼
-     *           convergent
-     */
-    enum class LocalAggStatus
-    {
-        // Accept the block and build aggregate data.
-        build,
-        // spill the aggregate data into disk.
-        spill,
-        // convert the aggregate data to block and then output it.
-        convergent,
-        // spill the rest remaining memory aggregate data.
-        final_spill,
-        // load the disk aggregate data to memory and then convert to block and output it.
-        restore,
-    };
     LocalAggStatus status{LocalAggStatus::build};
-
-    LocalAggregateRestorerPtr restorer;
 };
 } // namespace DB

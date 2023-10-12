@@ -26,14 +26,14 @@
 #include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/StoragePool.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/TMTContext.h>
 #include <Storages/MarkCache.h>
 #include <Storages/Page/FileUsage.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/PageStorage.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/StorageDeltaMerge.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <common/config_common.h>
 
 #include <chrono>
@@ -154,7 +154,9 @@ FileUsageStatistics AsynchronousMetrics::getPageStorageFileUsage()
                 const auto meta_usage = global_storage_pool->meta_storage->getFileUsageStatistics();
                 const auto data_usage = global_storage_pool->data_storage->getFileUsageStatistics();
 
-                usage.merge(log_usage).merge(meta_usage).merge(data_usage);
+                usage.merge(log_usage)
+                    .merge(meta_usage)
+                    .merge(data_usage);
             }
         }
         break;
@@ -213,15 +215,6 @@ void AsynchronousMetrics::update()
         }
     }
 
-    {
-        if (auto rn_delta_index_cache = context.getSharedContextDisagg()->rn_delta_index_cache)
-        {
-            set("RNDeltaIndexCacheBytes", rn_delta_index_cache->getCacheWeight());
-            set("RNDeltaIndexFiles", rn_delta_index_cache->getCacheCount());
-        }
-    }
-
-
     set("Uptime", context.getUptimeSeconds());
 
     {
@@ -243,7 +236,7 @@ void AsynchronousMetrics::update()
                 {
                     if (auto store = dt_storage->getStoreIfInited(); store)
                     {
-                        const auto stat = store->getStoreStats();
+                        auto stat = store->getStoreStats();
                         if (context.getPageStorageRunMode() == PageStorageRunMode::ONLY_V2)
                         {
                             calculateMax(
@@ -331,15 +324,7 @@ void AsynchronousMetrics::update()
         size_t current_commit;
         size_t peak_commit;
         size_t page_faults;
-        mi_process_info(
-            &elapsed_msecs,
-            &user_msecs,
-            &system_msecs,
-            &current_rss,
-            &peak_rss,
-            &current_commit,
-            &peak_commit,
-            &page_faults);
+        mi_process_info(&elapsed_msecs, &user_msecs, &system_msecs, &current_rss, &peak_rss, &current_commit, &peak_commit, &page_faults);
         MI_STATS_SET(elapsed_msecs);
         MI_STATS_SET(user_msecs);
         MI_STATS_SET(system_msecs);

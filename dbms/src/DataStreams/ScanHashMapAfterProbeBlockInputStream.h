@@ -24,16 +24,11 @@ namespace DB
 class ScanHashMapAfterProbeBlockInputStream : public IProfilingBlockInputStream
 {
 public:
-    ScanHashMapAfterProbeBlockInputStream(
-        const Join & parent_,
-        const Block & left_sample_block,
-        size_t index_,
-        size_t step_,
-        size_t max_block_size_);
+    ScanHashMapAfterProbeBlockInputStream(const Join & parent_, const Block & left_sample_block, size_t index_, size_t step_, size_t max_block_size_);
 
     String getName() const override { return "ScanHashMapAfterProbe"; }
 
-    Block getHeader() const override { return projected_sample_block; };
+    Block getHeader() const override { return result_sample_block; };
 
     size_t getIndex() const { return index; }
 
@@ -59,7 +54,6 @@ private:
 
 
     Block result_sample_block;
-    Block projected_sample_block; /// same schema with join's final schema
     /// Indices of columns in result_sample_block that come from the left-side table (except key columns).
     ColumnNumbers column_indices_left;
     /// Indices of columns that come from the right-side table.
@@ -80,13 +74,12 @@ private:
     }
 
     template <ASTTableJoin::Strictness STRICTNESS, bool row_flagged, bool output_joined_rows, typename Map>
-    void fillColumns(
-        const Map & map,
-        size_t num_columns_left,
-        MutableColumns & mutable_columns_left,
-        size_t num_columns_right,
-        MutableColumns & mutable_columns_right,
-        IColumn * row_counter_column);
+    void fillColumns(const Map & map,
+                     size_t num_columns_left,
+                     MutableColumns & mutable_columns_left,
+                     size_t num_columns_right,
+                     MutableColumns & mutable_columns_right,
+                     IColumn * row_counter_column);
 
     template <bool row_flagged, bool output_joined_rows>
     void fillColumnsUsingCurrentPartition(

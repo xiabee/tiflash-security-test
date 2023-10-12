@@ -73,22 +73,15 @@ public:
 
     grpc::Status leaseRevoke(LeaseID lease_id);
 
-    std::tuple<v3electionpb::LeaderKey, grpc::Status> campaign(
-        grpc::ClientContext * grpc_context,
-        const String & name,
-        const String & value,
-        LeaseID lease_id);
+    std::tuple<v3electionpb::LeaderKey, grpc::Status>
+    campaign(const String & name, const String & value, LeaseID lease_id);
 
-    std::unique_ptr<grpc::ClientReaderWriter<etcdserverpb::WatchRequest, etcdserverpb::WatchResponse>> watch(
-        grpc::ClientContext * grpc_context);
+    std::unique_ptr<grpc::ClientReaderWriter<etcdserverpb::WatchRequest, etcdserverpb::WatchResponse>>
+    watch(grpc::ClientContext * grpc_context);
 
     std::tuple<mvccpb::KeyValue, grpc::Status> leader(const String & name);
 
     grpc::Status resign(const v3electionpb::LeaderKey & leader_key);
-
-    // Basically same with tidb's Domain::acquireServerID.
-    // Only for tiflash resource control.
-    UInt64 acquireServerIDFromPD();
 
 private:
     EtcdConnClientPtr getOrCreateGRPCConn(const String & addr);
@@ -96,10 +89,6 @@ private:
     EtcdConnClientPtr leaderClient();
 
     void updateLeader();
-
-    std::unordered_set<UInt64> getExistsServerID();
-
-    static const String TIDB_SERVER_ID_ETCD_PATH;
 
 private:
     pingcap::pd::ClientPtr pd_client;
@@ -117,7 +106,10 @@ private:
 class Session
 {
 public:
-    LeaseID leaseID() const { return lease_id; }
+    LeaseID leaseID() const
+    {
+        return lease_id;
+    }
 
     // Send one rpc LeaseKeepAliveRequest to etcd for
     // keeping the lease valid. Note that it could be blocked
@@ -130,8 +122,7 @@ public:
     bool isValid() const;
 
 private:
-    using KeepAliveWriter = std::unique_ptr<
-        grpc::ClientReaderWriter<etcdserverpb::LeaseKeepAliveRequest, etcdserverpb::LeaseKeepAliveResponse>>;
+    using KeepAliveWriter = std::unique_ptr<grpc::ClientReaderWriter<etcdserverpb::LeaseKeepAliveRequest, etcdserverpb::LeaseKeepAliveResponse>>;
     using TimePoint = std::chrono::time_point<std::chrono::system_clock>;
 
     Session(LeaseID l, TimePoint first_deadline, KeepAliveWriter && w)
@@ -140,7 +131,8 @@ private:
         , writer(std::move(w))
         , finished(false)
         , log(Logger::get(fmt::format("lease={:x}", lease_id)))
-    {}
+    {
+    }
 
     friend class Client;
 

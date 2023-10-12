@@ -18,9 +18,9 @@
 #include <Common/Logger.h>
 #include <Storages/BackgroundProcessingPool.h>
 #include <Storages/DeltaMerge/StoragePool_fwd.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/Page/FileUsage.h>
 #include <Storages/Page/PageStorage_fwd.h>
+#include <Storages/Transaction/Types.h>
 
 #include <atomic>
 #include <chrono>
@@ -88,12 +88,7 @@ public:
     using Timepoint = Clock::time_point;
     using Seconds = std::chrono::seconds;
 
-    StoragePool(
-        Context & global_ctx,
-        KeyspaceID keyspace_id_,
-        NamespaceID ns_id_,
-        StoragePathPool & storage_path_pool_,
-        const String & name = "");
+    StoragePool(Context & global_ctx, KeyspaceID keyspace_id_, NamespaceID ns_id_, StoragePathPool & storage_path_pool_, const String & name = "");
 
     PageStorageRunMode restore();
 
@@ -103,7 +98,10 @@ public:
 
     NamespaceID getNamespaceID() const { return ns_id; }
 
-    PageStorageRunMode getPageStorageRunMode() const { return run_mode; }
+    PageStorageRunMode getPageStorageRunMode() const
+    {
+        return run_mode;
+    }
 
     PageReaderPtr & logReader()
     {
@@ -178,7 +176,7 @@ public:
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #endif
-    bool doV2Gc(const Settings & settings) const;
+    bool doV2Gc(const Settings & settings);
 
     void forceTransformMetaV2toV3();
     void forceTransformDataV2toV3();

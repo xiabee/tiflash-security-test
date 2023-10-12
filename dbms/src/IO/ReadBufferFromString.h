@@ -32,8 +32,7 @@ public:
     {}
 };
 
-class ReadBufferFromOwnString
-    : public String
+class ReadBufferFromOwnString : public String
     , public ReadBufferFromString
 {
 public:

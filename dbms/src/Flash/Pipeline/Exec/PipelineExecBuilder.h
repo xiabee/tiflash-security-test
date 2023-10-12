@@ -31,47 +31,24 @@ struct PipelineExecBuilder
     Block getCurrentHeader() const;
 
     PipelineExecPtr build();
-
-    OperatorProfileInfoPtr getCurProfileInfo() const;
-
-    IOProfileInfoPtr getCurIOProfileInfo() const;
 };
 
-class PipelineExecGroupBuilder
+struct PipelineExecGroupBuilder
 {
-public:
-    PipelineExecGroupBuilder() { groups.emplace_back(); }
-
+    // A Group generates a set of pipeline_execs running in parallel.
     using BuilderGroup = std::vector<PipelineExecBuilder>;
+    BuilderGroup group;
 
-    PipelineExecBuilder & getCurBuilder(size_t index)
-    {
-        auto & cur_group = getCurGroup();
-        RUNTIME_CHECK(cur_group.size() > index);
-        return cur_group[index];
-    }
+    size_t concurrency = 0;
 
-    void addGroup() { groups.emplace_back(); }
-
-    size_t groupCnt() const { return groups.size(); }
-
-    size_t concurrency() const { return getCurGroup().size(); }
-
-    bool empty() const { return getCurGroup().empty(); }
-
-    void addConcurrency(SourceOpPtr && source);
-
-    void addConcurrency(PipelineExecBuilder && exec_builder);
-
-    void reset();
-
-    void merge(PipelineExecGroupBuilder && other);
+    void init(size_t init_concurrency);
 
     /// ff: [](PipelineExecBuilder & builder) {}
     template <typename FF>
     void transform(FF && ff)
     {
-        for (auto & builder : getCurGroup())
+        assert(concurrency > 0);
+        for (auto & builder : group)
         {
             ff(builder);
         }
@@ -80,36 +57,5 @@ public:
     PipelineExecGroup build();
 
     Block getCurrentHeader();
-
-    OperatorProfileInfos getCurProfileInfos() const;
-
-    IOProfileInfos getCurIOProfileInfos() const;
-
-private:
-    BuilderGroup & getCurGroup()
-    {
-        RUNTIME_CHECK(!groups.empty());
-        return groups.back();
-    }
-
-    const BuilderGroup & getCurGroup() const
-    {
-        RUNTIME_CHECK(!groups.empty());
-        return groups.back();
-    }
-
-private:
-    // groups generates a set of pipeline_execs running in parallel.
-    //
-    // group1  -->   group2  -->   cur_group
-    // exec1         exec1         exec1
-    // exec2         exec2         exec2
-    // exec3                       exec3
-    //                             exec4
-    //
-    // Only `cur_group` will be modified, other groups are already stable.
-    // The concurrency level of different groups can be different. Usually, a `SharedQueue` is used to connect different groups.
-    // This way, different operators with different levels of concurrency can be executed together in a pipeline.
-    std::vector<BuilderGroup> groups;
 };
 } // namespace DB

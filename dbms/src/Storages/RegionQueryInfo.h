@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
-#include <Storages/KVStore/Decode/TiKVHandle.h>
+#include <Storages/Transaction/TiKVHandle.h>
+#include <Storages/Transaction/TiKVKeyValue.h>
 
 namespace DB
 {
@@ -28,13 +28,7 @@ using ScanContextPtr = std::shared_ptr<ScanContext>;
 
 struct RegionQueryInfo
 {
-    RegionQueryInfo(
-        RegionID region_id_,
-        UInt64 version_,
-        UInt64 conf_version_,
-        Int64 physical_table_id_,
-        const std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr> & range_in_table_ = {},
-        const std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> & required_handle_ranges_ = {})
+    RegionQueryInfo(RegionID region_id_, UInt64 version_, UInt64 conf_version_, Int64 physical_table_id_, const std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr> & range_in_table_ = {}, const std::vector<std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr>> & required_handle_ranges_ = {})
         : region_id(region_id_)
         , version(version_)
         , conf_version(conf_version_)

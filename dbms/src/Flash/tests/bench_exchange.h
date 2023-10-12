@@ -52,7 +52,10 @@ struct MockReceiverContext
     using Status = ::grpc::Status;
     struct Request
     {
-        String debugString() const { return "{Request}"; }
+        String debugString() const
+        {
+            return "{Request}";
+        }
 
         int source_index = 0;
         int send_task_id = 0;
@@ -65,7 +68,9 @@ struct MockReceiverContext
             : queue(queue_)
         {}
 
-        void initialize() const {}
+        void initialize() const
+        {
+        }
 
         bool read(PacketPtr & packet [[maybe_unused]]) const
         {
@@ -78,7 +83,10 @@ struct MockReceiverContext
             return false;
         }
 
-        Status finish() const { return ::grpc::Status(); }
+        Status finish() const
+        {
+            return ::grpc::Status();
+        }
 
         PacketQueuePtr queue;
     };
@@ -86,17 +94,20 @@ struct MockReceiverContext
     struct MockAsyncGrpcExchangePacketReader
     {
         // Not implement benchmark for Async GRPC for now.
-        void init(GRPCKickTag *) { assert(0); }
-        void read(TrackedMppDataPacketPtr &, GRPCKickTag *) { assert(0); }
-        void finish(::grpc::Status &, GRPCKickTag *) { assert(0); }
+        void init(UnaryCallback<bool> *) { assert(0); }
+        void read(TrackedMppDataPacketPtr &, UnaryCallback<bool> *) { assert(0); }
+        void finish(::grpc::Status &, UnaryCallback<bool> *) { assert(0); }
     };
 
     using AsyncReader = MockAsyncGrpcExchangePacketReader;
 
-    MockReceiverContext(const std::vector<PacketQueuePtr> & queues_, const std::vector<tipb::FieldType> & field_types_)
+    MockReceiverContext(
+        const std::vector<PacketQueuePtr> & queues_,
+        const std::vector<tipb::FieldType> & field_types_)
         : queues(queues_)
         , field_types(field_types_)
-    {}
+    {
+    }
 
     void fillSchema(DAGSchema & schema) const
     {
@@ -109,20 +120,27 @@ struct MockReceiverContext
         }
     }
 
-    Request makeRequest(int index) const { return {index, index, -1}; }
+    Request makeRequest(int index) const
+    {
+        return {index, index, -1};
+    }
 
     std::shared_ptr<Reader> makeSyncReader(const Request & request)
     {
         return std::make_shared<Reader>(queues[request.send_task_id]);
     }
 
-    static Status getStatusOK() { return ::grpc::Status(); }
+    static Status getStatusOK()
+    {
+        return ::grpc::Status();
+    }
 
     bool supportAsync(const Request &) const { return false; }
-    std::unique_ptr<AsyncReader> makeAsyncReader(const Request &, grpc::CompletionQueue *, GRPCKickTag *) const
-    {
-        return nullptr;
-    }
+    void makeAsyncReader(
+        const Request &,
+        std::shared_ptr<AsyncReader> &,
+        grpc::CompletionQueue *,
+        UnaryCallback<bool> *) const {}
 
     std::vector<PacketQueuePtr> queues;
     std::vector<tipb::FieldType> field_types;
@@ -145,7 +163,10 @@ struct MockWriter : public PacketWriter
         return true;
     }
 
-    void finish() { queue->finish(); }
+    void finish()
+    {
+        queue->finish();
+    }
 
     PacketQueuePtr queue;
 };
@@ -264,11 +285,10 @@ class ExchangeBench : public benchmark::Fixture
 public:
     void SetUp(const benchmark::State &) override;
     void TearDown(const benchmark::State &) override;
-    void runAndWait(
-        std::shared_ptr<ReceiverHelper> receiver_helper,
-        BlockInputStreamPtr receiver_stream,
-        std::shared_ptr<SenderHelper> & sender_helper,
-        BlockInputStreamPtr sender_stream);
+    void runAndWait(std::shared_ptr<ReceiverHelper> receiver_helper,
+                    BlockInputStreamPtr receiver_stream,
+                    std::shared_ptr<SenderHelper> & sender_helper,
+                    BlockInputStreamPtr sender_stream);
 
     std::vector<Block> uniform_blocks;
     std::vector<Block> skew_blocks;

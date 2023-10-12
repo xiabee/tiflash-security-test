@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 #include <Common/FmtUtils.h>
 #include <DataStreams/HashJoinBuildBlockInputStream.h>
-
 namespace DB
 {
 Block HashJoinBuildBlockInputStream::readImpl()
@@ -24,17 +24,10 @@ Block HashJoinBuildBlockInputStream::readImpl()
         Block block = children.back()->read();
         if (!block)
         {
-            if (join->finishOneBuild(stream_index))
-            {
-                if (join->hasBuildSideMarkedSpillData(stream_index))
-                    join->flushBuildSideMarkedSpillData(stream_index);
-                join->finalizeBuild();
-            }
+            join->finishOneBuild();
             return block;
         }
-        join->insertFromBlock(block, stream_index);
-        if (join->hasBuildSideMarkedSpillData(stream_index))
-            join->flushBuildSideMarkedSpillData(stream_index);
+        join->insertFromBlock(block, concurrency_build_index);
         return block;
     }
     catch (...)

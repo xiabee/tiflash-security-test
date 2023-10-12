@@ -153,8 +153,8 @@ struct DTLeaf
 
     std::string toString()
     {
-        return "{count:" + DB::toString(count) + ",prev:" + addrToHex(prev) + ",next:" + addrToHex(next)
-            + ",parent:" + addrToHex(parent) + "}";
+        return "{count:" + DB::toString(count) + ",prev:" + addrToHex(prev) + ",next:" + addrToHex(next) + ",parent:" + addrToHex(parent)
+            + "}";
     }
 
     inline UInt64 sid(size_t pos) const { return sids[pos]; }
@@ -178,10 +178,7 @@ struct DTLeaf
         if (n > 0)
         {
             std::move_backward(std::begin(sids) + pos, std::begin(sids) + count, std::begin(sids) + count + n);
-            std::move_backward(
-                std::begin(mutations) + pos,
-                std::begin(mutations) + count,
-                std::begin(mutations) + count + n);
+            std::move_backward(std::begin(mutations) + pos, std::begin(mutations) + count, std::begin(mutations) + count + n);
         }
         else
         {
@@ -259,10 +256,7 @@ struct DTLeaf
         this->next = right_n;
 
         std::move(std::begin(this->sids) + split, std::begin(this->sids) + this->count, std::begin(right_n->sids));
-        std::move(
-            std::begin(this->mutations) + split,
-            std::begin(this->mutations) + this->count,
-            std::begin(right_n->mutations));
+        std::move(std::begin(this->mutations) + split, std::begin(this->mutations) + this->count, std::begin(right_n->mutations));
 
         right_n->count = this->count - split;
         this->count = split;
@@ -298,10 +292,7 @@ struct DTLeaf
             this->shiftEntries(0, adopt_count);
 
             auto sibling_cut = sibling->count - adopt_count;
-            std::move(
-                std::begin(sibling->sids) + sibling_cut,
-                std::begin(sibling->sids) + sibling->count,
-                std::begin(this->sids));
+            std::move(std::begin(sibling->sids) + sibling_cut, std::begin(sibling->sids) + sibling->count, std::begin(this->sids));
             std::move(
                 std::begin(sibling->mutations) + sibling_cut,
                 std::begin(sibling->mutations) + sibling->count,
@@ -314,10 +305,7 @@ struct DTLeaf
         }
         else
         {
-            std::move(
-                std::begin(sibling->sids),
-                std::begin(sibling->sids) + adopt_count,
-                std::begin(this->sids) + this->count);
+            std::move(std::begin(sibling->sids), std::begin(sibling->sids) + adopt_count, std::begin(this->sids) + this->count);
             std::move(
                 std::begin(sibling->mutations),
                 std::begin(sibling->mutations) + adopt_count,
@@ -381,14 +369,8 @@ struct DTIntern
             }
 
             std::move_backward(std::begin(sids) + child_pos, std::begin(sids) + count, std::begin(sids) + count + n);
-            std::move_backward(
-                std::begin(deltas) + child_pos,
-                std::begin(deltas) + count,
-                std::begin(deltas) + count + n);
-            std::move_backward(
-                std::begin(children) + child_pos,
-                std::begin(children) + count,
-                std::begin(children) + count + n);
+            std::move_backward(std::begin(deltas) + child_pos, std::begin(deltas) + count, std::begin(deltas) + count + n);
+            std::move_backward(std::begin(children) + child_pos, std::begin(children) + count, std::begin(children) + count + n);
             if ((static_cast<int>(child_pos)) - 1 >= 0)
                 sids[child_pos - 1 + n] = sids[child_pos - 1];
 
@@ -406,10 +388,7 @@ struct DTIntern
                 sids[child_pos - 1 + n] = sids[child_pos - 1];
             std::move(std::begin(sids) + child_pos, std::begin(sids) + count, std::begin(sids) + child_pos + n);
             std::move(std::begin(deltas) + child_pos, std::begin(deltas) + count, std::begin(deltas) + child_pos + n);
-            std::move(
-                std::begin(children) + child_pos,
-                std::begin(children) + count,
-                std::begin(children) + child_pos + n);
+            std::move(std::begin(children) + child_pos, std::begin(children) + count, std::begin(children) + child_pos + n);
             return;
         }
     }
@@ -450,14 +429,8 @@ struct DTIntern
         right_n->parent = this->parent;
 
         std::move(std::begin(this->sids) + split, std::begin(this->sids) + this->count, std::begin(right_n->sids));
-        std::move(
-            std::begin(this->deltas) + split,
-            std::begin(this->deltas) + this->count,
-            std::begin(right_n->deltas));
-        std::move(
-            std::begin(this->children) + split,
-            std::begin(this->children) + this->count,
-            std::begin(right_n->children));
+        std::move(std::begin(this->deltas) + split, std::begin(this->deltas) + this->count, std::begin(right_n->deltas));
+        std::move(std::begin(this->children) + split, std::begin(this->children) + this->count, std::begin(right_n->children));
 
         right_n->count = this->count - split;
         this->count = split;
@@ -485,14 +458,8 @@ struct DTIntern
             // if adopt_count equals to sibling->count, new_sep_sid is meaningless.
             auto new_sep_sid = !sibling_cut ? 0 : sibling->sids[sibling_cut - 1];
 
-            std::move(
-                std::begin(sibling->sids) + sibling_cut,
-                std::begin(sibling->sids) + sibling->count - 1,
-                std::begin(this->sids));
-            std::move(
-                std::begin(sibling->deltas) + sibling_cut,
-                std::begin(sibling->deltas) + sibling->count,
-                std::begin(this->deltas));
+            std::move(std::begin(sibling->sids) + sibling_cut, std::begin(sibling->sids) + sibling->count - 1, std::begin(this->sids));
+            std::move(std::begin(sibling->deltas) + sibling_cut, std::begin(sibling->deltas) + sibling->count, std::begin(this->deltas));
             std::move(
                 std::begin(sibling->children) + sibling_cut,
                 std::begin(sibling->children) + sibling->count,
@@ -511,18 +478,9 @@ struct DTIntern
         {
             auto new_sep_sid = adopt_count == sibling->count ? 0 : sibling->sids[adopt_count - 1];
 
-            std::move(
-                std::begin(sibling->sids),
-                std::begin(sibling->sids) + adopt_count,
-                std::begin(this->sids) + this->count);
-            std::move(
-                std::begin(sibling->deltas),
-                std::begin(sibling->deltas) + adopt_count,
-                std::begin(this->deltas) + this->count);
-            std::move(
-                std::begin(sibling->children),
-                std::begin(sibling->children) + adopt_count,
-                std::begin(this->children) + this->count);
+            std::move(std::begin(sibling->sids), std::begin(sibling->sids) + adopt_count, std::begin(this->sids) + this->count);
+            std::move(std::begin(sibling->deltas), std::begin(sibling->deltas) + adopt_count, std::begin(this->deltas) + this->count);
+            std::move(std::begin(sibling->children), std::begin(sibling->children) + adopt_count, std::begin(this->children) + this->count);
 
             sibling->shiftEntries(adopt_count, -adopt_count);
 
@@ -555,10 +513,7 @@ public:
         , delta(delta_)
     {}
 
-    std::string toString()
-    {
-        return "{leaf:" + addrToHex(leaf) + ",pos:" + DB::toString(pos) + ",delta:" + DB::toString(delta) + "}";
-    }
+    std::string toString() { return "{leaf:" + addrToHex(leaf) + ",pos:" + DB::toString(pos) + ",delta:" + DB::toString(delta) + "}"; }
 
     bool operator==(const DTEntryIterator & rhs) const { return leaf == rhs.leaf && pos == rhs.pos; }
     bool operator!=(const DTEntryIterator & rhs) const { return !(*this == rhs); }
@@ -669,7 +624,8 @@ public:
             , entries(entries_.get())
             , index(index_)
             , delta(delta_)
-        {}
+        {
+        }
 
         bool operator==(const Iterator & rhs) const { return index == rhs.index; }
         bool operator!=(const Iterator & rhs) const { return index != rhs.index; }
@@ -708,10 +664,7 @@ public:
     };
 
     static Iterator begin(const std::shared_ptr<DTEntriesCopy> & entries) { return {entries, 0, 0}; }
-    static Iterator end(const std::shared_ptr<DTEntriesCopy> & entries)
-    {
-        return {entries, entries->entry_count, entries->delta};
-    }
+    static Iterator end(const std::shared_ptr<DTEntriesCopy> & entries) { return {entries, entries->entry_count, entries->delta}; }
 };
 
 /// Compact the continuing inserts.
@@ -774,8 +727,7 @@ public:
                     continue;
                 }
             }
-            Entry entry
-                = {.sid = it.getSid(), .is_insert = it.isInsert(), .count = it.getCount(), .value = it.getValue()};
+            Entry entry = {.sid = it.getSid(), .is_insert = it.isInsert(), .count = it.getCount(), .value = it.getValue()};
             entries.emplace_back(entry);
         }
     }
@@ -940,8 +892,14 @@ private:
     }
 
 public:
-    DeltaTree() { init(std::make_shared<ValueSpace>()); }
-    explicit DeltaTree(const ValueSpacePtr & insert_value_space_) { init(insert_value_space_); }
+    DeltaTree()
+    {
+        init(std::make_shared<ValueSpace>());
+    }
+    explicit DeltaTree(const ValueSpacePtr & insert_value_space_)
+    {
+        init(insert_value_space_);
+    }
     DeltaTree(const Self & o);
 
     DeltaTree & operator=(const Self & o)
@@ -1002,10 +960,19 @@ public:
         check(root, true);
     }
 
-    size_t getBytes() { return bytes; }
+    size_t getBytes()
+    {
+        return bytes;
+    }
 
-    size_t getHeight() const { return height; }
-    EntryIterator begin() const { return EntryIterator(left_leaf, 0, 0); }
+    size_t getHeight() const
+    {
+        return height;
+    }
+    EntryIterator begin() const
+    {
+        return EntryIterator(left_leaf, 0, 0);
+    }
     EntryIterator end() const
     {
         Int64 delta = isLeaf(root) ? as(Leaf, root)->getDelta() : as(Intern, root)->getDelta();
@@ -1024,9 +991,18 @@ public:
         return std::make_shared<CompactedEntries>(begin(), end(), num_entries);
     }
 
-    size_t numEntries() const { return num_entries; }
-    size_t numInserts() const { return num_inserts; }
-    size_t numDeletes() const { return num_deletes; }
+    size_t numEntries() const
+    {
+        return num_entries;
+    }
+    size_t numInserts() const
+    {
+        return num_inserts;
+    }
+    size_t numDeletes() const
+    {
+        return num_deletes;
+    }
 
     void addDelete(UInt64 rid);
     void addInsert(UInt64 rid, UInt64 tuple_id);

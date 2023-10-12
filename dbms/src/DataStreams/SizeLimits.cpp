@@ -33,10 +33,9 @@ bool SizeLimits::check(UInt64 rows, UInt64 bytes, const char * what, int excepti
     if (rows_exceed_limit)
     {
         if (overflow_mode == OverflowMode::THROW)
-            throw Exception(
-                "Limit for " + std::string(what) + " exceeded, max rows: " + formatReadableQuantity(max_rows)
-                    + ", current rows: " + formatReadableQuantity(rows),
-                exception_code);
+            throw Exception("Limit for " + std::string(what) + " exceeded, max rows: " + formatReadableQuantity(max_rows)
+                                + ", current rows: " + formatReadableQuantity(rows),
+                            exception_code);
         else
             return false;
     }
@@ -44,11 +43,9 @@ bool SizeLimits::check(UInt64 rows, UInt64 bytes, const char * what, int excepti
     if (max_bytes && bytes > max_bytes)
     {
         if (overflow_mode == OverflowMode::THROW)
-            throw Exception(
-                "Limit for " + std::string(what)
-                    + " exceeded, max bytes: " + formatReadableSizeWithBinarySuffix(max_bytes)
-                    + ", current bytes: " + formatReadableSizeWithBinarySuffix(bytes),
-                exception_code);
+            throw Exception("Limit for " + std::string(what) + " exceeded, max bytes: " + formatReadableSizeWithBinarySuffix(max_bytes)
+                                + ", current bytes: " + formatReadableSizeWithBinarySuffix(bytes),
+                            exception_code);
         else
             return false;
     }

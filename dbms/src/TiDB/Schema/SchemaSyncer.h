@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 #include <common/logger_useful.h>
 
 #include <memory>
@@ -37,16 +37,21 @@ class SchemaSyncer
 public:
     virtual ~SchemaSyncer() = default;
 
-    /*
-     * Sync all tables' schemas based on schema diff, but may not apply all diffs.
+    /**
+     * Get current version of CH schema.
      */
-    virtual bool syncSchemas(Context & context) = 0;
+    virtual Int64 getCurrentVersion(KeyspaceID keyspace_id) = 0;
 
-    /*
-     * Sync the table's inner schema(like add columns, modify columns, etc) for given physical_table_id
-     * This function will be called concurrently when the schema not matches during reading or writing
+    /**
+     * Synchronize all schemas between TiDB and CH.
+     * @param context
      */
-    virtual bool syncTableSchema(Context & context, TableID physical_table_id) = 0;
+    virtual bool syncSchemas(Context & context, KeyspaceID keyspace_id) = 0;
+
+    /**
+     *  Remove current version of CH schema.
+    */
+    virtual void removeCurrentVersion(KeyspaceID keyspace_id) = 0;
 
     virtual void reset() = 0;
 
@@ -54,9 +59,7 @@ public:
 
     virtual TiDB::DBInfoPtr getDBInfoByMappedName(const String & mapped_database_name) = 0;
 
-    virtual void removeTableID(TableID table_id) = 0;
-
-    virtual void dropAllSchema(Context & context) = 0;
+    virtual std::vector<TiDB::DBInfoPtr> fetchAllDBs(KeyspaceID keyspace_id) = 0;
 };
 
 using SchemaSyncerPtr = std::shared_ptr<SchemaSyncer>;

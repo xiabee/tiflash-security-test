@@ -40,10 +40,7 @@
 
 namespace detail
 {
-ALWAYS_INLINE inline void memcpySmallAllowReadWriteOverflow15Impl(
-    char * __restrict dst,
-    const char * __restrict src,
-    ssize_t n)
+ALWAYS_INLINE inline void memcpySmallAllowReadWriteOverflow15Impl(char * __restrict dst, const char * __restrict src, ssize_t n)
 {
     while (n > 0)
     {
@@ -58,13 +55,7 @@ ALWAYS_INLINE inline void memcpySmallAllowReadWriteOverflow15Impl(
 /** Works under assumption, that it's possible to read up to 15 excessive bytes after end of 'src' region
   *  and to write any garbage into up to 15 bytes after end of 'dst' region.
   */
-__attribute__((always_inline)) inline void memcpySmallAllowReadWriteOverflow15(
-    void * __restrict dst,
-    const void * __restrict src,
-    size_t n)
+__attribute__((always_inline)) inline void memcpySmallAllowReadWriteOverflow15(void * __restrict dst, const void * __restrict src, size_t n)
 {
-    ::detail::memcpySmallAllowReadWriteOverflow15Impl(
-        reinterpret_cast<char *>(dst),
-        reinterpret_cast<const char *>(src),
-        n);
+    ::detail::memcpySmallAllowReadWriteOverflow15Impl(reinterpret_cast<char *>(dst), reinterpret_cast<const char *>(src), n);
 }

@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/Defines.h>
 #include <IO/WriteBufferAIO.h>
+#include <Core/Defines.h>
 
 #include <boost/filesystem.hpp>
-#include <cstdlib>
-#include <fstream>
+
 #include <iostream>
+#include <fstream>
 #include <streambuf>
+#include <cstdlib>
 
 namespace
 {
@@ -45,8 +46,19 @@ bool test10();
 
 void run()
 {
-    const std::vector<std::function<bool()>> tests
-        = {test1, test2, test3, test4, test5, test6, test7, test8, test9, test10};
+    const std::vector<std::function<bool()>> tests =
+    {
+        test1,
+        test2,
+        test3,
+        test4,
+        test5,
+        test6,
+        test7,
+        test8,
+        test9,
+        test10
+    };
 
     unsigned int num = 0;
     for (const auto & test : tests)
@@ -133,7 +145,7 @@ bool test1()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -166,15 +178,14 @@ bool test2()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
 
     if (received.substr(0, buf.length() / 2) != buf.substr(0, buf.length() / 2))
         return false;
-    if (received.substr(buf.length() / 2, DEFAULT_AIO_FILE_BLOCK_SIZE)
-        != std::string(DEFAULT_AIO_FILE_BLOCK_SIZE, '\0'))
+    if (received.substr(buf.length() / 2, DEFAULT_AIO_FILE_BLOCK_SIZE) != std::string(DEFAULT_AIO_FILE_BLOCK_SIZE, '\0'))
         return false;
     if (received.substr(buf.length() / 2 + DEFAULT_AIO_FILE_BLOCK_SIZE) != buf.substr(buf.length() / 2))
         return false;
@@ -214,7 +225,7 @@ bool test3()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -254,7 +265,7 @@ bool test4()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -292,7 +303,7 @@ bool test5()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -328,7 +339,7 @@ bool test6()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -367,7 +378,7 @@ bool test7()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     if (received.length() != 4106)
         return false;
@@ -404,7 +415,7 @@ bool test8()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     if (received.length() != 8202)
         return false;
@@ -447,7 +458,7 @@ bool test9()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -484,7 +495,7 @@ bool test10()
     if (!in.is_open())
         die("Could not open file");
 
-    std::string received{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    std::string received{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 
     in.close();
     fs::remove_all(fs::path(filename).parent_path().string());
@@ -492,7 +503,7 @@ bool test10()
     return (received == buf);
 }
 
-} // namespace
+}
 
 int main()
 {

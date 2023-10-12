@@ -82,7 +82,8 @@ public:
 
     void bindThreadCPUAffinity() const;
 #else
-    void init(const CPUAffinityConfig &) {}
+    void init(const CPUAffinityConfig &)
+    {}
 
     void bindQueryThread(pid_t) const {}
     void bindOtherThread(pid_t) const {}
@@ -91,7 +92,10 @@ public:
     void bindSelfOtherThread() const {}
     void bindSelfGrpcThread() const {}
 
-    static std::string toString() { return "Not Support"; }
+    static std::string toString()
+    {
+        return "Not Support";
+    }
 
     void bindThreadCPUAffinity() const {}
 #endif

@@ -18,9 +18,7 @@
 
 namespace DB
 {
-BlockOutputStreamFromRowOutputStream::BlockOutputStreamFromRowOutputStream(
-    RowOutputStreamPtr row_output_,
-    const Block & header_)
+BlockOutputStreamFromRowOutputStream::BlockOutputStreamFromRowOutputStream(RowOutputStreamPtr row_output_, const Block & header_)
     : row_output(row_output_)
     , header(header_)
 {}

@@ -35,11 +35,7 @@ class DistinctSortedBlockInputStream : public IProfilingBlockInputStream
 {
 public:
     /// Empty columns_ means all collumns.
-    DistinctSortedBlockInputStream(
-        const BlockInputStreamPtr & input,
-        const SizeLimits & set_size_limits,
-        size_t limit_hint_,
-        const Names & columns);
+    DistinctSortedBlockInputStream(const BlockInputStreamPtr & input, const SizeLimits & set_size_limits, size_t limit_hint_, const Names & columns);
 
     String getName() const override { return "DistinctSorted"; }
 
@@ -83,4 +79,4 @@ private:
     SizeLimits set_size_limits;
 };
 
-} // namespace DB
+}

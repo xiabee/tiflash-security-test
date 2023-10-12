@@ -57,7 +57,10 @@ public:
      * Segment_log is not available when constructing, because usually
      * at that time the segment has not been constructed yet.
      */
-    void resetLogger(const LoggerPtr & segment_log) { log = segment_log; }
+    void resetLogger(const LoggerPtr & segment_log)
+    {
+        log = segment_log;
+    }
 
     // Set DMFiles for this value space.
     // If this value space is logical split, specify `range` and `dm_context` so that we can get more precise
@@ -139,8 +142,7 @@ public:
     struct Snapshot;
     using SnapshotPtr = std::shared_ptr<Snapshot>;
 
-    struct Snapshot
-        : public std::enable_shared_from_this<Snapshot>
+    struct Snapshot : public std::enable_shared_from_this<Snapshot>
         , private boost::noncopyable
     {
         StableValueSpacePtr stable;
@@ -211,26 +213,17 @@ public:
 
         ColumnCachePtrs & getColumnCaches() { return column_caches; }
 
-        void clearColumnCaches()
-        {
-            for (auto & col_cache : column_caches)
-            {
-                col_cache->clear();
-            }
-        }
-
-        SkippableBlockInputStreamPtr getInputStream(
-            const DMContext & context, //
-            const ColumnDefines & read_columns,
-            const RowKeyRanges & rowkey_ranges,
-            const RSOperatorPtr & filter,
-            UInt64 max_data_version,
-            size_t expected_block_size,
-            bool enable_handle_clean_read,
-            bool is_fast_scan = false,
-            bool enable_del_clean_read = false,
-            const std::vector<IdSetPtr> & read_packs = {},
-            bool need_row_id = false);
+        SkippableBlockInputStreamPtr getInputStream(const DMContext & context, //
+                                                    const ColumnDefines & read_columns,
+                                                    const RowKeyRanges & rowkey_ranges,
+                                                    const RSOperatorPtr & filter,
+                                                    UInt64 max_data_version,
+                                                    size_t expected_block_size,
+                                                    bool enable_handle_clean_read,
+                                                    bool is_fast_scan = false,
+                                                    bool enable_del_clean_read = false,
+                                                    const std::vector<IdSetPtr> & read_packs = {},
+                                                    bool need_row_id = false);
 
         RowsAndBytes getApproxRowsAndBytes(const DMContext & context, const RowKeyRange & range) const;
 
@@ -255,8 +248,6 @@ public:
     SnapshotPtr createSnapshot();
 
     void drop(const FileProviderPtr & file_provider);
-
-    size_t avgRowBytes(const ColumnDefines & read_columns);
 
 private:
     const PageIdU64 id;

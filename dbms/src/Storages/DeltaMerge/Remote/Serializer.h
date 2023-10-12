@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <IO/CompressedStream.h>
 #include <IO/ReadBuffer.h>
 #include <IO/WriteBuffer.h>
@@ -22,8 +21,8 @@
 #include <Storages/DeltaMerge/Remote/DisaggTaskId.h>
 #include <Storages/DeltaMerge/Remote/ObjectId.h>
 #include <Storages/DeltaMerge/Remote/Proto/remote.pb.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Transaction/Types.h>
 
 namespace DB
 {
@@ -58,8 +57,7 @@ struct Serializer
 {
     static RemotePb::RemotePhysicalTable serializeTo(
         const DisaggPhysicalTableReadSnapshotPtr & snap,
-        const DisaggTaskId & task_id,
-        MemTrackerWrapper & mem_tracker_wrapper);
+        const DisaggTaskId & task_id);
 
     /// segment snapshot ///
 
@@ -68,21 +66,18 @@ struct Serializer
         PageIdU64 segment_id,
         UInt64 segment_epoch,
         const RowKeyRange & segment_range,
-        const RowKeyRanges & read_ranges,
-        MemTrackerWrapper & mem_tracker_wrapper);
+        const RowKeyRanges & read_ranges);
 
     static SegmentSnapshotPtr deserializeSegmentSnapshotFrom(
         const DMContext & dm_context,
         StoreID remote_store_id,
-        KeyspaceID keyspace_id,
         TableID table_id,
         const RemotePb::RemoteSegment & proto);
 
     /// column file set ///
 
     static google::protobuf::RepeatedPtrField<RemotePb::ColumnFileRemote> serializeTo(
-        const ColumnFileSetSnapshotPtr & snap,
-        MemTrackerWrapper & mem_tracker_wrapper);
+        const ColumnFileSetSnapshotPtr & snap);
 
     /// Note: This function always build a snapshot over nop data provider. In order to read from this snapshot,
     /// you must explicitly assign a proper data provider.
@@ -96,9 +91,7 @@ struct Serializer
     static RemotePb::ColumnFileRemote serializeTo(const ColumnFileInMemory & cf_in_mem);
     static ColumnFileInMemoryPtr deserializeCFInMemory(const RemotePb::ColumnFileInMemory & proto);
 
-    static RemotePb::ColumnFileRemote serializeTo(
-        const ColumnFileTiny & cf_tiny,
-        IColumnFileDataProviderPtr data_provider);
+    static RemotePb::ColumnFileRemote serializeTo(const ColumnFileTiny & cf_tiny, IColumnFileDataProviderPtr data_provider);
     static ColumnFileTinyPtr deserializeCFTiny(const RemotePb::ColumnFileTiny & proto);
 
     static RemotePb::ColumnFileRemote serializeTo(const ColumnFileDeleteRange & cf_delete_range);

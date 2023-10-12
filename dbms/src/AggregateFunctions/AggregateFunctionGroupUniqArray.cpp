@@ -27,18 +27,12 @@ namespace
 /// Substitute return type for Date and DateTime
 class AggregateFunctionGroupUniqArrayDate : public AggregateFunctionGroupUniqArray<DataTypeDate::FieldType>
 {
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDate>());
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDate>()); }
 };
 
 class AggregateFunctionGroupUniqArrayDateTime : public AggregateFunctionGroupUniqArray<DataTypeDateTime::FieldType>
 {
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDateTime>());
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDateTime>()); }
 };
 
 
@@ -58,10 +52,7 @@ static IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_ty
     }
 }
 
-AggregateFunctionPtr createAggregateFunctionGroupUniqArray(
-    const std::string & name,
-    const DataTypes & argument_types,
-    const Array & parameters)
+AggregateFunctionPtr createAggregateFunctionGroupUniqArray(const std::string & name, const DataTypes & argument_types, const Array & parameters)
 {
     assertNoParameters(name, parameters);
     assertUnary(name, argument_types);
@@ -72,9 +63,7 @@ AggregateFunctionPtr createAggregateFunctionGroupUniqArray(
         res = AggregateFunctionPtr(createWithExtraTypes(argument_types[0]));
 
     if (!res)
-        throw Exception(
-            "Illegal type " + argument_types[0]->getName() + " of argument for aggregate function " + name,
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+        throw Exception("Illegal type " + argument_types[0]->getName() + " of argument for aggregate function " + name, ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
     return res;
 }

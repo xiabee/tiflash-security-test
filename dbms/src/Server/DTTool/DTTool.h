@@ -27,8 +27,8 @@
 #include <Server/CLIService.h>
 #include <Server/IServer.h>
 #include <Server/RaftConfigParser.h>
-#include <Storages/KVStore/FFI/ProxyFFI.h>
-#include <Storages/KVStore/TMTContext.h>
+#include <Storages/Transaction/ProxyFFI.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <daemon/BaseDaemon.h>
 #include <pingcap/Config.h>
 
@@ -55,7 +55,6 @@ struct InspectArgs
 {
     bool check;
     bool dump_columns;
-    bool dump_all_columns;
     size_t file_id;
     std::string workdir;
 };
@@ -150,7 +149,10 @@ public:
         global_context.reset();
     }
 
-    ContextPtr getContext() { return global_context; }
+    ContextPtr getContext()
+    {
+        return global_context;
+    }
 };
 } // namespace detail
 

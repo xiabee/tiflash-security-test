@@ -224,10 +224,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -248,11 +245,7 @@ public:
         const auto * ptr = checkAndGetDataType<DataTypeFixedString>(arguments[0].get());
         if (!ptr || ptr->getN() != ipv6_bytes_length)
             throw Exception(
-                fmt::format(
-                    "Illegal type {} of argument 1 of function {}, expected FixedString({})",
-                    arguments[0]->getName(),
-                    getName(),
-                    ipv6_bytes_length),
+                fmt::format("Illegal type {} of argument 1 of function {}, expected FixedString({})", arguments[0]->getName(), getName(), ipv6_bytes_length),
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         if (!checkDataType<DataTypeUInt8>(arguments[1].get()))
@@ -285,50 +278,35 @@ public:
         {
             if (col_in->getN() != ipv6_bytes_length)
                 throw Exception(
-                    fmt::format(
-                        "Illegal type {} of column {} argument of function {}, expected FixedString({})",
-                        col_type_name.type->getName(),
-                        col_in->getName(),
-                        getName(),
-                        ipv6_bytes_length),
+                    fmt::format("Illegal type {} of column {} argument of function {}, expected FixedString({})",
+                                col_type_name.type->getName(),
+                                col_in->getName(),
+                                getName(),
+                                ipv6_bytes_length),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-            const auto * ipv6_zeroed_tail_bytes
-                = checkAndGetColumnConst<ColumnVector<UInt8>>(col_ipv6_zeroed_tail_bytes.get());
+            const auto * ipv6_zeroed_tail_bytes = checkAndGetColumnConst<ColumnVector<UInt8>>(col_ipv6_zeroed_tail_bytes.get());
             if (!ipv6_zeroed_tail_bytes)
                 throw Exception(
-                    fmt::format(
-                        "Illegal type {} of argument 2 of function {}",
-                        col_ipv6_zeroed_tail_bytes_type.type->getName(),
-                        getName()),
+                    fmt::format("Illegal type {} of argument 2 of function {}", col_ipv6_zeroed_tail_bytes_type.type->getName(), getName()),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
             auto ipv6_zeroed_tail_bytes_count = ipv6_zeroed_tail_bytes->getValue<UInt8>();
             if (ipv6_zeroed_tail_bytes_count > ipv6_bytes_length)
                 throw Exception(
-                    fmt::format(
-                        "Illegal value for argument 2 {} of function {}",
-                        col_ipv6_zeroed_tail_bytes_type.type->getName(),
-                        getName()),
+                    fmt::format("Illegal value for argument 2 {} of function {}", col_ipv6_zeroed_tail_bytes_type.type->getName(), getName()),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-            const auto * ipv4_zeroed_tail_bytes
-                = checkAndGetColumnConst<ColumnVector<UInt8>>(col_ipv4_zeroed_tail_bytes.get());
+            const auto * ipv4_zeroed_tail_bytes = checkAndGetColumnConst<ColumnVector<UInt8>>(col_ipv4_zeroed_tail_bytes.get());
             if (!ipv4_zeroed_tail_bytes)
                 throw Exception(
-                    fmt::format(
-                        "Illegal type {} of argument 3 of function {}",
-                        col_ipv4_zeroed_tail_bytes_type.type->getName(),
-                        getName()),
+                    fmt::format("Illegal type {} of argument 3 of function {}", col_ipv4_zeroed_tail_bytes_type.type->getName(), getName()),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
             auto ipv4_zeroed_tail_bytes_count = ipv4_zeroed_tail_bytes->getValue<UInt8>();
             if (ipv4_zeroed_tail_bytes_count > ipv6_bytes_length)
                 throw Exception(
-                    fmt::format(
-                        "Illegal value for argument 3 {} of function {}",
-                        col_ipv4_zeroed_tail_bytes_type.type->getName(),
-                        getName()),
+                    fmt::format("Illegal value for argument 3 {} of function {}", col_ipv4_zeroed_tail_bytes_type.type->getName(), getName()),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
             const auto size = col_in->size();
@@ -347,8 +325,7 @@ public:
             for (size_t offset = 0, i = 0; offset < vec_in.size(); offset += ipv6_bytes_length, ++i)
             {
                 const auto * address = &vec_in[offset];
-                UInt8 zeroed_tail_bytes_count
-                    = isIPv4Mapped(address) ? ipv4_zeroed_tail_bytes_count : ipv6_zeroed_tail_bytes_count;
+                UInt8 zeroed_tail_bytes_count = isIPv4Mapped(address) ? ipv4_zeroed_tail_bytes_count : ipv6_zeroed_tail_bytes_count;
                 cutAddress(address, pos, zeroed_tail_bytes_count);
                 offsets_res[i] = pos - begin;
             }
@@ -359,10 +336,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 
@@ -565,10 +539,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -796,10 +767,7 @@ class FunctionIPv4NumToString : public IFunction
 {
 public:
     static constexpr auto name = Name::name;
-    static FunctionPtr create(const Context &)
-    {
-        return std::make_shared<FunctionIPv4NumToString<mask_tail_octets, Name>>();
-    }
+    static FunctionPtr create(const Context &) { return std::make_shared<FunctionIPv4NumToString<mask_tail_octets, Name>>(); }
 
     String getName() const override { return name; }
 
@@ -810,10 +778,7 @@ public:
     {
         if (!checkDataType<DataTypeUInt32>(&*arguments[0]))
             throw Exception(
-                fmt::format(
-                    "Illegal type {} of argument of function {}, expected UInt32",
-                    arguments[0]->getName(),
-                    getName()),
+                fmt::format("Illegal type {} of argument of function {}, expected UInt32", arguments[0]->getName(), getName()),
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeString>();
@@ -852,10 +817,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -931,10 +893,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -1052,10 +1011,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -1104,10 +1060,7 @@ public:
         }
         else
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 
@@ -1323,10 +1276,7 @@ public:
             return;
 
         throw Exception(
-            fmt::format(
-                "Illegal column {} of argument of function {}",
-                block.getByPosition(arguments[0]).column->getName(),
-                getName()),
+            fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
             ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -1416,10 +1366,7 @@ public:
         else
         {
             throw Exception(
-                fmt::format(
-                    "Illegal column {} of argument of function {}",
-                    block.getByPosition(arguments[0]).column->getName(),
-                    getName()),
+                fmt::format("Illegal column {} of argument of function {}", block.getByPosition(arguments[0]).column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
         }
     }

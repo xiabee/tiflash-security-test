@@ -83,9 +83,15 @@ public:
     void kill();
 
     /// Cancellation request has been received.
-    bool isCancelled() const { return is_cancelled; }
+    bool isCancelled() const
+    {
+        return is_cancelled;
+    }
 
-    static BaseDaemon & instance() { return dynamic_cast<BaseDaemon &>(Poco::Util::Application::instance()); }
+    static BaseDaemon & instance()
+    {
+        return dynamic_cast<BaseDaemon &>(Poco::Util::Application::instance());
+    }
 
     /// return none if daemon doesn't exist, reference to the daemon otherwise
     static std::optional<std::reference_wrapper<BaseDaemon>> tryGetInstance() { return tryGetInstance<BaseDaemon>(); }
@@ -103,12 +109,7 @@ public:
     /// root_path is by default one_min
     /// key - better to group by meaning. For example "meminfo.cached" or "meminfo.free", "meminfo.total"
     template <class T>
-    void writeToGraphite(
-        const std::string & key,
-        const T & value,
-        const std::string & config_name = DEFAULT_GRAPHITE_CONFIG_NAME,
-        time_t timestamp = 0,
-        const std::string & custom_root_path = "")
+    void writeToGraphite(const std::string & key, const T & value, const std::string & config_name = DEFAULT_GRAPHITE_CONFIG_NAME, time_t timestamp = 0, const std::string & custom_root_path = "")
     {
         auto * writer = getGraphiteWriter(config_name);
         if (writer)
@@ -116,11 +117,7 @@ public:
     }
 
     template <class T>
-    void writeToGraphite(
-        const GraphiteWriter::KeyValueVector<T> & key_vals,
-        const std::string & config_name = DEFAULT_GRAPHITE_CONFIG_NAME,
-        time_t timestamp = 0,
-        const std::string & custom_root_path = "")
+    void writeToGraphite(const GraphiteWriter::KeyValueVector<T> & key_vals, const std::string & config_name = DEFAULT_GRAPHITE_CONFIG_NAME, time_t timestamp = 0, const std::string & custom_root_path = "")
     {
         auto * writer = getGraphiteWriter(config_name);
         if (writer)
@@ -128,10 +125,7 @@ public:
     }
 
     template <class T>
-    void writeToGraphite(
-        const GraphiteWriter::KeyValueVector<T> & key_vals,
-        const std::chrono::system_clock::time_point & current_time,
-        const std::string & custom_root_path)
+    void writeToGraphite(const GraphiteWriter::KeyValueVector<T> & key_vals, const std::chrono::system_clock::time_point & current_time, const std::string & custom_root_path)
     {
         auto * writer = getGraphiteWriter();
         if (writer)
@@ -145,7 +139,10 @@ public:
         return nullptr;
     }
 
-    std::optional<size_t> getLayer() const { return layer; }
+    std::optional<size_t> getLayer() const
+    {
+        return layer;
+    }
 
 protected:
     virtual void logRevision() const;

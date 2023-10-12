@@ -16,13 +16,11 @@
 
 #include <Core/Block.h>
 #include <Core/NamesAndTypes.h>
-#include <DataStreams/RuntimeFilter.h>
 #include <DataTypes/IDataType.h>
-#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/JoinUtils.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
-#include <TiDB/Collation/Collator.h>
+#include <Storages/Transaction/Collator.h>
 #include <tipb/executor.pb.h>
 
 #include <functional>
@@ -107,8 +105,7 @@ struct JoinNonEqualConditions
         if (isNullAwareSemiFamily(kind))
         {
             if unlikely (null_aware_eq_cond_name.empty() || null_aware_eq_cond_expr == nullptr)
-                return "null-aware semi join does not have null_aware_eq_cond_name or null_aware_eq_cond_expr is "
-                       "nullptr";
+                return "null-aware semi join does not have null_aware_eq_cond_name or null_aware_eq_cond_expr is nullptr";
             if unlikely (!other_eq_cond_from_in_name.empty())
                 return "null-aware semi join should not have other_eq_cond_from_in_name";
         }
@@ -134,17 +131,9 @@ struct TiFlashJoin
     ASTTableJoin::Strictness strictness;
 
     /// (cartesian) (anti) left outer semi join.
-    bool isLeftOuterSemiFamily() const
-    {
-        return join.join_type() == tipb::JoinType::TypeLeftOuterSemiJoin
-            || join.join_type() == tipb::JoinType::TypeAntiLeftOuterSemiJoin;
-    }
+    bool isLeftOuterSemiFamily() const { return join.join_type() == tipb::JoinType::TypeLeftOuterSemiJoin || join.join_type() == tipb::JoinType::TypeAntiLeftOuterSemiJoin; }
 
-    bool isSemiJoin() const
-    {
-        return join.join_type() == tipb::JoinType::TypeSemiJoin || join.join_type() == tipb::JoinType::TypeAntiSemiJoin
-            || isLeftOuterSemiFamily();
-    }
+    bool isSemiJoin() const { return join.join_type() == tipb::JoinType::TypeSemiJoin || join.join_type() == tipb::JoinType::TypeAntiSemiJoin || isLeftOuterSemiFamily(); }
 
     const google::protobuf::RepeatedPtrField<tipb::Expr> & getBuildJoinKeys() const
     {
@@ -166,10 +155,7 @@ struct TiFlashJoin
         return build_side_index == 0 ? join.right_conditions() : join.left_conditions();
     }
 
-    bool isTiFlashLeftOuterJoin() const
-    {
-        return kind == ASTTableJoin::Kind::LeftOuter || kind == ASTTableJoin::Kind::Cross_LeftOuter;
-    }
+    bool isTiFlashLeftOuterJoin() const { return kind == ASTTableJoin::Kind::LeftOuter || kind == ASTTableJoin::Kind::Cross_LeftOuter; }
 
     /// Cross_RightOuter join will be converted to Cross_LeftOuter join, so no need to check Cross_RightOuter
     bool isTiFlashRightOuterJoin() const { return kind == ASTTableJoin::Kind::RightOuter; }
@@ -178,7 +164,7 @@ struct TiFlashJoin
     /// return "" for everything else.
     String genMatchHelperName(const Block & header1, const Block & header2) const;
 
-    /// return a name that is unique in header1 and header2 for right semi/anti/outer joins that has_other_condition,
+    /// return a name that is unique in header1 and header2 for right semi/anti joins that has_other_condition,
     /// return "" for everything else.
     String genFlagMappedEntryHelperName(const Block & header1, const Block & header2, bool has_other_condition) const;
 
@@ -211,11 +197,6 @@ struct TiFlashJoin
         const Block & left_input_header,
         const Block & right_input_header,
         const ExpressionActionsPtr & probe_prepare_join_actions) const;
-
-    std::vector<RuntimeFilterPtr> genRuntimeFilterList(
-        const Context & context,
-        const Block & input_header,
-        const LoggerPtr & log);
 };
 
 /// @join_prepare_expr_actions: generates join key columns and join filter column

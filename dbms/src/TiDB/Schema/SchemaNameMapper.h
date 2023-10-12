@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/TiDB.h>
 
 namespace DB
 {
@@ -46,18 +46,11 @@ struct SchemaNameMapper
         return keyspace_id == NullspaceID ? name : KEYSPACE_PREFIX.data() + std::to_string(keyspace_id) + "_" + name;
     }
 
-    virtual String mapDatabaseName(DatabaseID db_id, KeyspaceID keyspace_id) const
-    {
-        auto db_name = DATABASE_PREFIX + std::to_string(db_id);
-        return map2Keyspace(keyspace_id, db_name);
-    }
-
     virtual String mapDatabaseName(const TiDB::DBInfo & db_info) const
     {
         auto db_name = DATABASE_PREFIX + std::to_string(db_info.id);
         return map2Keyspace(db_info.keyspace_id, db_name);
     }
-
     virtual String displayDatabaseName(const TiDB::DBInfo & db_info) const
     {
         return map2Keyspace(db_info.keyspace_id, db_info.name);
@@ -76,22 +69,17 @@ struct SchemaNameMapper
     // Only use for logging / debugging
     virtual String debugDatabaseName(const TiDB::DBInfo & db_info) const
     {
-        return map2Keyspace(db_info.keyspace_id, db_info.name);
+        auto db_name = db_info.name + "(" + std::to_string(db_info.id) + ")";
+        return map2Keyspace(db_info.keyspace_id, db_name);
     }
     virtual String debugTableName(const TiDB::TableInfo & table_info) const
     {
-        return map2Keyspace(table_info.keyspace_id, table_info.name);
+        auto table_name = table_info.name + "(" + std::to_string(table_info.id) + ")";
+        return map2Keyspace(table_info.keyspace_id, table_name);
     }
     virtual String debugCanonicalName(const TiDB::DBInfo & db_info, const TiDB::TableInfo & table_info) const
     {
         return debugDatabaseName(db_info) + "." + debugTableName(table_info);
-    }
-
-    virtual String debugCanonicalName(const TiDB::TableInfo & table_info, DatabaseID db_id, KeyspaceID keyspace_id)
-        const
-    {
-        auto db_name = DATABASE_PREFIX + std::to_string(db_id);
-        return map2Keyspace(keyspace_id, db_name) + "." + debugTableName(table_info);
     }
 };
 

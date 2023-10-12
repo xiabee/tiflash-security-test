@@ -33,10 +33,10 @@ public:
     {}
 
     void write(TrackedMppDataPacketPtr && data, size_t index);
-    void forceWrite(TrackedMppDataPacketPtr && data, size_t index);
+    void nonBlockingWrite(TrackedMppDataPacketPtr && data, size_t index);
 
     void write(tipb::SelectResponse & response, size_t index);
-    void forceWrite(tipb::SelectResponse & response, size_t index);
+    void nonBlockingWrite(tipb::SelectResponse & response, size_t index);
 
     /// this is a execution summary writing.
     /// only return meaningful execution summary for the first tunnel,
@@ -56,12 +56,18 @@ public:
 
     uint16_t getPartitionNum() const { return tunnels.size(); }
 
-    int getExternalThreadCnt() { return external_thread_cnt; }
-    size_t getLocalTunnelCnt() { return local_tunnel_cnt; }
+    int getExternalThreadCnt()
+    {
+        return external_thread_cnt;
+    }
+    size_t getLocalTunnelCnt()
+    {
+        return local_tunnel_cnt;
+    }
 
     const std::vector<TunnelPtr> & getTunnels() const { return tunnels; }
 
-    bool isWritable() const;
+    bool isReadyForWrite() const;
 
     bool isLocal(size_t index) const;
 

@@ -63,7 +63,10 @@ public:
         futures.push_back(DynamicThreadPool::global_instance->schedule(propagate_memory_tracker, std::move(job)));
     }
 
-    void wait() override { waitTasks(futures); }
+    void wait() override
+    {
+        waitTasks(futures);
+    }
 
 protected:
     std::vector<std::future<void>> futures;
@@ -84,9 +87,15 @@ public:
         t.detach();
     }
 
-    void wait() override { waitAndClear(); }
+    void wait() override
+    {
+        waitAndClear();
+    }
 
-    ~RawThreadManager() override { waitAndClear(); }
+    ~RawThreadManager() override
+    {
+        waitAndClear();
+    }
 
 protected:
     void waitAndClear()
@@ -111,7 +120,10 @@ public:
         pool.schedule(wrapInvocable(propagate_memory_tracker, std::move(job)));
     }
 
-    void wait() override { pool.wait(); }
+    void wait() override
+    {
+        pool.wait();
+    }
 
 protected:
     legacy::ThreadPool pool;

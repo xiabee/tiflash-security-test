@@ -26,27 +26,23 @@
 
 namespace DB
 {
-class BatchCoprocessorHandler
+class BatchCoprocessorHandler : public CoprocessorHandler
 {
 public:
-    BatchCoprocessorHandler(
-        CoprocessorContext & cop_context_,
-        const coprocessor::BatchRequest * cop_request_,
-        ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer_);
+    BatchCoprocessorHandler(CoprocessorContext & cop_context_, const coprocessor::BatchRequest * cop_request_, ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer_);
 
-    grpc::Status execute();
+    ~BatchCoprocessorHandler() = default;
 
-protected:
-    grpc::Status recordError(grpc::StatusCode err_code, const String & err_msg);
+    grpc::Status execute() override;
 
 protected:
-    CoprocessorContext & cop_context;
+    grpc::Status recordError(grpc::StatusCode err_code, const String & err_msg) override;
 
+protected:
     const coprocessor::BatchRequest * cop_request;
-    grpc::ServerWriter<coprocessor::BatchResponse> * writer;
+    ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer;
 
-    const String resource_group_name;
-    const LoggerPtr log;
+    ::coprocessor::BatchResponse err_response;
 };
 
 using BatchCopHandlerPtr = std::shared_ptr<BatchCoprocessorHandler>;

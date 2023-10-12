@@ -26,7 +26,7 @@
 #include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Poco/Net/TCPServerConnection.h>
-#include <Storages/KVStore/Read/RegionLockInfo.h>
+#include <Storages/Transaction/RegionLockInfo.h>
 
 #include "IServer.h"
 
@@ -75,9 +75,15 @@ struct QueryState
     std::unique_ptr<TimeoutSetter> timeout_setter;
 
 
-    void reset() { *this = QueryState(); }
+    void reset()
+    {
+        *this = QueryState();
+    }
 
-    bool empty() { return is_empty; }
+    bool empty()
+    {
+        return is_empty;
+    }
 };
 
 

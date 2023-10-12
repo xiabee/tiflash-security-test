@@ -59,7 +59,8 @@ public:
         , config(config_)
         , name(std::move(name_))
         , log(log_)
-    {}
+    {
+    }
 
     ~PageEntriesVersionSetWithDelta()
     {
@@ -153,11 +154,7 @@ public:
         std::weak_ptr<BackgroundProcessingPool::TaskInfo> compact_handle;
 
     public:
-        Snapshot(
-            PageEntriesVersionSetWithDelta * vset_,
-            VersionPtr tail_,
-            const String & tracing_id_,
-            BackgroundProcessingPool::TaskHandle handle)
+        Snapshot(PageEntriesVersionSetWithDelta * vset_, VersionPtr tail_, const String & tracing_id_, BackgroundProcessingPool::TaskHandle handle)
             : vset(vset_)
             , view(std::move(tail_))
             , create_thread(Poco::ThreadNumber::get())
@@ -206,9 +203,7 @@ public:
 
     SnapshotPtr getSnapshot(const String & tracing_id, BackgroundProcessingPool::TaskHandle handle);
 
-    std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> gcApply(
-        PageEntriesEdit & edit,
-        bool need_scan_page_ids = true);
+    std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> gcApply(PageEntriesEdit & edit, bool need_scan_page_ids = true);
 
     /// List all PageFile that are used by any version
     std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> //
@@ -281,21 +276,19 @@ private:
 class DeltaVersionEditAcceptor
 {
 public:
-    explicit DeltaVersionEditAcceptor(
-        const PageEntriesView * view_, //
-        const String & name_,
-        bool ignore_invalid_ref_ = false,
-        Poco::Logger * log_ = nullptr);
+    explicit DeltaVersionEditAcceptor(const PageEntriesView * view_, //
+                                      const String & name_,
+                                      bool ignore_invalid_ref_ = false,
+                                      Poco::Logger * log_ = nullptr);
 
     ~DeltaVersionEditAcceptor();
 
     void apply(PageEntriesEdit & edit);
 
-    static void applyInplace(
-        const String & name,
-        const PageEntriesVersionSetWithDelta::VersionPtr & current,
-        const PageEntriesEdit & edit,
-        Poco::Logger * log);
+    static void applyInplace(const String & name,
+                             const PageEntriesVersionSetWithDelta::VersionPtr & current,
+                             const PageEntriesEdit & edit,
+                             Poco::Logger * log);
 
     void gcApply(PageEntriesEdit & edit) { PageEntriesBuilder::gcApplyTemplate(view, edit, current_version); }
 

@@ -17,7 +17,8 @@
 
 namespace DB
 {
-
+namespace
+{
 // Convert cpu time nanoseconds to cpu time millisecond, and round up.
 UInt64 toCPUTimeMillisecond(UInt64 cpu_time_ns)
 {
@@ -28,20 +29,17 @@ UInt64 toCPUTimeMillisecond(UInt64 cpu_time_ns)
     auto ceil_cpu_time_millisecond = ceil(cpu_time_millisecond);
     return ceil_cpu_time_millisecond;
 }
+} // namespace
 
 // 1 ru = 3 millisecond cpu time
-RU cpuTimeToRU(UInt64 cpu_time_ns)
+RU toRU(UInt64 cpu_time_ns)
 {
     if (unlikely(cpu_time_ns == 0))
         return 0;
 
     auto cpu_time_millisecond = toCPUTimeMillisecond(cpu_time_ns);
-    return static_cast<double>(cpu_time_millisecond) / 3;
-}
-
-// 1ru = 64KB
-RU bytesToRU(UInt64 bytes)
-{
-    return static_cast<double>(bytes) / 1024.0 / 64.0;
+    auto ru = static_cast<double>(cpu_time_millisecond) / 3;
+    auto ceil_ru = ceil(ru);
+    return ceil_ru;
 }
 } // namespace DB

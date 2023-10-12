@@ -42,8 +42,7 @@ namespace DB::PS::V2::tests
 {
 using PSPtr = std::shared_ptr<PageStorage>;
 
-class PageStorageMultiPathsTest
-    : public DB::base::TiFlashStorageTestBasic
+class PageStorageMultiPathsTest : public DB::base::TiFlashStorageTestBasic
     , public ::testing::WithParamInterface<size_t>
 {
 public:
@@ -92,17 +91,10 @@ try
 
     size_t number_of_paths = GetParam();
     auto all_paths = getMultiTestPaths(number_of_paths);
-    auto capacity
-        = std::make_shared<PathCapacityMetrics>(0, all_paths, std::vector<size_t>{}, Strings{}, std::vector<size_t>{});
-    StoragePathPool pool
-        = PathPool(all_paths, all_paths, Strings{}, capacity, file_provider).withTable("test", "table", false);
+    auto capacity = std::make_shared<PathCapacityMetrics>(0, all_paths, std::vector<size_t>{}, Strings{}, std::vector<size_t>{});
+    StoragePathPool pool = PathPool(all_paths, all_paths, Strings{}, capacity, file_provider).withTable("test", "table", false);
 
-    storage = std::make_shared<PageStorage>(
-        "test.table",
-        pool.getPSDiskDelegatorMulti("log"),
-        config,
-        file_provider,
-        *bkg_pool);
+    storage = std::make_shared<PageStorage>("test.table", pool.getPSDiskDelegatorMulti("log"), config, file_provider, *bkg_pool);
     storage->restore();
 
     const UInt64 tag = 0;
@@ -140,12 +132,7 @@ try
     }
 
     // restore
-    storage = std::make_shared<PageStorage>(
-        "test.t",
-        pool.getPSDiskDelegatorMulti("log"),
-        config,
-        file_provider,
-        *bkg_pool);
+    storage = std::make_shared<PageStorage>("test.t", pool.getPSDiskDelegatorMulti("log"), config, file_provider, *bkg_pool);
     storage->restore();
 
     // Read again
@@ -201,12 +188,7 @@ try
     }
 
     // Restore. This ensure last write is correct.
-    storage = std::make_shared<PageStorage>(
-        "test.t",
-        pool.getPSDiskDelegatorMulti("log"),
-        config,
-        file_provider,
-        *bkg_pool);
+    storage = std::make_shared<PageStorage>("test.t", pool.getPSDiskDelegatorMulti("log"), config, file_provider, *bkg_pool);
     storage->restore();
 
     // Read again to check all data.

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <DataStreams/IProfilingBlockInputStream.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
@@ -28,7 +28,9 @@ private:
     static constexpr auto NAME = "MockExchangeSender";
 
 public:
-    MockExchangeSenderInputStream(const BlockInputStreamPtr & input, const String & req_id);
+    MockExchangeSenderInputStream(
+        const BlockInputStreamPtr & input,
+        const String & req_id);
 
     String getName() const override { return NAME; }
     Block getHeader() const override;

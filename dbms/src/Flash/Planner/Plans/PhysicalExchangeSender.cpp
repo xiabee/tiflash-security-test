@@ -33,11 +33,10 @@ PhysicalPlanNodePtr PhysicalExchangeSender::build(
     const FineGrainedShuffle & fine_grained_shuffle,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     std::vector<Int64> partition_col_ids = ExchangeSenderInterpreterHelper::genPartitionColIds(exchange_sender);
-    TiDB::TiDBCollators partition_col_collators
-        = ExchangeSenderInterpreterHelper::genPartitionColCollators(exchange_sender);
+    TiDB::TiDBCollators partition_col_collators = ExchangeSenderInterpreterHelper::genPartitionColCollators(exchange_sender);
 
     auto physical_exchange_sender = std::make_shared<PhysicalExchangeSender>(
         executor_id,
@@ -59,20 +58,14 @@ void PhysicalExchangeSender::buildBlockInputStreamImpl(DAGPipeline & pipeline, C
     child->buildBlockInputStream(pipeline, context, max_streams);
 
     auto & dag_context = *context.getDAGContext();
-    restoreConcurrency(
-        pipeline,
-        dag_context.final_concurrency,
-        context.getSettingsRef().max_buffered_bytes_in_executor,
-        log);
+    restoreConcurrency(pipeline, dag_context.final_concurrency, log);
 
     String extra_info;
     if (fine_grained_shuffle.enable())
     {
         extra_info = String(enableFineGrainedShuffleExtraInfo);
         RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Hash, ExchangeType_Name(exchange_type));
-        RUNTIME_CHECK(
-            fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount,
-            fine_grained_shuffle.stream_count);
+        RUNTIME_CHECK(fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount, fine_grained_shuffle.stream_count);
     }
     pipeline.transform([&](auto & stream) {
         // construct writer
@@ -89,14 +82,13 @@ void PhysicalExchangeSender::buildBlockInputStreamImpl(DAGPipeline & pipeline, C
             compression_mode,
             context.getSettingsRef().batch_send_min_limit_compression,
             log->identifier());
-        stream
-            = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
+        stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
         stream->setExtraInfo(extra_info);
     });
 }
 
-void PhysicalExchangeSender::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalExchangeSender::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & context,
     size_t /*concurrency*/)
@@ -104,9 +96,7 @@ void PhysicalExchangeSender::buildPipelineExecGroupImpl(
     if (fine_grained_shuffle.enable())
     {
         RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Hash, ExchangeType_Name(exchange_type));
-        RUNTIME_CHECK(
-            fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount,
-            fine_grained_shuffle.stream_count);
+        RUNTIME_CHECK(fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount, fine_grained_shuffle.stream_count);
     }
 
     group_builder.transform([&](auto & builder) {
@@ -125,8 +115,7 @@ void PhysicalExchangeSender::buildPipelineExecGroupImpl(
             context.getSettingsRef().batch_send_min_limit_compression,
             log->identifier(),
             /*is_async=*/true);
-        builder.setSinkOp(
-            std::make_unique<ExchangeSenderSinkOp>(exec_context, log->identifier(), std::move(response_writer)));
+        builder.setSinkOp(std::make_unique<ExchangeSenderSinkOp>(exec_status, log->identifier(), std::move(response_writer)));
     });
 }
 

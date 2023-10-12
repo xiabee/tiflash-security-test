@@ -14,10 +14,9 @@
 
 #pragma once
 
-#include <Parsers/ASTQueryWithOutput.h>
-#include <Parsers/IAST.h>
-
 #include <iomanip>
+#include <Parsers/IAST.h>
+#include <Parsers/ASTQueryWithOutput.h>
 
 
 namespace DB
@@ -51,23 +50,21 @@ protected:
     {
         if (databases)
         {
-            settings.ostr << (settings.hilite ? hilite_keyword : "") << "SHOW DATABASES"
-                          << (settings.hilite ? hilite_none : "");
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << "SHOW DATABASES" << (settings.hilite ? hilite_none : "");
         }
         else
         {
-            settings.ostr << (settings.hilite ? hilite_keyword : "") << "SHOW TABLES"
-                          << (settings.hilite ? hilite_none : "");
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << "SHOW TABLES" << (settings.hilite ? hilite_none : "");
 
             if (!from.empty())
-                settings.ostr << (settings.hilite ? hilite_keyword : "") << " FROM "
-                              << (settings.hilite ? hilite_none : "") << backQuoteIfNeed(from);
+                settings.ostr << (settings.hilite ? hilite_keyword : "") << " FROM " << (settings.hilite ? hilite_none : "")
+                    << backQuoteIfNeed(from);
 
             if (!like.empty())
-                settings.ostr << (settings.hilite ? hilite_keyword : "") << " LIKE "
-                              << (settings.hilite ? hilite_none : "") << std::quoted(like, '\'');
+                settings.ostr << (settings.hilite ? hilite_keyword : "") << " LIKE " << (settings.hilite ? hilite_none : "")
+                    << std::quoted(like, '\'');
         }
     }
 };
 
-} // namespace DB
+}

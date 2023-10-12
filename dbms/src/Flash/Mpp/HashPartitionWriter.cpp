@@ -22,8 +22,7 @@
 
 namespace DB
 {
-constexpr ssize_t MAX_BATCH_SEND_MIN_LIMIT_MEM_SIZE
-    = 1024 * 1024 * 64; // 64MB: 8192 Rows * 256 Byte/row * 32 partitions
+constexpr ssize_t MAX_BATCH_SEND_MIN_LIMIT_MEM_SIZE = 1024 * 1024 * 64; // 64MB: 8192 Rows * 256 Byte/row * 32 partitions
 const char * HashPartitionWriterLabels[] = {"HashPartitionWriter", "HashPartitionWriter-V1"};
 
 template <class ExchangeWriterPtr>
@@ -93,9 +92,9 @@ void HashPartitionWriter<ExchangeWriterPtr>::flush()
 }
 
 template <class ExchangeWriterPtr>
-bool HashPartitionWriter<ExchangeWriterPtr>::isWritable() const
+bool HashPartitionWriter<ExchangeWriterPtr>::isReadyForWrite() const
 {
-    return writer->isWritable();
+    return writer->isReadyForWrite();
 }
 
 template <class ExchangeWriterPtr>
@@ -168,13 +167,7 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocksV1()
             assertBlockSchema(expected_types, block, HashPartitionWriterLabels[MPPDataPacketV1]);
         }
         auto && dest_tbl_cols = HashBaseWriterHelper::createDestColumns(block, partition_num);
-        HashBaseWriterHelper::scatterColumns(
-            block,
-            partition_col_ids,
-            collators,
-            partition_key_containers,
-            partition_num,
-            dest_tbl_cols);
+        HashBaseWriterHelper::scatterColumns(block, partition_col_ids, collators, partition_key_containers, partition_num, dest_tbl_cols);
         block.clear();
 
         for (size_t part_id = 0; part_id < partition_num; ++part_id)
@@ -192,12 +185,7 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocksV1()
 
     for (size_t part_id = 0; part_id < partition_num; ++part_id)
     {
-        writer->partitionWrite(
-            dest_block_header,
-            std::move(dest_columns[part_id]),
-            part_id,
-            data_codec_version,
-            compression_method);
+        writer->partitionWrite(dest_block_header, std::move(dest_columns[part_id]), part_id, data_codec_version, compression_method);
     }
 
     assert(blocks.empty());
@@ -222,13 +210,7 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocks()
         {
             const auto & block = blocks.back();
             auto dest_tbl_cols = HashBaseWriterHelper::createDestColumns(block, partition_num);
-            HashBaseWriterHelper::scatterColumns(
-                block,
-                partition_col_ids,
-                collators,
-                partition_key_containers,
-                partition_num,
-                dest_tbl_cols);
+            HashBaseWriterHelper::scatterColumns(block, partition_col_ids, collators, partition_key_containers, partition_num, dest_tbl_cols);
             blocks.pop_back();
 
             for (size_t part_id = 0; part_id < partition_num; ++part_id)

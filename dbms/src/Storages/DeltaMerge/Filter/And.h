@@ -16,9 +16,10 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 class And : public LogicalOp
 {
 public:
@@ -31,20 +32,23 @@ public:
 
     String name() override { return "and"; }
 
-    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
+    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override
     {
-        RSResults res(pack_count, RSResult::All); // All && X = X
-        for (const auto & child : children)
+        auto res = children[0]->roughCheck(pack_id, param);
+        if (res == None)
+            return res;
+        for (size_t i = 1; i < children.size(); ++i)
         {
-            const auto tmp = child->roughCheck(start_pack, pack_count, param);
-            std::transform(res.begin(), res.end(), tmp.cbegin(), res.begin(), [](const auto a, const auto b) {
-                return a && b;
-            });
+            res = res && children[i]->roughCheck(pack_id, param);
+            if (res == None)
+                return res;
         }
         return res;
     }
 
-    // TODO: override optimize()
+    // TODO: override applyOptimize()
 };
 
-} // namespace DB::DM
+} // namespace DM
+
+} // namespace DB

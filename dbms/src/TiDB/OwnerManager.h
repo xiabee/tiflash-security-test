@@ -64,13 +64,15 @@ class OwnerManager
 public:
     static constexpr Int64 DefaultOwnerTTL = 60;
 
-    static OwnerManagerPtr createS3GCOwner(
+    static OwnerManagerPtr
+    createS3GCOwner(
         Context & context,
         std::string_view id,
         const Etcd::ClientPtr & client,
         Int64 owner_ttl = DefaultOwnerTTL);
 
-    static OwnerManagerPtr createMockOwner(std::string_view id);
+    static OwnerManagerPtr
+    createMockOwner(std::string_view id);
 
     virtual ~OwnerManager() = default;
 
@@ -120,7 +122,10 @@ public:
 
     void cancel() override;
 
-    void setBeOwnerHook(std::function<void()> && hook) override { be_owner = hook; }
+    void setBeOwnerHook(std::function<void()> && hook) override
+    {
+        be_owner = hook;
+    }
 
     friend class tests::OwnerManagerTest;
 
@@ -181,7 +186,6 @@ private:
     std::mutex mtx_camaign;
     State state = State::Init;
     std::condition_variable cv_camaign;
-    std::unique_ptr<grpc::ClientContext> campaing_ctx;
 
     // A thread for running camaign logic
     std::thread th_camaign;

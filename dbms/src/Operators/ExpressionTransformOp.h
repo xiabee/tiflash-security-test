@@ -26,14 +26,17 @@ class ExpressionTransformOp : public TransformOp
 {
 public:
     ExpressionTransformOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id,
         const ExpressionActionsPtr & expression_)
-        : TransformOp(exec_context_, req_id)
+        : TransformOp(exec_status_, req_id)
         , expression(expression_)
     {}
 
-    String getName() const override { return "ExpressionTransformOp"; }
+    String getName() const override
+    {
+        return "ExpressionTransformOp";
+    }
 
 protected:
     OperatorStatus transformImpl(Block & block) override;

@@ -43,10 +43,8 @@ extern const Metric DT_SnapshotOfDisaggReadNodeRead;
 
 namespace DB::DM::Remote
 {
-RemotePb::RemotePhysicalTable Serializer::serializeTo(
-    const DisaggPhysicalTableReadSnapshotPtr & snap,
-    const DisaggTaskId & task_id,
-    MemTrackerWrapper & mem_tracker_wrapper)
+RemotePb::RemotePhysicalTable
+Serializer::serializeTo(const DisaggPhysicalTableReadSnapshotPtr & snap, const DisaggTaskId & task_id)
 {
     std::shared_lock read_lock(snap->mtx);
     RemotePb::RemotePhysicalTable remote_table;
@@ -60,20 +58,19 @@ RemotePb::RemotePhysicalTable Serializer::serializeTo(
             seg_id,
             seg_task->segment->segmentEpoch(),
             seg_task->segment->getRowKeyRange(),
-            /*read_ranges*/ seg_task->ranges,
-            mem_tracker_wrapper);
+            /*read_ranges*/ seg_task->ranges);
         remote_table.mutable_segments()->Add(std::move(remote_seg));
     }
     return remote_table;
 }
 
-RemotePb::RemoteSegment Serializer::serializeTo(
+RemotePb::RemoteSegment
+Serializer::serializeTo(
     const SegmentSnapshotPtr & snap,
     PageIdU64 segment_id,
     UInt64 segment_epoch,
     const RowKeyRange & segment_range,
-    const RowKeyRanges & read_ranges,
-    MemTrackerWrapper & mem_tracker_wrapper)
+    const RowKeyRanges & read_ranges)
 {
     RemotePb::RemoteSegment remote;
     remote.set_segment_id(segment_id);
@@ -96,10 +93,8 @@ RemotePb::RemoteSegment Serializer::serializeTo(
         RUNTIME_CHECK(startsWith(dt_file->path(), "s3://"), dt_file->path());
         checkpoint_info->set_data_file_id(dt_file->path()); // It should be a key to remote path
     }
-    remote.mutable_column_files_memtable()->CopyFrom(
-        serializeTo(snap->delta->getMemTableSetSnapshot(), mem_tracker_wrapper));
-    remote.mutable_column_files_persisted()->CopyFrom(
-        serializeTo(snap->delta->getPersistedFileSetSnapshot(), mem_tracker_wrapper));
+    remote.mutable_column_files_memtable()->CopyFrom(serializeTo(snap->delta->getMemTableSetSnapshot()));
+    remote.mutable_column_files_persisted()->CopyFrom(serializeTo(snap->delta->getPersistedFileSetSnapshot()));
 
     // serialize the read ranges to read node
     for (const auto & read_range : read_ranges)
@@ -115,7 +110,6 @@ RemotePb::RemoteSegment Serializer::serializeTo(
 SegmentSnapshotPtr Serializer::deserializeSegmentSnapshotFrom(
     const DMContext & dm_context,
     StoreID remote_store_id,
-    KeyspaceID keyspace_id,
     TableID table_id,
     const RemotePb::RemoteSegment & proto)
 {
@@ -129,9 +123,14 @@ SegmentSnapshotPtr Serializer::deserializeSegmentSnapshotFrom(
 
     auto delta_snap = std::make_shared<DeltaValueSnapshot>(CurrentMetrics::DT_SnapshotOfDisaggReadNodeRead);
     delta_snap->is_update = false;
-    delta_snap->mem_table_snap = deserializeColumnFileSet(proto.column_files_memtable(), data_store, segment_range);
-    delta_snap->persisted_files_snap
-        = deserializeColumnFileSet(proto.column_files_persisted(), data_store, segment_range);
+    delta_snap->mem_table_snap = deserializeColumnFileSet(
+        proto.column_files_memtable(),
+        data_store,
+        segment_range);
+    delta_snap->persisted_files_snap = deserializeColumnFileSet(
+        proto.column_files_persisted(),
+        data_store,
+        segment_range);
 
     // Note: At this moment, we still cannot read from `delta_snap->mem_table_snap` and `delta_snap->persisted_files_snap`,
     // because they are constructed using ColumnFileDataProviderNop.
@@ -141,7 +140,6 @@ SegmentSnapshotPtr Serializer::deserializeSegmentSnapshotFrom(
     {
         delta_snap->shared_delta_index = delta_index_cache->getDeltaIndex({
             .store_id = remote_store_id,
-            .keyspace_id = keyspace_id,
             .table_id = table_id,
             .segment_id = proto.segment_id(),
             .segment_epoch = proto.segment_epoch(),
@@ -170,13 +168,11 @@ SegmentSnapshotPtr Serializer::deserializeSegmentSnapshotFrom(
 
     return std::make_shared<SegmentSnapshot>(
         std::move(delta_snap),
-        std::move(stable_snap),
-        Logger::get(dm_context.tracing_id));
+        std::move(stable_snap));
 }
 
-RepeatedPtrField<RemotePb::ColumnFileRemote> Serializer::serializeTo(
-    const ColumnFileSetSnapshotPtr & snap,
-    MemTrackerWrapper & mem_tracker_wrapper)
+RepeatedPtrField<RemotePb::ColumnFileRemote>
+Serializer::serializeTo(const ColumnFileSetSnapshotPtr & snap)
 {
     RepeatedPtrField<RemotePb::ColumnFileRemote> ret;
     ret.Reserve(snap->column_files.size());
@@ -202,7 +198,6 @@ RepeatedPtrField<RemotePb::ColumnFileRemote> Serializer::serializeTo(
         {
             RUNTIME_CHECK_MSG(false, "Unknown ColumnFile, type={}", magic_enum::enum_name(file->getType()));
         }
-        mem_tracker_wrapper.alloc(ret.rbegin()->SpaceUsedLong());
     }
     return ret;
 }
@@ -230,7 +225,10 @@ ColumnFileSetSnapshotPtr Serializer::deserializeColumnFileSet(
         else if (remote_column_file.has_big())
         {
             const auto & big_file = remote_column_file.big();
-            ret->column_files.push_back(deserializeCFBig(big_file, data_store, segment_range));
+            ret->column_files.push_back(deserializeCFBig(
+                big_file,
+                data_store,
+                segment_range));
         }
         else if (remote_column_file.has_in_memory())
         {
@@ -312,9 +310,7 @@ ColumnFileInMemoryPtr Serializer::deserializeCFInMemory(const RemotePb::ColumnFi
     return std::make_shared<ColumnFileInMemory>(schema, cache);
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeTo(
-    const ColumnFileTiny & cf_tiny,
-    IColumnFileDataProviderPtr data_provider)
+RemotePb::ColumnFileRemote Serializer::serializeTo(const ColumnFileTiny & cf_tiny, IColumnFileDataProviderPtr data_provider)
 {
     RemotePb::ColumnFileRemote ret;
     auto * remote_tiny = ret.mutable_tiny();

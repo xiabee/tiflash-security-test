@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Executor/PipelineExecutorContext.h>
+#include <Flash/Executor/PipelineExecutorStatus.h>
 #include <Flash/Executor/QueryExecutor.h>
 #include <Flash/Executor/ResultQueue.h>
 
@@ -25,8 +25,6 @@ class Context;
 class Pipeline;
 using PipelinePtr = std::shared_ptr<Pipeline>;
 using Pipelines = std::vector<PipelinePtr>;
-
-class AutoSpillTrigger;
 
 /**
  * PipelineExecutor is the implementation of the pipeline-based execution model.
@@ -56,10 +54,9 @@ class PipelineExecutor : public QueryExecutor
 public:
     PipelineExecutor(
         const MemoryTrackerPtr & memory_tracker_,
-        AutoSpillTrigger * auto_spill_trigger,
-        const RegisterOperatorSpillContext & register_operator_spill_context,
         Context & context_,
-        const String & req_id);
+        const String & req_id,
+        const PipelinePtr & root_pipeline_);
 
     String toString() const override;
 
@@ -81,11 +78,11 @@ private:
 
     void wait();
 
-    void consume(ResultHandler & result_handler);
+    void consume(const ResultQueuePtr & result_queue, ResultHandler && result_handler);
 
 private:
     PipelinePtr root_pipeline;
 
-    PipelineExecutorContext exec_context;
+    PipelineExecutorStatus status;
 };
 } // namespace DB

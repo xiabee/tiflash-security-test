@@ -32,8 +32,10 @@ private:
 public:
     void loadFromConfig(Poco::Util::AbstractConfiguration & config) override;
 
-    UserPtr authorizeAndGetUser(const String & user_name, const String & password, const Poco::Net::IPAddress & address)
-        const override;
+    UserPtr authorizeAndGetUser(
+        const String & user_name,
+        const String & password,
+        const Poco::Net::IPAddress & address) const override;
 
     UserPtr getUser(const String & user_name) const override;
 

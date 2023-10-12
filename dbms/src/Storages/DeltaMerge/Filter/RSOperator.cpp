@@ -29,9 +29,10 @@
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/Filter/Unsupported.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 // clang-format off
 RSOperatorPtr createAnd(const RSOperators & children)                                           { return std::make_shared<And>(children); }
 RSOperatorPtr createEqual(const Attr & attr, const Field & value)                               { return std::make_shared<Equal>(attr, value); }
@@ -49,5 +50,5 @@ RSOperatorPtr createOr(const RSOperators & children)                            
 RSOperatorPtr createIsNull(const Attr & attr)                                                   { return std::make_shared<IsNull>(attr);}
 RSOperatorPtr createUnsupported(const String & content, const String & reason, bool is_not)     { return std::make_shared<Unsupported>(content, reason, is_not); }
 // clang-format on
-
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

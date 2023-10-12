@@ -16,7 +16,7 @@
 
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 
 #include <map>
 #include <set>
@@ -35,15 +35,14 @@ struct TableInfo;
 }
 namespace DB
 {
+std::tuple<NamesAndTypes, Strings> parseColumnsFromTableInfo(const TiDB::TableInfo & table_info);
+
 constexpr char tmpNamePrefix[] = "_tiflash_tmp_";
 
 struct TmpTableNameGenerator
 {
     using TableName = std::pair<String, String>;
-    TableName operator()(const TableName & name)
-    {
-        return std::make_pair(name.first, String(tmpNamePrefix) + name.second);
-    }
+    TableName operator()(const TableName & name) { return std::make_pair(name.first, String(tmpNamePrefix) + name.second); }
 };
 
 struct TmpColNameGenerator

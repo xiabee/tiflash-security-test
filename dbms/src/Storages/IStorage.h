@@ -37,9 +37,6 @@ using BlockOutputStreamPtr = std::shared_ptr<IBlockOutputStream>;
 using BlockInputStreamPtr = std::shared_ptr<IBlockInputStream>;
 using BlockInputStreams = std::vector<BlockInputStreamPtr>;
 
-class PipelineExecutorContext;
-class PipelineExecGroupBuilder;
-
 class ASTCreateQuery;
 
 class IStorage;
@@ -59,8 +56,7 @@ class AlterCommands;
   * - data storage structure (compression, etc.)
   * - concurrent access to data (locks, etc.)
   */
-class IStorage
-    : public std::enable_shared_from_this<IStorage>
+class IStorage : public std::enable_shared_from_this<IStorage>
     , private boost::noncopyable
     , public ITableDeclaration
 {
@@ -94,15 +90,11 @@ public:
     /// that table will be not dropped while you holding this lock. It's used in
     /// variety of cases starting from SELECT queries to background merges in
     /// MergeTree.
-    TableLockHolder lockForShare(
-        const String & query_id,
-        const std::chrono::milliseconds & acquire_timeout = std::chrono::milliseconds(0));
+    TableLockHolder lockForShare(const String & query_id, const std::chrono::milliseconds & acquire_timeout = std::chrono::milliseconds(0));
 
     /// Lock table for alter. This lock must be acuqired in ALTER queries to be
     /// sure, that we execute only one simultaneous alter. Doesn't affect share lock.
-    TableLockHolder lockForAlter(
-        const String & query_id,
-        const std::chrono::milliseconds & acquire_timeout = std::chrono::milliseconds(0));
+    TableLockHolder lockForAlter(const String & query_id, const std::chrono::milliseconds & acquire_timeout = std::chrono::milliseconds(0));
 
     /// Lock table for decoding KV pairs into Blocks.
     /// Mutiple Raft apply threads may decode data in concurrent, we ensure the structure
@@ -143,31 +135,14 @@ public:
       * The Storage schema can be changed during lifetime of the returned input streams, but the data read
       * is guaranteed to be immutable once the input streams are returned.
       */
-    virtual BlockInputStreams read(
-        const Names & /*column_names*/,
-        const SelectQueryInfo & /*query_info*/,
-        const Context & /*context*/,
-        QueryProcessingStage::Enum & /*processed_stage*/,
-        size_t /*max_block_size*/,
-        unsigned /*num_streams*/)
+    virtual BlockInputStreams read(const Names & /*column_names*/,
+                                   const SelectQueryInfo & /*query_info*/,
+                                   const Context & /*context*/,
+                                   QueryProcessingStage::Enum & /*processed_stage*/,
+                                   size_t /*max_block_size*/,
+                                   unsigned /*num_streams*/)
     {
-        throw Exception(
-            "Method read(pull model) is not supported by storage " + getName(),
-            ErrorCodes::NOT_IMPLEMENTED);
-    }
-
-    virtual void read(
-        PipelineExecutorContext & /*exec_status*/,
-        PipelineExecGroupBuilder & /*group_builder*/,
-        const Names & /*column_names*/,
-        const SelectQueryInfo & /*query_info*/,
-        const Context & /*context*/,
-        size_t /*max_block_size*/,
-        unsigned /*num_streams*/)
-    {
-        throw Exception(
-            fmt::format("Method read(push model) is not supported by storage {}", getName()),
-            ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method read is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /** Writes the data to a table.
@@ -196,10 +171,7 @@ public:
       * In this function, you need to rename the directory with the data, if any.
       * Called when the table structure is locked for write.
       */
-    virtual void rename(
-        const String & /*new_path_to_db*/,
-        const String & /*new_database_name*/,
-        const String & /*new_table_name*/)
+    virtual void rename(const String & /*new_path_to_db*/, const String & /*new_database_name*/, const String & /*new_table_name*/)
     {
         throw Exception("Method rename is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -208,34 +180,20 @@ public:
       * This method must fully execute the ALTER query, taking care of the locks itself.
       * To update the table metadata on disk, this method should call InterpreterAlterQuery::updateMetadata.
       */
-    virtual void alter(
-        const TableLockHolder &,
-        const AlterCommands & /*params*/,
-        const String & /*database_name*/,
-        const String & /*table_name*/,
-        const Context & /*context*/)
+    virtual void alter(const TableLockHolder &, const AlterCommands & /*params*/, const String & /*database_name*/, const String & /*table_name*/, const Context & /*context*/)
     {
         throw Exception("Method alter is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /** Execute CLEAR COLUMN ... IN PARTITION query which removes column from given partition. */
-    virtual void clearColumnInPartition(
-        const ASTPtr & /*partition*/,
-        const Field & /*column_name*/,
-        const Context & /*context*/)
+    virtual void clearColumnInPartition(const ASTPtr & /*partition*/, const Field & /*column_name*/, const Context & /*context*/)
     {
-        throw Exception(
-            "Method dropColumnFromPartition is not supported by storage " + getName(),
-            ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception("Method dropColumnFromPartition is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     /** Run the query (DROP|DETACH) PARTITION.
       */
-    virtual void dropPartition(
-        const ASTPtr & /*query*/,
-        const ASTPtr & /*partition*/,
-        bool /*detach*/,
-        const Context & /*context*/)
+    virtual void dropPartition(const ASTPtr & /*query*/, const ASTPtr & /*partition*/, bool /*detach*/, const Context & /*context*/)
     {
         throw Exception("Method dropPartition is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -263,10 +221,7 @@ public:
 
     /** Run the FREEZE PARTITION request. That is, create a local backup (snapshot) of data using the `localBackup` function (see localBackup.h)
       */
-    virtual void freezePartition(
-        const ASTPtr & /*partition*/,
-        const String & /*with_name*/,
-        const Context & /*context*/)
+    virtual void freezePartition(const ASTPtr & /*partition*/, const String & /*with_name*/, const Context & /*context*/)
     {
         throw Exception("Method freezePartition is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
@@ -310,10 +265,7 @@ public:
     virtual bool mayBenefitFromIndexForIn(const ASTPtr & /* left_in_operand */) const { return false; }
 
     /// Checks validity of the data
-    virtual bool checkData() const
-    {
-        throw DB::Exception("Check query is not supported for " + getName() + " storage");
-    }
+    virtual bool checkData() const { throw DB::Exception("Check query is not supported for " + getName() + " storage"); }
 
     /// Checks that table could be dropped right now
     /// If it can - returns true

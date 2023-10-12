@@ -23,15 +23,18 @@ class WindowTransformOp : public TransformOp
 {
 public:
     WindowTransformOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id_,
         const WindowDescription & window_description_);
 
-    String getName() const override { return "WindowTransformOp"; }
+    String getName() const override
+    {
+        return "WindowTransformOp";
+    }
+
+    void operateSuffix() override;
 
 protected:
-    void operateSuffixImpl() override;
-
     OperatorStatus transformImpl(Block & block) override;
     OperatorStatus tryOutputImpl(Block & block) override;
 

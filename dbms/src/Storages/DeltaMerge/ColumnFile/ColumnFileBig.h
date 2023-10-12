@@ -46,7 +46,8 @@ private:
         , valid_rows(valid_rows_)
         , valid_bytes(valid_bytes_)
         , segment_range(segment_range_)
-    {}
+    {
+    }
 
     void calculateStat(const DMContext & context);
 
@@ -83,17 +84,15 @@ public:
 
     void serializeMetadata(WriteBuffer & buf, bool save_schema) const override;
 
-    static ColumnFilePersistedPtr deserializeMetadata(
-        const DMContext & context, //
-        const RowKeyRange & segment_range,
-        ReadBuffer & buf);
+    static ColumnFilePersistedPtr deserializeMetadata(const DMContext & context, //
+                                                      const RowKeyRange & segment_range,
+                                                      ReadBuffer & buf);
 
-    static ColumnFilePersistedPtr createFromCheckpoint(
-        DMContext & context, //
-        const RowKeyRange & target_range,
-        ReadBuffer & buf,
-        UniversalPageStoragePtr temp_ps,
-        WriteBatches & wbs);
+    static ColumnFilePersistedPtr createFromCheckpoint(DMContext & context, //
+                                                       const RowKeyRange & target_range,
+                                                       ReadBuffer & buf,
+                                                       UniversalPageStoragePtr temp_ps,
+                                                       WriteBatches & wbs);
 
     String toString() const override
     {
@@ -139,22 +138,11 @@ private:
 
 private:
     void initStream();
-    std::pair<size_t, size_t> readRowsRepeatedly(
-        MutableColumns & output_cols,
-        size_t rows_offset,
-        size_t rows_limit,
-        const RowKeyRange * range);
-    std::pair<size_t, size_t> readRowsOnce(
-        MutableColumns & output_cols,
-        size_t rows_offset,
-        size_t rows_limit,
-        const RowKeyRange * range);
+    std::pair<size_t, size_t> readRowsRepeatedly(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range);
+    std::pair<size_t, size_t> readRowsOnce(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range);
 
 public:
-    ColumnFileBigReader(
-        const DMContext & context_,
-        const ColumnFileBig & column_file_,
-        const ColumnDefinesPtr & col_defs_)
+    ColumnFileBigReader(const DMContext & context_, const ColumnFileBig & column_file_, const ColumnDefinesPtr & col_defs_)
         : context(context_)
         , column_file(column_file_)
         , col_defs(col_defs_)
@@ -179,11 +167,7 @@ public:
         }
     }
 
-    std::pair<size_t, size_t> readRows(
-        MutableColumns & output_cols,
-        size_t rows_offset,
-        size_t rows_limit,
-        const RowKeyRange * range) override;
+    std::pair<size_t, size_t> readRows(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range) override;
 
     Block readNextBlock() override;
 

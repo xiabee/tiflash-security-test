@@ -64,11 +64,7 @@ inline void serializeEntryTo(const PageEntryV3 & entry, WriteBuffer & buf, bool 
     }
 }
 
-inline void deserializeEntryFrom(
-    ReadBuffer & buf,
-    PageEntryV3 & entry,
-    bool has_checkpoint_info,
-    DataFileIdSet * data_file_id_set)
+inline void deserializeEntryFrom(ReadBuffer & buf, PageEntryV3 & entry, bool has_checkpoint_info, DataFileIdSet * data_file_id_set)
 {
     readIntBinary(entry.file_id, buf);
     readIntBinary(entry.offset, buf);
@@ -149,9 +145,7 @@ inline bool isCheckpointInfoExists(UInt32 flags)
 template <typename EditRecord>
 void serializePutTo(const EditRecord & record, WriteBuffer & buf)
 {
-    assert(
-        record.type == EditRecordType::PUT || record.type == EditRecordType::UPSERT
-        || record.type == EditRecordType::VAR_ENTRY || record.type == EditRecordType::UPDATE_DATA_FROM_REMOTE);
+    assert(record.type == EditRecordType::PUT || record.type == EditRecordType::UPSERT || record.type == EditRecordType::VAR_ENTRY || record.type == EditRecordType::UPDATE_DATA_FROM_REMOTE);
 
     writeIntBinary(record.type, buf);
 
@@ -177,15 +171,9 @@ void serializePutTo(const EditRecord & record, WriteBuffer & buf)
 }
 
 template <typename EditType>
-void deserializePutFrom(
-    [[maybe_unused]] const EditRecordType record_type,
-    ReadBuffer & buf,
-    EditType & edit,
-    DataFileIdSet * data_file_id_set)
+void deserializePutFrom([[maybe_unused]] const EditRecordType record_type, ReadBuffer & buf, EditType & edit, DataFileIdSet * data_file_id_set)
 {
-    assert(
-        record_type == EditRecordType::PUT || record_type == EditRecordType::UPSERT
-        || record_type == EditRecordType::VAR_ENTRY || record_type == EditRecordType::UPDATE_DATA_FROM_REMOTE);
+    assert(record_type == EditRecordType::PUT || record_type == EditRecordType::UPSERT || record_type == EditRecordType::VAR_ENTRY || record_type == EditRecordType::UPDATE_DATA_FROM_REMOTE);
 
     UInt32 flags = 0;
     readIntBinary(flags, buf);
@@ -397,9 +385,7 @@ void deserializeFrom(ReadBuffer & buf, EditType & edit, DataFileIdSet * data_fil
             break;
         }
         default:
-            throw Exception(
-                fmt::format("Unknown record type: {}", static_cast<Int32>(record_type)),
-                ErrorCodes::LOGICAL_ERROR);
+            throw Exception(fmt::format("Unknown record type: {}", static_cast<Int32>(record_type)), ErrorCodes::LOGICAL_ERROR);
         }
     }
 }
@@ -492,9 +478,7 @@ PageEntriesEdit Serializer<PageEntriesEdit>::deserializeFrom(std::string_view re
         break;
     }
     default:
-        throw Exception(
-            fmt::format("Unknown version for PageEntriesEdit deser [version={}]", version),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception(fmt::format("Unknown version for PageEntriesEdit deser [version={}]", version), ErrorCodes::LOGICAL_ERROR);
     }
     return edit;
 };

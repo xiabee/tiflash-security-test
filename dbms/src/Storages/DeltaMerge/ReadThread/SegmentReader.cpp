@@ -37,7 +37,10 @@ public:
         t = std::thread(&SegmentReader::run, this);
     }
 
-    void setStop() { stop.store(true, std::memory_order_relaxed); }
+    void setStop()
+    {
+        stop.store(true, std::memory_order_relaxed);
+    }
 
     ~SegmentReader()
     {
@@ -45,7 +48,10 @@ public:
         LOG_DEBUG(log, "Stopped");
     }
 
-    std::thread::id getId() const { return t.get_id(); }
+    std::thread::id getId() const
+    {
+        return t.get_id();
+    }
 
 private:
     void setCPUAffinity()
@@ -74,7 +80,10 @@ private:
 #endif
     }
 
-    bool isStop() { return stop.load(std::memory_order_relaxed); }
+    bool isStop()
+    {
+        return stop.load(std::memory_order_relaxed);
+    }
 
     void readSegments()
     {
@@ -99,12 +108,7 @@ private:
             }
             if (read_count <= 0)
             {
-                LOG_DEBUG(
-                    log,
-                    "All finished, pool_ids={} segment_id={} read_count={}",
-                    merged_task->getPoolIds(),
-                    merged_task->getSegmentId(),
-                    read_count);
+                LOG_DEBUG(log, "All finished, pool_ids={} segment_id={} read_count={}", merged_task->getPoolIds(), merged_task->getSegmentId(), read_count);
             }
             // If `merged_task` is pushed back to `MergedTaskPool`, it can be accessed by another read thread if it is scheduled.
             // So do not push back to `MergedTaskPool` when exception happened since current read thread can still access to this `merged_task` object and set exception message to it.

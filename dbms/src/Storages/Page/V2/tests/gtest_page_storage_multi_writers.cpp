@@ -118,7 +118,8 @@ public:
         , bytes_written(0)
         , pages_written(0)
         , ctx(ctx_)
-    {}
+    {
+    }
 
     static void setApproxPageSize(size_t size_kb)
     {
@@ -198,7 +199,8 @@ public:
         , pages_read(0)
         , bytes_read(0)
         , ctx(ctx_)
-    {}
+    {
+    }
 
     void run() override
     {
@@ -295,13 +297,7 @@ struct StressTimeout
 // A full set of writers, readers, gc.
 struct Suit
 {
-    Suit(
-        TestContext & ctx_,
-        PSPtr storage_,
-        size_t num_writers_,
-        size_t num_readers_,
-        UInt64 gc_interval_sec,
-        UInt64 cancel_sec_)
+    Suit(TestContext & ctx_, PSPtr storage_, size_t num_writers_, size_t num_readers_, UInt64 gc_interval_sec, UInt64 cancel_sec_)
         : ctx(ctx_)
         , storage(storage_)
         , num_writers(num_writers_)
@@ -315,10 +311,9 @@ struct Suit
         , cancel_timer(cancel_sec * 1000)
         , cancel_runner(ctx)
     {
-        LOG_INFO(
-            &Poco::Logger::get("root"),
-            "start running with these threads: W:" + DB::toString(num_writers) + ",R:" + DB::toString(num_readers)
-                + ",Gc:1, config.num_writer_slots:" + DB::toString(storage->config.num_write_slots.get()));
+        LOG_INFO(&Poco::Logger::get("root"),
+                 "start running with these threads: W:" + DB::toString(num_writers) + ",R:" + DB::toString(num_readers)
+                     + ",Gc:1, config.num_writer_slots:" + DB::toString(storage->config.num_write_slots.get()));
     }
 
     void run()

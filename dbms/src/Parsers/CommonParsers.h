@@ -43,12 +43,8 @@ class ParserToken : public IParserBase
 {
 private:
     TokenType token_type;
-
 public:
-    ParserToken(TokenType token_type)
-        : token_type(token_type)
-    {}
-
+    ParserToken(TokenType token_type) : token_type(token_type) {}
 protected:
     const char * getName() const override { return "token"; }
 
@@ -64,4 +60,4 @@ protected:
     }
 };
 
-} // namespace DB
+}

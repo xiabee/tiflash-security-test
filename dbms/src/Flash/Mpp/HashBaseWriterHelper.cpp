@@ -14,7 +14,7 @@
 
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Mpp/HashBaseWriterHelper.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
 
 namespace DB::HashBaseWriterHelper
 {
@@ -43,7 +43,10 @@ std::vector<MutableColumns> createDestColumns(const Block & sample_block, size_t
     return dest_tbl_cols;
 }
 
-void fillSelector(size_t rows, const WeakHash32 & hash, uint32_t part_num, IColumn::Selector & selector)
+void fillSelector(size_t rows,
+                  const WeakHash32 & hash,
+                  uint32_t part_num,
+                  IColumn::Selector & selector)
 {
     // fill selector array with most significant bits of hash values
     const auto & hash_data = hash.getData();
@@ -59,12 +62,11 @@ void fillSelector(size_t rows, const WeakHash32 & hash, uint32_t part_num, IColu
 
 /// For FineGrainedShuffle, the selector algorithm should satisfy the requirement:
 //  the FineGrainedShuffleStreamIndex can be calculated using hash_data and fine_grained_shuffle_stream_count values, without the presence of part_num.
-void fillSelectorForFineGrainedShuffle(
-    size_t rows,
-    const WeakHash32 & hash,
-    uint32_t part_num,
-    uint32_t fine_grained_shuffle_stream_count,
-    IColumn::Selector & selector)
+void fillSelectorForFineGrainedShuffle(size_t rows,
+                                       const WeakHash32 & hash,
+                                       uint32_t part_num,
+                                       uint32_t fine_grained_shuffle_stream_count,
+                                       IColumn::Selector & selector)
 {
     // fill selector array with most significant bits of hash values
     const auto & hash_data = hash.getData();
@@ -75,18 +77,15 @@ void fillSelectorForFineGrainedShuffle(
         selector[i] = hash_data[i]; /// [0, 2^32)
         selector[i] *= part_num; /// [0, part_num * 2^32), selector stores 64 bit values.
         selector[i] >>= 32u; /// [0, part_num)
-        selector[i] = selector[i] * fine_grained_shuffle_stream_count
-            + hash_data[i]
-                % fine_grained_shuffle_stream_count; /// map to [0, part_num * fine_grained_shuffle_stream_count)
+        selector[i] = selector[i] * fine_grained_shuffle_stream_count + hash_data[i] % fine_grained_shuffle_stream_count; /// map to [0, part_num * fine_grained_shuffle_stream_count)
     }
 }
 
-void computeHash(
-    const Block & block,
-    const std::vector<Int64> & partition_col_ids,
-    const TiDB::TiDBCollators & collators,
-    std::vector<String> & partition_key_containers,
-    WeakHash32 & hash)
+void computeHash(const Block & block,
+                 const std::vector<Int64> & partition_col_ids,
+                 const TiDB::TiDBCollators & collators,
+                 std::vector<String> & partition_key_containers,
+                 WeakHash32 & hash)
 {
     size_t rows = block.rows();
     if unlikely (rows == 0)
@@ -102,12 +101,11 @@ void computeHash(
     }
 }
 
-void computeHash(
-    size_t rows,
-    const ColumnRawPtrs & key_columns,
-    const TiDB::TiDBCollators & collators,
-    std::vector<String> & partition_key_containers,
-    WeakHash32 & hash)
+void computeHash(size_t rows,
+                 const ColumnRawPtrs & key_columns,
+                 const TiDB::TiDBCollators & collators,
+                 std::vector<String> & partition_key_containers,
+                 WeakHash32 & hash)
 {
     if unlikely (rows == 0)
         return;
@@ -118,13 +116,12 @@ void computeHash(
         key_columns[i]->updateWeakHash32(hash, collators[i], partition_key_containers[i]);
 }
 
-void scatterColumns(
-    const Block & input_block,
-    const std::vector<Int64> & partition_col_ids,
-    const TiDB::TiDBCollators & collators,
-    std::vector<String> & partition_key_containers,
-    uint32_t bucket_num,
-    std::vector<std::vector<MutableColumnPtr>> & result_columns)
+void scatterColumns(const Block & input_block,
+                    const std::vector<Int64> & partition_col_ids,
+                    const TiDB::TiDBCollators & collators,
+                    std::vector<String> & partition_key_containers,
+                    uint32_t bucket_num,
+                    std::vector<std::vector<MutableColumnPtr>> & result_columns)
 {
     if unlikely (input_block.rows() == 0)
         return;
@@ -138,8 +135,7 @@ void scatterColumns(
     for (size_t col_id = 0; col_id < input_block.columns(); ++col_id)
     {
         // Scatter columns to different partitions
-        std::vector<MutableColumnPtr> part_columns
-            = input_block.getByPosition(col_id).column->scatter(bucket_num, selector);
+        std::vector<MutableColumnPtr> part_columns = input_block.getByPosition(col_id).column->scatter(bucket_num, selector);
         assert(part_columns.size() == bucket_num);
         for (size_t bucket_idx = 0; bucket_idx < bucket_num; ++bucket_idx)
         {
@@ -148,16 +144,15 @@ void scatterColumns(
     }
 }
 
-void scatterColumnsForFineGrainedShuffle(
-    const Block & block,
-    const std::vector<Int64> & partition_col_ids,
-    const TiDB::TiDBCollators & collators,
-    std::vector<String> & partition_key_containers,
-    uint32_t part_num,
-    uint32_t fine_grained_shuffle_stream_count,
-    WeakHash32 & hash,
-    IColumn::Selector & selector,
-    std::vector<IColumn::ScatterColumns> & scattered)
+void scatterColumnsForFineGrainedShuffle(const Block & block,
+                                         const std::vector<Int64> & partition_col_ids,
+                                         const TiDB::TiDBCollators & collators,
+                                         std::vector<String> & partition_key_containers,
+                                         uint32_t part_num,
+                                         uint32_t fine_grained_shuffle_stream_count,
+                                         WeakHash32 & hash,
+                                         IColumn::Selector & selector,
+                                         std::vector<IColumn::ScatterColumns> & scattered)
 {
     if unlikely (block.rows() == 0)
         return;

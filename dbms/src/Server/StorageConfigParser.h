@@ -96,7 +96,7 @@ struct StorageS3Config
     // verbose logging for http requests. Use for debugging
     bool verbose = false;
 
-    bool enable_http_pool = false; // will be removed after testing
+    bool enable_http_pool = true; // will be removed after testing
     bool enable_poco_client = true; // will be removed after testing
 
     String endpoint;
@@ -115,7 +115,6 @@ struct StorageS3Config
     void parse(const String & content);
     void enable(bool check_requirements, const LoggerPtr & log);
     bool isS3Enabled() const;
-    void disable() { is_enabled = false; }
 
     String toString() const;
 };
@@ -161,9 +160,7 @@ public:
 
     Strings getAllNormalPaths() const;
 
-    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(
-        Poco::Util::LayeredConfiguration & config,
-        const LoggerPtr & log);
+    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
 
 private:
     void parseStoragePath(const String & storage_section, const LoggerPtr & log);

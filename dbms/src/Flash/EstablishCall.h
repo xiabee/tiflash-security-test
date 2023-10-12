@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <Common/GRPCQueue.h>
 #include <Common/MPMCQueue.h>
 #include <Common/Stopwatch.h>
 #include <Flash/FlashService.h>
+#include <Flash/Mpp/GRPCSendQueue.h>
 #include <Flash/Mpp/MPPTaskId.h>
 #include <kvproto/tikvpb.grpc.pb.h>
 
@@ -31,17 +31,18 @@ class IAsyncCallData
 public:
     virtual ~IAsyncCallData() = default;
 
+    /// Should return a non-null `grpc_call`.
+    virtual grpc_call * grpcCall() = 0;
+
     /// Attach async sender in order to notify consumer finish msg directly.
     virtual void attachAsyncTunnelSender(const std::shared_ptr<DB::AsyncTunnelSender> &) = 0;
 
     /// The default `GRPCKickFunc` implementation is to push tag into completion queue.
     /// Here return a user-defined `GRPCKickFunc` only for test.
-    virtual std::optional<GRPCKickFunc> getGRPCKickFuncForTest() { return std::nullopt; }
+    virtual std::optional<GRPCKickFunc> getKickFuncForTest() { return std::nullopt; }
 };
 
-class EstablishCallData final
-    : public IAsyncCallData
-    , public GRPCKickTag
+class EstablishCallData : public IAsyncCallData
 {
 public:
     // A state machine used for async grpc api EstablishMPPConnection. When a relative grpc event arrives,
@@ -56,12 +57,20 @@ public:
 
     ~EstablishCallData() override;
 
-    void execute(bool ok) override;
+    void proceed(bool ok);
+
+    grpc_call * grpcCall() override;
 
     void attachAsyncTunnelSender(const std::shared_ptr<DB::AsyncTunnelSender> &) override;
     void startEstablishConnection();
-    void setToWaitingTunnelState() { state = WAIT_TUNNEL; }
-    bool isWaitingTunnelState() { return state == WAIT_TUNNEL; }
+    void setToWaitingTunnelState()
+    {
+        state = WAITING_TUNNEL;
+    }
+    bool isWaitingTunnelState()
+    {
+        return state == WAITING_TUNNEL;
+    }
 
     // Spawn a new EstablishCallData instance to serve new clients while we process the one for this EstablishCallData.
     // The instance will deallocate itself as part of its FINISH state.
@@ -118,10 +127,9 @@ private:
     enum CallStatus
     {
         NEW_REQUEST,
-        WAIT_TUNNEL,
-        WAIT_WRITE,
-        WAIT_POP_FROM_QUEUE,
-        WAIT_WRITE_ERR,
+        WAITING_TUNNEL,
+        PROCESSING,
+        ERR_HANDLE,
         FINISH
     };
     // The current serving state.

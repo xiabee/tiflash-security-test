@@ -52,7 +52,9 @@ public:
             insertDefault();
     }
     void popBack(size_t n) override;
-    ScatterColumns scatter(IColumn::ColumnIndex num_columns, const IColumn::Selector & selector) const override;
+    ScatterColumns scatter(
+        IColumn::ColumnIndex num_columns,
+        const IColumn::Selector & selector) const override;
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override;
 
     void getExtremes(Field &, Field &) const override {}
@@ -104,8 +106,7 @@ public:
         throw Exception("Cannot insert into " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    StringRef serializeValueIntoArena(size_t, Arena &, char const *&, const TiDB::TiDBCollatorPtr &, String &)
-        const override
+    StringRef serializeValueIntoArena(size_t, Arena &, char const *&, const TiDB::TiDBCollatorPtr &, String &) const override
     {
         throw Exception("Cannot serialize from " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }

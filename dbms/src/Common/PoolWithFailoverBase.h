@@ -72,7 +72,8 @@ public:
         , decrease_error_period(decrease_error_period_)
         , shared_pool_states(nested_pools.size())
         , log(log_)
-    {}
+    {
+    }
 
     struct TryResult
     {
@@ -82,7 +83,8 @@ public:
             : entry(std::move(entry_))
             , is_usable(true)
             , is_up_to_date(true)
-        {}
+        {
+        }
 
         void reset()
         {
@@ -146,9 +148,8 @@ protected:
 };
 
 template <typename TNestedPool>
-typename TNestedPool::Entry PoolWithFailoverBase<TNestedPool>::get(
-    const TryGetEntryFunc & try_get_entry,
-    const GetPriorityFunc & get_priority)
+typename TNestedPool::Entry
+PoolWithFailoverBase<TNestedPool>::get(const TryGetEntryFunc & try_get_entry, const GetPriorityFunc & get_priority)
 {
     std::vector<TryResult> results = getMany(1, 1, try_get_entry, get_priority);
     if (results.empty() || results[0].entry.isNull())
@@ -159,7 +160,8 @@ typename TNestedPool::Entry PoolWithFailoverBase<TNestedPool>::get(
 }
 
 template <typename TNestedPool>
-std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult> PoolWithFailoverBase<TNestedPool>::getMany(
+std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult>
+PoolWithFailoverBase<TNestedPool>::getMany(
     size_t min_entries,
     size_t max_entries,
     const TryGetEntryFunc & try_get_entry,
@@ -187,9 +189,12 @@ std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult> PoolWithFailo
     shuffled_pools.reserve(nested_pools.size());
     for (size_t i = 0; i < nested_pools.size(); ++i)
         shuffled_pools.push_back(ShuffledPool{nested_pools[i].get(), &pool_states[i], i, 0});
-    std::sort(shuffled_pools.begin(), shuffled_pools.end(), [](const ShuffledPool & lhs, const ShuffledPool & rhs) {
-        return PoolState::compare(*lhs.state, *rhs.state);
-    });
+    std::sort(
+        shuffled_pools.begin(),
+        shuffled_pools.end(),
+        [](const ShuffledPool & lhs, const ShuffledPool & rhs) {
+            return PoolState::compare(*lhs.state, *rhs.state);
+        });
 
     /// We will try to get a connection from each pool until a connection is produced or max_tries is reached.
     std::vector<TryResult> try_results(shuffled_pools.size());
@@ -199,11 +204,12 @@ std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult> PoolWithFailo
     size_t failed_pools_count = 0;
 
     /// At exit update shared error counts with error counts occured during this call.
-    SCOPE_EXIT({
-        std::lock_guard lock(pool_states_mutex);
-        for (const ShuffledPool & pool : shuffled_pools)
-            shared_pool_states[pool.index].error_count += pool.error_count;
-    });
+    SCOPE_EXIT(
+        {
+            std::lock_guard lock(pool_states_mutex);
+            for (const ShuffledPool & pool : shuffled_pools)
+                shared_pool_states[pool.index].error_count += pool.error_count;
+        });
 
     std::string fail_messages;
     bool finished = false;
@@ -241,11 +247,7 @@ std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult> PoolWithFailo
             }
             else
             {
-                LOG_WARNING(
-                    log,
-                    "Connection failed at try No.{}, reason: {}",
-                    shuffled_pool.error_count + 1,
-                    fail_message);
+                LOG_WARNING(log, "Connection failed at try No.{}, reason: {}", shuffled_pool.error_count + 1, fail_message);
 
                 ++shuffled_pool.error_count;
 
@@ -270,10 +272,13 @@ std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult> PoolWithFailo
         try_results.end());
 
     /// Sort so that preferred items are near the beginning.
-    std::stable_sort(try_results.begin(), try_results.end(), [](const TryResult & left, const TryResult & right) {
-        return std::forward_as_tuple(!left.is_up_to_date, left.staleness)
-            < std::forward_as_tuple(!right.is_up_to_date, right.staleness);
-    });
+    std::stable_sort(
+        try_results.begin(),
+        try_results.end(),
+        [](const TryResult & left, const TryResult & right) {
+            return std::forward_as_tuple(!left.is_up_to_date, left.staleness)
+                < std::forward_as_tuple(!right.is_up_to_date, right.staleness);
+        });
 
     if (up_to_date_count >= min_entries)
     {
@@ -319,7 +324,10 @@ struct PoolWithFailoverBase<TNestedPool>::PoolState
     Int64 priority = 0;
     UInt32 random = 0;
 
-    void randomize() { random = rng(); }
+    void randomize()
+    {
+        random = rng();
+    }
 
     static bool compare(const PoolState & lhs, const PoolState & rhs)
     {
@@ -332,7 +340,8 @@ private:
 };
 
 template <typename TNestedPool>
-typename PoolWithFailoverBase<TNestedPool>::PoolStates PoolWithFailoverBase<TNestedPool>::updatePoolStates()
+typename PoolWithFailoverBase<TNestedPool>::PoolStates
+PoolWithFailoverBase<TNestedPool>::updatePoolStates()
 {
     PoolStates result;
     result.reserve(nested_pools.size());

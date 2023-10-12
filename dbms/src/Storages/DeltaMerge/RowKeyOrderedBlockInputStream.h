@@ -46,12 +46,12 @@ public:
 
     Block getHeader() const override { return header; }
 
-    bool getSkippedRows(size_t & /*skip_rows*/) override
-    {
-        throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED);
-    }
+    bool getSkippedRows(size_t & /*skip_rows*/) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
 
-    size_t skipNextBlock() override { return skipBlock(stable, delta); }
+    size_t skipNextBlock() override
+    {
+        return skipBlock(stable, delta);
+    }
 
     Block readWithFilter(const IColumn::Filter & filter) override
     {

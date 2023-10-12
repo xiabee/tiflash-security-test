@@ -22,10 +22,7 @@ namespace DB::PS::V3
 
 CheckpointProto::ManifestFilePrefix CPManifestFileReader::readPrefix()
 {
-    RUNTIME_CHECK_MSG(
-        read_stage == ReadStage::ReadingPrefix,
-        "unexpected read stage {}",
-        magic_enum::enum_name(read_stage));
+    RUNTIME_CHECK_MSG(read_stage == ReadStage::ReadingPrefix, "unexpected read stage {}", magic_enum::enum_name(read_stage));
 
     CheckpointProto::ManifestFilePrefix ret;
     details::readMessageWithLength(*compressed_reader, ret);
@@ -33,15 +30,11 @@ CheckpointProto::ManifestFilePrefix CPManifestFileReader::readPrefix()
     return ret;
 }
 
-std::optional<universal::PageEntriesEdit> CPManifestFileReader::readEdits(
-    CheckpointProto::StringsInternMap & strings_map)
+std::optional<universal::PageEntriesEdit> CPManifestFileReader::readEdits(CheckpointProto::StringsInternMap & strings_map)
 {
     if (read_stage == ReadStage::ReadingEditsFinished)
         return std::nullopt;
-    RUNTIME_CHECK_MSG(
-        read_stage == ReadStage::ReadingEdits,
-        "unexpected read stage {}",
-        magic_enum::enum_name(read_stage));
+    RUNTIME_CHECK_MSG(read_stage == ReadStage::ReadingEdits, "unexpected read stage {}", magic_enum::enum_name(read_stage));
 
     CheckpointProto::ManifestFileEditsPart part;
     details::readMessageWithLength(*compressed_reader, part);
@@ -66,10 +59,7 @@ std::optional<std::unordered_set<String>> CPManifestFileReader::readLocks()
         return std::nullopt;
     if (read_stage == ReadStage::ReadingEditsFinished)
         read_stage = ReadStage::ReadingLocks;
-    RUNTIME_CHECK_MSG(
-        read_stage == ReadStage::ReadingLocks,
-        "unexpected read stage {}",
-        magic_enum::enum_name(read_stage));
+    RUNTIME_CHECK_MSG(read_stage == ReadStage::ReadingLocks, "unexpected read stage {}", magic_enum::enum_name(read_stage));
 
     CheckpointProto::ManifestFileLocksPart part;
     details::readMessageWithLength(*compressed_reader, part);

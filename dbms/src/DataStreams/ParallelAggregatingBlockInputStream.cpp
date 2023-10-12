@@ -29,17 +29,16 @@ ParallelAggregatingBlockInputStream::ParallelAggregatingBlockInputStream(
     const Aggregator::Params & params_,
     bool final_,
     size_t max_threads_,
-    Int64 max_buffered_bytes_,
     size_t temporary_data_merge_threads_,
-    const String & req_id,
-    const RegisterOperatorSpillContext & register_operator_spill_context)
+    const String & req_id)
     : log(Logger::get(req_id))
-    , max_threads(std::min(inputs.size(), max_threads_))
     , params(params_)
-    , aggregator(params, req_id, max_threads, register_operator_spill_context)
+    , aggregator(params, req_id)
     , final(final_)
-    , max_buffered_bytes(max_buffered_bytes_)
+    , max_threads(std::min(inputs.size(), max_threads_))
     , temporary_data_merge_threads(temporary_data_merge_threads_)
+    , keys_size(params.keys_size)
+    , aggregates_size(params.aggregates_size)
     , handler(*this)
     , processor(inputs, additional_inputs_at_end, max_threads, handler, log)
 {
@@ -97,21 +96,12 @@ Block ParallelAggregatingBlockInputStream::readImpl()
                 {
                     BlockInputStreams merging_streams;
                     for (size_t i = 0; i < merging_buckets->getConcurrency(); ++i)
-                        merging_streams.push_back(std::make_shared<MergingAndConvertingBlockInputStream>(
-                            merging_buckets,
-                            i,
-                            log->identifier()));
-                    impl = std::make_unique<UnionBlockInputStream<>>(
-                        merging_streams,
-                        BlockInputStreams{},
-                        max_threads,
-                        max_buffered_bytes,
-                        log->identifier());
+                        merging_streams.push_back(std::make_shared<MergingAndConvertingBlockInputStream>(merging_buckets, i, log->identifier()));
+                    impl = std::make_unique<UnionBlockInputStream<>>(merging_streams, BlockInputStreams{}, max_threads, log->identifier());
                 }
                 else
                 {
-                    impl
-                        = std::make_unique<MergingAndConvertingBlockInputStream>(merging_buckets, 0, log->identifier());
+                    impl = std::make_unique<MergingAndConvertingBlockInputStream>(merging_buckets, 0, log->identifier());
                 }
             }
         }
@@ -144,15 +134,11 @@ Block ParallelAggregatingBlockInputStream::readImpl()
 
 void ParallelAggregatingBlockInputStream::Handler::onBlock(Block & block, size_t thread_num)
 {
-    auto & data = *parent.many_data[thread_num];
-    auto & agg_process_info = parent.threads_data[thread_num].agg_process_info;
-    agg_process_info.resetBlock(block);
-    do
-    {
-        parent.aggregator.executeOnBlock(agg_process_info, data, thread_num);
-        if (data.need_spill)
-            parent.aggregator.spill(data, thread_num);
-    } while (!agg_process_info.allBlockDataHandled());
+    parent.aggregator.executeOnBlock(
+        block,
+        *parent.many_data[thread_num],
+        parent.threads_data[thread_num].key_columns,
+        parent.threads_data[thread_num].aggregate_columns);
 
     parent.threads_data[thread_num].src_rows += block.rows();
     parent.threads_data[thread_num].src_bytes += block.bytes();
@@ -164,34 +150,28 @@ void ParallelAggregatingBlockInputStream::Handler::onFinishThread(size_t thread_
     {
         /// Flush data in the RAM to disk. So it's easier to unite them later.
         auto & data = *parent.many_data[thread_num];
-        if (data.tryMarkNeedSpill())
-            parent.aggregator.spill(data, thread_num);
+
+        if (data.isConvertibleToTwoLevel())
+            data.convertToTwoLevel();
+
+        if (!data.empty())
+            parent.aggregator.spill(data);
     }
 }
 
 void ParallelAggregatingBlockInputStream::Handler::onFinish()
 {
-    /// no new spill can be triggered
-    parent.aggregator.getAggSpillContext()->finishSpillableStage();
-    bool need_final_spill = false;
-    for (size_t i = 0; i < parent.many_data.size(); ++i)
-    {
-        if (parent.aggregator.getAggSpillContext()->isThreadMarkedForAutoSpill(i))
-        {
-            /// corner case, auto spill is triggered at the last time
-            need_final_spill = true;
-            break;
-        }
-    }
-    if (!parent.isCancelled() && (parent.aggregator.hasSpilledData() || need_final_spill))
+    if (!parent.isCancelled() && parent.aggregator.hasSpilledData())
     {
         /// It may happen that some data has not yet been flushed,
         ///  because at the time of `onFinishThread` call, no data has been flushed to disk, and then some were.
-        for (size_t i = 0; i < parent.many_data.size(); ++i)
+        for (auto & data : parent.many_data)
         {
-            auto & data = parent.many_data[i];
-            if (data->tryMarkNeedSpill())
-                parent.aggregator.spill(*data, i);
+            if (data->isConvertibleToTwoLevel())
+                data->convertToTwoLevel();
+
+            if (!data->empty())
+                parent.aggregator.spill(*data);
         }
     }
 }
@@ -200,11 +180,7 @@ void ParallelAggregatingBlockInputStream::Handler::onException(std::exception_pt
 {
     parent.exceptions[thread_num] = exception;
     Int32 old_value = -1;
-    parent.first_exception_index.compare_exchange_strong(
-        old_value,
-        static_cast<Int32>(thread_num),
-        std::memory_order_seq_cst,
-        std::memory_order_relaxed);
+    parent.first_exception_index.compare_exchange_strong(old_value, static_cast<Int32>(thread_num), std::memory_order_seq_cst, std::memory_order_relaxed);
 
     if (!parent.executed)
         /// use cancel instead of kill to avoid too many useless error message
@@ -218,7 +194,7 @@ void ParallelAggregatingBlockInputStream::execute()
     exceptions.resize(max_threads);
 
     for (size_t i = 0; i < max_threads; ++i)
-        threads_data.emplace_back(&aggregator);
+        threads_data.emplace_back(keys_size, aggregates_size);
     aggregator.initThresholdByAggregatedDataVariantsSize(many_data.size());
 
     LOG_TRACE(log, "Aggregating");
@@ -269,15 +245,11 @@ void ParallelAggregatingBlockInputStream::execute()
     /// If there was no data, and we aggregate without keys, we must return single row with the result of empty aggregation.
     /// To do this, we pass a block with zero rows to aggregate.
     if (total_src_rows == 0 && params.keys_size == 0 && !params.empty_result_for_aggregation_by_empty_set)
-    {
-        auto & data = *many_data[0];
-        auto & agg_process_info = threads_data[0].agg_process_info;
-        agg_process_info.resetBlock(children.at(0)->getHeader());
-        aggregator.executeOnBlock(agg_process_info, data, 0);
-        if (data.need_spill)
-            aggregator.spill(data, 0);
-        assert(agg_process_info.allBlockDataHandled());
-    }
+        aggregator.executeOnBlock(
+            children.at(0)->getHeader(),
+            *many_data[0],
+            threads_data[0].key_columns,
+            threads_data[0].aggregate_columns);
 }
 
 void ParallelAggregatingBlockInputStream::appendInfo(FmtBuffer & buffer) const

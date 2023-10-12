@@ -31,16 +31,14 @@ public:
     using ColStringType = typename TypeTraits<String>::FieldType;
     using ColUInt8Type = typename TypeTraits<UInt8>::FieldType;
 
-    ColumnsWithTypeAndName data{
-        toVec<String>("col0", std::vector<ColStringType>(1000000, "aaaaaaaaaaaaa")),
-        toVec<String>("col1", std::vector<ColStringType>(1000000, "aaaaaaaaaaaaa")),
-        toVec<UInt8>("result", std::vector<ColUInt8Type>{})};
+    ColumnsWithTypeAndName data{toVec<String>("col0", std::vector<ColStringType>(1000000, "aaaaaaaaaaaaa")),
+                                toVec<String>("col1", std::vector<ColStringType>(1000000, "aaaaaaaaaaaaa")),
+                                toVec<UInt8>("result", std::vector<ColUInt8Type>{})};
 
-    ColumnsWithTypeAndName like_data{
-        toVec<String>("col0", std::vector<ColStringType>(1000000, "qwdgefwabchfue")),
-        createConstColumn<String>(1000000, "%abc%"),
-        createConstColumn<Int32>(1000000, static_cast<Int32>('\\')),
-        toVec<UInt8>("result", std::vector<ColUInt8Type>{})};
+    ColumnsWithTypeAndName like_data{toVec<String>("col0", std::vector<ColStringType>(1000000, "qwdgefwabchfue")),
+                                     createConstColumn<String>(1000000, "%abc%"),
+                                     createConstColumn<Int32>(1000000, static_cast<Int32>('\\')),
+                                     toVec<UInt8>("result", std::vector<ColUInt8Type>{})};
 };
 
 class CollationLessBench : public CollationBench
@@ -121,8 +119,6 @@ public:
 BENCH_LESS_COLLATOR(UTF8MB4_BIN);
 BENCH_LESS_COLLATOR(UTF8MB4_GENERAL_CI);
 BENCH_LESS_COLLATOR(UTF8MB4_UNICODE_CI);
-BENCH_LESS_COLLATOR(UTF8MB4_0900_AI_CI);
-BENCH_LESS_COLLATOR(UTF8MB4_0900_BIN);
 BENCH_LESS_COLLATOR(UTF8_BIN);
 BENCH_LESS_COLLATOR(UTF8_GENERAL_CI);
 BENCH_LESS_COLLATOR(UTF8_UNICODE_CI);
@@ -133,8 +129,6 @@ BENCH_LESS_COLLATOR(LATIN1_BIN);
 BENCH_EQ_COLLATOR(UTF8MB4_BIN);
 BENCH_EQ_COLLATOR(UTF8MB4_GENERAL_CI);
 BENCH_EQ_COLLATOR(UTF8MB4_UNICODE_CI);
-BENCH_EQ_COLLATOR(UTF8MB4_0900_AI_CI);
-BENCH_EQ_COLLATOR(UTF8MB4_0900_BIN);
 BENCH_EQ_COLLATOR(UTF8_BIN);
 BENCH_EQ_COLLATOR(UTF8_GENERAL_CI);
 BENCH_EQ_COLLATOR(UTF8_UNICODE_CI);
@@ -145,8 +139,6 @@ BENCH_EQ_COLLATOR(LATIN1_BIN);
 BENCH_LIKE_COLLATOR(UTF8MB4_BIN);
 BENCH_LIKE_COLLATOR(UTF8MB4_GENERAL_CI);
 BENCH_LIKE_COLLATOR(UTF8MB4_UNICODE_CI);
-BENCH_LIKE_COLLATOR(UTF8MB4_0900_AI_CI);
-BENCH_LIKE_COLLATOR(UTF8MB4_0900_BIN);
 BENCH_LIKE_COLLATOR(UTF8_BIN);
 BENCH_LIKE_COLLATOR(UTF8_GENERAL_CI);
 BENCH_LIKE_COLLATOR(UTF8_UNICODE_CI);

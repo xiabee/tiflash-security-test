@@ -22,10 +22,7 @@ namespace DB::PS::V3
 
 void CPManifestFileWriter::writePrefix(const CheckpointProto::ManifestFilePrefix & prefix)
 {
-    RUNTIME_CHECK_MSG(
-        write_stage == WriteStage::WritingPrefix,
-        "unexpected write stage {}",
-        magic_enum::enum_name(write_stage));
+    RUNTIME_CHECK_MSG(write_stage == WriteStage::WritingPrefix, "unexpected write stage {}", magic_enum::enum_name(write_stage));
 
     details::writeMessageWithLength(*compressed_writer, prefix);
     write_stage = WriteStage::WritingEdits;
@@ -101,7 +98,9 @@ void CPManifestFileWriter::writeLocks(const std::unordered_set<String> & lock_fi
     std::sort(
         part.mutable_locks()->begin(),
         part.mutable_locks()->end(),
-        [](const CheckpointProto::LockFile & a, const CheckpointProto::LockFile & b) { return a.name() < b.name(); });
+        [](const CheckpointProto::LockFile & a, const CheckpointProto::LockFile & b) {
+            return a.name() < b.name();
+        });
     details::writeMessageWithLength(*compressed_writer, part);
 
     write_stage = WriteStage::WritingLocks;
