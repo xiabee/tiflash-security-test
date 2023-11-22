@@ -14,8 +14,16 @@
 
 #pragma once
 
-#include <Storages/Transaction/KeyspaceSnapshot.h>
 #include <Storages/Transaction/TiDB.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <pingcap/kv/Snapshot.h>
+#pragma GCC diagnostic pop
+
 #include <common/logger_useful.h>
 
 #include <optional>
@@ -87,17 +95,11 @@ enum class SchemaActionType : Int8
     AlterNoCacheTable = 59,
     CreateTables = 60,
     ActionMultiSchemaChange = 61,
-    ActionFlashbackCluster = 62,
-    ActionRecoverSchema = 63,
-    ActionReorganizePartition = 64,
-    ActionAlterTTLInfo = 65,
-    ActionAlterTTLRemove = 67,
-
 
     // If we supporte new type from TiDB.
     // MaxRecognizedType also needs to be changed.
     // It should always be equal to the maximum supported type + 1
-    MaxRecognizedType = 68,
+    MaxRecognizedType = 62,
 };
 
 struct AffectedOption
@@ -120,7 +122,6 @@ struct SchemaDiff
 
     TableID old_table_id;
     DatabaseID old_schema_id;
-    bool regenerate_schema_map{false};
 
     std::vector<AffectedOption> affected_opts;
 
@@ -129,20 +130,14 @@ struct SchemaDiff
 
 struct SchemaGetter
 {
-    static constexpr Int64 SchemaVersionNotExist = -1;
+    pingcap::kv::Snapshot snap;
 
-    KeyspaceSnapshot snap;
+    Poco::Logger * log;
 
-    KeyspaceID keyspace_id;
-
-    LoggerPtr log;
-
-    SchemaGetter(pingcap::kv::Cluster * cluster_, UInt64 tso_, KeyspaceID keyspace_id_)
-        : snap(keyspace_id_, cluster_, tso_)
-        , keyspace_id(keyspace_id_)
-        , log(Logger::get())
-    {
-    }
+    SchemaGetter(pingcap::kv::Cluster * cluster_, UInt64 tso_)
+        : snap(cluster_, tso_)
+        , log(&Poco::Logger::get("SchemaGetter"))
+    {}
 
     Int64 getVersion();
 
@@ -165,8 +160,6 @@ struct SchemaGetter
     std::vector<TiDB::DBInfoPtr> listDBs();
 
     std::vector<TiDB::TableInfoPtr> listTables(DatabaseID db_id);
-
-    KeyspaceID getKeyspaceID() const { return keyspace_id; }
 };
 
 } // namespace DB

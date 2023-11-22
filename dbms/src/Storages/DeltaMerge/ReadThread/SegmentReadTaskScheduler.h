@@ -78,6 +78,6 @@ private:
     std::atomic<bool> stop;
     std::thread sched_thread;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 } // namespace DB::DM

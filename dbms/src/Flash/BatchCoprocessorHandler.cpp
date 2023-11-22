@@ -14,13 +14,9 @@
 
 #include <Common/TiFlashMetrics.h>
 #include <Flash/BatchCoprocessorHandler.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGDriver.h>
 #include <Flash/Coprocessor/InterpreterDAG.h>
-#include <Flash/Coprocessor/RequestUtils.h>
 #include <Flash/ServiceUtils.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/IStorage.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <TiDB/Schema/SchemaSyncer.h>
@@ -52,8 +48,6 @@ grpc::Status BatchCoprocessorHandler::execute()
 
     try
     {
-        RUNTIME_CHECK_MSG(!cop_context.db_context.getSharedContextDisagg()->isDisaggregatedComputeMode(), "cannot run cop or batchCop request on tiflash_compute node");
-
         switch (cop_request->tp())
         {
         case COP_REQ_TYPE_DAG:
@@ -72,13 +66,11 @@ grpc::Status BatchCoprocessorHandler::execute()
                 tables_regions_info.tableCount(),
                 dag_request.DebugString());
 
-            DAGContext dag_context(
-                dag_request,
-                std::move(tables_regions_info),
-                RequestUtils::deriveKeyspaceID(cop_request->context()),
-                cop_context.db_context.getClientInfo().current_address.toString(),
-                /*is_batch_cop=*/true,
-                Logger::get("BatchCoprocessorHandler"));
+            DAGContext dag_context(dag_request);
+            dag_context.is_batch_cop = true;
+            dag_context.tables_regions_info = std::move(tables_regions_info);
+            dag_context.log = Logger::get("BatchCoprocessorHandler");
+            dag_context.tidb_host = cop_context.db_context.getClientInfo().current_address.toString();
             cop_context.db_context.setDAGContext(&dag_context);
 
             DAGDriver<true> driver(cop_context.db_context, cop_request->start_ts() > 0 ? cop_request->start_ts() : dag_request.start_ts_fallback(), cop_request->schema_ver(), writer);

@@ -30,7 +30,6 @@
 #include <IO/ReadBufferFromPocoSocket.h>
 #include <IO/WriteBufferFromPocoSocket.h>
 #include <IO/copyData.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/Quota.h>
 #include <Interpreters/SharedQueries.h>
 #include <Interpreters/TablesStatus.h>
@@ -178,7 +177,29 @@ void TCPHandler::runImpl()
             state.maybe_compressed_in.reset(); /// For more accurate accounting by MemoryTracker.
 
             /// Processing Query
-            state.io = executeQuery(state.query, query_context, false, state.stage);
+            const Settings & settings = query_context.getSettingsRef();
+            if (settings.shared_query_clients && !state.query_id.empty())
+            {
+                LOG_DEBUG(log, "shared query");
+
+                state.io = query_context.getSharedQueries()->getOrCreateBlockIO(
+                    state.query_id,
+                    settings.shared_query_clients,
+                    [&]() {
+                        return executeQuery(state.query, query_context, false, state.stage);
+                    });
+
+                /// As getOrCreateBlockIO could produce exception, this line must be put after.
+                shared_query_id = state.query_id;
+
+                if (state.io.out)
+                    throw Exception("Insert query is not supported in shared query mode");
+            }
+            else
+            {
+                state.io = executeQuery(state.query, query_context, false, state.stage);
+            }
+
             if (state.io.out)
                 state.need_receive_data_for_insert = true;
 
@@ -200,7 +221,7 @@ void TCPHandler::runImpl()
         catch (LockException & e)
         {
             state.io.onException();
-            lock_info = std::move(e.locks[0].second);
+            lock_info = std::move(e.lock_info);
         }
         catch (RegionException & e)
         {
@@ -418,6 +439,7 @@ void TCPHandler::processOrdinaryQuery()
               */
             if (!block && !isQueryCancelled())
             {
+                sendTotals();
                 sendExtremes();
                 sendProfileInfo();
                 sendProgress();
@@ -467,6 +489,28 @@ void TCPHandler::sendProfileInfo()
         out->next();
     }
 }
+
+
+void TCPHandler::sendTotals()
+{
+    if (auto * input = dynamic_cast<IProfilingBlockInputStream *>(state.io.in.get()))
+    {
+        const Block & totals = input->getTotals();
+
+        if (totals)
+        {
+            initBlockOutput(totals);
+
+            writeVarUInt(Protocol::Server::Totals, *out);
+            writeStringBinary("", *out);
+
+            state.block_out->write(totals);
+            state.maybe_compressed_out->next();
+            out->next();
+        }
+    }
+}
+
 
 void TCPHandler::sendExtremes()
 {

@@ -14,10 +14,19 @@
 
 #pragma once
 
+#include <Common/MPMCQueue.h>
 #include <Common/ThreadManager.h>
+#include <Flash/Coprocessor/CHBlockChunkCodec.h>
+#include <Flash/Coprocessor/ChunkCodec.h>
 #include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
+#include <Flash/Coprocessor/DecodeDetail.h>
 #include <Flash/Mpp/GRPCReceiverContext.h>
+#include <Interpreters/Context.h>
+#include <kvproto/mpp.pb.h>
+#include <tipb/executor.pb.h>
+#include <tipb/select.pb.h>
 
 #include <future>
 #include <mutex>
@@ -25,7 +34,31 @@
 
 namespace DB
 {
-constexpr Int32 batch_packet_count = 16;
+struct ReceivedMessage
+{
+    size_t source_index;
+    String req_info;
+    // shared_ptr<const MPPDataPacket> is copied to make sure error_ptr, resp_ptr and chunks are valid.
+    const std::shared_ptr<DB::TrackedMppDataPacket> packet;
+    const mpp::Error * error_ptr;
+    const String * resp_ptr;
+    std::vector<const String *> chunks;
+
+    // Constructor that move chunks.
+    ReceivedMessage(size_t source_index_,
+                    const String & req_info_,
+                    const std::shared_ptr<DB::TrackedMppDataPacket> & packet_,
+                    const mpp::Error * error_ptr_,
+                    const String * resp_ptr_,
+                    std::vector<const String *> && chunks_)
+        : source_index(source_index_)
+        , req_info(req_info_)
+        , packet(packet_)
+        , error_ptr(error_ptr_)
+        , resp_ptr(resp_ptr_)
+        , chunks(chunks_)
+    {}
+};
 
 struct ExchangeReceiverResult
 {
@@ -81,18 +114,7 @@ enum class ExchangeReceiverState
     CLOSED,
 };
 
-enum class ReceiveStatus
-{
-    empty,
-    ok,
-    eof,
-};
-
-struct ReceiveResult
-{
-    ReceiveStatus recv_status;
-    std::shared_ptr<ReceivedMessage> recv_msg;
-};
+using MsgChannelPtr = std::unique_ptr<MPMCQueue<std::shared_ptr<ReceivedMessage>>>;
 
 template <typename RPCContext>
 class ExchangeReceiverBase
@@ -108,23 +130,15 @@ public:
         size_t max_streams_,
         const String & req_id,
         const String & executor_id,
-        uint64_t fine_grained_shuffle_stream_count,
-        Int32 local_tunnel_version_,
-        const std::vector<RequestAndRegionIDs> & disaggregated_dispatch_reqs_ = {});
+        uint64_t fine_grained_shuffle_stream_count);
 
     ~ExchangeReceiverBase();
 
     void cancel();
+
     void close();
 
-    ReceiveResult receive(size_t stream_id);
-    ReceiveResult nonBlockingReceive(size_t stream_id);
-
-    ExchangeReceiverResult toExchangeReceiveResult(
-        ReceiveResult & recv_result,
-        std::queue<Block> & block_queue,
-        const Block & header,
-        std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
+    const DAGSchema & getOutputSchema() const { return schema; }
 
     ExchangeReceiverResult nextResult(
         std::queue<Block> & block_queue,
@@ -132,13 +146,10 @@ public:
         size_t stream_id,
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
 
-    const DAGSchema & getOutputSchema() const { return schema; }
     size_t getSourceNum() const { return source_num; }
     uint64_t getFineGrainedShuffleStreamCount() const { return enable_fine_grained_shuffle_flag ? output_stream_count : 0; }
+
     int getExternalThreadCnt() const { return thread_count; }
-    std::vector<MsgChannelPtr> & getMsgChannels() { return msg_channels; }
-    MemoryTracker * getMemoryTracker() const { return mem_tracker.get(); }
-    std::atomic<Int64> * getDataSizeInQueue() { return &data_size_in_queue; }
 
 private:
     std::shared_ptr<MemoryTracker> mem_tracker;
@@ -168,9 +179,6 @@ private:
         const String & local_err_msg,
         const LoggerPtr & log);
 
-    void waitAllConnectionDone();
-    void waitLocalConnectionDone(std::unique_lock<std::mutex> & lock);
-
     void finishAllMsgChannels();
     void cancelAllMsgChannels();
 
@@ -180,25 +188,7 @@ private:
         const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
 
-    ReceiveResult receive(
-        size_t stream_id,
-        std::function<MPMCQueueResult(size_t, std::shared_ptr<ReceivedMessage> &)> recv_func);
-
 private:
-    void prepareMsgChannels();
-    void addLocalConnectionNum();
-    void connectionLocalDone();
-    void handleConnectionAfterException();
-
-    void setUpConnectionWithReadLoop(Request && req);
-    void setUpLocalConnections(std::vector<Request> & requests, bool has_remote_conn);
-
-    bool isReceiverForTiFlashStorage()
-    {
-        // If not empty, need to send MPPTask to tiflash_storage.
-        return !disaggregated_dispatch_reqs.empty();
-    }
-
     std::shared_ptr<RPCContext> rpc_context;
 
     const tipb::ExchangeReceiver pb_exchange_receiver;
@@ -207,7 +197,6 @@ private:
     const bool enable_fine_grained_shuffle_flag;
     const size_t output_stream_count;
     const size_t max_buffer_size;
-    Int32 connection_uncreated_num;
 
     std::shared_ptr<ThreadManager> thread_manager;
     DAGSchema schema;
@@ -215,9 +204,7 @@ private:
     std::vector<MsgChannelPtr> msg_channels;
 
     std::mutex mu;
-    std::condition_variable cv;
     /// should lock `mu` when visit these members
-    Int32 live_local_connections;
     Int32 live_connections;
     ExchangeReceiverState state;
     String err_msg;
@@ -226,12 +213,6 @@ private:
 
     bool collected = false;
     int thread_count = 0;
-    Int32 local_tunnel_version;
-
-    std::atomic<Int64> data_size_in_queue;
-
-    // For tiflash_compute node, need to send MPPTask to tiflash_storage node.
-    std::vector<RequestAndRegionIDs> disaggregated_dispatch_reqs;
 };
 
 class ExchangeReceiver : public ExchangeReceiverBase<GRPCReceiverContext>

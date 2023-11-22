@@ -15,7 +15,7 @@
 #pragma once
 
 #include <IO/ReadBuffer.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 
 #include <vector>
 

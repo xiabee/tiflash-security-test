@@ -20,7 +20,7 @@
 #include <DataTypes/DataTypesNumber.h>
 #include <IO/Operators.h>
 #include <IO/WriteBufferFromString.h>
-#include <Interpreters/Context_fwd.h>
+#include <Interpreters/Context.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Range.h>
@@ -113,8 +113,10 @@ inline String genMockCommonHandle(Int64 value, size_t rowkey_column_size)
 class DMTestEnv
 {
 public:
-    static ContextPtr getContext() { return ::DB::tests::TiFlashTestEnv::getContext(); }
-    static ContextPtr getContext(const ::DB::Settings & settings) { return ::DB::tests::TiFlashTestEnv::getContext(settings); }
+    static Context getContext(const ::DB::Settings & settings = DB::Settings())
+    {
+        return ::DB::tests::TiFlashTestEnv::getContext(settings);
+    }
 
     static constexpr const char * pk_name = "_tidb_rowid";
 
@@ -152,7 +154,7 @@ public:
         return "<unknown>";
     }
 
-    static ColumnDefinesPtr getDefaultColumns(PkType pk_type = PkType::HiddenTiDBRowID, bool add_nullable = false)
+    static ColumnDefinesPtr getDefaultColumns(PkType pk_type = PkType::HiddenTiDBRowID)
     {
         // Return [handle, ver, del] column defines
         ColumnDefinesPtr columns = std::make_shared<ColumnDefines>();
@@ -175,10 +177,6 @@ public:
         }
         columns->emplace_back(getVersionColumnDefine());
         columns->emplace_back(getTagColumnDefine());
-        if (add_nullable)
-        {
-            columns->emplace_back(ColumnDefine{1, "Nullable(UInt64)", DataTypeFactory::instance().get("Nullable(UInt64)")});
-        }
         return columns;
     }
 
@@ -290,8 +288,7 @@ public:
                                          bool is_common_handle = false,
                                          size_t rowkey_column_size = 1,
                                          bool with_internal_columns = true,
-                                         bool is_deleted = false,
-                                         bool with_nullable_uint64 = false)
+                                         bool is_deleted = false)
     {
         Block block;
         const size_t num_rows = (end - beg);
@@ -340,35 +337,9 @@ public:
                 TAG_COLUMN_NAME,
                 TAG_COLUMN_ID));
         }
-        if (with_nullable_uint64)
-        {
-            std::vector<UInt64> data(num_rows);
-            std::iota(data.begin(), data.end(), beg);
-            std::vector<Int32> null_map(num_rows, 0);
-            block.insert(DB::tests::createNullableColumn<UInt64>(
-                data,
-                null_map,
-                "Nullable(UInt64)",
-                1));
-        }
         return block;
     }
 
-    static Block prepareSimpleWriteBlockWithNullable(size_t beg, size_t end)
-    {
-        return prepareSimpleWriteBlock(beg,
-                                       end,
-                                       /*reversed*/ false,
-                                       /*tso*/ 2,
-                                       pk_name,
-                                       EXTRA_HANDLE_COLUMN_ID,
-                                       EXTRA_HANDLE_COLUMN_INT_TYPE,
-                                       /* is_common_handle */ false,
-                                       /* rowkey_column_size */ 1,
-                                       /*with_internal_columns*/ true,
-                                       /*is_deleted*/ false,
-                                       /*with_nullable_uint64*/ true);
-    }
     /**
      * Create a simple block with 3 columns:
      *   * `pk` - Int64 / `version` / `tag`
@@ -441,8 +412,7 @@ public:
         const String & colname,
         const String & value,
         bool is_common_handle,
-        size_t rowkey_column_size,
-        ColumnID column_id = 100)
+        size_t rowkey_column_size)
     {
         Block block;
         const size_t num_rows = 1;
@@ -475,8 +445,7 @@ public:
         // string column
         block.insert(DB::tests::createColumn<String>(
             Strings{value},
-            colname,
-            /*column_id*/ column_id));
+            colname));
         return block;
     }
 

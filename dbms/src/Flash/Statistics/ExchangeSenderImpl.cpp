@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Common/TiFlashException.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
 #include <Flash/Statistics/ExchangeSenderImpl.h>

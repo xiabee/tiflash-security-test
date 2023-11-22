@@ -105,13 +105,15 @@ void MultiplexedConnections::sendQuery(
     if (replica_states.size() > 1)
     {
         Settings query_settings = settings;
+        query_settings.parallel_replicas_count = replica_states.size();
 
-        for (auto & replica_state : replica_states)
+        for (size_t i = 0; i < replica_states.size(); ++i)
         {
-            Connection * connection = replica_state.connection;
+            Connection * connection = replica_states[i].connection;
             if (connection == nullptr)
                 throw Exception("MultiplexedConnections: Internal error", ErrorCodes::LOGICAL_ERROR);
 
+            query_settings.parallel_replica_offset = i;
             connection->sendQuery(query, query_id, stage, &query_settings, client_info, with_pending_data);
         }
     }
@@ -200,6 +202,7 @@ Connection::Packet MultiplexedConnections::drain()
         case Protocol::Server::Data:
         case Protocol::Server::Progress:
         case Protocol::Server::ProfileInfo:
+        case Protocol::Server::Totals:
         case Protocol::Server::Extremes:
         case Protocol::Server::EndOfStream:
             break;
@@ -257,6 +260,7 @@ Connection::Packet MultiplexedConnections::receivePacketUnlocked()
     case Protocol::Server::Data:
     case Protocol::Server::Progress:
     case Protocol::Server::ProfileInfo:
+    case Protocol::Server::Totals:
     case Protocol::Server::Extremes:
         break;
 

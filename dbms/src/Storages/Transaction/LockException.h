@@ -16,31 +16,29 @@
 
 #include <Common/Exception.h>
 #include <Storages/Transaction/RegionLockInfo.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <pingcap/kv/RegionCache.h>
+#pragma GCC diagnostic pop
 
 namespace DB
 {
-
-namespace ErrorCodes
-{
-extern const int REGION_LOCKED;
-} // namespace ErrorCodes
+using RegionVerID = pingcap::kv::RegionVerID;
 
 class LockException : public Exception
 {
 public:
-    explicit LockException(std::vector<std::pair<RegionID, LockInfoPtr>> && locks_)
-        : Exception("Key is locked", ErrorCodes::REGION_LOCKED)
-        , locks(std::move(locks_))
-    {
-        std::set<RegionID> locked_regions;
-        for (const auto & lock : locks)
-            locked_regions.insert(lock.first);
+    explicit LockException(RegionID region_id_, LockInfoPtr lock_info)
+        : region_id(region_id_)
+        , lock_info(std::move(lock_info))
+    {}
 
-        this->message(fmt::format("Key is locked ({} locks in region {})", locks.size(), locked_regions));
-    }
-
-    std::vector<std::pair<RegionID, LockInfoPtr>> locks;
+    RegionID region_id;
+    LockInfoPtr lock_info;
 };
 
 } // namespace DB

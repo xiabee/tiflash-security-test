@@ -20,7 +20,6 @@
 #include <DataStreams/materializeBlock.h>
 #include <Interpreters/Join.h>
 #include <Interpreters/Set.h>
-#include <Interpreters/Settings.h>
 #include <Storages/IStorage.h>
 
 #include <iomanip>
@@ -31,6 +30,7 @@ namespace DB
 namespace FailPoints
 {
 extern const char exception_in_creating_set_input_stream[];
+extern const char exception_mpp_hash_build[];
 } // namespace FailPoints
 namespace ErrorCodes
 {
@@ -100,6 +100,17 @@ void CreatingSetsBlockInputStream::readPrefixImpl()
 }
 
 
+Block CreatingSetsBlockInputStream::getTotals()
+{
+    auto * input = dynamic_cast<IProfilingBlockInputStream *>(children.back().get());
+
+    if (input)
+        return input->getTotals();
+    else
+        return totals;
+}
+
+
 void CreatingSetsBlockInputStream::createAll()
 {
     if (!created)
@@ -109,7 +120,7 @@ void CreatingSetsBlockInputStream::createAll()
             for (auto & elem : subqueries_for_sets)
             {
                 if (elem.second.join)
-                    elem.second.join->setInitActiveBuildThreads();
+                    elem.second.join->setBuildTableState(Join::BuildTableState::WAITING);
             }
         }
         Stopwatch watch;
@@ -150,7 +161,7 @@ void CreatingSetsBlockInputStream::createAll()
                 exception_from_workers.size());
             std::rethrow_exception(exception_from_workers.front());
         }
-        LOG_INFO(
+        LOG_DEBUG(
             log,
             "Creating all tasks takes {} sec. ",
             watch.elapsedSeconds());
@@ -173,7 +184,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
     Stopwatch watch;
     try
     {
-        LOG_INFO(log, "{}", gen_log_msg());
+        LOG_DEBUG(log, "{}", gen_log_msg());
         BlockOutputStreamPtr table_out;
         if (subquery.table)
             table_out = subquery.table->write({}, {});
@@ -192,7 +203,7 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
         {
             if (isCancelled())
             {
-                LOG_WARNING(log, "Query was cancelled during set / join or temporary table creation.");
+                LOG_DEBUG(log, "Query was cancelled during set / join or temporary table creation.");
                 return;
             }
 
@@ -227,6 +238,13 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
             }
         }
 
+
+        if (subquery.join)
+        {
+            FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_mpp_hash_build);
+            subquery.join->setBuildTableState(Join::BuildTableState::SUCCEED);
+        }
+
         if (table_out)
             table_out->writeSuffix();
 
@@ -238,64 +256,47 @@ void CreatingSetsBlockInputStream::createOne(SubqueryForSet & subquery)
             const BlockStreamProfileInfo & profile_info = profiling_in->getProfileInfo();
 
             head_rows = profile_info.rows;
+
+            if (subquery.join)
+                subquery.join->setTotals(profiling_in->getTotals());
         }
         if (subquery.join)
             head_rows = subquery.join->getTotalBuildInputRows();
 
-        // avoid generate log message when log level > INFO.
-        auto gen_finish_log_msg = [&] {
-            FmtBuffer msg;
-            msg.append("Created. ");
+        if (head_rows != 0)
+        {
+            // avoid generate log message when log level > DEBUG.
+            auto gen_debug_log_msg = [&] {
+                FmtBuffer msg;
+                msg.append("Created. ");
 
-            if (subquery.set)
-                msg.fmtAppend("Set with {} entries from {} rows. ", head_rows > 0 ? subquery.set->getTotalRowCount() : 0, head_rows);
-            if (subquery.join)
-                msg.fmtAppend("Join with {} entries from {} rows. ", head_rows > 0 ? subquery.join->getTotalRowCount() : 0, head_rows);
-            if (subquery.table)
-                msg.fmtAppend("Table with {} rows. ", head_rows);
+                if (subquery.set)
+                    msg.fmtAppend("Set with {} entries from {} rows. ", subquery.set->getTotalRowCount(), head_rows);
+                if (subquery.join)
+                    msg.fmtAppend("Join with {} entries from {} rows. ", subquery.join->getTotalRowCount(), head_rows);
+                if (subquery.table)
+                    msg.fmtAppend("Table with {} rows. ", head_rows);
 
-            msg.fmtAppend("In {:.3f} sec. ", watch.elapsedSeconds());
-            msg.fmtAppend("using {} threads.", subquery.join ? subquery.join->getBuildConcurrency() : 1);
-            return msg.toString();
-        };
+                msg.fmtAppend("In {:.3f} sec. ", watch.elapsedSeconds());
+                msg.fmtAppend("using {} threads.", subquery.join ? subquery.join->getBuildConcurrency() : 1);
+                return msg.toString();
+            };
 
-        LOG_INFO(log, "{}", gen_finish_log_msg());
+            LOG_DEBUG(log, "{}", gen_debug_log_msg());
+        }
+        else
+        {
+            LOG_DEBUG(log, "Subquery has empty result.");
+        }
     }
     catch (...)
     {
-        {
-            std::unique_lock lock(exception_mutex);
-            exception_from_workers.push_back(std::current_exception());
-        }
-        auto error_message = getCurrentExceptionMessage(false, true);
+        std::unique_lock lock(exception_mutex);
+        exception_from_workers.push_back(std::current_exception());
         if (subquery.join)
-            subquery.join->meetError(error_message);
-        LOG_ERROR(log, "{} throw exception: {} In {} sec. ", gen_log_msg(), error_message, watch.elapsedSeconds());
-        /// createOne is concurrently running in multiple threads, call cancel here to stop other threads
-        /// need to use cancel(true) here because the other threads may be blocked in `ExchangeReceiver::nextResult`,
-        /// cancel(true) will wake up these threads
-        cancel(true);
+            subquery.join->setBuildTableState(Join::BuildTableState::FAILED);
+        LOG_ERROR(log, "{} throw exception: {} In {} sec. ", gen_log_msg(), getCurrentExceptionMessage(false, true), watch.elapsedSeconds());
     }
-}
-
-uint64_t CreatingSetsBlockInputStream::collectCPUTimeNsImpl(bool is_thread_runner)
-{
-    // `CreatingSetsBlockInputStream` does not count its own execute time,
-    // whether `CreatingSetsBlockInputStream` is `thread-runner` or not,
-    // because `CreatingSetsBlockInputStream` basically does not use cpu, only `condition_cv.wait`.
-    uint64_t cpu_time_ns = 0;
-    std::shared_lock lock(children_mutex);
-    if (!children.empty())
-    {
-        // Each of `CreatingSetsBlockInputStream`'s children is a thread-runner.
-        size_t i = 0;
-        for (; i < children.size() - 1; ++i)
-            cpu_time_ns += children[i]->collectCPUTimeNs(true);
-        // The last child is running on the same thread as `CreatingSetsBlockInputStream`.
-        // Since we don't count `CreatingSetsBlockInputStream`'s execute time, we try to collect the last child's cpu time here.
-        cpu_time_ns += children[i]->collectCPUTimeNs(is_thread_runner);
-    }
-    return cpu_time_ns;
 }
 
 } // namespace DB

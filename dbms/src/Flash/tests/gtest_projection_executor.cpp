@@ -20,9 +20,12 @@ namespace DB
 namespace tests
 {
 
-class ProjectionExecutorTestRunner : public DB::tests::ExecutorTest
+class ExecutorProjectionTestRunner : public DB::tests::ExecutorTest
 {
 public:
+    using ColDataString = std::vector<std::optional<typename TypeTraits<String>::FieldType>>;
+    using ColDataInt32 = std::vector<std::optional<typename TypeTraits<Int32>::FieldType>>;
+
     void initializeContext() override
     {
         ExecutorTest::initializeContext();
@@ -58,19 +61,6 @@ public:
                               toNullableVec<Int64>("s2", {1, 1, 1, 1, 1}),
                               toNullableVec<Int64>("s3", {1, 1, 1, 1, 1}),
                               toNullableVec<Int64>("s4", {1, 1, 1, 1, 1})});
-
-        // with 200 rows.
-        std::vector<std::optional<TypeTraits<Int64>::FieldType>> key(200);
-        std::vector<std::optional<String>> value(200);
-        for (size_t i = 0; i < 200; ++i)
-        {
-            key[i] = i % 15;
-            value[i] = {fmt::format("val_{}", i)};
-        }
-        context.addMockTable(
-            {"test_db", "big_table"},
-            {{"key", TiDB::TP::TypeLongLong}, {"value", TiDB::TP::TypeString}},
-            {toNullableVec<Int64>("key", key), toNullableVec<String>("value", value)});
     }
 
     template <typename T>
@@ -80,23 +70,23 @@ public:
     };
 
     /// Prepare column data
-    const ColumnWithNullableString col0{"col0-0", "col0-1", "", "col0-2", {}, "col0-3", ""};
-    const ColumnWithNullableString col1{"col1-0", {}, "", "col1-1", "", "col1-2", "col1-3"};
-    const ColumnWithNullableString col2{"", "col2-0", "col2-1", {}, "col2-3", {}, "col2-4"};
-    const ColumnWithNullableInt32 col3{1, {}, 0, -111111, {}, 0, 9999};
+    const ColDataString col0{"col0-0", "col0-1", "", "col0-2", {}, "col0-3", ""};
+    const ColDataString col1{"col1-0", {}, "", "col1-1", "", "col1-2", "col1-3"};
+    const ColDataString col2{"", "col2-0", "col2-1", {}, "col2-3", {}, "col2-4"};
+    const ColDataInt32 col3{1, {}, 0, -111111, {}, 0, 9999};
 
     /** Each value in col4 should be different from each other so that topn 
      *  could sort the columns into an unique result, or multi-results could
      *  be right.
      */
-    const ColumnWithNullableInt32 col4{0, 5, -123, -234, {}, 24353, 9999};
+    const ColDataInt32 col4{0, 5, -123, -234, {}, 24353, 9999};
 
     /// Results after sorted by col4
-    const ColumnWithNullableString col0_sorted_asc{{}, "col0-2", "", "col0-0", "col0-1", "", "col0-3"};
-    const ColumnWithNullableString col1_sorted_asc{"", "col1-1", "", "col1-0", {}, "col1-3", "col1-2"};
-    const ColumnWithNullableString col2_sorted_asc{"col2-3", {}, "col2-1", "", "col2-0", "col2-4", {}};
-    const ColumnWithNullableInt32 col3_sorted_asc{{}, -111111, 0, 1, {}, 9999, 0};
-    const ColumnWithNullableInt32 col4_sorted_asc{{}, -234, -123, 0, 5, 9999, 24353};
+    const ColDataString col0_sorted_asc{{}, "col0-2", "", "col0-0", "col0-1", "", "col0-3"};
+    const ColDataString col1_sorted_asc{"", "col1-1", "", "col1-0", {}, "col1-3", "col1-2"};
+    const ColDataString col2_sorted_asc{"col2-3", {}, "col2-1", "", "col2-0", "col2-4", {}};
+    const ColDataInt32 col3_sorted_asc{{}, -111111, 0, 1, {}, 9999, 0};
+    const ColDataInt32 col4_sorted_asc{{}, -234, -123, 0, 5, 9999, 24353};
 
     /// Prepare some names
     std::vector<String> col_names{"col0", "col1", "col2", "col3", "col4"};
@@ -104,7 +94,7 @@ public:
     const String table_name{"projection_test_table"};
 };
 
-TEST_F(ProjectionExecutorTestRunner, Projection)
+TEST_F(ExecutorProjectionTestRunner, Projection)
 try
 {
     /// Check single column
@@ -151,7 +141,7 @@ try
 }
 CATCH
 
-TEST_F(ProjectionExecutorTestRunner, ProjectionFunction)
+TEST_F(ExecutorProjectionTestRunner, ProjectionFunction)
 try
 {
     std::shared_ptr<tipb::DAGRequest> request;
@@ -241,7 +231,7 @@ try
 }
 CATCH
 
-TEST_F(ProjectionExecutorTestRunner, MultiFunction)
+TEST_F(ExecutorProjectionTestRunner, MultiFunction)
 try
 {
     MockAstVec functions = {
@@ -318,7 +308,7 @@ try
 }
 CATCH
 
-TEST_F(ProjectionExecutorTestRunner, MultiProjection)
+TEST_F(ExecutorProjectionTestRunner, MultiProjection)
 try
 {
     auto req = context
@@ -353,7 +343,7 @@ try
               .scan("test_db", "test_table3")
               .project({lit(Field(String("a")))})
               .build(context);
-    executeAndAssertColumnsEqual(req, {createColumns({createConstColumn<String>(5, "a")})});
+    executeAndAssertColumnsEqual(req, {createColumns({toVec<String>({"a", "a", "a", "a", "a"})})});
 
     req = context
               .scan("test_db", "test_table3")
@@ -361,7 +351,7 @@ try
               .project(MockAstVec{})
               .project({lit(Field(String("a")))})
               .build(context);
-    executeAndAssertColumnsEqual(req, {createColumns({createConstColumn<String>(5, "a")})});
+    executeAndAssertColumnsEqual(req, {createColumns({toVec<String>({"a", "a", "a", "a", "a"})})});
 
     req = context
               .scan("test_db", "test_table3")
@@ -369,7 +359,7 @@ try
               .project(MockAstVec{})
               .project({lit(Field(String("a")))})
               .build(context);
-    executeAndAssertColumnsEqual(req, {createColumns({createConstColumn<String>(5, "a")})});
+    executeAndAssertColumnsEqual(req, {createColumns({toVec<String>({"a", "a", "a", "a", "a"})})});
 
     req = context
               .scan("test_db", "test_table3")
@@ -385,7 +375,7 @@ try
 }
 CATCH
 
-TEST_F(ProjectionExecutorTestRunner, ProjectionThenAgg)
+TEST_F(ExecutorProjectionTestRunner, ProjectionThenAgg)
 try
 {
     auto req = context
@@ -431,18 +421,6 @@ try
                                   toVec<UInt64>({5}),
                                   toNullableVec<Int64>({1}),
                                   toNullableVec<Int64>({1})});
-}
-CATCH
-
-TEST_F(ProjectionExecutorTestRunner, BigTable)
-try
-{
-    auto request = context
-                       .scan("test_db", "big_table")
-                       .project({plusInt(col("key"), lit(Field(static_cast<UInt64>(7)))), concat(col("value"), col("value"))})
-                       .build(context);
-    auto expect = executeStreams(request, 1);
-    executeAndAssertColumnsEqual(request, expect);
 }
 CATCH
 

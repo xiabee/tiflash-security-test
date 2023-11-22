@@ -18,6 +18,7 @@
 #include <DataTypes/DataTypesNumber.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsString.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -41,7 +42,7 @@ class StringASCII : public DB::tests::FunctionTest
 // test string and string
 TEST_F(StringASCII, strAndStrTest)
 {
-    const auto context = TiFlashTestEnv::getContext();
+    const Context context = TiFlashTestEnv::getContext();
 
     auto & factory = FunctionFactory::instance();
 
@@ -64,7 +65,7 @@ TEST_F(StringASCII, strAndStrTest)
         ColumnNumbers cns{0};
 
         // test ascii
-        auto bp = factory.tryGet("ascii", *context);
+        auto bp = factory.tryGet("ascii", context);
         ASSERT_TRUE(bp != nullptr);
         ASSERT_FALSE(bp->isVariadic());
 
@@ -88,7 +89,7 @@ TEST_F(StringASCII, strAndStrTest)
 // test NULL
 TEST_F(StringASCII, nullTest)
 {
-    const auto context = TiFlashTestEnv::getContext();
+    const Context context = TiFlashTestEnv::getContext();
 
     auto & factory = FunctionFactory::instance();
 
@@ -120,7 +121,7 @@ TEST_F(StringASCII, nullTest)
     test_block.insert(col1);
     ColumnNumbers cns{0};
 
-    auto bp = factory.tryGet("ascii", *context);
+    auto bp = factory.tryGet("ascii", context);
     ASSERT_TRUE(bp != nullptr);
     ASSERT_FALSE(bp->isVariadic());
     auto func = bp->build(ctns);

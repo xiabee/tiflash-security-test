@@ -58,19 +58,6 @@ struct SortImpl
 };
 using SortStatistics = ExecutorStatistics<SortImpl>;
 
-struct ExpandImpl
-{
-    static constexpr bool has_extra_info = false;
-
-    static constexpr auto type = "Expand";
-
-    static bool isMatch(const tipb::Executor * executor)
-    {
-        return executor->has_expand();
-    }
-};
-using ExpandStatistics = ExecutorStatistics<ExpandImpl>;
-
 struct FilterImpl
 {
     static constexpr bool has_extra_info = false;

@@ -14,13 +14,9 @@
 
 #include <Common/Logger.h>
 #include <Common/Stopwatch.h>
-#include <Common/TiFlashException.h>
 #include <Common/TiFlashMetrics.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
-#include <Poco/Message.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/LearnerRead.h>
 #include <Storages/Transaction/LockException.h>
@@ -30,48 +26,66 @@
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/Types.h>
 #include <Storages/Transaction/Utils.h>
+#include <common/ThreadPool.h>
 #include <common/likely.h>
 #include <common/logger_useful.h>
-#include <fmt/chrono.h>
+#include <fmt/format.h>
 
+#include <ext/scope_guard.h>
 
 namespace DB
 {
+class LockWrap
+{
+    mutable std::mutex mutex;
+    bool need_lock{true};
 
-struct UnavailableRegions
+protected:
+    std::unique_lock<std::mutex> genLockGuard() const
+    {
+        if (need_lock)
+            return std::unique_lock(mutex);
+        return {};
+    }
+
+public:
+    void setNoNeedLock() { need_lock = false; }
+};
+
+struct UnavailableRegions : public LockWrap
 {
     using Result = RegionException::UnavailableRegions;
 
     void add(RegionID id, RegionException::RegionReadStatus status_)
     {
         status = status_;
+        auto lock = genLockGuard();
         doAdd(id);
     }
 
     size_t size() const
     {
+        auto lock = genLockGuard();
         return ids.size();
     }
 
     bool empty() const { return size() == 0; }
 
-    void addRegionLock(RegionID region_id_, LockInfoPtr && region_lock_)
+    void setRegionLock(RegionID region_id_, LockInfoPtr && region_lock_)
     {
-        region_locks.emplace_back(region_id_, std::move(region_lock_));
+        auto lock = genLockGuard();
+        region_lock = std::pair(region_id_, std::move(region_lock_));
         doAdd(region_id_);
     }
 
-    void tryThrowRegionException(bool batch_cop, bool is_wn_disagg_read)
+    void tryThrowRegionException(bool batch_cop)
     {
-        // For batch-cop request (not handled by disagg write node), all unavailable regions, include the ones with lock exception, should be collected and retry next round.
-        // For normal cop request, which only contains one region, LockException should be thrown directly and let upper layer (like client-c, tidb, tispark) handle it.
-        // For batch-cop request (handled by disagg write node), LockException should be thrown directly and let upper layer (disagg read node) handle it.
+        auto lock = genLockGuard();
 
-        if (is_wn_disagg_read && !region_locks.empty())
-            throw LockException(std::move(region_locks));
-
-        if (!batch_cop && !region_locks.empty())
-            throw LockException(std::move(region_locks));
+        // For batch-cop request, all unavailable regions, include the ones with lock exception, should be collected and retry next round.
+        // For normal cop request, which only contains one region, LockException should be thrown directly and let upper layer(like client-c, tidb, tispark) handle it.
+        if (!batch_cop && region_lock)
+            throw LockException(region_lock->first, std::move(region_lock->second));
 
         if (!ids.empty())
             throw RegionException(std::move(ids), status);
@@ -79,6 +93,7 @@ struct UnavailableRegions
 
     bool contains(RegionID region_id) const
     {
+        auto lock = genLockGuard();
         return ids.count(region_id);
     }
 
@@ -86,18 +101,18 @@ private:
     inline void doAdd(RegionID id) { ids.emplace(id); }
 
     RegionException::UnavailableRegions ids;
-    std::vector<std::pair<RegionID, LockInfoPtr>> region_locks;
+    std::optional<std::pair<RegionID, LockInfoPtr>> region_lock;
     std::atomic<RegionException::RegionReadStatus> status{RegionException::RegionReadStatus::NOT_FOUND}; // NOLINT
 };
 
 class MvccQueryInfoWrap
     : boost::noncopyable
+    , public LockWrap
 {
     using Base = MvccQueryInfo;
     Base & inner;
     std::optional<Base::RegionsQueryInfo> regions_info;
-    // Points to either `regions_info` or `mvcc_query_info.regions_query_info`.
-    Base::RegionsQueryInfo * regions_query_info_ptr;
+    Base::RegionsQueryInfo * regions_info_ptr;
 
 public:
     MvccQueryInfoWrap(Base & mvcc_query_info, TMTContext & tmt, const TiDB::TableID logical_table_id)
@@ -105,62 +120,62 @@ public:
     {
         if (likely(!inner.regions_query_info.empty()))
         {
-            regions_query_info_ptr = &inner.regions_query_info;
+            regions_info_ptr = &inner.regions_query_info;
         }
         else
         {
             regions_info = Base::RegionsQueryInfo();
-            regions_query_info_ptr = &*regions_info;
-            // Only for (integration) test, because regions_query_info should never be empty if query is from TiDB or TiSpark.
+            regions_info_ptr = &*regions_info;
+            // Only for test, because regions_query_info should never be empty if query is from TiDB or TiSpark.
             // todo support partition table
-            auto regions = tmt.getRegionTable().getRegionsByTable(NullspaceID, logical_table_id);
-            regions_query_info_ptr->reserve(regions.size());
+            auto regions = tmt.getRegionTable().getRegionsByTable(logical_table_id);
+            regions_info_ptr->reserve(regions.size());
             for (const auto & [id, region] : regions)
             {
                 if (region == nullptr)
                     continue;
-                regions_query_info_ptr->emplace_back(
+                regions_info_ptr->emplace_back(
                     RegionQueryInfo{id, region->version(), region->confVer(), logical_table_id, region->getRange()->rawKeys(), {}});
             }
         }
     }
     Base * operator->() { return &inner; }
 
-    const Base::RegionsQueryInfo & getRegionsInfo() const { return *regions_query_info_ptr; }
+    const Base::RegionsQueryInfo & getRegionsInfo() const { return *regions_info_ptr; }
     void addReadIndexRes(RegionID region_id, UInt64 read_index)
     {
+        auto lock = genLockGuard();
         inner.read_index_res[region_id] = read_index;
     }
     UInt64 getReadIndexRes(RegionID region_id) const
     {
+        auto lock = genLockGuard();
         if (auto it = inner.read_index_res.find(region_id); it != inner.read_index_res.end())
             return it->second;
         return 0;
     }
 };
 
-struct LearnerReadStatistics
-{
-    UInt64 read_index_elapsed_ms = 0;
-    UInt64 wait_index_elapsed_ms = 0;
-
-    UInt64 num_stale_read = 0;
-};
-
 LearnerReadSnapshot doLearnerRead(
     const TiDB::TableID logical_table_id,
     MvccQueryInfo & mvcc_query_info_,
+    size_t num_streams,
     bool for_batch_cop,
     Context & context,
     const LoggerPtr & log)
 {
     assert(log != nullptr);
-    RUNTIME_ASSERT(!(context.getSharedContextDisagg()->isDisaggregatedComputeMode() && context.getSharedContextDisagg()->use_autoscaler));
 
     auto & tmt = context.getTMTContext();
 
     MvccQueryInfoWrap mvcc_query_info(mvcc_query_info_, tmt, logical_table_id);
     const auto & regions_info = mvcc_query_info.getRegionsInfo();
+
+    // adjust concurrency by num of regions or num of streams * mvcc_query_info.concurrent
+    size_t concurrent_num = std::max(1, std::min(static_cast<size_t>(num_streams * mvcc_query_info->concurrent), regions_info.size()));
+
+    // use single thread to do replica read by default because there is some overhead from thread pool itself.
+    concurrent_num = std::min(tmt.replicaReadMaxThread(), concurrent_num);
 
     KVStorePtr & kvstore = tmt.getKVStore();
     LearnerReadSnapshot regions_snapshot;
@@ -177,22 +192,18 @@ LearnerReadSnapshot doLearnerRead(
     }
     // make sure regions are not duplicated.
     if (unlikely(regions_snapshot.size() != regions_info.size()))
-        throw TiFlashException(
-            Errors::Coprocessor::BadRequest,
-            "Duplicate region id, n_request={} n_actual={}",
-            regions_info.size(),
-            regions_snapshot.size());
+        throw Exception("Duplicate region id", ErrorCodes::LOGICAL_ERROR);
 
     const size_t num_regions = regions_info.size();
 
-    // TODO: refactor this enormous lambda into smaller parts
+    const size_t batch_size = num_regions / concurrent_num;
     UnavailableRegions unavailable_regions;
-    LearnerReadStatistics stats;
     const auto batch_wait_index = [&](const size_t region_begin_idx) -> void {
         Stopwatch batch_wait_data_watch;
         Stopwatch watch;
 
-        const size_t ori_batch_region_size = num_regions - region_begin_idx;
+        const size_t region_end_idx = std::min(region_begin_idx + batch_size, num_regions);
+        const size_t ori_batch_region_size = region_end_idx - region_begin_idx;
         std::unordered_map<RegionID, kvrpcpb::ReadIndexResponse> batch_read_index_result;
 
         std::vector<kvrpcpb::ReadIndexRequest> batch_read_index_req;
@@ -201,36 +212,25 @@ LearnerReadSnapshot doLearnerRead(
         {
             // If using `std::numeric_limits<uint64_t>::max()`, set `start-ts` 0 to get the latest index but let read-index-worker do not record as history.
             auto read_index_tso = mvcc_query_info->read_tso == std::numeric_limits<uint64_t>::max() ? 0 : mvcc_query_info->read_tso;
-            RegionTable & region_table = tmt.getRegionTable();
-            for (size_t region_idx = region_begin_idx; region_idx < num_regions; ++region_idx)
+
+            for (size_t region_idx = region_begin_idx; region_idx < region_end_idx; ++region_idx)
             {
                 const auto & region_to_query = regions_info[region_idx];
                 const RegionID region_id = region_to_query.region_id;
-                // don't stale read in test scenarios.
-                bool can_stale_read = mvcc_query_info->read_tso != std::numeric_limits<uint64_t>::max() && read_index_tso <= region_table.getSelfSafeTS(region_id);
-                if (!can_stale_read)
+                if (auto ori_read_index = mvcc_query_info.getReadIndexRes(region_id); ori_read_index)
                 {
-                    if (auto ori_read_index = mvcc_query_info.getReadIndexRes(region_id); ori_read_index)
-                    {
-                        auto resp = kvrpcpb::ReadIndexResponse();
-                        resp.set_read_index(ori_read_index);
-                        batch_read_index_result.emplace(region_id, std::move(resp));
-                    }
-                    else
-                    {
-                        auto & region = regions_snapshot.find(region_id)->second;
-                        batch_read_index_req.emplace_back(GenRegionReadIndexReq(*region, read_index_tso));
-                    }
+                    auto resp = kvrpcpb::ReadIndexResponse();
+                    resp.set_read_index(ori_read_index);
+                    batch_read_index_result.emplace(region_id, std::move(resp));
                 }
                 else
                 {
-                    batch_read_index_result.emplace(region_id, kvrpcpb::ReadIndexResponse());
-                    ++stats.num_stale_read;
+                    auto & region = regions_snapshot.find(region_id)->second;
+                    batch_read_index_req.emplace_back(GenRegionReadIndexReq(*region, read_index_tso));
                 }
             }
         }
 
-        GET_METRIC(tiflash_stale_read_count).Increment(stats.num_stale_read);
         GET_METRIC(tiflash_raft_read_index_count).Increment(batch_read_index_req.size());
 
         const auto & make_default_batch_read_index_result = [&](bool with_region_error) {
@@ -274,8 +274,8 @@ LearnerReadSnapshot doLearnerRead(
         }();
 
         {
-            stats.read_index_elapsed_ms = watch.elapsedMilliseconds();
-            GET_METRIC(tiflash_raft_read_index_duration_seconds).Observe(stats.read_index_elapsed_ms / 1000.0);
+            auto read_index_elapsed_ms = watch.elapsedMilliseconds();
+            GET_METRIC(tiflash_raft_read_index_duration_seconds).Observe(read_index_elapsed_ms / 1000.0);
             const size_t cached_size = ori_batch_region_size - batch_read_index_req.size();
 
             LOG_DEBUG(
@@ -283,7 +283,7 @@ LearnerReadSnapshot doLearnerRead(
                 "Batch read index, original size {}, send & get {} message, cost {}ms{}",
                 ori_batch_region_size,
                 batch_read_index_req.size(),
-                stats.read_index_elapsed_ms,
+                read_index_elapsed_ms,
                 (cached_size != 0) ? (fmt::format(", {} in cache", cached_size)) : "");
 
             watch.restart(); // restart to count the elapsed of wait index
@@ -302,16 +302,12 @@ LearnerReadSnapshot doLearnerRead(
             }
             else if (resp.has_locked())
             {
-                unavailable_regions.addRegionLock(region_id, LockInfoPtr(resp.release_locked()));
+                unavailable_regions.setRegionLock(region_id, LockInfoPtr(resp.release_locked()));
             }
             else
             {
                 // cache read-index to avoid useless overhead about retry.
-                // resp.read_index() is 0 when stale read, skip it to avoid overwriting read_index res in last retry.
-                if (resp.read_index() != 0)
-                {
-                    mvcc_query_info.addReadIndexRes(region_id, resp.read_index());
-                }
+                mvcc_query_info.addReadIndexRes(region_id, resp.read_index());
             }
         }
 
@@ -323,12 +319,13 @@ LearnerReadSnapshot doLearnerRead(
                 return;
             }
             // TODO: Maybe collect all the Regions that happen wait index timeout instead of just throwing one Region id
-            throw TiFlashException(Errors::Coprocessor::RegionError, "Region {} is unavailable at {}", region_id, index);
+            throw TiFlashException(fmt::format("Region {} is unavailable at {}", region_id, index), Errors::Coprocessor::RegionError);
         };
         const auto wait_index_timeout_ms = tmt.waitIndexTimeout();
-        for (size_t region_idx = region_begin_idx, read_index_res_idx = 0; region_idx < num_regions; ++region_idx, ++read_index_res_idx)
+        for (size_t region_idx = region_begin_idx, read_index_res_idx = 0; region_idx < region_end_idx; ++region_idx, ++read_index_res_idx)
         {
             const auto & region_to_query = regions_info[region_idx];
+            Int64 physical_table_id = region_to_query.physical_table_id;
 
             // if region is unavailable, skip wait index.
             if (unavailable_regions.contains(region_to_query.region_id))
@@ -368,7 +365,6 @@ LearnerReadSnapshot doLearnerRead(
             // Try to resolve locks and flush data into storage layer
             if (mvcc_query_info->resolve_locks)
             {
-                Int64 physical_table_id = region_to_query.physical_table_id;
                 auto res = RegionTable::resolveLocksAndWriteRegion(
                     tmt,
                     physical_table_id,
@@ -381,7 +377,7 @@ LearnerReadSnapshot doLearnerRead(
 
                 std::visit(
                     variant_op::overloaded{
-                        [&](LockInfoPtr & lock) { unavailable_regions.addRegionLock(region->id(), std::move(lock)); },
+                        [&](LockInfoPtr & lock) { unavailable_regions.setRegionLock(region->id(), std::move(lock)); },
                         [&](RegionException::RegionReadStatus & status) {
                             if (status != RegionException::RegionReadStatus::OK)
                             {
@@ -391,7 +387,7 @@ LearnerReadSnapshot doLearnerRead(
                                     region_to_query.region_id,
                                     region_to_query.version,
                                     RecordKVFormat::DecodedTiKVKeyRangeToDebugString(region_to_query.range_in_table),
-                                    magic_enum::enum_name(status));
+                                    RegionException::RegionReadStatusString(status));
                                 unavailable_regions.add(region->id(), status);
                             }
                         },
@@ -400,37 +396,41 @@ LearnerReadSnapshot doLearnerRead(
             }
         }
         GET_METRIC(tiflash_syncing_data_freshness).Observe(batch_wait_data_watch.elapsedSeconds()); // For DBaaS SLI
-        stats.wait_index_elapsed_ms = watch.elapsedMilliseconds();
+        auto wait_index_elapsed_ms = watch.elapsedMilliseconds();
         LOG_DEBUG(
             log,
             "Finish wait index | resolve locks | check memory cache for {} regions, cost {}ms, {} unavailable regions",
             batch_read_index_req.size(),
-            stats.wait_index_elapsed_ms,
+            wait_index_elapsed_ms,
             unavailable_regions.size());
     };
 
-    const auto start_time = Clock::now();
-    batch_wait_index(0);
+    auto start_time = Clock::now();
+    if (concurrent_num <= 1)
+    {
+        mvcc_query_info.setNoNeedLock();
+        unavailable_regions.setNoNeedLock();
+        batch_wait_index(0);
+    }
+    else
+    {
+        ::ThreadPool pool(concurrent_num);
+        for (size_t region_begin_idx = 0; region_begin_idx < num_regions; region_begin_idx += batch_size)
+        {
+            pool.schedule([&batch_wait_index, region_begin_idx] { batch_wait_index(region_begin_idx); });
+        }
+        pool.wait();
+    }
 
-    unavailable_regions.tryThrowRegionException(
-        for_batch_cop,
-        context.getDAGContext() ? context.getDAGContext()->is_disaggregated_task : false);
+    unavailable_regions.tryThrowRegionException(for_batch_cop);
 
-    const auto end_time = Clock::now();
-    const auto time_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-    // Use info level if read wait index run slow
-    const auto log_lvl = time_elapsed_ms > 1000 ? Poco::Message::PRIO_INFORMATION : Poco::Message::PRIO_DEBUG;
-    LOG_IMPL(
+    auto end_time = Clock::now();
+    LOG_DEBUG(
         log,
-        log_lvl,
-        "[Learner Read] batch read index | wait index"
-        " total_cost={} read_cost={} wait_cost={} n_regions={} n_stale_read={} n_unavailable={}",
-        time_elapsed_ms,
-        stats.read_index_elapsed_ms,
-        stats.wait_index_elapsed_ms,
+        "[Learner Read] batch read index | wait index cost {} ms totally, regions_num={}, concurrency={}",
+        std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count(),
         num_regions,
-        stats.num_stale_read,
-        unavailable_regions.size());
+        concurrent_num);
 
     if (auto * dag_context = context.getDAGContext())
     {
@@ -459,7 +459,6 @@ void validateQueryInfo(
         if (auto iter = regions_snapshot.find(region_query_info.region_id); //
             iter == regions_snapshot.end() || iter->second != region)
         {
-            // If snapshot is applied during learner read, we should abort with an exception later.
             status = RegionException::RegionReadStatus::NOT_FOUND;
         }
         else if (region->version() != region_query_info.version)
@@ -479,7 +478,7 @@ void validateQueryInfo(
                 region_query_info.region_id,
                 region_query_info.version,
                 RecordKVFormat::DecodedTiKVKeyRangeToDebugString(region_query_info.range_in_table),
-                magic_enum::enum_name(status));
+                RegionException::RegionReadStatusString(status));
         }
     }
 
@@ -489,10 +488,9 @@ void validateQueryInfo(
     }
 }
 
-MvccQueryInfo::MvccQueryInfo(bool resolve_locks_, UInt64 read_tso_, DM::ScanContextPtr scan_ctx)
+MvccQueryInfo::MvccQueryInfo(bool resolve_locks_, UInt64 read_tso_)
     : read_tso(read_tso_)
     , resolve_locks(read_tso_ == std::numeric_limits<UInt64>::max() ? false : resolve_locks_)
-    , scan_context(std::move(scan_ctx))
 {
     // using `std::numeric_limits::max()` to resolve lock may break basic logic.
 }

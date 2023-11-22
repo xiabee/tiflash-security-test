@@ -18,7 +18,6 @@
 #include <Common/TiFlashException.h>
 #include <Common/typeid_cast.h>
 #include <Core/Field.h>
-#include <Core/SpillConfig.h>
 #include <DataStreams/AggregatingBlockInputStream.h>
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <DataStreams/ConcatBlockInputStream.h>
@@ -28,13 +27,16 @@
 #include <DataStreams/ExpressionBlockInputStream.h>
 #include <DataStreams/FilterBlockInputStream.h>
 #include <DataStreams/LimitBlockInputStream.h>
+#include <DataStreams/LimitByBlockInputStream.h>
 #include <DataStreams/MaterializingBlockInputStream.h>
 #include <DataStreams/MergeSortingBlockInputStream.h>
+#include <DataStreams/MergingAggregatedBlockInputStream.h>
 #include <DataStreams/MergingAggregatedMemoryEfficientBlockInputStream.h>
 #include <DataStreams/MergingSortedBlockInputStream.h>
 #include <DataStreams/NullBlockInputStream.h>
 #include <DataStreams/ParallelAggregatingBlockInputStream.h>
 #include <DataStreams/PartialSortingBlockInputStream.h>
+#include <DataStreams/TotalsHavingBlockInputStream.h>
 #include <DataStreams/UnionBlockInputStream.h>
 #include <DataStreams/copyData.h>
 #include <Encryption/FileProvider.h>
@@ -49,7 +51,6 @@
 #include <Parsers/ASTSelectQuery.h>
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
 #include <Storages/RegionQueryInfo.h>
@@ -152,6 +153,10 @@ void InterpreterSelectQuery::init(const Names & required_result_column_names)
     initSettings();
     const Settings & settings = context.getSettingsRef();
 
+    if (settings.max_subquery_depth && subquery_depth > settings.max_subquery_depth)
+        throw Exception("Too deep subqueries. Maximum: " + settings.max_subquery_depth.toString(),
+                        ErrorCodes::TOO_DEEP_SUBQUERIES);
+
     max_streams = settings.max_threads;
 
     const auto & table_expression = query.table();
@@ -225,7 +230,7 @@ void InterpreterSelectQuery::getAndLockStorageWithSchemaVersion(const String & d
     const String qualified_name = database_name + "." + table_name;
 
     /// Get current schema version in schema syncer for a chance to shortcut.
-    const auto global_schema_version = context.getTMTContext().getSchemaSyncer()->getCurrentVersion(NullspaceID);
+    const auto global_schema_version = context.getTMTContext().getSchemaSyncer()->getCurrentVersion();
 
     /// Lambda for get storage, then align schema version under the read lock.
     auto get_and_lock_storage = [&](bool schema_synced) -> std::tuple<StoragePtr, TableLockHolder, Int64, bool> {
@@ -296,10 +301,7 @@ void InterpreterSelectQuery::getAndLockStorageWithSchemaVersion(const String & d
     {
         log_schema_version("not OK, syncing schemas.");
         auto start_time = Clock::now();
-        // Since InterpreterSelectQuery will only be trigger while using ClickHouse client,
-        // and we do not support keyspace feature for ClickHouse interface,
-        // we could use nullspace id here safely.
-        context.getTMTContext().getSchemaSyncer()->syncSchemas(context, NullspaceID);
+        context.getTMTContext().getSchemaSyncer()->syncSchemas(context);
         auto schema_sync_cost = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time).count();
         LOG_DEBUG(log, "Table {} schema sync cost {}ms.", qualified_name, schema_sync_cost);
 
@@ -496,14 +498,25 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
     {
         /// Now we will compose block streams that perform the necessary actions.
 
+        /// Do I need to aggregate in a separate row rows that have not passed max_rows_to_group_by.
+        bool aggregate_overflow_row = expressions.need_aggregate && query.group_by_with_totals && settings.max_rows_to_group_by && settings.group_by_overflow_mode == OverflowMode::ANY && settings.totals_mode != TotalsMode::AFTER_HAVING_EXCLUSIVE;
+
         /// Do I need to immediately finalize the aggregate functions after the aggregation?
-        bool aggregate_final = expressions.need_aggregate && to_stage > QueryProcessingStage::WithMergeableState;
+        bool aggregate_final = expressions.need_aggregate && to_stage > QueryProcessingStage::WithMergeableState && !query.group_by_with_totals;
 
         if (expressions.first_stage)
         {
             if (expressions.has_join)
             {
-                for (auto & stream : pipeline.streams)
+                const auto & join = static_cast<const ASTTableJoin &>(*query.join()->table_join);
+                if (join.kind == ASTTableJoin::Kind::Full || join.kind == ASTTableJoin::Kind::Right)
+                    pipeline.streams_with_non_joined_data.push_back(expressions.before_join->createStreamWithNonJoinedDataIfFullOrRightJoin(
+                        pipeline.firstStream()->getHeader(),
+                        0,
+                        1,
+                        settings.max_block_size));
+
+                for (auto & stream : pipeline.streams) /// Applies to all sources except streams_with_non_joined_data.
                     stream = std::make_shared<ExpressionBlockInputStream>(stream, expressions.before_join, /*req_id=*/"");
             }
 
@@ -511,7 +524,7 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
                 executeWhere(pipeline, expressions.before_where);
 
             if (expressions.need_aggregate)
-                executeAggregation(pipeline, expressions.before_aggregation, aggregate_final);
+                executeAggregation(pipeline, expressions.before_aggregation, context.getFileProvider(), aggregate_overflow_row, aggregate_final);
             else
             {
                 executeExpression(pipeline, expressions.before_order_and_select);
@@ -545,9 +558,11 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
             {
                 /// If you need to combine aggregated results from multiple servers
                 if (!expressions.first_stage)
-                    executeMergeAggregated(pipeline, aggregate_final);
+                    executeMergeAggregated(pipeline, aggregate_overflow_row, aggregate_final);
 
-                if (aggregate_final && expressions.has_having)
+                if (!aggregate_final)
+                    executeTotalsAndHaving(pipeline, expressions.has_having, expressions.before_having, aggregate_overflow_row);
+                else if (expressions.has_having)
                     executeHaving(pipeline, expressions.before_having);
 
                 executeExpression(pipeline, expressions.before_order_and_select);
@@ -558,6 +573,9 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
             else
             {
                 need_second_distinct_pass = query.distinct && pipeline.hasMoreThanOneStream();
+
+                if (query.group_by_with_totals && !aggregate_final)
+                    executeTotalsAndHaving(pipeline, false, nullptr, aggregate_overflow_row);
             }
 
             if (expressions.has_order_by)
@@ -566,7 +584,7 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
                   *  but there is no aggregation, then on the remote servers ORDER BY was made
                   *  - therefore, we merge the sorted streams from remote servers.
                   */
-                if (!expressions.first_stage && !expressions.need_aggregate)
+                if (!expressions.first_stage && !expressions.need_aggregate && !(query.group_by_with_totals && !aggregate_final))
                     executeMergeSorted(pipeline);
                 else /// Otherwise, just sort.
                     executeOrder(pipeline);
@@ -582,7 +600,8 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
 
             if (need_second_distinct_pass
                 || query.limit_length
-                || query.limit_by_expression_list)
+                || query.limit_by_expression_list
+                || !pipeline.streams_with_non_joined_data.empty())
             {
                 need_merge_streams = true;
             }
@@ -595,6 +614,12 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
               */
             if (need_second_distinct_pass)
                 executeDistinct(pipeline, false, expressions.selected_columns);
+
+            if (expressions.has_limit_by)
+            {
+                executeExpression(pipeline, expressions.before_limit_by);
+                executeLimitBy(pipeline);
+            }
 
             /** We must do projection after DISTINCT because projection may remove some columns.
               */
@@ -680,6 +705,8 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
          */
         Context subquery_context = context;
         Settings subquery_settings = context.getSettings();
+        subquery_settings.max_result_rows = 0;
+        subquery_settings.max_result_bytes = 0;
         /// The calculation of extremes does not make sense and is not necessary (if you do it, then the extremes of the subquery can be taken for whole query).
         subquery_settings.extremes = false;
         subquery_context.setSettings(subquery_settings);
@@ -690,9 +717,22 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
             required_columns,
             QueryProcessingStage::Complete,
             subquery_depth + 1);
+
+        /// If there is an aggregation in the outer query, WITH TOTALS is ignored in the subquery.
+        if (query_analyzer->hasAggregation())
+            interpreter_subquery->ignoreWithTotals();
     }
 
     const Settings & settings = context.getSettingsRef();
+
+    /// Limitation on the number of columns to read.
+    /// It's not applied in 'dry_run' mode, because the query could be analyzed without removal of unnecessary columns.
+    if (!dry_run && settings.max_columns_to_read && required_columns.size() > settings.max_columns_to_read)
+        throw Exception("Limit for number of columns to read exceeded. "
+                        "Requested: "
+                            + toString(required_columns.size())
+                            + ", maximum: " + settings.max_columns_to_read.toString(),
+                        ErrorCodes::TOO_MANY_COLUMNS);
 
     size_t limit_length = 0;
     size_t limit_offset = 0;
@@ -705,8 +745,10 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
      *  To simultaneously query more remote servers,
      *  instead of max_threads, max_distributed_connections is used.
      */
+    bool is_remote = false;
     if (storage && storage->isRemote())
     {
+        is_remote = true;
         max_streams = settings.max_distributed_connections;
     }
 
@@ -754,13 +796,16 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
         if (max_streams == 0)
             throw Exception("Logical error: zero number of streams requested", ErrorCodes::LOGICAL_ERROR);
 
+        /// If necessary, we request more sources than the number of threads - to distribute the work evenly over the threads.
+        if (max_streams > 1 && !is_remote)
+            max_streams *= settings.max_streams_to_max_threads_ratio;
+
         query_analyzer->makeSetsForIndex();
 
         SelectQueryInfo query_info;
         query_info.query = query_ptr;
         query_info.sets = query_analyzer->getPreparedSets();
-        auto scan_context = std::make_shared<DM::ScanContext>();
-        query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(settings.resolve_locks, settings.read_tso, scan_context);
+        query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(settings.resolve_locks, settings.read_tso);
 
         const String & request_str = settings.regions;
 
@@ -802,6 +847,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
 
             if (query_info.mvcc_query_info->regions_query_info.empty())
                 throw Exception("[InterpreterSelectQuery::executeFetchColumns] no region query", ErrorCodes::LOGICAL_ERROR);
+            query_info.mvcc_query_info->concurrent = 0.0;
         }
 
         /// PARTITION SELECT only supports MergeTree family now.
@@ -832,7 +878,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
                     if (likely(!select_query->no_kvstore))
                     {
                         auto table_info = managed_storage->getTableInfo();
-                        learner_read_snapshot = doLearnerRead(table_info.id, *query_info.mvcc_query_info, false, context, log);
+                        learner_read_snapshot = doLearnerRead(table_info.id, *query_info.mvcc_query_info, max_streams, false, context, log);
                     }
                 }
             }
@@ -851,6 +897,40 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
         pipeline.transform([&](auto & stream) {
             stream->addTableLock(table_lock);
         });
+
+        /// Set the limits and quota for reading data, the speed and time of the query.
+        {
+            IProfilingBlockInputStream::LocalLimits limits;
+            limits.mode = IProfilingBlockInputStream::LIMITS_TOTAL;
+            limits.size_limits = SizeLimits(settings.max_rows_to_read, settings.max_bytes_to_read, settings.read_overflow_mode);
+            limits.max_execution_time = settings.max_execution_time;
+            limits.timeout_overflow_mode = settings.timeout_overflow_mode;
+
+            /** Quota and minimal speed restrictions are checked on the initiating server of the request, and not on remote servers,
+              *  because the initiating server has a summary of the execution of the request on all servers.
+              *
+              * But limits on data size to read and maximum execution time are reasonable to check both on initiator and
+              *  additionally on each remote server, because these limits are checked per block of data processed,
+              *  and remote servers may process way more blocks of data than are received by initiator.
+              */
+            if (to_stage == QueryProcessingStage::Complete)
+            {
+                limits.min_execution_speed = settings.min_execution_speed;
+                limits.timeout_before_checking_execution_speed = settings.timeout_before_checking_execution_speed;
+            }
+
+            QuotaForIntervals & quota = context.getQuota();
+
+            pipeline.transform([&](auto & stream) {
+                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream.get()))
+                {
+                    p_stream->setLimits(limits);
+
+                    if (to_stage == QueryProcessingStage::Complete)
+                        p_stream->setQuota(quota);
+                }
+            });
+        }
     }
     else
         throw Exception("Logical error in InterpreterSelectQuery: nowhere to read", ErrorCodes::LOGICAL_ERROR);
@@ -875,7 +955,7 @@ void InterpreterSelectQuery::executeWhere(Pipeline & pipeline, const ExpressionA
 }
 
 
-void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, bool final)
+void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, const FileProviderPtr & file_provider, bool overflow_row, bool final)
 {
     pipeline.transform([&](auto & stream) {
         stream = std::make_shared<ExpressionBlockInputStream>(stream, expression, /*req_id=*/"");
@@ -902,22 +982,16 @@ void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const Expre
       */
     bool allow_to_use_two_level_group_by = pipeline.streams.size() > 1 || settings.max_bytes_before_external_group_by != 0;
 
-    SpillConfig spill_config(
-        context.getTemporaryPath(),
-        "aggregation",
-        settings.max_cached_data_bytes_in_spiller,
-        settings.max_spilled_rows_per_file,
-        settings.max_spilled_bytes_per_file,
-        context.getFileProvider());
-    Aggregator::Params params(header, keys, aggregates, allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold : SettingUInt64(0), allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0), settings.max_bytes_before_external_group_by, false, spill_config, settings.max_block_size);
+    Aggregator::Params params(header, keys, aggregates, overflow_row, settings.max_rows_to_group_by, settings.group_by_overflow_mode, allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold : SettingUInt64(0), allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0), settings.max_bytes_before_external_group_by, settings.empty_result_for_aggregation_by_empty_set, context.getTemporaryPath());
 
     /// If there are several sources, then we perform parallel aggregation
-    if (pipeline.streams.size() > 1)
+    if (pipeline.streams.size() > 1 || pipeline.streams_with_non_joined_data.size() > 1)
     {
         auto stream = std::make_shared<ParallelAggregatingBlockInputStream>(
             pipeline.streams,
-            BlockInputStreams{},
+            pipeline.streams_with_non_joined_data,
             params,
+            file_provider,
             final,
             max_streams,
             settings.aggregation_memory_efficient_merge_threads
@@ -926,6 +1000,7 @@ void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const Expre
             /*req_id=*/"");
 
         pipeline.streams.resize(1);
+        pipeline.streams_with_non_joined_data.clear();
         pipeline.firstStream() = std::move(stream);
     }
     else
@@ -934,18 +1009,23 @@ void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const Expre
         if (!pipeline.streams.empty())
             inputs.push_back(pipeline.firstStream());
 
+        if (!pipeline.streams_with_non_joined_data.empty())
+            inputs.push_back(pipeline.streams_with_non_joined_data.at(0));
+
         pipeline.streams.resize(1);
+        pipeline.streams_with_non_joined_data.clear();
 
         pipeline.firstStream() = std::make_shared<AggregatingBlockInputStream>(
             std::make_shared<ConcatBlockInputStream>(inputs, /*req_id=*/""),
             params,
+            file_provider,
             final,
             /*req_id=*/"");
     }
 }
 
 
-void InterpreterSelectQuery::executeMergeAggregated(Pipeline & pipeline, bool final)
+void InterpreterSelectQuery::executeMergeAggregated(Pipeline & pipeline, bool overflow_row, bool final)
 {
     Names key_names;
     AggregateDescriptions aggregates;
@@ -972,19 +1052,30 @@ void InterpreterSelectQuery::executeMergeAggregated(Pipeline & pipeline, bool fi
       *  but it can work more slowly.
       */
 
+    Aggregator::Params params(header, keys, aggregates, overflow_row);
+
     const Settings & settings = context.getSettingsRef();
 
-    Aggregator::Params params(header, keys, aggregates, SpillConfig(context.getTemporaryPath(), "aggregation", settings.max_cached_data_bytes_in_spiller, settings.max_spilled_rows_per_file, settings.max_spilled_bytes_per_file, context.getFileProvider()), settings.max_block_size);
+    if (!settings.distributed_aggregation_memory_efficient)
+    {
+        /// We union several sources into one, parallelizing the work.
+        executeUnion(pipeline);
 
-    pipeline.firstStream() = std::make_shared<MergingAggregatedMemoryEfficientBlockInputStream>(
-        pipeline.streams,
-        params,
-        final,
-        max_streams,
-        settings.aggregation_memory_efficient_merge_threads ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads) : static_cast<size_t>(settings.max_threads),
-        /*req_id=*/"");
+        /// Now merge the aggregated blocks
+        pipeline.firstStream() = std::make_shared<MergingAggregatedBlockInputStream>(pipeline.firstStream(), params, final, settings.max_threads);
+    }
+    else
+    {
+        pipeline.firstStream() = std::make_shared<MergingAggregatedMemoryEfficientBlockInputStream>(
+            pipeline.streams,
+            params,
+            final,
+            max_streams,
+            settings.aggregation_memory_efficient_merge_threads ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads) : static_cast<size_t>(settings.max_threads),
+            /*req_id=*/"");
 
-    pipeline.streams.resize(1);
+        pipeline.streams.resize(1);
+    }
 }
 
 
@@ -994,6 +1085,23 @@ void InterpreterSelectQuery::executeHaving(Pipeline & pipeline, const Expression
         stream = std::make_shared<FilterBlockInputStream>(stream, expression, query.having_expression->getColumnName(), /*req_id=*/"");
     });
 }
+
+
+void InterpreterSelectQuery::executeTotalsAndHaving(Pipeline & pipeline, bool has_having, const ExpressionActionsPtr & expression, bool overflow_row)
+{
+    executeUnion(pipeline);
+
+    const Settings & settings = context.getSettingsRef();
+
+    pipeline.firstStream() = std::make_shared<TotalsHavingBlockInputStream>(
+        pipeline.firstStream(),
+        overflow_row,
+        expression,
+        has_having ? query.having_expression->getColumnName() : "",
+        settings.totals_mode,
+        settings.totals_auto_threshold);
+}
+
 
 void InterpreterSelectQuery::executeExpression(Pipeline & pipeline, const ExpressionActionsPtr & expression) // NOLINT
 {
@@ -1046,7 +1154,15 @@ void InterpreterSelectQuery::executeOrder(Pipeline & pipeline)
     const Settings & settings = context.getSettingsRef();
 
     pipeline.transform([&](auto & stream) {
-        stream = std::make_shared<PartialSortingBlockInputStream>(stream, order_descr, /*req_id=*/"", limit);
+        auto sorting_stream = std::make_shared<PartialSortingBlockInputStream>(stream, order_descr, /*req_id=*/"", limit);
+
+        /// Limits on sorting
+        IProfilingBlockInputStream::LocalLimits limits;
+        limits.mode = IProfilingBlockInputStream::LIMITS_TOTAL;
+        limits.size_limits = SizeLimits(settings.max_rows_to_sort, settings.max_bytes_to_sort, settings.sort_overflow_mode);
+        sorting_stream->setLimits(limits);
+
+        stream = sorting_stream;
     });
 
     /// If there are several streams, we merge them into one
@@ -1059,7 +1175,7 @@ void InterpreterSelectQuery::executeOrder(Pipeline & pipeline)
         settings.max_block_size,
         limit,
         settings.max_bytes_before_external_sort,
-        SpillConfig(context.getTemporaryPath(), "sort", settings.max_cached_data_bytes_in_spiller, settings.max_spilled_rows_per_file, settings.max_spilled_bytes_per_file, context.getFileProvider()),
+        context.getTemporaryPath(),
         /*req_id=*/"");
 }
 
@@ -1126,21 +1242,30 @@ void InterpreterSelectQuery::executeDistinct(Pipeline & pipeline, bool before_or
 
 void InterpreterSelectQuery::executeUnion(Pipeline & pipeline)
 {
-    switch (pipeline.streams.size())
+    switch (pipeline.streams.size() + pipeline.streams_with_non_joined_data.size())
     {
     case 0:
-    case 1:
         break;
+    case 1:
+    {
+        if (pipeline.streams.size() == 1)
+            break;
+        // streams_with_non_joined_data's size is 1.
+        pipeline.streams.push_back(pipeline.streams_with_non_joined_data.at(0));
+        pipeline.streams_with_non_joined_data.clear();
+        break;
+    }
     default:
     {
         BlockInputStreamPtr stream = std::make_shared<UnionBlockInputStream<>>(
             pipeline.streams,
-            BlockInputStreams{},
+            pipeline.streams_with_non_joined_data,
             max_streams,
             /*req_id=*/"");
         ;
 
         pipeline.streams.resize(1);
+        pipeline.streams_with_non_joined_data.clear();
         pipeline.firstStream() = std::move(stream);
         break;
     }
@@ -1156,13 +1281,56 @@ void InterpreterSelectQuery::executePreLimit(Pipeline & pipeline)
     getLimitLengthAndOffset(query, limit_length, limit_offset);
 
     /// If there is LIMIT
-    if (limit_length)
+    if (query.limit_length)
     {
         pipeline.transform([&](auto & stream) {
-            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length + limit_offset, /* offset */ 0, /*req_id=*/"");
+            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length + limit_offset, 0, /*req_id=*/"", false);
         });
     }
 }
+
+
+void InterpreterSelectQuery::executeLimitBy(Pipeline & pipeline) // NOLINT
+{
+    if (!query.limit_by_value || !query.limit_by_expression_list)
+        return;
+
+    Names columns;
+    for (const auto & elem : query.limit_by_expression_list->children)
+        columns.emplace_back(elem->getColumnName());
+
+    auto value = safeGet<UInt64>(typeid_cast<ASTLiteral &>(*query.limit_by_value).value);
+
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<LimitByBlockInputStream>(stream, value, columns);
+    });
+}
+
+
+bool hasWithTotalsInAnySubqueryInFromClause(const ASTSelectQuery & query)
+{
+    if (query.group_by_with_totals)
+        return true;
+
+    /** NOTE You can also check that the table in the subquery is distributed, and that it only looks at one shard.
+      * In other cases, totals will be computed on the initiating server of the query, and it is not necessary to read the data to the end.
+      */
+
+    auto query_table = query.table();
+    if (query_table)
+    {
+        const auto * ast_union = typeid_cast<const ASTSelectWithUnionQuery *>(query_table.get());
+        if (ast_union)
+        {
+            for (const auto & elem : ast_union->list_of_selects->children)
+                if (hasWithTotalsInAnySubqueryInFromClause(typeid_cast<const ASTSelectQuery &>(*elem)))
+                    return true;
+        }
+    }
+
+    return false;
+}
+
 
 void InterpreterSelectQuery::executeLimit(Pipeline & pipeline)
 {
@@ -1171,11 +1339,27 @@ void InterpreterSelectQuery::executeLimit(Pipeline & pipeline)
     getLimitLengthAndOffset(query, limit_length, limit_offset);
 
     /// If there is LIMIT
-    if (limit_length)
+    if (query.limit_length)
     {
-        RUNTIME_CHECK_MSG(pipeline.streams.size() == 1, "Cannot executeLimit with multiple streams");
+        /** Rare case:
+          *  if there is no WITH TOTALS and there is a subquery in FROM, and there is WITH TOTALS on one of the levels,
+          *  then when using LIMIT, you should read the data to the end, rather than cancel the query earlier,
+          *  because if you cancel the query, we will not get `totals` data from the remote server.
+          *
+          * Another case:
+          *  if there is WITH TOTALS and there is no ORDER BY, then read the data to the end,
+          *  otherwise TOTALS is counted according to incomplete data.
+          */
+        bool always_read_till_end = false;
+
+        if (query.group_by_with_totals && !query.order_expression_list)
+            always_read_till_end = true;
+
+        if (!query.group_by_with_totals && hasWithTotalsInAnySubqueryInFromClause(query))
+            always_read_till_end = true;
+
         pipeline.transform([&](auto & stream) {
-            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length, limit_offset, /*req_id=*/"");
+            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length, limit_offset, /*req_id=*/"", always_read_till_end);
         });
     }
 }
@@ -1204,6 +1388,13 @@ void InterpreterSelectQuery::executeSubqueriesInSetsAndJoins(Pipeline & pipeline
         SizeLimits(settings.max_rows_to_transfer, settings.max_bytes_to_transfer, settings.transfer_overflow_mode),
         /*req_id=*/"");
 }
+
+
+void InterpreterSelectQuery::ignoreWithTotals()
+{
+    query.group_by_with_totals = false;
+}
+
 
 void InterpreterSelectQuery::initSettings()
 {

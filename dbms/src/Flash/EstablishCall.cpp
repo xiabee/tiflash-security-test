@@ -21,7 +21,6 @@
 #include <Flash/Mpp/MPPTaskManager.h>
 #include <Flash/Mpp/MPPTunnel.h>
 #include <Flash/Mpp/Utils.h>
-#include <Interpreters/Context.h>
 #include <Storages/Transaction/TMTContext.h>
 
 namespace DB
@@ -137,9 +136,7 @@ void EstablishCallData::initRpc()
     {
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_tunnel_init_rpc_failure_failpoint);
 
-        connection_id = fmt::format("tunnel{}+{}", request.sender_meta().task_id(), request.receiver_meta().task_id());
-        query_id = MPPQueryId(request.sender_meta()).toString();
-        auto res = service->establishMPPConnectionAsync(this);
+        auto res = service->establishMPPConnectionAsync(&ctx, &request, this);
 
         if (!res.ok())
             writeDone("initRpc called with no-ok status", res);
@@ -203,19 +200,13 @@ void EstablishCallData::writeErr(const mpp::MPPDataPacket & packet)
     write(packet);
 }
 
-static LoggerPtr & getLogger()
-{
-    static auto logger = Logger::get("EstablishCallData");
-    return logger;
-}
-
 void EstablishCallData::writeDone(String msg, const grpc::Status & status)
 {
     state = FINISH;
 
     if (async_tunnel_sender)
     {
-        LOG_INFO(async_tunnel_sender->getLogger(), "connection for {} cost {}ms, including {}ms to waiting task.", async_tunnel_sender->getTunnelId(), stopwatch->elapsedMilliseconds(), waiting_task_time_ms);
+        LOG_INFO(async_tunnel_sender->getLogger(), "connection for {} cost {} ms, including {} ms to waiting task.", async_tunnel_sender->getTunnelId(), stopwatch->elapsedMilliseconds(), waiting_task_time_ms);
 
         RUNTIME_ASSERT(!async_tunnel_sender->isConsumerFinished(), async_tunnel_sender->getLogger(), "tunnel {} consumer finished in advance", async_tunnel_sender->getTunnelId());
 
@@ -225,22 +216,6 @@ void EstablishCallData::writeDone(String msg, const grpc::Status & status)
         }
         // Trigger mpp tunnel finish work.
         async_tunnel_sender->consumerFinish(msg);
-    }
-    else if (!connection_id.empty())
-    {
-        if (stopwatch != nullptr)
-            LOG_WARNING(
-                getLogger(),
-                "EstablishCallData finishes without connected, time cost {}ms, query id: {}, connection id: {}",
-                stopwatch != nullptr ? stopwatch->elapsedMilliseconds() : 0,
-                query_id,
-                connection_id);
-        else
-            LOG_WARNING(
-                getLogger(),
-                "EstablishCallData finishes without connected, query id: {}, connection id: {}",
-                query_id,
-                connection_id);
     }
 
     responder.Finish(status, this);
@@ -258,7 +233,6 @@ void EstablishCallData::trySendOneMsg()
     switch (async_tunnel_sender->pop(res, this))
     {
     case GRPCSendQueueRes::OK:
-        async_tunnel_sender->subDataSizeMetric(res->getPacket().ByteSizeLong());
         /// Note: has to switch the memory tracker before `write`
         /// because after `write`, `async_tunnel_sender` can be destroyed at any time
         /// so there is a risk that `res` is destructed after `aysnc_tunnel_sender`

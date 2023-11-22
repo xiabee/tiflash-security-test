@@ -68,8 +68,8 @@ void SSTFilesToBlockInputStream::readPrefix()
     std::vector<SSTView> ssts_write;
     std::vector<SSTView> ssts_lock;
 
-    auto make_inner_func = [&](const TiFlashRaftProxyHelper * proxy_helper, SSTView snap, SSTReader::RegionRangeFilter range) {
-        return std::make_unique<MonoSSTReader>(proxy_helper, snap, range);
+    auto make_inner_func = [&](const TiFlashRaftProxyHelper * proxy_helper, SSTView snap) {
+        return std::make_unique<MonoSSTReader>(proxy_helper, snap);
     };
     for (UInt64 i = 0; i < snaps.len; ++i)
     {
@@ -87,19 +87,17 @@ void SSTFilesToBlockInputStream::readPrefix()
             break;
         }
     }
-
-    // Pass the log to SSTReader inorder to filter logs by table_id suffix
     if (!ssts_default.empty())
     {
-        default_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Default, make_inner_func, ssts_default, log, region->getRange());
+        default_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Default, make_inner_func, ssts_default);
     }
     if (!ssts_write.empty())
     {
-        write_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Write, make_inner_func, ssts_write, log, region->getRange());
+        write_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Write, make_inner_func, ssts_write);
     }
     if (!ssts_lock.empty())
     {
-        lock_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Lock, make_inner_func, ssts_lock, log, region->getRange());
+        lock_cf_reader = std::make_unique<MultiSSTReader<MonoSSTReader, SSTView>>(proxy_helper, ColumnFamilyType::Lock, make_inner_func, ssts_lock);
     }
     LOG_INFO(log, "Finish Construct MultiSSTReader, write {} lock {} default {} region {}", ssts_write.size(), ssts_lock.size(), ssts_default.size(), this->region->id());
 
@@ -159,7 +157,6 @@ Block SSTFilesToBlockInputStream::read()
             // else continue to decode key-value from write CF.
         }
     }
-
     // Load all key-value pairs from other CFs
     loadCFDataFromSST(ColumnFamilyType::Default, nullptr);
     loadCFDataFromSST(ColumnFamilyType::Lock, nullptr);
@@ -196,7 +193,7 @@ void SSTFilesToBlockInputStream::loadCFDataFromSST(ColumnFamilyType cf, const De
             BaseBuffView key = reader->keyView();
             BaseBuffView value = reader->valueView();
             // TODO: use doInsert to avoid locking
-            region->insert(cf, TiKVKey(key.data, key.len), TiKVValue(value.data, value.len), DupCheck::AllowSame);
+            region->insert(cf, TiKVKey(key.data, key.len), TiKVValue(value.data, value.len));
             reader->next();
             (*p_process_keys) += 1;
         }
@@ -262,17 +259,7 @@ Block SSTFilesToBlockInputStream::readCommitedBlock()
         if (e.code() == ErrorCodes::ILLFORMAT_RAFT_ROW)
         {
             // br or lighting may write illegal data into tikv, stop decoding.
-            const auto & start_key = region->getMetaRegion().start_key();
-            const auto & end_key = region->getMetaRegion().end_key();
-            LOG_WARNING(log, "Got error while reading region committed cache: {}. Stop decoding rows into DTFiles and keep uncommitted data in region."
-                             "region_id: {}, applied_index: {}, version: {}, conf_version {}, start_key: {}, end_key: {}",
-                        e.displayText(),
-                        region->id(),
-                        region->appliedIndex(),
-                        region->version(),
-                        region->confVer(),
-                        Redact::keyToDebugString(start_key.data(), start_key.size()),
-                        Redact::keyToDebugString(end_key.data(), end_key.size()));
+            LOG_WARNING(log, "Got error while reading region committed cache: {}. Stop decoding rows into DTFiles and keep uncommitted data in region.", e.displayText());
             // Cancel the decoding process.
             // Note that we still need to scan data from CFs and keep them in `region`
             is_decode_cancelled = true;

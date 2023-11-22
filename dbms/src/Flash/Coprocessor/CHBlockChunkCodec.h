@@ -25,12 +25,11 @@ class CHBlockChunkCodec final : public ChunkCodec
 {
 public:
     CHBlockChunkCodec() = default;
-    explicit CHBlockChunkCodec(const Block & header_);
-    explicit CHBlockChunkCodec(const DAGSchema & schema);
+    CHBlockChunkCodec(const Block & header_);
+    CHBlockChunkCodec(const DAGSchema & schema);
 
     Block decode(const String &, const DAGSchema & schema) override;
     static Block decode(const String &, const Block & header);
-    Block decode(const String &);
     std::unique_ptr<ChunkCodecStream> newCodecStream(const std::vector<tipb::FieldType> & field_types) override;
 
 private:

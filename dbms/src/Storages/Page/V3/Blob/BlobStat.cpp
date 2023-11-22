@@ -15,7 +15,6 @@
 #include <Common/ProfileEvents.h>
 #include <Storages/Page/V3/Blob/BlobFile.h>
 #include <Storages/Page/V3/Blob/BlobStat.h>
-#include <Storages/PathPool.h>
 #include <boost_wrapper/string_split.h>
 
 #include <boost/algorithm/string/classification.hpp>
@@ -44,16 +43,8 @@ BlobStats::BlobStats(LoggerPtr log_, PSDiskDelegatorPtr delegator_, BlobConfig &
 
 void BlobStats::restoreByEntry(const PageEntryV3 & entry)
 {
-    if (entry.file_id != INVALID_BLOBFILE_ID)
-    {
-        auto stat = blobIdToStat(entry.file_id);
-        stat->restoreSpaceMap(entry.offset, entry.getTotalSize());
-    }
-    else
-    {
-        // It must be an entry point to remote data location
-        RUNTIME_CHECK(entry.checkpoint_info.is_valid && entry.checkpoint_info.is_local_data_reclaimed);
-    }
+    auto stat = blobIdToStat(entry.file_id);
+    stat->restoreSpaceMap(entry.offset, entry.getTotalSize());
 }
 
 std::pair<BlobFileId, String> BlobStats::getBlobIdFromName(String blob_name)

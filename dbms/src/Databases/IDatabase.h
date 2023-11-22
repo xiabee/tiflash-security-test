@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Common/UniThreadPool.h>
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/ColumnsDescription.h>
@@ -23,6 +22,9 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+
+
+class ThreadPool;
 
 
 namespace DB

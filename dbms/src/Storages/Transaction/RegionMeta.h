@@ -75,7 +75,6 @@ public:
     ImutRegionRangePtr getRange() const;
 
     metapb::Peer getPeer() const;
-    void setPeer(metapb::Peer &&);
 
     UInt64 version() const;
 
@@ -109,10 +108,8 @@ public:
     RegionMetaSnapshot dumpRegionMetaSnapshot() const;
     MetaRaftCommandDelegate & makeRaftCommandDelegate();
 
-    const metapb::Region & getMetaRegion() const;
-    metapb::Region cloneMetaRegion() const;
-    const raft_serverpb::MergeState & getMergeState() const;
-    raft_serverpb::MergeState cloneMergeState() const;
+    metapb::Region getMetaRegion() const;
+    raft_serverpb::MergeState getMergeState() const;
 
     RegionMeta() = delete;
 

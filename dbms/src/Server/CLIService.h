@@ -13,12 +13,10 @@
 // limitations under the License.
 
 #pragma once
-
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/UnifiedLogFormatter.h>
 #include <Encryption/DataKeyManager.h>
 #include <Encryption/MockKeyManager.h>
-#include <Interpreters/Context.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/File.h>
 #include <Poco/FormattingChannel.h>
@@ -210,7 +208,8 @@ int CLIService<Func, Args>::main(const std::vector<std::string> &)
         proxy_runner.join();
     });
 
-    global_context = Context::createGlobal();
+    global_context = std::make_unique<Context>(Context::createGlobal());
+    global_context->setGlobalContext(*global_context);
     global_context->setApplicationType(Context::ApplicationType::SERVER);
 
     /// Init File Provider

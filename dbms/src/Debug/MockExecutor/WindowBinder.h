@@ -27,6 +27,7 @@ struct MockWindowFrame
     std::optional<MockWindowFrameBound> end;
     // TODO: support calcFuncs
 };
+
 using ASTPartitionByElement = ASTOrderByElement;
 
 class WindowBinder : public ExecutorBinder

@@ -24,7 +24,7 @@ public:
     MockTableScanBlockInputStream(ColumnsWithTypeAndName columns, size_t max_block_size, bool is_infinite_ = false);
     Block getHeader() const override
     {
-        return Block(columns).cloneEmpty();
+        return Block(columns);
     }
     String getName() const override { return "MockTableScan"; }
 

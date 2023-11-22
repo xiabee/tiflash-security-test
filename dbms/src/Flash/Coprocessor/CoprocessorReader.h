@@ -20,6 +20,7 @@
 #include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
 #include <Flash/Coprocessor/DecodeDetail.h>
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
+#include <Interpreters/Context.h>
 #include <common/logger_useful.h>
 
 #include <chrono>
@@ -79,13 +80,12 @@ public:
     CoprocessorReader(
         const DAGSchema & schema_,
         pingcap::kv::Cluster * cluster,
-        std::vector<pingcap::coprocessor::CopTask> tasks,
+        std::vector<pingcap::coprocessor::copTask> tasks,
         bool has_enforce_encode_type_,
-        int concurrency,
-        const pingcap::kv::LabelFilter & tiflash_label_filter_)
+        int concurrency)
         : schema(schema_)
         , has_enforce_encode_type(has_enforce_encode_type_)
-        , resp_iter(std::move(tasks), cluster, concurrency, &Poco::Logger::get("pingcap/coprocessor"), tiflash_label_filter_)
+        , resp_iter(std::move(tasks), cluster, concurrency, &Poco::Logger::get("pingcap/coprocessor"))
         , collected(false)
         , concurrency_(concurrency)
     {}

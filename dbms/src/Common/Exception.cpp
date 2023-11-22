@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <Common/FmtUtils.h>
 #include <Common/Logger.h>
 #include <IO/Operators.h>
 #include <IO/ReadBufferFromString.h>
@@ -95,7 +94,7 @@ void tryLogCurrentException(Poco::Logger * logger,
 std::string getCurrentExceptionMessage(bool with_stacktrace,
                                        bool check_embedded_stacktrace)
 {
-    FmtBuffer buffer;
+    std::stringstream stream;
 
     try
     {
@@ -103,18 +102,16 @@ std::string getCurrentExceptionMessage(bool with_stacktrace,
     }
     catch (const Exception & e)
     {
-        buffer.append(getExceptionMessage(e, with_stacktrace, check_embedded_stacktrace));
+        stream << getExceptionMessage(e, with_stacktrace, check_embedded_stacktrace);
     }
     catch (const Poco::Exception & e)
     {
         try
         {
-            buffer.fmtAppend(
-                "Poco::Exception. Code: {}, e.code() = {}, e.displayText() = {}, e.what() = {}",
-                ErrorCodes::POCO_EXCEPTION,
-                e.code(),
-                e.displayText(),
-                e.what());
+            stream << "Poco::Exception. Code: " << ErrorCodes::POCO_EXCEPTION
+                   << ", e.code() = " << e.code()
+                   << ", e.displayText() = " << e.displayText()
+                   << ", e.what() = " << e.what();
         }
         catch (...)
         {
@@ -130,7 +127,8 @@ std::string getCurrentExceptionMessage(bool with_stacktrace,
             if (status)
                 name += " (demangling status: " + toString(status) + ")";
 
-            buffer.fmtAppend("std::exception. Code: {}, type: {}, e.what() = {}", ErrorCodes::STD_EXCEPTION, name, e.what());
+            stream << "std::exception. Code: " << ErrorCodes::STD_EXCEPTION
+                   << ", type: " << name << ", e.what() = " << e.what();
         }
         catch (...)
         {
@@ -146,14 +144,15 @@ std::string getCurrentExceptionMessage(bool with_stacktrace,
             if (status)
                 name += " (demangling status: " + toString(status) + ")";
 
-            buffer.fmtAppend("Unknown exception. Code: {}, type: {}", ErrorCodes::UNKNOWN_EXCEPTION, name);
+            stream << "Unknown exception. Code: " << ErrorCodes::UNKNOWN_EXCEPTION
+                   << ", type: " << name;
         }
         catch (...)
         {
         }
     }
 
-    return buffer.toString();
+    return stream.str();
 }
 
 int getCurrentExceptionCode()
@@ -189,7 +188,7 @@ void rethrowFirstException(const Exceptions & exceptions)
 
 std::string getExceptionMessage(const Exception & e, bool with_stacktrace, bool check_embedded_stacktrace)
 {
-    FmtBuffer buffer;
+    std::stringstream stream;
 
     try
     {
@@ -207,16 +206,18 @@ std::string getExceptionMessage(const Exception & e, bool with_stacktrace, bool 
             }
         }
 
-        buffer.fmtAppend("Code: {}, e.displayText() = {}, e.what() = {}", e.code(), text, e.what());
+        stream << "Code: " << e.code() << ", e.displayText() = " << text
+               << ", e.what() = " << e.what();
 
         if (with_stacktrace && !has_embedded_stack_trace)
-            buffer.append(", Stack trace:\n\n").append(e.getStackTrace().toString());
+            stream << ", Stack trace:\n\n"
+                   << e.getStackTrace().toString();
     }
     catch (...)
     {
     }
 
-    return buffer.toString();
+    return stream.str();
 }
 
 std::string getExceptionMessage(std::exception_ptr e, bool with_stacktrace)

@@ -17,11 +17,10 @@
 #include <Common/nocopyable.h>
 #include <Core/Block.h>
 #include <IO/WriteHelpers.h>
-#include <Storages/DeltaMerge/ColumnFile/ColumnFileDataProvider_fwd.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/StoragePool_fwd.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
+#include <Storages/Page/PageDefines.h>
 
 namespace DB
 {
@@ -127,16 +126,14 @@ public:
 
     ColumnFilePersisted * tryToColumnFilePersisted();
 
-    virtual ColumnFileReaderPtr getReader(
-        const DMContext & context,
-        const IColumnFileDataProviderPtr & data_provider,
-        const ColumnDefinesPtr & col_defs) const = 0;
+    virtual ColumnFileReaderPtr
+    getReader(const DMContext & context, const StorageSnapshotPtr & storage_snap, const ColumnDefinesPtr & col_defs) const = 0;
 
     /// Note: Only ColumnFileInMemory can be appendable. Other ColumnFiles (i.e. ColumnFilePersisted) have
     /// been persisted in the disk and their data will be immutable.
     virtual bool isAppendable() const { return false; }
     virtual void disableAppend() {}
-    virtual bool append(const DMContext & /*dm_context*/, const Block & /*data*/, size_t /*offset*/, size_t /*limit*/, size_t /*data_bytes*/)
+    virtual bool append(DMContext & /*dm_context*/, const Block & /*data*/, size_t /*offset*/, size_t /*limit*/, size_t /*data_bytes*/)
     {
         throw Exception("Unsupported operation", ErrorCodes::LOGICAL_ERROR);
     }
@@ -154,8 +151,7 @@ public:
 
     /// Read data from this reader and store the result into output_cols.
     /// Note that if "range" is specified, then the caller must guarantee that the rows between [rows_offset, rows_offset + rows_limit) are sorted.
-    /// Returns <actual_offset, actual_limit>
-    virtual std::pair<size_t, size_t> readRows(MutableColumns & /*output_cols*/, size_t /*rows_offset*/, size_t /*rows_limit*/, const RowKeyRange * /*range*/)
+    virtual size_t readRows(MutableColumns & /*output_cols*/, size_t /*rows_offset*/, size_t /*rows_limit*/, const RowKeyRange * /*range*/)
     {
         throw Exception("Unsupported operation", ErrorCodes::LOGICAL_ERROR);
     }
@@ -163,14 +159,11 @@ public:
     /// This method is only used to read raw data.
     virtual Block readNextBlock() { throw Exception("Unsupported operation", ErrorCodes::LOGICAL_ERROR); }
 
-    /// This method used to skip next block.
-    virtual size_t skipNextBlock() { throw Exception("Unsupported operation", ErrorCodes::LOGICAL_ERROR); }
-
     /// Create a new reader from current reader with different columns to read.
     virtual ColumnFileReaderPtr createNewReader(const ColumnDefinesPtr & col_defs) = 0;
 };
 
-std::pair<size_t, size_t> copyColumnsData(
+size_t copyColumnsData(
     const Columns & from,
     const ColumnPtr & pk_col,
     MutableColumns & to,

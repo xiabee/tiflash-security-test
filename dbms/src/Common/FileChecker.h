@@ -15,10 +15,8 @@
 #pragma once
 
 #include <Poco/File.h>
-#include <Poco/Logger.h>
 #include <common/logger_useful.h>
 
-#include <map>
 #include <string>
 
 

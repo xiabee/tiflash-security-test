@@ -39,9 +39,11 @@ public:
 
     void flush() override;
 
+    void setTotals(const Block & totals_) override { totals = totals_; }
     void setExtremes(const Block & extremes_) override { extremes = extremes_; }
 
 protected:
+    void writeTotals();
     void writeExtremes();
 
     WriteBuffer & ostr;
@@ -52,6 +54,7 @@ protected:
 
     bool no_escapes;
 
+    Block totals;
     Block extremes;
 
     const Context & context;
@@ -63,4 +66,4 @@ protected:
     void writeValueWithPadding(const ColumnWithTypeAndName & elem, size_t row_num, size_t value_width, size_t pad_to_width);
 };
 
-} // namespace DB
+}

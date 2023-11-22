@@ -20,8 +20,9 @@
 #include <Flash/Coprocessor/DAGStorageInterpreter.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 #include <Interpreters/AggregateDescription.h>
-#include <Interpreters/Context_fwd.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
+#include <Interpreters/ExpressionAnalyzer.h>
 #include <Storages/TableLockHolder.h>
 #include <Storages/Transaction/TiDB.h>
 #pragma GCC diagnostic push
@@ -37,9 +38,6 @@ namespace DB
 class DAGQueryBlock;
 class ExchangeReceiver;
 class DAGExpressionAnalyzer;
-struct SubqueryForSet;
-class Join;
-using JoinPtr = std::shared_ptr<Join>;
 
 /** build ch plan from dag request: dag executors -> ch plan
   */
@@ -72,7 +70,6 @@ private:
     void executeWindowOrder(DAGPipeline & pipeline, SortDescription sort_desc, bool enable_fine_grained_shuffle);
     void executeOrder(DAGPipeline & pipeline, const NamesAndTypes & order_columns);
     void executeLimit(DAGPipeline & pipeline);
-    void executeExpand(DAGPipeline & pipeline, const ExpressionActionsPtr & expr);
     void executeWindow(
         DAGPipeline & pipeline,
         WindowDescription & window_description,
@@ -95,7 +92,7 @@ private:
 
     void restorePipelineConcurrency(DAGPipeline & pipeline);
 
-    DAGContext & dagContext() const;
+    DAGContext & dagContext() const { return *context.getDAGContext(); }
 
     Context & context;
     std::vector<BlockInputStreams> input_streams_vec;

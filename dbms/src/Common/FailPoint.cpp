@@ -14,6 +14,7 @@
 
 #include <Common/Exception.h>
 #include <Common/FailPoint.h>
+#include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
 #include <Poco/Util/LayeredConfiguration.h>
 #include <common/defines.h>
@@ -22,7 +23,6 @@
 #include <boost/core/noncopyable.hpp>
 #include <condition_variable>
 #include <mutex>
-#include <optional>
 
 namespace DB
 {
@@ -42,6 +42,8 @@ namespace DB
     M(region_exception_after_read_from_storage_all_error)         \
     M(exception_before_dmfile_remove_encryption)                  \
     M(exception_before_dmfile_remove_from_disk)                   \
+    M(force_enable_region_persister_compatible_mode)              \
+    M(force_disable_region_persister_compatible_mode)             \
     M(force_triggle_background_merge_delta)                       \
     M(force_triggle_foreground_flush)                             \
     M(exception_before_mpp_register_non_root_mpp_task)            \
@@ -55,6 +57,7 @@ namespace DB
     M(exception_during_mpp_root_task_run)                         \
     M(exception_during_write_to_storage)                          \
     M(force_set_sst_to_dtfile_block_size)                         \
+    M(force_set_sst_decode_rand)                                  \
     M(exception_before_page_file_write_sync)                      \
     M(force_set_segment_ingest_packs_fail)                        \
     M(segment_merge_after_ingest_packs)                           \
@@ -63,15 +66,11 @@ namespace DB
     M(exception_in_creating_set_input_stream)                     \
     M(exception_when_read_from_log)                               \
     M(exception_mpp_hash_build)                                   \
-    M(exception_mpp_hash_probe)                                   \
     M(exception_before_drop_segment)                              \
     M(exception_after_drop_segment)                               \
     M(exception_between_schema_change_in_the_same_diff)           \
     M(force_ps_wal_compact)                                       \
-    M(pause_before_full_gc_prepare)                               \
-    M(force_owner_mgr_state)                                      \
-    M(exception_during_spill)                                     \
-    M(force_fail_to_create_etcd_session)
+    M(pause_before_full_gc_prepare)
 
 #define APPLY_FOR_FAILPOINTS(M)                              \
     M(skip_check_segment_update)                             \
@@ -95,13 +94,9 @@ namespace DB
     M(force_ingest_via_replace)                              \
     M(unblock_query_init_after_write)                        \
     M(exception_in_merged_task_init)                         \
-    M(invalid_mpp_version)                                   \
     M(force_fail_in_flush_region_data)                       \
-    M(force_use_dmfile_format_v3)                            \
-    M(force_set_mocked_s3_object_mtime)                      \
-    M(force_stop_background_checkpoint_upload)               \
-    M(skip_seek_before_read_dmfile)                          \
     M(exception_after_large_write_exceed)
+
 
 #define APPLY_FOR_PAUSEABLE_FAILPOINTS_ONCE(M) \
     M(pause_with_alter_locks_acquired)         \
@@ -125,9 +120,7 @@ namespace DB
 
 #define APPLY_FOR_RANDOM_FAILPOINTS(M)                  \
     M(random_tunnel_wait_timeout_failpoint)             \
-    M(random_tunnel_write_failpoint)                    \
     M(random_tunnel_init_rpc_failure_failpoint)         \
-    M(random_receiver_local_msg_push_failure_failpoint) \
     M(random_receiver_sync_msg_push_failure_failpoint)  \
     M(random_receiver_async_msg_push_failure_failpoint) \
     M(random_limit_check_failpoint)                     \
@@ -138,16 +131,8 @@ namespace DB
     M(random_sharedquery_failpoint)                     \
     M(random_interpreter_failpoint)                     \
     M(random_task_manager_find_task_failure_failpoint)  \
-    M(random_min_tso_scheduler_failpoint)               \
-    M(random_pipeline_model_task_run_failpoint)         \
-    M(random_pipeline_model_task_construct_failpoint)   \
-    M(random_pipeline_model_event_schedule_failpoint)   \
-    M(random_pipeline_model_event_finish_failpoint)     \
-    M(random_pipeline_model_operator_run_failpoint)     \
-    M(random_pipeline_model_cancel_failpoint)           \
-    M(random_spill_to_disk_failpoint)                   \
-    M(random_restore_from_disk_failpoint)               \
-    M(random_exception_when_connect_local_tunnel)
+    M(random_min_tso_scheduler_failpoint)
+
 namespace FailPoints
 {
 #define M(NAME) extern const char(NAME)[] = #NAME "";

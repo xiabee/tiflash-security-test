@@ -20,6 +20,7 @@
 #include <DataTypes/DataTypeDecimal.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/IDataType.h>
+#include <Interpreters/Context.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>

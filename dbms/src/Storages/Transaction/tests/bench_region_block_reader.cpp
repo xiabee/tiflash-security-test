@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/Transaction/DatumCodec.h>
 #include <Storages/Transaction/RegionBlockReader.h>
 #include <benchmark/benchmark.h>
 #include <gtest/gtest.h>
@@ -75,7 +74,7 @@ protected:
             for (size_t i = 0; i < primary_index_info.idx_cols.size(); i++)
             {
                 auto idx = column_name_columns_index_map[primary_index_info.idx_cols[i].name];
-                DB::EncodeDatum(pk_fields[i], table_info.columns[idx].getCodecFlag(), pk_buf);
+                EncodeDatum(pk_fields[i], table_info.columns[idx].getCodecFlag(), pk_buf);
             }
         }
         else

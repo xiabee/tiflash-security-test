@@ -15,6 +15,7 @@
 #include <Columns/ColumnConst.h>
 #include <Common/Exception.h>
 #include <Functions/FunctionsDateTime.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -35,7 +36,7 @@ TEST_F(TestFromUnixTime, TestInputPattern)
 try
 {
     /// set timezone to UTC
-    context->getTimezoneInfo().resetByTimezoneName("UTC");
+    context.getTimezoneInfo().resetByTimezoneName("UTC");
     std::vector<String> decimal_20_0_data{"-1", "0", "1602328271", "2147483647", "2147483648"};
     InferredDataVector<MyDateTime> decimal_20_0_date_time_result{
         MyDateTime(0, 0, 0, 0, 0, 0, 0).toPackedUInt(),
@@ -126,7 +127,7 @@ TEST_F(TestFromUnixTime, TestInputType)
 try
 {
     /// set timezone to UTC
-    context->getTimezoneInfo().resetByTimezoneName("UTC");
+    context.getTimezoneInfo().resetByTimezoneName("UTC");
     std::vector<String> decimal_20_3_data{"-1.000", "0.123", "1602328271.124", "2147483647.123", "2147483648.123"};
     InferredDataVector<MyDateTime> decimal_20_3_date_time_result{
         MyDateTime(0, 0, 0, 0, 0, 0, 0).toPackedUInt(),
@@ -195,7 +196,7 @@ CATCH
 TEST_F(TestFromUnixTime, TestTimezone)
 try
 {
-    context->getTimezoneInfo().resetByTimezoneName("Asia/Shanghai");
+    context.getTimezoneInfo().resetByTimezoneName("Asia/Shanghai");
     std::vector<String> decimal_20_0_data{"-1", "0", "640115999", "640116000", "653414400", "653418000", "2147483647", "2147483648"};
     InferredDataVector<MyDateTime> decimal_20_0_date_time_result{
         MyDateTime(0, 0, 0, 0, 0, 0, 0).toPackedUInt(),
@@ -225,7 +226,7 @@ try
     ASSERT_COLUMN_EQ(createNullableColumn<String>(decimal_20_0_string_result, null_map),
                      executeFunction(func_name, createColumn<Decimal128>(std::make_tuple(20, 0), decimal_20_0_data), createConstColumn<String>(5, format_data)));
 
-    context->getTimezoneInfo().resetByTimezoneOffset(28800);
+    context.getTimezoneInfo().resetByTimezoneOffset(28800);
     decimal_20_0_date_time_result[3] = MyDateTime(1990, 4, 15, 2, 0, 0, 0).toPackedUInt();
     decimal_20_0_string_result[3] = "1990-04-15 02:00:00.000000";
     decimal_20_0_date_time_result[4] = MyDateTime(1990, 9, 16, 0, 0, 0, 0).toPackedUInt();
@@ -236,15 +237,15 @@ try
     ASSERT_COLUMN_EQ(createNullableColumn<String>(decimal_20_0_string_result, null_map),
                      executeFunction(func_name, createColumn<Decimal128>(std::make_tuple(20, 0), decimal_20_0_data), createConstColumn<String>(5, format_data)));
 
-    context->getTimezoneInfo().resetByTimezoneName("America/Santiago");
-    decimal_20_0_data = {"-1", "0", "1648951200", "1648954800", "1630814399", "1630814400", "2147483647", "2147483648"};
+    context.getTimezoneInfo().resetByTimezoneName("America/Santiago");
+    decimal_20_0_data = {"-1", "0", "1648951200", "1648954800", "1662263999", "1662264000", "2147483647", "2147483648"};
     decimal_20_0_date_time_result = {
         MyDateTime(0, 0, 0, 0, 0, 0, 0).toPackedUInt(),
         MyDateTime(1969, 12, 31, 21, 0, 0, 0).toPackedUInt(),
         MyDateTime(2022, 4, 2, 23, 0, 0, 0).toPackedUInt(),
         MyDateTime(2022, 4, 2, 23, 0, 0, 0).toPackedUInt(),
-        MyDateTime(2021, 9, 4, 23, 59, 59, 0).toPackedUInt(),
-        MyDateTime(2021, 9, 5, 1, 0, 0, 0).toPackedUInt(),
+        MyDateTime(2022, 9, 3, 23, 59, 59, 0).toPackedUInt(),
+        MyDateTime(2022, 9, 4, 1, 0, 0, 0).toPackedUInt(),
         MyDateTime(2038, 1, 19, 0, 14, 7, 0).toPackedUInt(),
         MyDateTime(2038, 1, 19, 0, 14, 8, 0).toPackedUInt(),
     };
@@ -253,8 +254,8 @@ try
         "1969-12-31 21:00:00.000000",
         "2022-04-02 23:00:00.000000",
         "2022-04-02 23:00:00.000000",
-        "2021-09-04 23:59:59.000000",
-        "2021-09-05 01:00:00.000000",
+        "2022-09-03 23:59:59.000000",
+        "2022-09-04 01:00:00.000000",
         "2038-01-19 00:14:07.000000",
         "2038-01-19 00:14:08.000000"};
 
@@ -263,11 +264,11 @@ try
     ASSERT_COLUMN_EQ(createNullableColumn<String>(decimal_20_0_string_result, null_map),
                      executeFunction(func_name, createColumn<Decimal128>(std::make_tuple(20, 0), decimal_20_0_data), createConstColumn<String>(5, format_data)));
 
-    context->getTimezoneInfo().resetByTimezoneOffset(-10800);
+    context.getTimezoneInfo().resetByTimezoneOffset(-10800);
     decimal_20_0_date_time_result[3] = MyDateTime(2022, 4, 3, 0, 0, 0, 0).toPackedUInt();
     decimal_20_0_string_result[3] = "2022-04-03 00:00:00.000000";
-    decimal_20_0_date_time_result[4] = MyDateTime(2021, 9, 5, 0, 59, 59, 0).toPackedUInt();
-    decimal_20_0_string_result[4] = "2021-09-05 00:59:59.000000";
+    decimal_20_0_date_time_result[4] = MyDateTime(2022, 9, 4, 0, 59, 59, 0).toPackedUInt();
+    decimal_20_0_string_result[4] = "2022-09-04 00:59:59.000000";
 
     ASSERT_COLUMN_EQ(createNullableColumn<MyDateTime>(std::make_tuple(0), decimal_20_0_date_time_result, null_map),
                      executeFunction(func_name, createColumn<Decimal128>(std::make_tuple(20, 0), decimal_20_0_data)));

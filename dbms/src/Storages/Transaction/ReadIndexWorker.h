@@ -35,20 +35,18 @@ class ReadIndexTest;
 
 struct AsyncWaker
 {
-    struct Notifier final : AsyncNotifier
-        , MutexCondVarWrap
+    struct Notifier : AsyncNotifier
+        , MutexLockWrap
     {
-        // usually sender invoke `wake`, receiver invoke `blockedWaitUtil`
-        // NOT thread safe
-        Status blockedWaitUtil(const SteadyClock::time_point &) override;
-        // thread safe
+        mutable std::condition_variable cv;
+        // multi notifiers single receiver model. use another flag to avoid waiting endlessly.
+        mutable std::atomic_bool wait_flag{false};
+
+        // usually sender invoke `wake`, receiver invoke `blockedWaitFor`
+        AsyncNotifier::Status blockedWaitFor(std::chrono::milliseconds timeout) override;
         void wake() override;
 
-        ~Notifier() override = default;
-
-    private:
-        // multi notifiers single receiver model. use another flag to avoid waiting endlessly.
-        AlignedStruct<std::atomic_bool, CPU_CACHE_LINE_SIZE> is_awake{false};
+        virtual ~Notifier() = default;
     };
     using NotifierPtr = std::shared_ptr<Notifier>;
 
@@ -58,7 +56,7 @@ struct AsyncWaker
     // create a `Notifier` in heap & let proxy wrap it and return as rust ptr with specific type.
     explicit AsyncWaker(const TiFlashRaftProxyHelper & helper_);
 
-    AsyncNotifier::Status waitUtil(SteadyClock::time_point);
+    AsyncNotifier::Status waitFor(std::chrono::milliseconds timeout);
 
     RawVoidPtr getRaw() const;
 
@@ -90,7 +88,7 @@ public:
 
     void wakeAll(); // wake all runners to handle tasks
     void asyncRun();
-    void runOneRound(SteadyClock::duration min_dur, size_t id);
+    void runOneRound(Duration min_dur, size_t id);
     void stop();
     ~ReadIndexWorkerManager();
     BatchReadIndexRes batchReadIndex(
@@ -106,7 +104,7 @@ public:
     ReadIndexFuturePtr genReadIndexFuture(const kvrpcpb::ReadIndexRequest & req);
 
 private:
-    void runOneRoundAll(SteadyClock::duration min_dur = std::chrono::milliseconds{0});
+    void runOneRoundAll(Duration min_dur = std::chrono::milliseconds{0});
 
     enum class State : uint8_t
     {
@@ -126,7 +124,7 @@ private:
         void blockedWaitFor(std::chrono::milliseconds timeout) const;
 
         /// Traverse its workers and try to execute tasks.
-        void runOneRound(SteadyClock::duration min_dur);
+        void runOneRound(Duration min_dur);
 
         /// Create one thread to run asynchronously.
         void asyncRun();
@@ -221,7 +219,7 @@ struct ReadIndexDataNode : MutexLockWrap
         Task task_pair;
         kvrpcpb::ReadIndexResponse resp;
         std::deque<ReadIndexFuturePtr> callbacks;
-        SteadyClock::time_point start_time = SteadyClock::now();
+        Timepoint start_time = Clock::now();
     };
 
     struct WaitingTasks : MutexLockWrap
@@ -300,12 +298,12 @@ struct ReadIndexWorker
 
     void consumeReadIndexNotifyCtrl();
 
-    void consumeRegionNotifies(SteadyClock::duration min_dur);
+    void consumeRegionNotifies(Duration min_dur);
 
     ReadIndexFuturePtr genReadIndexFuture(const kvrpcpb::ReadIndexRequest & req);
 
     // try to consume read-index response notifications & region waiting list
-    void runOneRound(SteadyClock::duration min_dur);
+    void runOneRound(Duration min_dur);
 
     explicit ReadIndexWorker(
         const TiFlashRaftProxyHelper & proxy_helper_,
@@ -331,7 +329,7 @@ struct ReadIndexWorker
     //        x = x == 0 ? 1 : x;
     //        max_read_index_history = x;
     //    }
-    bool lastRunTimeout(SteadyClock::duration timeout) const;
+    bool lastRunTimeout(Duration timeout) const;
 
     void removeRegion(uint64_t);
 
@@ -350,7 +348,7 @@ struct ReadIndexWorker
     RegionNotifyMap region_notify_map;
 
     // no need to be protected
-    std::atomic<SteadyClock::time_point> last_run_time{SteadyClock::time_point::min()};
+    std::atomic<Timepoint> last_run_time{Timepoint::min()};
 };
 
 struct MockStressTestCfg

@@ -21,84 +21,44 @@
 
 namespace DB
 {
-using SteadyClock = std::chrono::steady_clock;
-static constexpr size_t CPU_CACHE_LINE_SIZE = 64;
-
-template <typename Base, size_t alignment>
-struct AlignedStruct
-{
-    template <typename... Args>
-    explicit AlignedStruct(Args &&... args)
-        : inner{std::forward<Args>(args)...}
-    {}
-
-    Base & base() { return inner; }
-    const Base & base() const { return inner; }
-    Base * operator->() { return &inner; }
-    const Base * operator->() const { return &inner; }
-    Base & operator*() { return inner; }
-    const Base & operator*() const { return inner; }
-
-private:
-    // Wrapped with struct to guarantee that it is aligned to `alignment`
-    // DO NOT need padding byte
-    alignas(alignment) Base inner;
-};
-
 class MutexLockWrap
 {
 public:
-    using Mutex = std::mutex;
-
-    std::lock_guard<Mutex> genLockGuard() const
+    std::lock_guard<std::mutex> genLockGuard() const
     {
-        return std::lock_guard(*mutex);
+        return std::lock_guard(mutex);
     }
 
-    std::unique_lock<Mutex> tryToLock() const
+    std::unique_lock<std::mutex> tryToLock() const
     {
-        return std::unique_lock(*mutex, std::try_to_lock);
+        return std::unique_lock(mutex, std::try_to_lock);
     }
 
-    std::unique_lock<Mutex> genUniqueLock() const
+    std::unique_lock<std::mutex> genUniqueLock() const
     {
-        return std::unique_lock(*mutex);
+        return std::unique_lock(mutex);
     }
 
 private:
-    mutable AlignedStruct<Mutex, CPU_CACHE_LINE_SIZE> mutex;
+    mutable std::mutex mutex;
 };
 
 class SharedMutexLockWrap
 {
 public:
-    using Mutex = std::shared_mutex;
-
-    std::shared_lock<Mutex> genSharedLock() const
+    std::shared_lock<std::shared_mutex> genReadLockGuard() const
     {
-        return std::shared_lock(*mutex);
+        return std::shared_lock(shared_mutex);
     }
 
-    std::unique_lock<Mutex> genUniqueLock() const
+    std::unique_lock<std::shared_mutex> genWriteLockGuard() const
     {
-        return std::unique_lock(*mutex);
+        return std::unique_lock(shared_mutex);
     }
 
 private:
-    mutable AlignedStruct<Mutex, CPU_CACHE_LINE_SIZE> mutex;
+    mutable std::shared_mutex shared_mutex;
 };
-
-class MutexCondVarWrap : public MutexLockWrap
-{
-public:
-    using CondVar = std::condition_variable;
-
-    CondVar & condVar() const { return *cv; }
-
-private:
-    mutable AlignedStruct<CondVar, CPU_CACHE_LINE_SIZE> cv;
-};
-
 
 struct AsyncNotifier
 {
@@ -107,11 +67,7 @@ struct AsyncNotifier
         Timeout,
         Normal,
     };
-    virtual Status blockedWaitFor(const std::chrono::milliseconds & duration)
-    {
-        return blockedWaitUtil(SteadyClock::now() + duration);
-    }
-    virtual Status blockedWaitUtil(const SteadyClock::time_point &) = 0;
+    virtual Status blockedWaitFor(std::chrono::milliseconds) { return AsyncNotifier::Status::Timeout; }
     virtual void wake() = 0;
     virtual ~AsyncNotifier() = default;
 };

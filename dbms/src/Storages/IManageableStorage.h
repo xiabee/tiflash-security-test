@@ -14,17 +14,14 @@
 
 #pragma once
 
-#include <Common/UniThreadPool.h>
 #include <DataStreams/IBlockInputStream.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <Interpreters/Context_fwd.h>
-#include <Operators/Operator.h>
+#include <Interpreters/Context.h>
 #include <Storages/IStorage.h>
 #include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
 #include <Storages/Transaction/StorageEngineType.h>
 #include <Storages/Transaction/TiKVHandle.h>
 #include <Storages/Transaction/Types.h>
-
 
 namespace TiDB
 {
@@ -86,7 +83,7 @@ public:
     virtual UInt64 onSyncGc(Int64 /*limit*/, const DM::GCOptions &) { throw Exception("Unsupported"); }
 
     /// Return true is data dir exist
-    virtual bool initStoreIfDataDirExist(ThreadPool * /*thread_pool*/) { throw Exception("Unsupported"); }
+    virtual bool initStoreIfDataDirExist() { throw Exception("Unsupported"); }
 
     virtual ::TiDB::StorageEngine engineType() const = 0;
 
@@ -143,13 +140,13 @@ public:
 
     PKType getPKType() const
     {
-        static const DataTypeInt64 & data_type_int64 = {};
-        static const DataTypeUInt64 & data_type_u_int64 = {};
+        static const DataTypeInt64 & dataTypeInt64 = {};
+        static const DataTypeUInt64 & dataTypeUInt64 = {};
 
         auto pk_data_type = getPKTypeImpl();
-        if (pk_data_type->equals(data_type_int64))
+        if (pk_data_type->equals(dataTypeInt64))
             return PKType::INT64;
-        else if (pk_data_type->equals(data_type_u_int64))
+        else if (pk_data_type->equals(dataTypeUInt64))
             return PKType::UINT64;
         return PKType::UNSPECIFIED;
     }
@@ -174,19 +171,6 @@ public:
     virtual void releaseDecodingBlock(Int64 /* block_decoding_schema_version */, BlockUPtr /* block */)
     {
         throw Exception("Method getDecodingSchemaSnapshot is not supported by storage " + getName(), ErrorCodes::NOT_IMPLEMENTED);
-    }
-
-    virtual SourceOps readSourceOps(
-        PipelineExecutorStatus &,
-        const Names &,
-        const SelectQueryInfo &,
-        const Context &,
-        size_t,
-        unsigned)
-    {
-        throw Exception(
-            fmt::format("Method readSourceOps is not supported by storage {}", getName()),
-            ErrorCodes::NOT_IMPLEMENTED);
     }
 
 private:

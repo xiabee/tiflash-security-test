@@ -69,8 +69,8 @@ BlockInputStreamPtr FormatFactory::getInput(
             std::forward<decltype(row_stream)>(row_stream),
             sample,
             max_block_size,
-            0,
-            0);
+            settings.input_format_allow_errors_num,
+            settings.input_format_allow_errors_ratio);
     };
 
     if (name == "Native")
