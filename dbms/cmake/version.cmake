@@ -1,17 +1,3 @@
-# Copyright 2023 PingCAP, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 # This strings autochanged from release_lib.sh:
 set(VERSION_DESCRIBE v1.1.54381-testing)
 set(VERSION_REVISION 54381)
@@ -34,7 +20,7 @@ endif ()
 
 set (VERSION_FULL "${PROJECT_NAME} ${VERSION_STRING}")
 
-if (OS_DARWIN)
+if (APPLE)
     # dirty hack: ld: malformed 64-bit a.b.c.d.e version number: 1.1.54160
     math (EXPR VERSION_SO1 "${VERSION_REVISION}/255")
     math (EXPR VERSION_SO2 "${VERSION_REVISION}%255")
@@ -52,14 +38,11 @@ set (TIFLASH_VERSION_REVISION 0)
 set (TIFLASH_VERSION "${TIFLASH_VERSION_MAJOR}.${TIFLASH_VERSION_MINOR}.${TIFLASH_VERSION_REVISION}")
 
 # Release version that follows PD/TiKV/TiDB convention.
-# Variables bellow are important, use `COMMAND_ERROR_IS_FATAL ANY`(since cmake 3.19) to confirm that there is output.
-
 execute_process(
   COMMAND git describe --tags --dirty --always
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE TIFLASH_RELEASE_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE
-  COMMAND_ERROR_IS_FATAL ANY
   )
 
 set (TIFLASH_EDITION $ENV{TIFLASH_EDITION})
@@ -72,7 +55,6 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE TIFLASH_GIT_HASH
   OUTPUT_STRIP_TRAILING_WHITESPACE
-  COMMAND_ERROR_IS_FATAL ANY
   )
 
 execute_process(
@@ -80,14 +62,12 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE TIFLASH_GIT_BRANCH
   OUTPUT_STRIP_TRAILING_WHITESPACE
-  COMMAND_ERROR_IS_FATAL ANY
   )
 
 execute_process(
   COMMAND date -u "+%Y-%m-%d %H:%M:%S"
   OUTPUT_VARIABLE TIFLASH_UTC_BUILD_TIME
   OUTPUT_STRIP_TRAILING_WHITESPACE
-  COMMAND_ERROR_IS_FATAL ANY
 )
 
 set (TIFLASH_PROFILE ${CMAKE_BUILD_TYPE})

@@ -1,21 +1,6 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/Exception.h>
 #include <Common/ProfileEvents.h>
 #include <Encryption/PosixRandomAccessFile.h>
-#include <Encryption/RateLimiter.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -27,6 +12,7 @@ extern const Event FileOpenFailed;
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int FILE_DOESNT_EXIST;
@@ -38,9 +24,7 @@ extern const int CANNOT_SEEK_THROUGH_FILE;
 extern const int CANNOT_SELECT;
 } // namespace ErrorCodes
 
-PosixRandomAccessFile::PosixRandomAccessFile(const std::string & file_name_, int flags, const ReadLimiterPtr & read_limiter_)
-    : file_name{file_name_}
-    , read_limiter(read_limiter_)
+PosixRandomAccessFile::PosixRandomAccessFile(const std::string & file_name_, int flags) : file_name{file_name_}
 {
     ProfileEvents::increment(ProfileEvents::FileOpen);
 
@@ -78,37 +62,17 @@ PosixRandomAccessFile::~PosixRandomAccessFile()
 
 void PosixRandomAccessFile::close()
 {
-    if (fd < 0)
-        return;
-    while (::close(fd) != 0)
-        if (errno != EINTR)
-            throwFromErrno("Cannot close file " + file_name, ErrorCodes::CANNOT_CLOSE_FILE);
+    if (0 != ::close(fd))
+        throw Exception("Cannot close file", ErrorCodes::CANNOT_CLOSE_FILE);
 
     fd = -1;
     metric_increment.destroy();
 }
 
-off_t PosixRandomAccessFile::seek(off_t offset, int whence)
-{
-    return ::lseek(fd, offset, whence);
-}
+off_t PosixRandomAccessFile::seek(off_t offset, int whence) { return ::lseek(fd, offset, whence); }
 
-ssize_t PosixRandomAccessFile::read(char * buf, size_t size)
-{
-    if (read_limiter != nullptr)
-    {
-        read_limiter->request(size);
-    }
-    return ::read(fd, buf, size);
-}
+ssize_t PosixRandomAccessFile::read(char * buf, size_t size) { return ::read(fd, buf, size); }
 
-ssize_t PosixRandomAccessFile::pread(char * buf, size_t size, off_t offset) const
-{
-    if (read_limiter != nullptr)
-    {
-        read_limiter->request(size);
-    }
-    return ::pread(fd, buf, size, offset);
-}
+ssize_t PosixRandomAccessFile::pread(char * buf, size_t size, off_t offset) const { return ::pread(fd, buf, size, offset); }
 
 } // namespace DB

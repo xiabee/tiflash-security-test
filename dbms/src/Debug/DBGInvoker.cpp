@@ -1,21 +1,6 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/FmtUtils.h>
 #include <DataStreams/StringStreamBlockInputStream.h>
+#include <Debug/ClusterManage.h>
 #include <Debug/DBGInvoker.h>
-#include <Debug/ReadIndexStressTest.h>
 #include <Debug/dbgFuncCoprocessor.h>
 #include <Debug/dbgFuncFailPoint.h>
 #include <Debug/dbgFuncMisc.h>
@@ -27,21 +12,25 @@
 #include <Debug/dbgFuncSchemaName.h>
 #include <Parsers/ASTLiteral.h>
 
+#include <cstring>
 #include <thread>
 
 namespace DB
 {
+
 void dbgFuncEcho(Context &, const ASTs & args, DBGInvoker::Printer output)
 {
-    for (const auto & arg : args)
-        output(arg->getColumnName());
+    for (auto it = args.begin(); it != args.end(); ++it)
+        output((*it)->getColumnName());
 }
 
 void dbgFuncSleep(Context &, const ASTs & args, DBGInvoker::Printer output)
 {
     const Int64 t = safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[0]).value);
     std::this_thread::sleep_for(std::chrono::milliseconds(t));
-    output(fmt::format("sleep {} ms.", t));
+    std::stringstream res;
+    res << "sleep " << t << " ms.";
+    output(res.str());
 }
 
 DBGInvoker::DBGInvoker()
@@ -63,8 +52,6 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("rename_column_in_tidb_table", MockTiDBTable::dbgFuncRenameColumnInTiDBTable);
     regSchemalessFunc("rename_tidb_table", MockTiDBTable::dbgFuncRenameTiDBTable);
     regSchemalessFunc("truncate_tidb_table", MockTiDBTable::dbgFuncTruncateTiDBTable);
-    regSchemalessFunc("create_tidb_tables", MockTiDBTable::dbgFuncCreateTiDBTables);
-    regSchemalessFunc("rename_tidb_tables", MockTiDBTable::dbgFuncRenameTiDBTables);
 
     regSchemalessFunc("set_flush_threshold", dbgFuncSetFlushThreshold);
 
@@ -83,7 +70,8 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("dump_all_region", dbgFuncDumpAllRegion);
     regSchemalessFunc("dump_all_mock_region", dbgFuncDumpAllMockRegion);
     regSchemalessFunc("remove_region", dbgFuncRemoveRegion);
-    regSchemalessFunc("find_region_by_range", dbgFuncFindRegionByRange);
+    regSchemalessFunc("find_region_by_range", ClusterManage::findRegionByRange);
+    regSchemalessFunc("check_table_optimize", ClusterManage::checkTableOptimize);
 
     regSchemalessFunc("enable_schema_sync_service", dbgFuncEnableSchemaSyncService);
     regSchemalessFunc("refresh_schemas", dbgFuncRefreshSchemas);
@@ -107,7 +95,6 @@ DBGInvoker::DBGInvoker()
 
     regSchemalessFunc("init_fail_point", DbgFailPointFunc::dbgInitFailPoint);
     regSchemalessFunc("enable_fail_point", DbgFailPointFunc::dbgEnableFailPoint);
-    regSchemalessFunc("enable_pause_fail_point", DbgFailPointFunc::dbgEnablePauseFailPoint);
     regSchemalessFunc("disable_fail_point", DbgFailPointFunc::dbgDisableFailPoint);
     regSchemalessFunc("wait_fail_point", DbgFailPointFunc::dbgDisableFailPoint);
 
@@ -119,14 +106,8 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("mapped_database", dbgFuncMappedDatabase);
     regSchemalessFunc("mapped_table", dbgFuncMappedTable);
     regSchemafulFunc("query_mapped", dbgFuncQueryMapped);
-    regSchemalessFunc("get_tiflash_replica_count", dbgFuncGetTiflashReplicaCount);
-    regSchemalessFunc("get_partition_tables_tiflash_replica_count", dbgFuncGetPartitionTablesTiflashReplicaCount);
 
     regSchemalessFunc("search_log_for_key", dbgFuncSearchLogForKey);
-    regSchemalessFunc("tidb_dag", dbgFuncTiDBQueryFromNaturalDag);
-    regSchemalessFunc("gc_global_storage_pool", dbgFuncTriggerGlobalPageStorageGC);
-
-    regSchemalessFunc("read_index_stress_test", ReadIndexStressTest::dbgFuncStressTest);
 }
 
 void replaceSubstr(std::string & str, const std::string & target, const std::string & replacement)
@@ -175,27 +156,19 @@ BlockInputStreamPtr DBGInvoker::invoke(Context & context, const std::string & or
 }
 
 BlockInputStreamPtr DBGInvoker::invokeSchemaless(
-    Context & context,
-    const std::string & name,
-    const SchemalessDBGFunc & func,
-    const ASTs & args)
+    Context & context, const std::string & name, const SchemalessDBGFunc & func, const ASTs & args)
 {
-    FmtBuffer fmt_buf;
-    fmt_buf.fmtAppend("{}(", name);
-    fmt_buf.joinStr(
-        args.cbegin(),
-        args.cend(),
-        [](const auto & arg, FmtBuffer & fb) {
-            std::string column_name = arg->getColumnName();
-            fb.append(normalizeArg(column_name));
-        },
-        ", ");
-    fmt_buf.append(")");
+    std::stringstream col_name;
+    col_name << name << "(";
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        std::string arg = args[i]->getColumnName();
+        col_name << normalizeArg(arg) << ((i + 1 == args.size()) ? "" : ", ");
+    }
+    col_name << ")";
 
-    std::shared_ptr<StringStreamBlockInputStream> res = std::make_shared<StringStreamBlockInputStream>(fmt_buf.toString());
-    Printer printer = [&](const std::string & s) {
-        res->append(s);
-    };
+    std::shared_ptr<StringStreamBlockInputStream> res = std::make_shared<StringStreamBlockInputStream>(col_name.str());
+    Printer printer = [&](const std::string & s) { res->append(s); };
 
     func(context, args, printer);
 

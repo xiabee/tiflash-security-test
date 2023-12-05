@@ -1,27 +1,15 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Interpreters/Settings.h>
+
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int UNKNOWN_SETTING;
-extern const int THERE_IS_NO_PROFILE;
-extern const int NO_ELEMENTS_IN_CONFIG;
-} // namespace ErrorCodes
+    extern const int UNKNOWN_SETTING;
+    extern const int THERE_IS_NO_PROFILE;
+    extern const int NO_ELEMENTS_IN_CONFIG;
+}
 
 
 /// Set the configuration by name.
@@ -30,11 +18,10 @@ void Settings::set(const String & name, const Field & value)
 #define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME) NAME.set(value);
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
+    else
+        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
 
 #undef TRY_SET
 }
@@ -45,11 +32,10 @@ void Settings::set(const String & name, ReadBuffer & buf)
 #define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME) NAME.set(buf);
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
+    else
+        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
 
 #undef TRY_SET
 }
@@ -60,13 +46,12 @@ void Settings::ignore(const String & name, ReadBuffer & buf)
 #define TRY_IGNORE(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME) decltype(NAME)(DEFAULT).set(buf);
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_IGNORE)
-    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
+    else
+        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
 
-#undef TRY_IGNORE
+    #undef TRY_IGNORE
 }
 
 /** Set the setting by name. Read the value in text form from a string (for example, from a config, or from a URL parameter).
@@ -76,11 +61,10 @@ void Settings::set(const String & name, const String & value)
 #define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME) NAME.set(value);
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
+    else
+        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
 
 #undef TRY_SET
 }
@@ -90,11 +74,10 @@ String Settings::get(const String & name) const
 #define GET(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME) return NAME.toString();
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(GET)
-    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
+    else
+        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
 
 #undef GET
 }
@@ -102,17 +85,12 @@ String Settings::get(const String & name) const
 bool Settings::tryGet(const String & name, String & value) const
 {
 #define TRY_GET(TYPE, NAME, DEFAULT, DESCRIPTION) \
-    else if (name == #NAME)                       \
-    {                                             \
-        value = NAME.toString();                  \
-        return true;                              \
-    }
+    else if (name == #NAME) { value = NAME.toString(); return true; }
 
-    if (false)
-    {
-    }
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_GET)
-    else { return false; }
+    else
+        return false;
 
 #undef TRY_GET
 }
@@ -135,7 +113,7 @@ void Settings::setProfile(const String & profile_name, Poco::Util::AbstractConfi
 
     for (const std::string & key : config_keys)
     {
-        if (key == "profile") /// Inheritance of one profile from another.
+        if (key == "profile")   /// Inheritance of one profile from another.
             setProfile(config.getString(elem + "." + key), config);
         else
             set(key, config.getString(elem + "." + key));
@@ -183,10 +161,10 @@ void Settings::deserialize(ReadBuffer & buf)
 void Settings::serialize(WriteBuffer & buf) const
 {
 #define WRITE(TYPE, NAME, DEFAULT, DESCRIPTION) \
-    if (NAME.changed)                           \
-    {                                           \
-        writeStringBinary(#NAME, buf);          \
-        NAME.write(buf);                        \
+    if (NAME.changed) \
+    { \
+        writeStringBinary(#NAME, buf); \
+        NAME.write(buf); \
     }
 
     APPLY_FOR_SETTINGS(WRITE)
@@ -197,4 +175,4 @@ void Settings::serialize(WriteBuffer & buf) const
 #undef WRITE
 }
 
-} // namespace DB
+}

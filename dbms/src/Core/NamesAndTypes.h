@@ -1,41 +1,25 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Core/Names.h>
-#include <DataTypes/IDataType.h>
-
-#include <initializer_list>
-#include <list>
 #include <map>
-#include <set>
+#include <list>
 #include <string>
+#include <set>
+#include <initializer_list>
+
+#include <DataTypes/IDataType.h>
+#include <Core/Names.h>
 
 
 namespace DB
 {
+
 struct NameAndTypePair
 {
     String name;
     DataTypePtr type;
 
-    NameAndTypePair() = default;
-    NameAndTypePair(const String & name_, const DataTypePtr & type_)
-        : name(name_)
-        , type(type_)
-    {}
+    NameAndTypePair() {}
+    NameAndTypePair(const String & name_, const DataTypePtr & type_) : name(name_), type(type_) {}
 
     bool operator<(const NameAndTypePair & rhs) const
     {
@@ -50,25 +34,17 @@ struct NameAndTypePair
 
 using NamesAndTypes = std::vector<NameAndTypePair>;
 
-String dumpJsonStructure(const NamesAndTypes & names_and_types);
-
-Names toNames(const NamesAndTypes & names_and_types);
-
 class NamesAndTypesList : public std::list<NameAndTypePair>
 {
 public:
     using Iterator = std::list<NameAndTypePair>::iterator;
 
-    NamesAndTypesList() = default;
+    NamesAndTypesList() {}
 
-    NamesAndTypesList(std::initializer_list<NameAndTypePair> init)
-        : std::list<NameAndTypePair>(init)
-    {}
+    NamesAndTypesList(std::initializer_list<NameAndTypePair> init) : std::list<NameAndTypePair>(init) {}
 
     template <typename Iterator>
-    NamesAndTypesList(Iterator begin, Iterator end)
-        : std::list<NameAndTypePair>(begin, end)
-    {}
+    NamesAndTypesList(Iterator begin, Iterator end) : std::list<NameAndTypePair>(begin, end) {}
 
 
     void readText(ReadBuffer & buf);
@@ -99,4 +75,4 @@ public:
     bool contains(const String & name) const;
 };
 
-} // namespace DB
+}

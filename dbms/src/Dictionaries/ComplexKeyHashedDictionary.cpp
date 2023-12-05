@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <ext/map.h>
 #include <ext/range.h>
 #include <Dictionaries/ComplexKeyHashedDictionary.h>
@@ -510,7 +496,7 @@ void ComplexKeyHashedDictionary::getItemsImpl(
         const auto key = placeKeysInPool(i, key_columns, keys, temporary_keys_pool);
 
         const auto it = attr.find(key);
-        set_value(i, it != attr.end() ? static_cast<OutputType>(it->getMapped()) : get_default(i));
+        set_value(i, it != attr.end() ? static_cast<OutputType>(it->second) : get_default(i));
 
         /// free memory allocated for the key
         temporary_keys_pool.rollback(key.size);
@@ -643,7 +629,7 @@ std::vector<StringRef> ComplexKeyHashedDictionary::getKeys(const Attribute & att
     std::vector<StringRef> keys;
     keys.reserve(attr.size());
     for (const auto & key : attr)
-        keys.push_back(key.getKey());
+        keys.push_back(key.first);
 
     return keys;
 }

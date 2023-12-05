@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Common/Exception.h>
@@ -20,6 +6,7 @@
 
 namespace DB
 {
+
 // Those versions use different data types. It is definitely a bad design pattern.
 // Unfortunately we cannot change it for compatibility issue.
 
@@ -38,7 +25,6 @@ using Version = UInt32;
 
 inline static constexpr Version V0 = 0;
 inline static constexpr Version V1 = 1; // Add column stats
-inline static constexpr Version V2 = 2; // Add checksum and configuration
 } // namespace DMFileFormat
 
 namespace StableFormat
@@ -64,11 +50,6 @@ using Version = UInt32;
 inline static constexpr Version V1 = 1;
 // Support multiple thread-write && read with offset inside page. See FLASH_341 && FLASH-942 for details.
 inline static constexpr Version V2 = 2;
-// Support multiple thread-write/read with offset inside page && support wal store meta && support space reused.
-// If we do enabled PageFormat::V3, it is not means all data in Disk will be V3 format.
-// - If we already have V2 data in disk. It will turn PageStorage into MIX_MODE
-// - If we don't have any v2 data in disk. It will turn PageStorage into ONLY_V3
-inline static constexpr Version V3 = 3;
 } // namespace PageFormat
 
 struct StorageFormatVersion
@@ -78,7 +59,6 @@ struct StorageFormatVersion
     StableFormat::Version stable;
     DeltaFormat::Version delta;
     PageFormat::Version page;
-    size_t identifier;
 };
 
 inline static const StorageFormatVersion STORAGE_FORMAT_V1 = StorageFormatVersion{
@@ -87,7 +67,6 @@ inline static const StorageFormatVersion STORAGE_FORMAT_V1 = StorageFormatVersio
     .stable = StableFormat::V1,
     .delta = DeltaFormat::V2,
     .page = PageFormat::V2,
-    .identifier = 1,
 };
 
 inline static const StorageFormatVersion STORAGE_FORMAT_V2 = StorageFormatVersion{
@@ -96,55 +75,25 @@ inline static const StorageFormatVersion STORAGE_FORMAT_V2 = StorageFormatVersio
     .stable = StableFormat::V1,
     .delta = DeltaFormat::V3, // diff
     .page = PageFormat::V2,
-    .identifier = 2,
 };
 
-inline static const StorageFormatVersion STORAGE_FORMAT_V3 = StorageFormatVersion{
-    .segment = SegmentFormat::V2,
-    .dm_file = DMFileFormat::V2, // diff
-    .stable = StableFormat::V1,
-    .delta = DeltaFormat::V3,
-    .page = PageFormat::V2,
-    .identifier = 3,
-};
-
-
-inline static const StorageFormatVersion STORAGE_FORMAT_V4 = StorageFormatVersion{
-    .segment = SegmentFormat::V2,
-    .dm_file = DMFileFormat::V2,
-    .stable = StableFormat::V1,
-    .delta = DeltaFormat::V3,
-    .page = PageFormat::V3, // diff
-    .identifier = 4,
-};
-
-inline StorageFormatVersion STORAGE_FORMAT_CURRENT = STORAGE_FORMAT_V4;
+inline StorageFormatVersion STORAGE_FORMAT_CURRENT = STORAGE_FORMAT_V2;
 
 inline const StorageFormatVersion & toStorageFormat(UInt64 setting)
 {
     switch (setting)
     {
-    case 1:
-        return STORAGE_FORMAT_V1;
-    case 2:
-        return STORAGE_FORMAT_V2;
-    case 3:
-        return STORAGE_FORMAT_V3;
-    case 4:
-        return STORAGE_FORMAT_V4;
-    default:
-        throw Exception("Illegal setting value: " + DB::toString(setting));
+        case 1:
+            return STORAGE_FORMAT_V1;
+        case 2:
+            return STORAGE_FORMAT_V2;
+        default:
+            throw Exception("Illegal setting value: " + DB::toString(setting));
     }
 }
 
-inline void setStorageFormat(UInt64 setting)
-{
-    STORAGE_FORMAT_CURRENT = toStorageFormat(setting);
-}
+inline void setStorageFormat(UInt64 setting) { STORAGE_FORMAT_CURRENT = toStorageFormat(setting); }
 
-inline void setStorageFormat(const StorageFormatVersion & version)
-{
-    STORAGE_FORMAT_CURRENT = version;
-}
+inline void setStorageFormat(const StorageFormatVersion & version) { STORAGE_FORMAT_CURRENT = version; }
 
 } // namespace DB

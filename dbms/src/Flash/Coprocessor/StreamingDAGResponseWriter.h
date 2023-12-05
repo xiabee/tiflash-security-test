@@ -1,52 +1,44 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/Logger.h>
 #include <Core/Types.h>
 #include <DataTypes/IDataType.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
-#include <Flash/Coprocessor/DAGContext.h>
+#include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
-#include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <common/logger_useful.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include <common/ThreadPool.h>
+#include <tipb/select.pb.h>
+
+#pragma GCC diagnostic pop
 
 namespace DB
 {
-/// Serializes the stream of blocks and sends them to TiDB/TiSpark with different serialization paths.
+
+/// Serializes the stream of blocks in TiDB DAG response format.
 template <class StreamWriterPtr>
 class StreamingDAGResponseWriter : public DAGResponseWriter
 {
 public:
-    StreamingDAGResponseWriter(
-        StreamWriterPtr writer_,
-        Int64 records_per_chunk_,
-        Int64 batch_send_min_limit_,
-        DAGContext & dag_context_);
+    StreamingDAGResponseWriter(StreamWriterPtr writer_, std::vector<Int64> partition_col_ids_, tipb::ExchangeType exchange_type_,
+        Int64 records_per_chunk_, tipb::EncodeType encodeType_, std::vector<tipb::FieldType> result_field_types, DAGContext & dag_context_);
     void write(const Block & block) override;
-    void flush() override;
+    void finishWrite() override;
 
 private:
-    void encodeThenWriteBlocks();
+    template <bool collect_execution_info>
+    void ScheduleEncodeTask();
+    ThreadPool::Job getEncodeTask(std::vector<Block> & input_blocks, tipb::SelectResponse & response) const;
+    ThreadPool::Job getEncodePartitionTask(std::vector<Block> & input_blocks, tipb::SelectResponse & response) const;
 
-private:
-    Int64 batch_send_min_limit;
+    tipb::ExchangeType exchange_type;
     StreamWriterPtr writer;
     std::vector<Block> blocks;
+    std::vector<Int64> partition_col_ids;
     size_t rows_in_blocks;
-    std::unique_ptr<ChunkCodecStream> chunk_codec_stream;
+    uint16_t partition_num;
+    ThreadPool thread_pool;
 };
 
 } // namespace DB

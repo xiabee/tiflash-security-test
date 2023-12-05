@@ -1,31 +1,18 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Columns/ColumnsCommon.h>
-#include <Columns/IColumn.h>
 #include <Common/Arena.h>
+#include <Columns/IColumn.h>
+#include <Columns/ColumnsCommon.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
-extern const int NOT_IMPLEMENTED;
-} // namespace ErrorCodes
+    extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
+    extern const int NOT_IMPLEMENTED;
+}
 
 
 /** Base class for columns-constants that contain a value that is not in the `Field`.
@@ -34,12 +21,8 @@ extern const int NOT_IMPLEMENTED;
 class IColumnDummy : public IColumn
 {
 public:
-    IColumnDummy()
-        : s(0)
-    {}
-    explicit IColumnDummy(size_t s_)
-        : s(s_)
-    {}
+    IColumnDummy() : s(0) {}
+    IColumnDummy(size_t s_) : s(s_) {}
 
 public:
     virtual MutableColumnPtr cloneDummy(size_t s_) const = 0;
@@ -66,31 +49,26 @@ public:
         ++s;
     }
 
-    StringRef serializeValueIntoArena(size_t /*n*/, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override
+    StringRef serializeValueIntoArena(size_t /*n*/, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override
     {
-        return {arena.allocContinue(0, begin), 0};
+        return { arena.allocContinue(0, begin), 0 };
     }
 
-    const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override
+    const char * deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator>) override
     {
         ++s;
         return pos;
     }
 
-    void updateHashWithValue(size_t /*n*/, SipHash & /*hash*/, const TiDB::TiDBCollatorPtr &, String &) const override
+    void updateHashWithValue(size_t /*n*/, SipHash & /*hash*/, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override
     {
     }
 
-    void updateHashWithValues(IColumn::HashValues &, const TiDB::TiDBCollatorPtr &, String &) const override
+    void updateHashWithValues(IColumn::HashValues &, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const override
     {
     }
 
-    void updateWeakHash32(WeakHash32 &, const TiDB::TiDBCollatorPtr &, String &) const override
-    {
-    }
-
-    void insertFrom(const IColumn &, size_t)
-        override
+    void insertFrom(const IColumn &, size_t) override
     {
         ++s;
     }
@@ -144,20 +122,6 @@ public:
         return res;
     }
 
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override
-    {
-        if (s != selector.size())
-            throw Exception("Size of selector doesn't match size of column.", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
-
-        IColumn::ColumnIndex num_columns = columns.size();
-        std::vector<size_t> counts(num_columns);
-        for (auto idx : selector)
-            ++counts[idx];
-
-        for (size_t i = 0; i < num_columns; ++i)
-            columns[i]->insertRangeFrom(*this, 0, counts[i]);
-    }
-
     void gather(ColumnGathererStream &) override
     {
         throw Exception("Method gather is not supported for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
@@ -181,4 +145,4 @@ protected:
     size_t s;
 };
 
-} // namespace DB
+}

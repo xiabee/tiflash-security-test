@@ -1,32 +1,14 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/config.h>
-#include <common/StringRef.h>
-#include <common/types.h>
-#include <re2/re2.h>
-
-#include <memory>
-#include <optional>
 #include <string>
 #include <vector>
+#include <memory>
+#include <Common/config.h>
+#include <re2/re2.h>
 #if USE_RE2_ST
-#include <re2_st/re2.h>
+    #include <re2_st/re2.h>
 #else
-#define re2_st re2
+    #define re2_st re2
 #endif
 
 
@@ -50,12 +32,12 @@
 
 namespace OptimizedRegularExpressionDetails
 {
-struct Match
-{
-    std::string::size_type offset;
-    std::string::size_type length;
-};
-} // namespace OptimizedRegularExpressionDetails
+    struct Match
+    {
+        std::string::size_type offset;
+        std::string::size_type length;
+    };
+}
 
 template <bool thread_safe>
 class OptimizedRegularExpressionImpl
@@ -63,10 +45,9 @@ class OptimizedRegularExpressionImpl
 public:
     enum Options
     {
-        RE_CASELESS = 0x00000001,
-        RE_NO_CAPTURE = 0x00000010,
-        RE_DOT_NL = 0x00000100,
-        RE_NO_OPTIMIZE = 0x00001000
+        RE_CASELESS        = 0x00000001,
+        RE_NO_CAPTURE    = 0x00000010,
+        RE_DOT_NL        = 0x00000100
     };
 
     using Match = OptimizedRegularExpressionDetails::Match;
@@ -75,7 +56,7 @@ public:
     using RegexType = std::conditional_t<thread_safe, re2::RE2, re2_st::RE2>;
     using StringPieceType = std::conditional_t<thread_safe, re2::StringPiece, re2_st::StringPiece>;
 
-    explicit OptimizedRegularExpressionImpl(const std::string & regexp_, int options = 0);
+    OptimizedRegularExpressionImpl(const std::string & regexp_, int options = 0);
 
     bool match(const std::string & subject) const
     {
@@ -115,16 +96,7 @@ public:
         out_required_substring_is_prefix = required_substring_is_prefix;
     }
 
-    Int64 instr(const char * subject, size_t subject_size, Int64 pos, Int64 occur, Int64 ret_op);
-    std::optional<StringRef> substr(const char * subject, size_t subject_size, Int64 pos, Int64 occur);
-
 private:
-    Int64 processInstrEmptyStringExpr(const char * expr, size_t expr_size, size_t byte_pos, Int64 occur);
-    Int64 instrImpl(const char * subject, size_t subject_size, Int64 byte_pos, Int64 occur, Int64 ret_op);
-
-    std::optional<StringRef> processSubstrEmptyStringExpr(const char * expr, size_t expr_size, size_t byte_pos, Int64 occur);
-    std::optional<StringRef> substrImpl(const char * subject, size_t subject_size, Int64 byte_pos, Int64 occur);
-
     bool is_trivial;
     bool required_substring_is_prefix;
     bool is_case_insensitive;

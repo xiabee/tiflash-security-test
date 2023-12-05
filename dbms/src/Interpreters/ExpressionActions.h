@@ -1,34 +1,21 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Core/Block.h>
-#include <Core/ColumnWithTypeAndName.h>
-#include <Core/Names.h>
 #include <Interpreters/Settings.h>
+#include <Core/Names.h>
+#include <Core/ColumnWithTypeAndName.h>
+#include <Core/Block.h>
 #include <Storages/Transaction/Collator.h>
 
-#include <unordered_map>
 #include <unordered_set>
+#include <unordered_map>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int LOGICAL_ERROR;
+    extern const int LOGICAL_ERROR;
 }
 
 using NameWithAlias = std::pair<std::string, std::string>;
@@ -62,6 +49,12 @@ public:
 
         APPLY_FUNCTION,
 
+        /** Replaces the specified columns with arrays into columns with elements.
+            * Duplicates the values in the remaining columns by the number of elements in the arrays.
+            * Arrays must be parallel (have the same lengths).
+            */
+        ARRAY_JOIN,
+
         JOIN,
 
         /// Reorder and rename the columns, delete the extra ones. The same column names are allowed in the result.
@@ -78,31 +71,33 @@ public:
     /// For ADD_COLUMN.
     ColumnPtr added_column;
 
-    /// For APPLY_FUNCTION.
+    /// For APPLY_FUNCTION and LEFT ARRAY JOIN.
     FunctionBuilderPtr function_builder;
     FunctionBasePtr function;
     Names argument_names;
-    TiDB::TiDBCollatorPtr collator = nullptr;
+    std::shared_ptr<TiDB::ITiDBCollator> collator;
+
+    /// For ARRAY_JOIN
+    NameSet array_joined_columns;
+    bool array_join_is_left = false;
 
     /// For JOIN
     std::shared_ptr<const Join> join;
     NamesAndTypesList columns_added_by_join;
 
     /// For PROJECT.
-    NamesWithAliases projections;
+    NamesWithAliases projection;
 
     /// If result_name_ == "", as name "function_name(arguments separated by commas) is used".
     static ExpressionAction applyFunction(
-        const FunctionBuilderPtr & function_,
-        const std::vector<std::string> & argument_names_,
-        std::string result_name_ = "",
-        const TiDB::TiDBCollatorPtr & collator_ = nullptr);
+        const FunctionBuilderPtr & function_, const std::vector<std::string> & argument_names_, std::string result_name_ = "", std::shared_ptr<TiDB::ITiDBCollator> collator_ = nullptr);
 
     static ExpressionAction addColumn(const ColumnWithTypeAndName & added_column_);
     static ExpressionAction removeColumn(const std::string & removed_name);
     static ExpressionAction copyColumn(const std::string & from_name, const std::string & to_name);
     static ExpressionAction project(const NamesWithAliases & projected_columns_);
     static ExpressionAction project(const Names & projected_columns_);
+    static ExpressionAction arrayJoin(const NameSet & array_joined_columns, bool array_join_is_left, const Context & context);
     static ExpressionAction ordinaryJoin(std::shared_ptr<const Join> join_, const NamesAndTypesList & columns_added_by_join_);
 
     /// Which columns necessary to perform this action.
@@ -127,16 +122,7 @@ public:
     using Actions = std::vector<ExpressionAction>;
 
     ExpressionActions(const NamesAndTypesList & input_columns_, const Settings & settings_)
-        : input_columns(input_columns_)
-        , settings(settings_)
-    {
-        for (const auto & input_elem : input_columns)
-            sample_block.insert(ColumnWithTypeAndName(nullptr, input_elem.type, input_elem.name));
-    }
-
-    ExpressionActions(const NamesAndTypes & input_columns_, const Settings & settings_)
-        : input_columns(input_columns_.cbegin(), input_columns_.cend())
-        , settings(settings_)
+        : input_columns(input_columns_), settings(settings_)
     {
         for (const auto & input_elem : input_columns)
             sample_block.insert(ColumnWithTypeAndName(nullptr, input_elem.type, input_elem.name));
@@ -167,6 +153,14 @@ public:
     /// Adds to the beginning the removal of all extra columns.
     void prependProjectInput();
 
+    /// Add the specified ARRAY JOIN action to the beginning. Change the appropriate input types to arrays.
+    /// If there are unknown columns in the ARRAY JOIN list, take their types from sample_block, and immediately after ARRAY JOIN remove them.
+    void prependArrayJoin(const ExpressionAction & action, const Block & sample_block);
+
+    /// If the last action is ARRAY JOIN, and it does not affect the columns from required_columns, discard and return it.
+    /// Change the corresponding output types to arrays.
+    bool popUnusedArrayJoin(const Names & required_columns, ExpressionAction & out_action);
+
     /// - Adds actions to delete all but the specified columns.
     /// - Removes unused input columns.
     /// - Can somehow optimize the expression.
@@ -181,8 +175,8 @@ public:
     Names getRequiredColumns() const
     {
         Names names;
-        for (const auto & input_column : input_columns)
-            names.push_back(input_column.name);
+        for (NamesAndTypesList::const_iterator it = input_columns.begin(); it != input_columns.end(); ++it)
+            names.push_back(it->name);
         return names;
     }
 
@@ -214,6 +208,11 @@ private:
     void checkLimits(Block & block) const;
 
     void addImpl(ExpressionAction action, Names & new_names);
+
+    /// Try to improve something without changing the lists of input and output columns.
+    void optimize();
+    /// Move all arrayJoin as close as possible to the end.
+    void optimizeArrayJoin();
 };
 
 using ExpressionActionsPtr = std::shared_ptr<ExpressionActions>;
@@ -235,10 +234,8 @@ struct ExpressionActionsChain
         ExpressionActionsPtr actions;
         Names required_output;
 
-        explicit Step(const ExpressionActionsPtr & actions_ = nullptr, const Names & required_output_ = Names())
-            : actions(actions_)
-            , required_output(required_output_)
-        {}
+        Step(const ExpressionActionsPtr & actions_ = nullptr, const Names & required_output_ = Names())
+            : actions(actions_), required_output(required_output_) {}
     };
 
     using Steps = std::vector<Step>;
@@ -274,4 +271,4 @@ struct ExpressionActionsChain
     std::string dumpChain();
 };
 
-} // namespace DB
+}

@@ -1,23 +1,10 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <IO/ReadWriteBufferFromHTTP.h>
 
-#include <Common/DNSCache.h>
 #include <Common/SimpleCache.h>
 #include <Common/config.h>
 #include <Core/Types.h>
 #include <IO/ReadBufferFromIStream.h>
-#include <IO/ReadWriteBufferFromHTTP.h>
+#include <Common/DNSCache.h>
 #include <Poco/Net/HTTPRequest.h>
 #include <Poco/Net/HTTPResponse.h>
 #include <Poco/Version.h>
@@ -32,23 +19,22 @@ namespace DB
 {
 namespace ErrorCodes
 {
-extern const int RECEIVED_ERROR_FROM_REMOTE_IO_SERVER;
-extern const int RECEIVED_ERROR_TOO_MANY_REQUESTS;
-} // namespace ErrorCodes
+    extern const int RECEIVED_ERROR_FROM_REMOTE_IO_SERVER;
+    extern const int RECEIVED_ERROR_TOO_MANY_REQUESTS;
+}
 
 
 ReadWriteBufferFromHTTP::ReadWriteBufferFromHTTP(const Poco::URI & uri,
-                                                 const std::string & method_,
-                                                 OutStreamCallback out_stream_callback,
-                                                 const ConnectionTimeouts & timeouts,
-                                                 size_t buffer_size_)
-    : ReadBuffer(nullptr, 0)
-    , uri{uri}
-    , method{!method_.empty() ? method_ : out_stream_callback ? Poco::Net::HTTPRequest::HTTP_POST
-                                                              : Poco::Net::HTTPRequest::HTTP_GET}
-    , timeouts{timeouts}
-    , is_ssl{uri.getScheme() == "https"}
-    , session
+    const std::string & method_,
+    OutStreamCallback out_stream_callback,
+    const ConnectionTimeouts & timeouts,
+    size_t buffer_size_)
+    : ReadBuffer(nullptr, 0),
+      uri{uri},
+      method{!method_.empty() ? method_ : out_stream_callback ? Poco::Net::HTTPRequest::HTTP_POST : Poco::Net::HTTPRequest::HTTP_GET},
+      timeouts{timeouts},
+      is_ssl{uri.getScheme() == "https"},
+      session
 {
     std::unique_ptr<Poco::Net::HTTPClientSession>(
 #if Poco_NetSSL_FOUND
@@ -74,7 +60,7 @@ ReadWriteBufferFromHTTP::ReadWriteBufferFromHTTP(const Poco::URI & uri,
 
     Poco::Net::HTTPResponse response;
 
-    LOG_TRACE((&Poco::Logger::get("ReadWriteBufferFromHTTP")), "Sending request to {}", uri.toString());
+    LOG_TRACE((&Logger::get("ReadWriteBufferFromHTTP")), "Sending request to " << uri.toString());
 
     auto & stream_out = session->sendRequest(request);
 
@@ -92,8 +78,8 @@ ReadWriteBufferFromHTTP::ReadWriteBufferFromHTTP(const Poco::URI & uri,
                       << response.getReason() << ", body: " << istr->rdbuf();
 
         throw Exception(error_message.str(),
-                        status == HTTP_TOO_MANY_REQUESTS ? ErrorCodes::RECEIVED_ERROR_TOO_MANY_REQUESTS
-                                                         : ErrorCodes::RECEIVED_ERROR_FROM_REMOTE_IO_SERVER);
+            status == HTTP_TOO_MANY_REQUESTS ? ErrorCodes::RECEIVED_ERROR_TOO_MANY_REQUESTS
+                                             : ErrorCodes::RECEIVED_ERROR_FROM_REMOTE_IO_SERVER);
     }
 
     impl = std::make_unique<ReadBufferFromIStream>(*istr, buffer_size_);
@@ -108,4 +94,4 @@ bool ReadWriteBufferFromHTTP::nextImpl()
     working_buffer = internal_buffer;
     return true;
 }
-} // namespace DB
+}

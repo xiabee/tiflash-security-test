@@ -1,33 +1,23 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Core/SortCursor.h>
-#include <Core/SortDescription.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
-#include <DataStreams/NativeBlockInputStream.h>
-#include <IO/CompressedReadBuffer.h>
-#include <IO/ReadBufferFromFile.h>
+#include <queue>
 #include <Poco/TemporaryFile.h>
+
 #include <common/logger_useful.h>
 
-#include <queue>
+#include <Core/SortDescription.h>
+#include <Core/SortCursor.h>
+
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/NativeBlockInputStream.h>
+
+#include <IO/ReadBufferFromFile.h>
+#include <IO/CompressedReadBuffer.h>
 
 
 namespace DB
 {
+
 /** Merges stream of sorted each-separately blocks to sorted as-a-whole stream of blocks.
   * If data to sort is too much, could use external sorting, with temporary files.
   */
@@ -37,18 +27,12 @@ namespace DB
   */
 class MergeSortingBlocksBlockInputStream : public IProfilingBlockInputStream
 {
-    static constexpr auto NAME = "MergeSortingBlocks";
-
 public:
     /// limit - if not 0, allowed to return just first 'limit' rows in sorted order.
-    MergeSortingBlocksBlockInputStream(
-        Blocks & blocks_,
-        SortDescription & description_,
-        const String & req_id,
-        size_t max_merged_block_size_,
-        size_t limit_ = 0);
+    MergeSortingBlocksBlockInputStream(Blocks & blocks_, SortDescription & description_,
+        size_t max_merged_block_size_, size_t limit_ = 0);
 
-    String getName() const override { return NAME; }
+    String getName() const override { return "MergeSortingBlocks"; }
 
     bool isGroupedOutput() const override { return true; }
     bool isSortedOutput() const override { return true; }
@@ -80,26 +64,18 @@ private:
      */
     template <typename TSortCursor>
     Block mergeImpl(std::priority_queue<TSortCursor> & queue);
-
-    LoggerPtr log;
 };
+
 
 class MergeSortingBlockInputStream : public IProfilingBlockInputStream
 {
-    static constexpr auto NAME = "MergeSorting";
-
 public:
     /// limit - if not 0, allowed to return just first 'limit' rows in sorted order.
-    MergeSortingBlockInputStream(
-        const BlockInputStreamPtr & input,
-        const SortDescription & description_,
-        size_t max_merged_block_size_,
-        size_t limit_,
-        size_t max_bytes_before_external_sort_,
-        const std::string & tmp_path_,
-        const String & req_id);
+    MergeSortingBlockInputStream(const BlockInputStreamPtr & input, SortDescription & description_,
+        size_t max_merged_block_size_, size_t limit_,
+        size_t max_bytes_before_external_sort_, const std::string & tmp_path_);
 
-    String getName() const override { return NAME; }
+    String getName() const override { return "MergeSorting"; }
 
     bool isGroupedOutput() const override { return true; }
     bool isSortedOutput() const override { return true; }
@@ -109,7 +85,6 @@ public:
 
 protected:
     Block readImpl() override;
-    void appendInfo(FmtBuffer & buffer) const override;
 
 private:
     SortDescription description;
@@ -119,7 +94,7 @@ private:
     size_t max_bytes_before_external_sort;
     const std::string tmp_path;
 
-    LoggerPtr log;
+    Logger * log = &Logger::get("MergeSortingBlockInputStream");
 
     Blocks blocks;
     size_t sum_bytes_in_blocks = 0;
@@ -138,14 +113,11 @@ private:
     struct TemporaryFileStream
     {
         ReadBufferFromFile file_in;
-        CompressedReadBuffer<> compressed_in;
+        CompressedReadBuffer compressed_in;
         BlockInputStreamPtr block_in;
 
         TemporaryFileStream(const std::string & path, const Block & header)
-            : file_in(path)
-            , compressed_in(file_in)
-            , block_in(std::make_shared<NativeBlockInputStream>(compressed_in, header, 0))
-        {}
+            : file_in(path), compressed_in(file_in), block_in(std::make_shared<NativeBlockInputStream>(compressed_in, header, 0)) {}
     };
 
     std::vector<std::unique_ptr<TemporaryFileStream>> temporary_inputs;
@@ -153,4 +125,4 @@ private:
     BlockInputStreams inputs_to_merge;
 };
 
-} // namespace DB
+}

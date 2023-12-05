@@ -1,26 +1,15 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Columns/ColumnTuple.h>
-#include <Common/SipHash.h>
-#include <Core/Defines.h>
 #include <city.h>
+#include <Core/Defines.h>
+#include <Common/SipHash.h>
+#include <Common/UInt128.h>
+#include <Columns/ColumnTuple.h>
+
 
 namespace DB
 {
+
 /** Hashes a set of arguments to the aggregate function
   *  to calculate the number of unique values
   *  and adds them to the set.
@@ -34,14 +23,14 @@ namespace DB
   * - for one argument-tuple.
   */
 
-template <typename Data, bool exact, bool for_tuple>
+template <bool exact, bool for_tuple>
 struct UniqVariadicHash;
 
 
-template <typename Data>
-struct UniqVariadicHash<Data, false, false>
+template <>
+struct UniqVariadicHash<false, false>
 {
-    static inline UInt64 apply(Data & data, size_t num_args, const IColumn ** columns, size_t row_num)
+    static inline UInt64 apply(size_t num_args, const IColumn ** columns, size_t row_num)
     {
         UInt64 hash;
 
@@ -50,7 +39,6 @@ struct UniqVariadicHash<Data, false, false>
 
         {
             StringRef value = (*column)->getDataAt(row_num);
-            value = data.getUpdatedValueForCollator(value, 0);
             hash = CityHash_v1_0_2::CityHash64(value.data, value.size);
             ++column;
         }
@@ -58,7 +46,6 @@ struct UniqVariadicHash<Data, false, false>
         while (column < columns_end)
         {
             StringRef value = (*column)->getDataAt(row_num);
-            value = data.getUpdatedValueForCollator(value, column - columns);
             hash = CityHash_v1_0_2::Hash128to64(CityHash_v1_0_2::uint128(CityHash_v1_0_2::CityHash64(value.data, value.size), hash));
             ++column;
         }
@@ -67,10 +54,10 @@ struct UniqVariadicHash<Data, false, false>
     }
 };
 
-template <typename Data>
-struct UniqVariadicHash<Data, false, true>
+template <>
+struct UniqVariadicHash<false, true>
 {
-    static inline UInt64 apply(Data &, size_t num_args, const IColumn ** columns, size_t row_num)
+    static inline UInt64 apply(size_t num_args, const IColumn ** columns, size_t row_num)
     {
         UInt64 hash;
 
@@ -96,10 +83,10 @@ struct UniqVariadicHash<Data, false, true>
     }
 };
 
-template <typename Data>
-struct UniqVariadicHash<Data, true, false>
+template <>
+struct UniqVariadicHash<true, false>
 {
-    static inline UInt128 apply(Data & data, size_t num_args, const IColumn ** columns, size_t row_num)
+    static inline UInt128 apply(size_t num_args, const IColumn ** columns, size_t row_num)
     {
         const IColumn ** column = columns;
         const IColumn ** columns_end = column + num_args;
@@ -108,8 +95,7 @@ struct UniqVariadicHash<Data, true, false>
 
         while (column < columns_end)
         {
-            auto collator_and_sort_key_container = data.getCollatorAndSortKeyContainer(column - columns);
-            (*column)->updateHashWithValue(row_num, hash, collator_and_sort_key_container.first, *collator_and_sort_key_container.second);
+            (*column)->updateHashWithValue(row_num, hash);
             ++column;
         }
 
@@ -119,10 +105,10 @@ struct UniqVariadicHash<Data, true, false>
     }
 };
 
-template <typename Data>
-struct UniqVariadicHash<Data, true, true>
+template <>
+struct UniqVariadicHash<true, true>
 {
-    static inline UInt128 apply(Data &, size_t num_args, const IColumn ** columns, size_t row_num)
+    static inline UInt128 apply(size_t num_args, const IColumn ** columns, size_t row_num)
     {
         const Columns & tuple_columns = static_cast<const ColumnTuple *>(columns[0])->getColumns();
 
@@ -143,4 +129,4 @@ struct UniqVariadicHash<Data, true, true>
     }
 };
 
-} // namespace DB
+}

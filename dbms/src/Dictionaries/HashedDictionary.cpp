@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <ext/size.h>
 #include <Dictionaries/HashedDictionary.h>
 #include <Dictionaries/DictionaryBlockInputStream.h>
@@ -87,7 +73,7 @@ void HashedDictionary::isInImpl(
         {
             auto it = attr.find(id);
             if (it != std::end(attr))
-                id = it->getMapped();
+                id = it->second;
             else
                 break;
         }
@@ -515,7 +501,7 @@ void HashedDictionary::getItemsImpl(
     for (const auto i : ext::range(0, rows))
     {
         const auto it = attr.find(ids[i]);
-        set_value(i, it != attr.end() ? static_cast<OutputType>(it->getMapped()) : get_default(i));
+        set_value(i, it != attr.end() ? static_cast<OutputType>(it->second) : get_default(i));
     }
 
     query_count.fetch_add(rows, std::memory_order_relaxed);
@@ -586,7 +572,7 @@ PaddedPODArray<HashedDictionary::Key> HashedDictionary::getIds(const Attribute &
     PaddedPODArray<Key> ids;
     ids.reserve(attr.size());
     for (const auto & value : attr)
-        ids.push_back(value.getKey());
+        ids.push_back(value.first);
 
     return ids;
 }

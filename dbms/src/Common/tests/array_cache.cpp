@@ -1,24 +1,9 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+#include <iostream>
+#include <cstring>
+#include <thread>
+#include <pcg_random.hpp>
 #include <Common/ArrayCache.h>
 #include <IO/ReadHelpers.h>
-
-#include <cstring>
-#include <iostream>
-#include <pcg_random.hpp>
-#include <thread>
 
 
 template <typename Cache>
@@ -71,7 +56,8 @@ int main(int argc, char ** argv)
     std::vector<std::thread> threads;
     for (size_t i = 0; i < num_threads; ++i)
     {
-        threads.emplace_back([&] {
+        threads.emplace_back([&]
+        {
             pcg64 generator(randomSeed());
 
             for (size_t i = 0; i < num_iterations; ++i)
@@ -81,21 +67,23 @@ int main(int argc, char ** argv)
 
                 cache.getOrSet(
                     key,
-                    [=] { return size; },
-                    [=](void * /*ptr*/, int & payload) {
+                    [=]{ return size; },
+                    [=](void * /*ptr*/, int & payload)
+                    {
                         payload = i;
-                        //        memset(ptr, i, size);
+                //        memset(ptr, i, size);
                     },
                     nullptr);
 
-                //    printStats(cache);
+            //    printStats(cache);
             }
         });
     }
 
     std::atomic_bool stop{};
 
-    std::thread stats_thread([&] {
+    std::thread stats_thread([&]
+    {
         while (!stop)
         {
             usleep(100000);
@@ -111,7 +99,7 @@ int main(int argc, char ** argv)
 
     return 0;
 
-    /*
+/*
     using Cache = ArrayCache<int, int>;
     Cache cache(64 * 1024 * 1024);
 

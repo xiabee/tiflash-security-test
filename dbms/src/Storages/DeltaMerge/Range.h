@@ -1,27 +1,14 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
-#include <Common/RedactHelpers.h>
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Transaction/Types.h>
+#include <Common/RedactHelpers.h>
 
 namespace DB
 {
 namespace DM
 {
+
 template <typename T>
 struct Range;
 template <typename T>
@@ -36,14 +23,8 @@ struct Range
     T start;
     T end;
 
-    Range(T start_, T end_)
-        : start(start_)
-        , end(end_)
-    {}
-    Range()
-        : start(0)
-        , end(0)
-    {}
+    Range(T start_, T end_) : start(start_), end(end_) {}
+    Range() : start(0), end(0) {}
 
     void swap(Range & other)
     {
@@ -106,8 +87,8 @@ inline String rangeToDebugString(const Range<T> & range)
 }
 
 // DB::DM::Handle
-using Handle = DB::HandleID;
-using HandleRange = Range<Handle>;
+using Handle       = DB::HandleID;
+using HandleRange  = Range<Handle>;
 using HandleRanges = std::vector<HandleRange>;
 
 inline String toDebugString(const HandleRanges & ranges)

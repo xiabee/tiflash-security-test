@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -22,6 +8,7 @@ namespace DM
 {
 namespace tests
 {
+
 TEST(HandleRange_test, Redact)
 {
     HandleRange range(20, 400);
@@ -46,7 +33,7 @@ std::shared_ptr<RegionRangeKeys> genTestRegionRangeKeys()
         TiDB::TableInfo table_info(table_info_json);
 
         start = RecordKVFormat::genKey(table_info, std::vector{Field{"aaa", strlen("aaa")}, Field{"abc", strlen("abc")}});
-        end = RecordKVFormat::genKey(table_info, std::vector{Field{"bbb", strlen("bbb")}, Field{"abc", strlen("abc")}});
+        end   = RecordKVFormat::genKey(table_info, std::vector{Field{"bbb", strlen("bbb")}, Field{"abc", strlen("abc")}});
     }
     return std::make_shared<RegionRangeKeys>(std::move(start), std::move(end));
 }
@@ -77,11 +64,11 @@ TEST(RowKeyRange_test, RedactRangeFromHandle)
 
 TEST(RowKeyRange_test, RedactRangeFromCommonHandle)
 {
-    auto region_range = genTestRegionRangeKeys();
-    TableID table_id = 49;
-    RowKeyRange range = RowKeyRange::fromRegionRange(region_range, table_id, true, 3);
-    RowKeyRange all_range = RowKeyRange::newAll(true, 3);
-    RowKeyRange none_range = RowKeyRange::newNone(true, 3);
+    auto        region_range = genTestRegionRangeKeys();
+    TableID     table_id     = 49;
+    RowKeyRange range        = RowKeyRange::fromRegionRange(region_range, table_id, true, 3);
+    RowKeyRange all_range    = RowKeyRange::newAll(true, 3);
+    RowKeyRange none_range   = RowKeyRange::newNone(true, 3);
 
     // print some values
     Redact::setRedactLog(false);
@@ -98,22 +85,6 @@ TEST(RowKeyRange_test, RedactRangeFromCommonHandle)
     Redact::setRedactLog(false); // restore flags
 }
 
-TEST(RowKey, DecodeKeyWithExtraZeroSuffix)
-{
-    // Note: {20,00} will be regarded as Key=21 in RowKeyRange::fromRegionRange.
-    auto key_end = RecordKVFormat::genRawKey(1, 20);
-    key_end.push_back(0);
-    auto tikv_key_end = RecordKVFormat::encodeAsTiKVKey(key_end);
-    const auto range_keys = std::make_shared<RegionRangeKeys>(
-        RecordKVFormat::genKey(1, 0),
-        std::move(tikv_key_end));
-    const auto range = RowKeyRange::fromRegionRange(
-        range_keys,
-        /* table_id */ 1,
-        /* is_common_handle */ false,
-        /* row_key_column_size */ 1);
-    EXPECT_EQ(0, compare(RowKeyValue::fromHandle(21).toRowKeyValueRef(), range.getEnd()));
-}
 } // namespace tests
 } // namespace DM
 } // namespace DB

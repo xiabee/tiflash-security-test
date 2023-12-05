@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 /** Run this (example)
   * ./arena_with_free_lists 5000000 < ../../Server/data/test/hits/20140317_20140323_2_178_4/Title.bin
   */
@@ -19,22 +5,22 @@
 #define USE_BAD_ARENA 0
 
 #if !USE_BAD_ARENA
-#include <Common/ArenaWithFreeLists.h>
+    #include <Common/ArenaWithFreeLists.h>
 #endif
 
-#include <Common/Arena.h>
-#include <Common/Stopwatch.h>
-#include <Core/Field.h>
-#include <IO/CompressedReadBuffer.h>
-#include <IO/ReadBufferFromFileDescriptor.h>
-#include <IO/ReadHelpers.h>
-#include <common/StringRef.h>
-#include <sys/resource.h>
-
+#include <memory>
 #include <array>
+#include <sys/resource.h>
 #include <ext/bit_cast.h>
 #include <ext/size.h>
-#include <memory>
+#include <Common/Arena.h>
+
+#include <common/StringRef.h>
+#include <Core/Field.h>
+#include <Common/Stopwatch.h>
+#include <IO/ReadBufferFromFileDescriptor.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/ReadHelpers.h>
 
 using namespace DB;
 
@@ -45,28 +31,13 @@ using namespace DB;
 class ArenaWithFreeLists : private Allocator<false>
 {
 private:
-    struct Block
-    {
-        Block * next;
-    };
+    struct Block { Block * next; };
 
     static const std::array<size_t, 14> & getSizes()
     {
         static constexpr std::array<size_t, 14> sizes{
-            8,
-            16,
-            32,
-            64,
-            128,
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-            8192,
-            16384,
-            32768,
-            65536};
+            8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536
+        };
 
         static_assert(sizes.front() >= sizeof(Block), "Can't make allocations smaller than sizeof(Block)");
 
@@ -88,7 +59,7 @@ private:
     static auto getMaxFixedBlockSize() { return getSizes().back(); }
 
     Arena pool;
-    const std::unique_ptr<Block *[]> free_lists = std::make_unique<Block *[]>(ext::size(getSizes()));
+    const std::unique_ptr<Block * []> free_lists = std::make_unique<Block * []>(ext::size(getSizes()));
 
     static size_t findFreeListIndex(const size_t size)
     {
@@ -100,8 +71,7 @@ private:
 
 public:
     ArenaWithFreeLists(
-        const size_t initial_size = 4096,
-        const size_t growth_factor = 2,
+        const size_t initial_size = 4096, const size_t growth_factor = 2,
         const size_t linear_growth_threshold = 128 * 1024 * 1024)
         : pool{initial_size, growth_factor, linear_growth_threshold}
     {
@@ -153,10 +123,8 @@ public:
 /// A small piece copied from the CacheDictionary. It is used only to demonstrate the problem.
 struct Dictionary
 {
-    template <typename Value>
-    using ContainerType = Value[];
-    template <typename Value>
-    using ContainerPtrType = std::unique_ptr<ContainerType<Value>>;
+    template <typename Value> using ContainerType = Value[];
+    template <typename Value> using ContainerPtrType = std::unique_ptr<ContainerType<Value>>;
 
     enum class AttributeUnderlyingType
     {
@@ -177,31 +145,15 @@ struct Dictionary
     {
         AttributeUnderlyingType type;
         std::tuple<
-            UInt8,
-            UInt16,
-            UInt32,
-            UInt64,
-            Int8,
-            Int16,
-            Int32,
-            Int64,
-            Float32,
-            Float64,
-            String>
-            null_values;
+            UInt8, UInt16, UInt32, UInt64,
+            Int8, Int16, Int32, Int64,
+            Float32, Float64,
+            String> null_values;
         std::tuple<
-            ContainerPtrType<UInt8>,
-            ContainerPtrType<UInt16>,
-            ContainerPtrType<UInt32>,
-            ContainerPtrType<UInt64>,
-            ContainerPtrType<Int8>,
-            ContainerPtrType<Int16>,
-            ContainerPtrType<Int32>,
-            ContainerPtrType<Int64>,
-            ContainerPtrType<Float32>,
-            ContainerPtrType<Float64>,
-            ContainerPtrType<StringRef>>
-            arrays;
+            ContainerPtrType<UInt8>, ContainerPtrType<UInt16>, ContainerPtrType<UInt32>, ContainerPtrType<UInt64>,
+            ContainerPtrType<Int8>, ContainerPtrType<Int16>, ContainerPtrType<Int32>, ContainerPtrType<Int64>,
+            ContainerPtrType<Float32>, ContainerPtrType<Float64>,
+            ContainerPtrType<StringRef>> arrays;
     };
 
     std::unique_ptr<ArenaWithFreeLists> string_arena;
@@ -211,58 +163,38 @@ struct Dictionary
     {
         switch (attribute.type)
         {
-        case AttributeUnderlyingType::UInt8:
-            std::get<ContainerPtrType<UInt8>>(attribute.arrays)[idx] = value.get<UInt64>();
-            break;
-        case AttributeUnderlyingType::UInt16:
-            std::get<ContainerPtrType<UInt16>>(attribute.arrays)[idx] = value.get<UInt64>();
-            break;
-        case AttributeUnderlyingType::UInt32:
-            std::get<ContainerPtrType<UInt32>>(attribute.arrays)[idx] = value.get<UInt64>();
-            break;
-        case AttributeUnderlyingType::UInt64:
-            std::get<ContainerPtrType<UInt64>>(attribute.arrays)[idx] = value.get<UInt64>();
-            break;
-        case AttributeUnderlyingType::Int8:
-            std::get<ContainerPtrType<Int8>>(attribute.arrays)[idx] = value.get<Int64>();
-            break;
-        case AttributeUnderlyingType::Int16:
-            std::get<ContainerPtrType<Int16>>(attribute.arrays)[idx] = value.get<Int64>();
-            break;
-        case AttributeUnderlyingType::Int32:
-            std::get<ContainerPtrType<Int32>>(attribute.arrays)[idx] = value.get<Int64>();
-            break;
-        case AttributeUnderlyingType::Int64:
-            std::get<ContainerPtrType<Int64>>(attribute.arrays)[idx] = value.get<Int64>();
-            break;
-        case AttributeUnderlyingType::Float32:
-            std::get<ContainerPtrType<Float32>>(attribute.arrays)[idx] = value.get<Float64>();
-            break;
-        case AttributeUnderlyingType::Float64:
-            std::get<ContainerPtrType<Float64>>(attribute.arrays)[idx] = value.get<Float64>();
-            break;
-        case AttributeUnderlyingType::String:
-        {
-            const auto & string = value.get<String>();
-            auto & string_ref = std::get<ContainerPtrType<StringRef>>(attribute.arrays)[idx];
-            const auto & null_value_ref = std::get<String>(attribute.null_values);
-
-            /// free memory unless it points to a null_value
-            if (string_ref.data && string_ref.data != null_value_ref.data())
-                string_arena->free(const_cast<char *>(string_ref.data), string_ref.size);
-
-            const auto size = string.size();
-            if (size != 0)
+            case AttributeUnderlyingType::UInt8: std::get<ContainerPtrType<UInt8>>(attribute.arrays)[idx] = value.get<UInt64>(); break;
+            case AttributeUnderlyingType::UInt16: std::get<ContainerPtrType<UInt16>>(attribute.arrays)[idx] = value.get<UInt64>(); break;
+            case AttributeUnderlyingType::UInt32: std::get<ContainerPtrType<UInt32>>(attribute.arrays)[idx] = value.get<UInt64>(); break;
+            case AttributeUnderlyingType::UInt64: std::get<ContainerPtrType<UInt64>>(attribute.arrays)[idx] = value.get<UInt64>(); break;
+            case AttributeUnderlyingType::Int8: std::get<ContainerPtrType<Int8>>(attribute.arrays)[idx] = value.get<Int64>(); break;
+            case AttributeUnderlyingType::Int16: std::get<ContainerPtrType<Int16>>(attribute.arrays)[idx] = value.get<Int64>(); break;
+            case AttributeUnderlyingType::Int32: std::get<ContainerPtrType<Int32>>(attribute.arrays)[idx] = value.get<Int64>(); break;
+            case AttributeUnderlyingType::Int64: std::get<ContainerPtrType<Int64>>(attribute.arrays)[idx] = value.get<Int64>(); break;
+            case AttributeUnderlyingType::Float32: std::get<ContainerPtrType<Float32>>(attribute.arrays)[idx] = value.get<Float64>(); break;
+            case AttributeUnderlyingType::Float64: std::get<ContainerPtrType<Float64>>(attribute.arrays)[idx] = value.get<Float64>(); break;
+            case AttributeUnderlyingType::String:
             {
-                auto string_ptr = string_arena->alloc(size + 1);
-                std::copy(string.data(), string.data() + size + 1, string_ptr);
-                string_ref = StringRef{string_ptr, size};
-            }
-            else
-                string_ref = {};
+                const auto & string = value.get<String>();
+                auto & string_ref = std::get<ContainerPtrType<StringRef>>(attribute.arrays)[idx];
+                const auto & null_value_ref = std::get<String>(attribute.null_values);
 
-            break;
-        }
+                /// free memory unless it points to a null_value
+                if (string_ref.data && string_ref.data != null_value_ref.data())
+                    string_arena->free(const_cast<char *>(string_ref.data), string_ref.size);
+
+                const auto size = string.size();
+                if (size != 0)
+                {
+                    auto string_ptr = string_arena->alloc(size + 1);
+                    std::copy(string.data(), string.data() + size + 1, string_ptr);
+                    string_ref = StringRef{string_ptr, size};
+                }
+                else
+                    string_ref = {};
+
+                break;
+            }
         }
     }
 };

@@ -1,40 +1,28 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Columns/ColumnConst.h>
-#include <Columns/ColumnNullable.h>
-#include <Common/typeid_cast.h>
-#include <DataTypes/DataTypeNothing.h>
-#include <DataTypes/DataTypeNullable.h>
-#include <Functions/FunctionHelpers.h>
 #include <Functions/IFunction.h>
+#include <Functions/FunctionHelpers.h>
+#include <Columns/ColumnNullable.h>
+#include <DataTypes/DataTypeNullable.h>
+#include <DataTypes/DataTypeNothing.h>
+#include <Columns/ColumnConst.h>
 #include <Interpreters/ExpressionActions.h>
-
-#include <ext/collection_cast.h>
+#include <Common/typeid_cast.h>
 #include <ext/range.h>
+#include <ext/collection_cast.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-extern const int ILLEGAL_COLUMN;
-} // namespace ErrorCodes
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+    extern const int ILLEGAL_COLUMN;
+}
 
 namespace
 {
+
+
 /** Return ColumnNullable of src, with null map as OR-ed null maps of args columns in blocks.
   * Or ColumnConst(ColumnNullable) if the result is always NULL or if the result is constant and always not NULL.
   */
@@ -98,6 +86,30 @@ ColumnPtr wrapInNullable(const ColumnPtr & src, Block & block, const ColumnNumbe
         return ColumnNullable::create(src_not_nullable, result_null_map_column);
 }
 
+
+struct NullPresence
+{
+    bool has_nullable = false;
+    bool has_null_constant = false;
+};
+
+NullPresence getNullPresense(const Block & block, const ColumnNumbers & args)
+{
+    NullPresence res;
+
+    for (const auto & arg : args)
+    {
+        const auto & elem = block.getByPosition(arg);
+
+        if (!res.has_nullable)
+            res.has_nullable = elem.type->isNullable();
+        if (!res.has_null_constant)
+            res.has_null_constant = elem.type->onlyNull();
+    }
+
+    return res;
+}
+
 NullPresence getNullPresense(const ColumnsWithTypeAndName & args)
 {
     NullPresence res;
@@ -120,26 +132,9 @@ bool allArgumentsAreConstants(const Block & block, const ColumnNumbers & args)
             return false;
     return true;
 }
-} // namespace
-
-NullPresence getNullPresense(const Block & block, const ColumnNumbers & args)
-{
-    NullPresence res;
-
-    for (const auto & arg : args)
-    {
-        const auto & elem = block.getByPosition(arg);
-
-        if (!res.has_nullable)
-            res.has_nullable = elem.type->isNullable();
-        if (!res.has_null_constant)
-            res.has_null_constant = elem.type->onlyNull();
-    }
-
-    return res;
 }
 
-bool IExecutableFunction::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForConstantArguments(Block & block, const ColumnNumbers & args, size_t result)
 {
     ColumnNumbers arguments_to_remain_constants = getArgumentsThatAreAlwaysConstant();
 
@@ -164,7 +159,7 @@ bool IExecutableFunction::defaultImplementationForConstantArguments(Block & bloc
         else
         {
             have_converted_columns = true;
-            temporary_block.insert({static_cast<const ColumnConst *>(column.column.get())->getDataColumnPtr(), column.type, column.name});
+            temporary_block.insert({ static_cast<const ColumnConst *>(column.column.get())->getDataColumnPtr(), column.type, column.name });
         }
     }
 
@@ -173,7 +168,7 @@ bool IExecutableFunction::defaultImplementationForConstantArguments(Block & bloc
       */
     if (!have_converted_columns)
         throw Exception("Number of arguments for function " + getName() + " doesn't match: the function requires more arguments",
-                        ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+            ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
     temporary_block.insert(block.getByPosition(result));
 
@@ -188,7 +183,7 @@ bool IExecutableFunction::defaultImplementationForConstantArguments(Block & bloc
 }
 
 
-bool IExecutableFunction::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result) const
+bool PreparedFunctionImpl::defaultImplementationForNulls(Block & block, const ColumnNumbers & args, size_t result)
 {
     if (args.empty() || !useDefaultImplementationForNulls())
         return false;
@@ -212,7 +207,7 @@ bool IExecutableFunction::defaultImplementationForNulls(Block & block, const Col
     return false;
 }
 
-void IExecutableFunction::execute(Block & block, const ColumnNumbers & args, size_t result) const
+void PreparedFunctionImpl::execute(Block & block, const ColumnNumbers & args, size_t result)
 {
     if (defaultImplementationForConstantArguments(block, args, result))
         return;
@@ -223,7 +218,7 @@ void IExecutableFunction::execute(Block & block, const ColumnNumbers & args, siz
     executeImpl(block, args, result);
 }
 
-void IFunctionBuilder::checkNumberOfArguments(size_t number_of_arguments) const
+void FunctionBuilderImpl::checkNumberOfArguments(size_t number_of_arguments) const
 {
     if (isVariadic())
         return;
@@ -232,16 +227,11 @@ void IFunctionBuilder::checkNumberOfArguments(size_t number_of_arguments) const
 
     if (number_of_arguments != expected_number_of_arguments)
         throw Exception("Number of arguments for function " + getName() + " doesn't match: passed "
-                            + toString(number_of_arguments) + ", should be " + toString(expected_number_of_arguments),
+                        + toString(number_of_arguments) + ", should be " + toString(expected_number_of_arguments),
                         ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 }
 
-FunctionBasePtr IFunctionBuilder::build(const ColumnsWithTypeAndName & arguments, const TiDB::TiDBCollatorPtr & collator) const
-{
-    return buildImpl(arguments, getReturnType(arguments), collator);
-}
-
-DataTypePtr IFunctionBuilder::getReturnType(const ColumnsWithTypeAndName & arguments) const
+DataTypePtr FunctionBuilderImpl::getReturnType(const ColumnsWithTypeAndName & arguments) const
 {
     checkNumberOfArguments(arguments.size());
 
@@ -258,16 +248,10 @@ DataTypePtr IFunctionBuilder::getReturnType(const ColumnsWithTypeAndName & argum
             Block nested_block = createBlockWithNestedColumns(Block(arguments), ext::collection_cast<ColumnNumbers>(ext::range(0, arguments.size())));
             auto return_type = getReturnTypeImpl(ColumnsWithTypeAndName(nested_block.begin(), nested_block.end()));
             return makeNullable(return_type);
+
         }
     }
 
     return getReturnTypeImpl(arguments);
 }
-
-void IFunctionBuilder::getLambdaArgumentTypes(DataTypes & arguments [[maybe_unused]]) const
-{
-    checkNumberOfArguments(arguments.size());
-    return getLambdaArgumentTypesImpl(arguments);
 }
-
-} // namespace DB

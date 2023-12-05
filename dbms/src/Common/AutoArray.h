@@ -1,26 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <common/likely.h>
-
 #include <cstddef>
+
+#include <common/likely.h>
 
 
 namespace DB
 {
+
 /** An array of (almost) unchangable size:
   *  the size is specified in the constructor;
   *  `resize` method removes old data, and necessary only for
@@ -95,7 +82,7 @@ public:
         src.setEmpty();
     }
 
-    AutoArray & operator=(AutoArray && src)
+    AutoArray & operator= (AutoArray && src)
     {
         if (this == &src)
             return *this;
@@ -113,7 +100,7 @@ public:
 
     size_t size() const
     {
-        return mSize();
+        return m_size();
     }
 
     bool empty() const
@@ -179,7 +166,7 @@ public:
     const_iterator begin() const { return &elem(0); }
     const_iterator end() const { return &elem(size()); }
 
-    bool operator==(const AutoArray<T> & rhs) const
+    bool operator== (const AutoArray<T> & rhs) const
     {
         size_t s = size();
 
@@ -193,12 +180,12 @@ public:
         return true;
     }
 
-    bool operator!=(const AutoArray<T> & rhs) const
+    bool operator!= (const AutoArray<T> & rhs) const
     {
         return !(*this == rhs);
     }
 
-    bool operator<(const AutoArray<T> & rhs) const
+    bool operator< (const AutoArray<T> & rhs) const
     {
         size_t s = size();
         size_t rhs_s = rhs.size();
@@ -222,12 +209,12 @@ public:
 private:
     char * data;
 
-    size_t & mSize()
+    size_t & m_size()
     {
         return reinterpret_cast<size_t *>(data)[-1];
     }
 
-    size_t mSize() const
+    size_t m_size() const
     {
         return reinterpret_cast<const size_t *>(data)[-1];
     }
@@ -257,7 +244,7 @@ private:
 
         data = new char[size_ * sizeof(T) + sizeof(size_t)];
         data += sizeof(size_t);
-        mSize() = size_;
+        m_size() = size_;
 
         if (!dont_init_elems)
             for (size_t i = 0; i < size_; ++i)
@@ -279,4 +266,4 @@ private:
     }
 };
 
-} // namespace DB
+}

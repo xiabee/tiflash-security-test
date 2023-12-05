@@ -1,49 +1,33 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/typeid_cast.h>
-#include <Core/Block.h>
 #include <Core/Defines.h>
+#include <Core/Block.h>
+
+#include <IO/WriteHelpers.h>
+#include <IO/VarInt.h>
+#include <IO/CompressedWriteBuffer.h>
+
 #include <DataStreams/MarkInCompressedFile.h>
 #include <DataStreams/NativeBlockOutputStream.h>
-#include <IO/CompressedWriteBuffer.h>
-#include <IO/VarInt.h>
-#include <IO/WriteHelpers.h>
+
+#include <Common/typeid_cast.h>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int LOGICAL_ERROR;
+    extern const int LOGICAL_ERROR;
 }
 
 
 NativeBlockOutputStream::NativeBlockOutputStream(
-    WriteBuffer & ostr_,
-    UInt64 client_revision_,
-    const Block & header_,
-    WriteBuffer * index_ostr_,
-    size_t initial_size_of_file_)
-    : ostr(ostr_)
-    , client_revision(client_revision_)
-    , header(header_)
-    , index_ostr(index_ostr_)
-    , initial_size_of_file(initial_size_of_file_)
+    WriteBuffer & ostr_, UInt64 client_revision_, const Block & header_,
+    WriteBuffer * index_ostr_, size_t initial_size_of_file_)
+    : ostr(ostr_), client_revision(client_revision_), header(header_),
+    index_ostr(index_ostr_), initial_size_of_file(initial_size_of_file_)
 {
     if (index_ostr)
     {
-        ostr_concrete = typeid_cast<CompressedWriteBuffer<> *>(&ostr);
+        ostr_concrete = typeid_cast<CompressedWriteBuffer *>(&ostr);
         if (!ostr_concrete)
             throw Exception("When need to write index for NativeBlockOutputStream, ostr must be CompressedWriteBuffer.", ErrorCodes::LOGICAL_ERROR);
     }
@@ -68,9 +52,7 @@ void NativeBlockOutputStream::writeData(const IDataType & type, const ColumnPtr 
     else
         full_column = column;
 
-    IDataType::OutputStreamGetter output_stream_getter = [&](const IDataType::SubstreamPath &) {
-        return &ostr;
-    };
+    IDataType::OutputStreamGetter output_stream_getter = [&] (const IDataType::SubstreamPath &) { return &ostr; };
     type.serializeBinaryBulkWithMultipleStreams(*full_column, output_stream_getter, offset, limit, false, {});
 }
 
@@ -106,7 +88,7 @@ void NativeBlockOutputStream::write(const Block & block)
 
         if (index_ostr)
         {
-            ostr_concrete->next(); /// Finish compressed block.
+            ostr_concrete->next();  /// Finish compressed block.
             mark.offset_in_compressed_file = initial_size_of_file + ostr_concrete->getCompressedBytes();
             mark.offset_in_decompressed_block = ostr_concrete->getRemainingBytes();
         }
@@ -128,7 +110,7 @@ void NativeBlockOutputStream::write(const Block & block)
         writeStringBinary(type_name, ostr);
 
         /// Data
-        if (rows) /// Zero items of data is always represented as zero number of bytes.
+        if (rows)    /// Zero items of data is always represented as zero number of bytes.
             writeData(*column.type, column.column, ostr, 0, 0);
 
         if (index_ostr)
@@ -142,4 +124,4 @@ void NativeBlockOutputStream::write(const Block & block)
     }
 }
 
-} // namespace DB
+}

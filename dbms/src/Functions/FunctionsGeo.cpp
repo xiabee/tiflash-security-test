@@ -1,44 +1,40 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Columns/ColumnArray.h>
-#include <Columns/ColumnTuple.h>
-#include <Common/ProfileEvents.h>
-#include <DataTypes/DataTypeArray.h>
-#include <DataTypes/DataTypeTuple.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsGeo.h>
 #include <Functions/GeoUtils.h>
 #include <Functions/ObjectPool.h>
-#include <IO/WriteHelpers.h>
-#include <Interpreters/ExpressionActions.h>
-#include <boost_wrapper/geometry.h>
 
+#include <boost/geometry.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
 
+#include <Interpreters/ExpressionActions.h>
+#include <DataTypes/DataTypeTuple.h>
+#include <Columns/ColumnTuple.h>
+#include <IO/WriteHelpers.h>
+#include <DataTypes/DataTypeArray.h>
+#include <Columns/ColumnArray.h>
+#include <Common/ProfileEvents.h>
+
+
+namespace ProfileEvents
+{
+    extern const Event PolygonsAddedToPool;
+    extern const Event PolygonsInPoolAllocatedBytes;
+}
+
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int TOO_LESS_ARGUMENTS_FOR_FUNCTION;
-extern const int BAD_ARGUMENTS;
-extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-} // namespace ErrorCodes
+    extern const int TOO_LESS_ARGUMENTS_FOR_FUNCTION;
+    extern const int BAD_ARGUMENTS;
+    extern const int ILLEGAL_TYPE_OF_ARGUMENT;
+}
 
 namespace FunctionPointInPolygonDetail
 {
+
 template <typename Polygon, typename PointInPolygonImpl>
 ColumnPtr callPointInPolygonImplWithPool(const IColumn & x, const IColumn & y, Polygon & polygon)
 {
@@ -46,12 +42,16 @@ ColumnPtr callPointInPolygonImplWithPool(const IColumn & x, const IColumn & y, P
     /// C++11 has thread-safe function-local statics on most modern compilers.
     static Pool known_polygons;
 
-    auto factory = [&polygon]() {
+    auto factory = [& polygon]()
+    {
         GeoUtils::normalizePolygon(polygon);
         auto ptr = std::make_unique<PointInPolygonImpl>(polygon);
 
         /// To allocate memory.
         ptr->init();
+
+        ProfileEvents::increment(ProfileEvents::PolygonsAddedToPool);
+        ProfileEvents::increment(ProfileEvents::PolygonsInPoolAllocatedBytes, ptr->getAllocatedBytes());
 
         return ptr.release();
     };
@@ -69,12 +69,13 @@ ColumnPtr callPointInPolygonImpl(const IColumn & x, const IColumn & y, Polygon &
     return GeoUtils::pointInPolygon(x, y, impl);
 }
 
-} // namespace FunctionPointInPolygonDetail
+}
 
 template <template <typename> typename PointInPolygonImpl, bool use_object_pool = false>
 class FunctionPointInPolygon : public IFunction
 {
 public:
+
     template <typename Type>
     using Point = boost::geometry::model::d2::point_xy<Type>;
     template <typename Type>
@@ -111,30 +112,28 @@ public:
             throw Exception("Too few arguments", ErrorCodes::TOO_LESS_ARGUMENTS_FOR_FUNCTION);
         }
 
-        auto get_msg_prefix = [this](size_t i) {
-            return "Argument " + toString(i + 1) + " for function " + getName();
-        };
+        auto getMsgPrefix = [this](size_t i) { return "Argument " + toString(i + 1) + " for function " + getName(); };
 
         for (size_t i = 1; i < arguments.size(); ++i)
         {
-            const auto * array = checkAndGetDataType<DataTypeArray>(arguments[i].get());
+            auto * array = checkAndGetDataType<DataTypeArray>(arguments[i].get());
             if (array == nullptr && i != 1)
-                throw Exception(get_msg_prefix(i) + " must be array of tuples.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                throw Exception(getMsgPrefix(i) + " must be array of tuples.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-            const auto * tuple = checkAndGetDataType<DataTypeTuple>(array ? array->getNestedType().get() : arguments[i].get());
+            auto * tuple = checkAndGetDataType<DataTypeTuple>(array ? array->getNestedType().get() : arguments[i].get());
             if (tuple == nullptr)
-                throw Exception(get_msg_prefix(i) + " must contains tuple.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                throw Exception(getMsgPrefix(i) + " must contains tuple.", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
             const DataTypes & elements = tuple->getElements();
 
             if (elements.size() != 2)
-                throw Exception(get_msg_prefix(i) + " must have exactly two elements.", ErrorCodes::BAD_ARGUMENTS);
+                throw Exception(getMsgPrefix(i) + " must have exactly two elements.", ErrorCodes::BAD_ARGUMENTS);
 
             for (auto j : ext::range(0, elements.size()))
             {
                 if (!elements[j]->isNumber())
                 {
-                    throw Exception(get_msg_prefix(i) + " must contains numeric tuple at position " + toString(j + 1),
+                    throw Exception(getMsgPrefix(i) + " must contains numeric tuple at position " + toString(j + 1),
                                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
                 }
             }
@@ -143,13 +142,14 @@ public:
         return std::make_shared<DataTypeUInt8>();
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override
     {
+
         const IColumn * point_col = block.getByPosition(arguments[0]).column.get();
-        const auto * const_tuple_col = checkAndGetColumn<ColumnConst>(point_col);
+        auto const_tuple_col = checkAndGetColumn<ColumnConst>(point_col);
         if (const_tuple_col)
             point_col = &const_tuple_col->getDataColumn();
-        const auto * tuple_col = checkAndGetColumn<ColumnTuple>(point_col);
+        auto tuple_col = checkAndGetColumn<ColumnTuple>(point_col);
 
         if (!tuple_col)
         {
@@ -174,41 +174,40 @@ public:
     }
 
 private:
-    Float64 getCoordinateFromField(const Field & field) const
+
+    Float64 getCoordinateFromField(const Field & field)
     {
         switch (field.getType())
         {
-        case Field::Types::Float64:
-            return field.get<Float64>();
-        case Field::Types::Int64:
-            return field.get<Int64>();
-        case Field::Types::UInt64:
-            return field.get<UInt64>();
-        default:
-        {
-            std::string msg = "Expected numeric field, but got ";
-            throw Exception(msg + Field::Types::toString(field.getType()), ErrorCodes::LOGICAL_ERROR);
-        }
+            case Field::Types::Float64:
+                return field.get<Float64>();
+            case Field::Types::Int64:
+                return field.get<Int64>();
+            case Field::Types::UInt64:
+                return field.get<UInt64>();
+            default:
+            {
+                std::string msg = "Expected numeric field, but got ";
+                throw Exception(msg + Field::Types::toString(field.getType()), ErrorCodes::LOGICAL_ERROR);
+            }
         }
     }
 
     template <typename Type>
-    ColumnPtr executeForType(const IColumn & x, const IColumn & y, Block & block, const ColumnNumbers & arguments) const
+    ColumnPtr executeForType(const IColumn & x, const IColumn & y, Block & block, const ColumnNumbers & arguments)
     {
         Polygon<Type> polygon;
 
-        auto get_msg_prefix = [this](size_t i) {
-            return "Argument " + toString(i + 1) + " for function " + getName();
-        };
+        auto getMsgPrefix = [this](size_t i) { return "Argument " + toString(i + 1) + " for function " + getName(); };
 
         for (size_t i = 1; i < arguments.size(); ++i)
         {
-            const auto * const_col = checkAndGetColumn<ColumnConst>(block.getByPosition(arguments[i]).column.get());
-            const auto * array_col = const_col ? checkAndGetColumn<ColumnArray>(&const_col->getDataColumn()) : nullptr;
-            const auto * tuple_col = array_col ? checkAndGetColumn<ColumnTuple>(&array_col->getData()) : nullptr;
+            auto const_col = checkAndGetColumn<ColumnConst>(block.getByPosition(arguments[i]).column.get());
+            auto array_col = const_col ? checkAndGetColumn<ColumnArray>(&const_col->getDataColumn()) : nullptr;
+            auto tuple_col = array_col ? checkAndGetColumn<ColumnTuple>(&array_col->getData()) : nullptr;
 
             if (!tuple_col)
-                throw Exception(get_msg_prefix(i) + " must be constant array of tuples.", ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception(getMsgPrefix(i) + " must be constant array of tuples.", ErrorCodes::ILLEGAL_COLUMN);
 
             const auto & tuple_columns = tuple_col->getColumns();
             const auto & column_x = tuple_columns[0];
@@ -222,7 +221,7 @@ private:
             auto size = column_x->size();
 
             if (size == 0)
-                throw Exception(get_msg_prefix(i) + " shouldn't be empty.", ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception(getMsgPrefix(i) + " shouldn't be empty.", ErrorCodes::ILLEGAL_COLUMN);
 
             for (auto j : ext::range(0, size))
             {
@@ -236,12 +235,13 @@ private:
                 container.push_back(container.front());
         }
 
-        auto call_impl = use_object_pool
+        auto callImpl = use_object_pool
             ? FunctionPointInPolygonDetail::callPointInPolygonImplWithPool<Polygon<Type>, PointInPolygonImpl<Type>>
             : FunctionPointInPolygonDetail::callPointInPolygonImpl<Polygon<Type>, PointInPolygonImpl<Type>>;
 
-        return call_impl(x, y, polygon);
+        return callImpl(x, y, polygon);
     }
+
 };
 
 template <typename Type>
@@ -260,4 +260,4 @@ void registerFunctionsGeo(FunctionFactory & factory)
 
     factory.registerFunction<FunctionPointInPolygon<PointInPolygonWithGrid, true>>();
 }
-} // namespace DB
+}

@@ -1,61 +1,58 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <cstring>
+#include <cmath>
 
-#include <Columns/ColumnVector.h>
-#include <Columns/ColumnsCommon.h>
-#include <Common/Arena.h>
 #include <Common/Exception.h>
-#include <Common/HashTable/Hash.h>
-#include <Common/NaNUtils.h>
+#include <Common/Arena.h>
 #include <Common/SipHash.h>
-#include <DataStreams/ColumnGathererStream.h>
+#include <Common/NaNUtils.h>
+
+#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 
-#include <cmath>
-#include <cstring>
+#include <Columns/ColumnVector.h>
+
+#include <DataStreams/ColumnGathererStream.h>
+
 #include <ext/bit_cast.h>
 
 #if __SSE2__
-#include <emmintrin.h>
+    #include <emmintrin.h>
 #endif
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int PARAMETER_OUT_OF_BOUND;
-extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
-} // namespace ErrorCodes
+    extern const int PARAMETER_OUT_OF_BOUND;
+    extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
+}
 
 
 template <typename T>
-StringRef ColumnVector<T>::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const
+StringRef ColumnVector<T>::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator>, String &) const
 {
-    auto * pos = arena.allocContinue(sizeof(T), begin);
+    auto pos = arena.allocContinue(sizeof(T), begin);
     memcpy(pos, &data[n], sizeof(T));
     return StringRef(pos, sizeof(T));
 }
 
 template <typename T>
-void ColumnVector<T>::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const
+const char * ColumnVector<T>::deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator>)
+{
+    data.push_back(*reinterpret_cast<const T *>(pos));
+    return pos + sizeof(T);
+}
+
+template <typename T>
+void ColumnVector<T>::updateHashWithValue(size_t n, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator>, String &) const
 {
     hash.update(data[n]);
 }
 
 template <typename T>
-void ColumnVector<T>::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const
+void ColumnVector<T>::updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const
 {
     for (size_t i = 0, sz = size(); i < sz; ++i)
     {
@@ -64,40 +61,11 @@ void ColumnVector<T>::updateHashWithValues(IColumn::HashValues & hash_values, co
 }
 
 template <typename T>
-void ColumnVector<T>::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const
-{
-    auto s = data.size();
-
-    if (hash.getData().size() != s)
-        throw Exception(
-            fmt::format("Size of WeakHash32 does not match size of column: column size is {}, hash size is {}", s, hash.getData().size()),
-            ErrorCodes::LOGICAL_ERROR);
-
-    const T * begin = data.data();
-    const T * end = begin + s;
-    UInt32 * hash_data = hash.getData().data();
-
-    while (begin < end)
-    {
-        if constexpr (is_fit_register<T>)
-            *hash_data = intHashCRC32(*begin, *hash_data);
-        else
-            *hash_data = wideIntHashCRC32(*begin, *hash_data);
-
-        ++begin;
-        ++hash_data;
-    }
-}
-
-template <typename T>
 struct ColumnVector<T>::less
 {
     const Self & parent;
     int nan_direction_hint;
-    less(const Self & parent_, int nan_direction_hint_)
-        : parent(parent_)
-        , nan_direction_hint(nan_direction_hint_)
-    {}
+    less(const Self & parent_, int nan_direction_hint_) : parent(parent_), nan_direction_hint(nan_direction_hint_) {}
     bool operator()(size_t lhs, size_t rhs) const { return CompareHelper<T>::less(parent.data[lhs], parent.data[rhs], nan_direction_hint); }
 };
 
@@ -106,10 +74,7 @@ struct ColumnVector<T>::greater
 {
     const Self & parent;
     int nan_direction_hint;
-    greater(const Self & parent_, int nan_direction_hint_)
-        : parent(parent_)
-        , nan_direction_hint(nan_direction_hint_)
-    {}
+    greater(const Self & parent_, int nan_direction_hint_) : parent(parent_), nan_direction_hint(nan_direction_hint_) {}
     bool operator()(size_t lhs, size_t rhs) const { return CompareHelper<T>::greater(parent.data[lhs], parent.data[rhs], nan_direction_hint); }
 };
 
@@ -163,7 +128,7 @@ MutableColumnPtr ColumnVector<T>::cloneResized(size_t size) const
             memset(&new_col.data[count], static_cast<int>(value_type()), size - count);
     }
 
-    return res;
+    return std::move(res);
 }
 
 template <typename T>
@@ -175,27 +140,25 @@ UInt64 ColumnVector<T>::get64(size_t n) const
 template <typename T>
 UInt64 ColumnVector<T>::getUInt(size_t n) const
 {
-    return static_cast<UInt64>(data[n]);
+    return UInt64(data[n]);
 }
 
 template <typename T>
 Int64 ColumnVector<T>::getInt(size_t n) const
 {
-    return static_cast<Int64>(data[n]);
+    return Int64(data[n]);
 }
 
 template <typename T>
 void ColumnVector<T>::insertRangeFrom(const IColumn & src, size_t start, size_t length)
 {
-    const auto & src_vec = static_cast<const ColumnVector &>(src);
+    const ColumnVector & src_vec = static_cast<const ColumnVector &>(src);
 
     if (start + length > src_vec.data.size())
-        throw Exception(
-            fmt::format(
-                "Parameters are out of bound in ColumnVector<T>::insertRangeFrom method, start={}, length={}, src.size()={}",
-                start,
-                length,
-                src_vec.data.size()),
+        throw Exception("Parameters start = "
+            + toString(start) + ", length = "
+            + toString(length) + " are out of bound in ColumnVector<T>::insertRangeFrom method"
+            " (data.size() = " + toString(src_vec.data.size()) + ").",
             ErrorCodes::PARAMETER_OUT_OF_BOUND);
 
     size_t old_size = data.size();
@@ -214,11 +177,7 @@ ColumnPtr ColumnVector<T>::filter(const IColumn::Filter & filt, ssize_t result_s
     Container & res_data = res->getData();
 
     if (result_size_hint)
-    {
-        if (result_size_hint < 0)
-            result_size_hint = countBytesInFilter(filt);
-        res_data.reserve(result_size_hint);
-    }
+        res_data.reserve(result_size_hint > 0 ? result_size_hint : size);
 
     const UInt8 * filt_pos = &filt[0];
     const UInt8 * filt_end = filt_pos + size;
@@ -268,7 +227,7 @@ ColumnPtr ColumnVector<T>::filter(const IColumn::Filter & filt, ssize_t result_s
         ++data_pos;
     }
 
-    return res;
+    return std::move(res);
 }
 
 template <typename T>
@@ -289,7 +248,7 @@ ColumnPtr ColumnVector<T>::permute(const IColumn::Permutation & perm, size_t lim
     for (size_t i = 0; i < limit; ++i)
         res_data[i] = data[perm[i]];
 
-    return res;
+    return std::move(res);
 }
 
 template <typename T>
@@ -316,7 +275,7 @@ ColumnPtr ColumnVector<T>::replicate(const IColumn::Offsets & offsets) const
             res_data.push_back(data[i]);
     }
 
-    return res;
+    return std::move(res);
 }
 
 template <typename T>
@@ -332,8 +291,8 @@ void ColumnVector<T>::getExtremes(Field & min, Field & max) const
 
     if (size == 0)
     {
-        min = static_cast<typename NearestFieldType<T>::Type>(0);
-        max = static_cast<typename NearestFieldType<T>::Type>(0);
+        min = typename NearestFieldType<T>::Type(0);
+        max = typename NearestFieldType<T>::Type(0);
         return;
     }
 
@@ -367,8 +326,8 @@ void ColumnVector<T>::getExtremes(Field & min, Field & max) const
             cur_max = x;
     }
 
-    min = static_cast<typename NearestFieldType<T>::Type>(cur_min);
-    max = static_cast<typename NearestFieldType<T>::Type>(cur_max);
+    min = typename NearestFieldType<T>::Type(cur_min);
+    max = typename NearestFieldType<T>::Type(cur_max);
 }
 
 /// Explicit template instantiations - to avoid code bloat in headers.
@@ -383,4 +342,4 @@ template class ColumnVector<Int32>;
 template class ColumnVector<Int64>;
 template class ColumnVector<Float32>;
 template class ColumnVector<Float64>;
-} // namespace DB
+}

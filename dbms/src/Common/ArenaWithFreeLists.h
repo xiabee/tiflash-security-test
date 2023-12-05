@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Common/Arena.h>
@@ -20,6 +6,8 @@
 
 namespace DB
 {
+
+
 /** Unlike Arena, allows you to release (for later re-use)
   *  previously allocated (not necessarily just recently) chunks of memory.
   * For this, the requested size is rounded up to the power of two
@@ -29,8 +17,7 @@ namespace DB
   * When allocating, we take the head of the list of free blocks,
   *  or, if the list is empty - allocate a new block using Arena.
   */
-class ArenaWithFreeLists : private Allocator<false>
-    , private boost::noncopyable
+class ArenaWithFreeLists : private Allocator<false>, private boost::noncopyable
 {
 private:
     /// If the block is free, then the pointer to the next free block is stored at its beginning, or nullptr, if there are no more free blocks.
@@ -55,12 +42,11 @@ private:
 
     /// Lists of free blocks. Each element points to the head of the corresponding list, or is nullptr.
     /// The first two elements are not used, but are intended to simplify arithmetic.
-    Block * free_lists[16]{};
+    Block * free_lists[16] {};
 
 public:
-    explicit ArenaWithFreeLists(
-        const size_t initial_size = 4096,
-        const size_t growth_factor = 2,
+    ArenaWithFreeLists(
+        const size_t initial_size = 4096, const size_t growth_factor = 2,
         const size_t linear_growth_threshold = 128 * 1024 * 1024)
         : pool{initial_size, growth_factor, linear_growth_threshold}
     {
@@ -78,7 +64,7 @@ public:
         if (auto & free_block_ptr = free_lists[list_idx])
         {
             /// Let's take it. And change the head of the list to the next item in the list.
-            auto * const res = free_block_ptr->data;
+            const auto res = free_block_ptr->data;
             free_block_ptr = free_block_ptr->next;
             return res;
         }
@@ -97,7 +83,7 @@ public:
 
         /// Insert the released block into the head of the list.
         auto & free_block_ptr = free_lists[list_idx];
-        auto * const old_head = free_block_ptr;
+        const auto old_head = free_block_ptr;
         free_block_ptr = reinterpret_cast<Block *>(ptr);
         free_block_ptr->next = old_head;
     }
@@ -110,4 +96,4 @@ public:
 };
 
 
-} // namespace DB
+}

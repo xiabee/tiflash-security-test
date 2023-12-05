@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/Exception.h>
 #include <Common/SimpleCache.h>
 #include <Common/StringUtils/StringUtils.h>
@@ -37,6 +23,7 @@
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int DNS_ERROR;
@@ -65,7 +52,7 @@ private:
     /// Address of mask. Always transformed to IPv6.
     Poco::Net::IPAddress mask_address;
     /// Number of bits in mask.
-    UInt8 prefix_bits{};
+    UInt8 prefix_bits;
 
 public:
     explicit IPAddressPattern(const String & str)
@@ -79,18 +66,16 @@ public:
         else
         {
             String addr(str, 0, pos - str.c_str());
-            auto prefix_bits = parse<UInt8>(pos + 1);
+            UInt8 prefix_bits_ = parse<UInt8>(pos + 1);
 
-            construct(Poco::Net::IPAddress(addr), prefix_bits);
+            construct(Poco::Net::IPAddress(addr), prefix_bits_);
         }
     }
 
     bool contains(const Poco::Net::IPAddress & addr) const override
     {
         return prefixBitsEquals(
-            reinterpret_cast<const char *>(toIPv6(addr).addr()),
-            reinterpret_cast<const char *>(mask_address.addr()),
-            prefix_bits);
+            reinterpret_cast<const char *>(toIPv6(addr).addr()), reinterpret_cast<const char *>(mask_address.addr()), prefix_bits);
     }
 
 private:
@@ -130,7 +115,7 @@ private:
         /// Resolve by hand, because Poco don't use AI_ALL flag but we need it.
         addrinfo * ai = nullptr;
 
-        addrinfo hints{};
+        addrinfo hints;
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_UNSPEC;
         hints.ai_flags |= AI_V4MAPPED | AI_ALL;
@@ -148,7 +133,8 @@ private:
                 if (ai->ai_family == AF_INET6)
                 {
                     if (addr_v6
-                        == Poco::Net::IPAddress(&reinterpret_cast<sockaddr_in6 *>(ai->ai_addr)->sin6_addr, sizeof(in6_addr), reinterpret_cast<sockaddr_in6 *>(ai->ai_addr)->sin6_scope_id))
+                        == Poco::Net::IPAddress(&reinterpret_cast<sockaddr_in6 *>(ai->ai_addr)->sin6_addr, sizeof(in6_addr),
+                            reinterpret_cast<sockaddr_in6 *>(ai->ai_addr)->sin6_scope_id))
                     {
                         return true;
                     }
@@ -167,9 +153,7 @@ private:
     }
 
 public:
-    explicit HostExactPattern(const String & host_)
-        : host(host_)
-    {}
+    explicit HostExactPattern(const String & host_) : host(host_) {}
 
     bool contains(const Poco::Net::IPAddress & addr) const override
     {
@@ -199,9 +183,7 @@ private:
     }
 
 public:
-    explicit HostRegexpPattern(const String & host_regexp_)
-        : host_regexp(host_regexp_)
-    {}
+    explicit HostRegexpPattern(const String & host_regexp_) : host_regexp(host_regexp_) {}
 
     bool contains(const Poco::Net::IPAddress & addr) const override
     {
@@ -210,28 +192,28 @@ public:
         String domain = cache(addr);
         Poco::RegularExpression::Match match;
 
-        return host_regexp.match(domain, match) && HostExactPattern(domain).contains(addr);
+        if (host_regexp.match(domain, match) && HostExactPattern(domain).contains(addr))
+            return true;
+
+        return false;
     }
 };
 
 
 bool AddressPatterns::contains(const Poco::Net::IPAddress & addr) const
 {
-    for (const auto & pattern : patterns)
+    for (size_t i = 0, size = patterns.size(); i < size; ++i)
     {
         /// If host cannot be resolved, skip it and try next.
         try
         {
-            if (pattern->contains(addr))
+            if (patterns[i]->contains(addr))
                 return true;
         }
         catch (const DB::Exception & e)
         {
-            LOG_WARNING(&Poco::Logger::get("AddressPatterns"),
-                        "Failed to check if pattern contains address {}. {}, code = {}",
-                        addr.toString(),
-                        e.displayText(),
-                        e.code());
+            LOG_WARNING(&Logger::get("AddressPatterns"),
+                "Failed to check if pattern contains address " << addr.toString() << ". " << e.displayText() << ", code = " << e.code());
 
             if (e.code() == ErrorCodes::DNS_ERROR)
             {
@@ -250,19 +232,19 @@ void AddressPatterns::addFromConfig(const String & config_elem, Poco::Util::Abst
     Poco::Util::AbstractConfiguration::Keys config_keys;
     config.keys(config_elem, config_keys);
 
-    for (auto & config_key : config_keys)
+    for (Poco::Util::AbstractConfiguration::Keys::const_iterator it = config_keys.begin(); it != config_keys.end(); ++it)
     {
         Container::value_type pattern;
-        String value = config.getString(config_elem + "." + config_key);
+        String value = config.getString(config_elem + "." + *it);
 
-        if (startsWith(config_key, "ip"))
+        if (startsWith(*it, "ip"))
             pattern = std::make_unique<IPAddressPattern>(value);
-        else if (startsWith(config_key, "host_regexp"))
+        else if (startsWith(*it, "host_regexp"))
             pattern = std::make_unique<HostRegexpPattern>(value);
-        else if (startsWith(config_key, "host"))
+        else if (startsWith(*it, "host"))
             pattern = std::make_unique<HostExactPattern>(value);
         else
-            throw Exception("Unknown address pattern type: " + config_key, ErrorCodes::UNKNOWN_ADDRESS_PATTERN_TYPE);
+            throw Exception("Unknown address pattern type: " + *it, ErrorCodes::UNKNOWN_ADDRESS_PATTERN_TYPE);
 
         patterns.emplace_back(std::move(pattern));
     }
@@ -275,13 +257,10 @@ const User & User::getDefaultUser()
 }
 
 User::User(const String & name_)
-    : name(name_)
-    , profile(User::DEFAULT_USER_NAME)
-    , quota(QuotaForInterval::DEFAULT_QUOTA_NAME)
+    : name(name_), password(), password_sha256_hex(), profile(User::DEFAULT_USER_NAME), quota(QuotaForInterval::DEFAULT_QUOTA_NAME)
 {}
 
-User::User(const String & name_, const String & config_elem, Poco::Util::AbstractConfiguration & config)
-    : name(name_)
+User::User(const String & name_, const String & config_elem, Poco::Util::AbstractConfiguration & config) : name(name_)
 {
     // Allow empty "password" for TiFlash
     bool has_password = config.has(config_elem + ".password");
@@ -289,7 +268,7 @@ User::User(const String & name_, const String & config_elem, Poco::Util::Abstrac
 
     if (has_password && has_password_sha256_hex)
         throw Exception("Both fields 'password' and 'password_sha256_hex' are specified for user " + name + ". Must be only one of them.",
-                        ErrorCodes::BAD_ARGUMENTS);
+            ErrorCodes::BAD_ARGUMENTS);
 
     if (has_password)
         password = config.getString(config_elem + ".password");
@@ -300,8 +279,8 @@ User::User(const String & name_, const String & config_elem, Poco::Util::Abstrac
 
         if (password_sha256_hex.size() != 64)
             throw Exception("password_sha256_hex for user " + name + " has length " + toString(password_sha256_hex.size())
-                                + " but must be exactly 64 symbols.",
-                            ErrorCodes::BAD_ARGUMENTS);
+                    + " but must be exactly 64 symbols.",
+                ErrorCodes::BAD_ARGUMENTS);
     }
 
     profile = config.getString(config_elem + ".profile");

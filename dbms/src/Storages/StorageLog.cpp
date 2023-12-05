@@ -1,35 +1,29 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <Storages/StorageLog.h>
+#include <Storages/StorageFactory.h>
 
-#include <Columns/ColumnArray.h>
 #include <Common/Exception.h>
 #include <Common/StringUtils/StringUtils.h>
-#include <Common/typeid_cast.h>
-#include <DataStreams/IBlockOutputStream.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
-#include <DataTypes/NestedUtils.h>
+
+#include <IO/ReadBufferFromFile.h>
+#include <IO/WriteBufferFromFile.h>
 #include <IO/CompressedReadBuffer.h>
 #include <IO/CompressedWriteBuffer.h>
-#include <IO/ReadBufferFromFile.h>
 #include <IO/ReadHelpers.h>
-#include <IO/WriteBufferFromFile.h>
 #include <IO/WriteHelpers.h>
+
+#include <DataTypes/NestedUtils.h>
+
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/IBlockOutputStream.h>
+
+#include <Columns/ColumnArray.h>
+
+#include <Common/typeid_cast.h>
+
 #include <Interpreters/Context.h>
-#include <Poco/DirectoryIterator.h>
+
 #include <Poco/Path.h>
-#include <Storages/StorageFactory.h>
-#include <Storages/StorageLog.h>
+#include <Poco/DirectoryIterator.h>
 
 
 #define DBMS_STORAGE_LOG_DATA_FILE_EXTENSION ".bin"
@@ -38,34 +32,31 @@
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int LOGICAL_ERROR;
-extern const int EMPTY_LIST_OF_COLUMNS_PASSED;
-extern const int NO_SUCH_COLUMN_IN_TABLE;
-extern const int DUPLICATE_COLUMN;
-extern const int SIZES_OF_MARKS_FILES_ARE_INCONSISTENT;
-extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-extern const int INCORRECT_FILE_NAME;
-} // namespace ErrorCodes
+    extern const int LOGICAL_ERROR;
+    extern const int EMPTY_LIST_OF_COLUMNS_PASSED;
+    extern const int NO_SUCH_COLUMN_IN_TABLE;
+    extern const int DUPLICATE_COLUMN;
+    extern const int SIZES_OF_MARKS_FILES_ARE_INCONSISTENT;
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+    extern const int INCORRECT_FILE_NAME;
+}
 
 
 class LogBlockInputStream final : public IProfilingBlockInputStream
 {
 public:
     LogBlockInputStream(
-        size_t block_size_,
-        const NamesAndTypesList & columns_,
-        StorageLog & storage_,
-        size_t mark_number_,
-        size_t rows_limit_,
-        size_t max_read_buffer_size_)
-        : block_size(block_size_)
-        , columns(columns_)
-        , storage(storage_)
-        , mark_number(mark_number_)
-        , rows_limit(rows_limit_)
-        , max_read_buffer_size(max_read_buffer_size_)
+        size_t block_size_, const NamesAndTypesList & columns_, StorageLog & storage_,
+        size_t mark_number_, size_t rows_limit_, size_t max_read_buffer_size_)
+        : block_size(block_size_),
+        columns(columns_),
+        storage(storage_),
+        mark_number(mark_number_),
+        rows_limit(rows_limit_),
+        max_read_buffer_size(max_read_buffer_size_)
     {
     }
 
@@ -76,7 +67,7 @@ public:
         Block res;
 
         for (const auto & name_type : columns)
-            res.insert({name_type.type->createColumn(), name_type.type, name_type.name});
+            res.insert({ name_type.type->createColumn(), name_type.type, name_type.name });
 
         return Nested::flatten(res);
     };
@@ -88,23 +79,23 @@ private:
     size_t block_size;
     NamesAndTypesList columns;
     StorageLog & storage;
-    size_t mark_number; /// from what mark to read data
-    size_t rows_limit; /// The maximum number of rows that can be read
+    size_t mark_number;     /// from what mark to read data
+    size_t rows_limit;      /// The maximum number of rows that can be read
     size_t rows_read = 0;
     size_t max_read_buffer_size;
 
     struct Stream
     {
         Stream(const std::string & data_path, size_t offset, size_t max_read_buffer_size)
-            : plain(data_path, std::min(static_cast<Poco::File::FileSize>(max_read_buffer_size), Poco::File(data_path).getSize()))
-            , compressed(plain)
+            : plain(data_path, std::min(static_cast<Poco::File::FileSize>(max_read_buffer_size), Poco::File(data_path).getSize())),
+            compressed(plain)
         {
             if (offset)
                 plain.seek(offset);
         }
 
         ReadBufferFromFile plain;
-        CompressedReadBuffer<> compressed;
+        CompressedReadBuffer compressed;
     };
 
     using FileStreams = std::map<std::string, Stream>;
@@ -118,9 +109,9 @@ class LogBlockOutputStream final : public IBlockOutputStream
 {
 public:
     explicit LogBlockOutputStream(StorageLog & storage_)
-        : storage(storage_)
-        , lock(storage.rwlock)
-        , marks_stream(storage.marks_file.path(), 4096, O_APPEND | O_CREAT | O_WRONLY)
+        : storage(storage_),
+        lock(storage.rwlock),
+        marks_stream(storage.marks_file.path(), 4096, O_APPEND | O_CREAT | O_WRONLY)
     {
     }
 
@@ -147,17 +138,17 @@ private:
 
     struct Stream
     {
-        Stream(const std::string & data_path, size_t max_compress_block_size)
-            : plain(data_path, max_compress_block_size, O_APPEND | O_CREAT | O_WRONLY)
-            , compressed(plain, CompressionSettings(CompressionMethod::LZ4), max_compress_block_size)
+        Stream(const std::string & data_path, size_t max_compress_block_size) :
+            plain(data_path, max_compress_block_size, O_APPEND | O_CREAT | O_WRONLY),
+            compressed(plain, CompressionSettings(CompressionMethod::LZ4), max_compress_block_size)
         {
             plain_offset = Poco::File(data_path).getSize();
         }
 
         WriteBufferFromFile plain;
-        CompressedWriteBuffer<> compressed;
+        CompressedWriteBuffer compressed;
 
-        size_t plain_offset; /// How many bytes were in the file at the time the LogBlockOutputStream was created.
+        size_t plain_offset;    /// How many bytes were in the file at the time the LogBlockOutputStream was created.
 
         void finalize()
         {
@@ -176,7 +167,9 @@ private:
 
     WriteBufferFromFile marks_stream; /// Declared below `lock` to make the file open when rwlock is captured.
 
-    void writeData(const String & name, const IDataType & type, const IColumn & column, MarksForColumns & out_marks, WrittenStreams & written_streams);
+    void writeData(const String & name, const IDataType & type, const IColumn & column,
+        MarksForColumns & out_marks,
+        WrittenStreams & written_streams);
 
     void writeMarks(MarksForColumns && marks);
 };
@@ -232,7 +225,8 @@ Block LogBlockInputStream::readImpl()
 
 void LogBlockInputStream::readData(const String & name, const IDataType & type, IColumn & column, size_t max_rows_to_read)
 {
-    IDataType::InputStreamGetter stream_getter = [&](const IDataType::SubstreamPath & path) -> ReadBuffer * {
+    IDataType::InputStreamGetter stream_getter = [&] (const IDataType::SubstreamPath & path) -> ReadBuffer *
+    {
         String stream_name = IDataType::getFileNameForStream(name, path);
 
         const auto & file_it = storage.files.find(stream_name);
@@ -240,12 +234,11 @@ void LogBlockInputStream::readData(const String & name, const IDataType & type, 
             throw Exception("Logical error: no information about file " + stream_name + " in StorageLog", ErrorCodes::LOGICAL_ERROR);
 
         auto it = streams.try_emplace(stream_name,
-                                      file_it->second.data_file.path(),
-                                      mark_number
-                                          ? file_it->second.marks[mark_number].offset
-                                          : 0,
-                                      max_read_buffer_size)
-                      .first;
+            file_it->second.data_file.path(),
+            mark_number
+                ? file_it->second.marks[mark_number].offset
+                : 0,
+            max_read_buffer_size).first;
 
         return &it->second.compressed;
     };
@@ -297,9 +290,12 @@ void LogBlockOutputStream::writeSuffix()
 }
 
 
-void LogBlockOutputStream::writeData(const String & name, const IDataType & type, const IColumn & column, MarksForColumns & out_marks, WrittenStreams & written_streams)
+void LogBlockOutputStream::writeData(const String & name, const IDataType & type, const IColumn & column,
+    MarksForColumns & out_marks,
+    WrittenStreams & written_streams)
 {
-    type.enumerateStreams([&](const IDataType::SubstreamPath & path) {
+    type.enumerateStreams([&] (const IDataType::SubstreamPath & path)
+    {
         String stream_name = IDataType::getFileNameForStream(name, path);
         if (written_streams.count(stream_name))
             return;
@@ -312,10 +308,10 @@ void LogBlockOutputStream::writeData(const String & name, const IDataType & type
         mark.offset = stream_it->second.plain_offset + stream_it->second.plain.count();
 
         out_marks.emplace_back(file.column_index, mark);
-    },
-                          {});
+    }, {});
 
-    IDataType::OutputStreamGetter stream_getter = [&](const IDataType::SubstreamPath & path) -> WriteBuffer * {
+    IDataType::OutputStreamGetter stream_getter = [&] (const IDataType::SubstreamPath & path) -> WriteBuffer *
+    {
         String stream_name = IDataType::getFileNameForStream(name, path);
         if (written_streams.count(stream_name))
             return nullptr;
@@ -328,7 +324,8 @@ void LogBlockOutputStream::writeData(const String & name, const IDataType & type
 
     type.serializeBinaryBulkWithMultipleStreams(column, stream_getter, 0, 0, true, {});
 
-    type.enumerateStreams([&](const IDataType::SubstreamPath & path) {
+    type.enumerateStreams([&] (const IDataType::SubstreamPath & path)
+    {
         String stream_name = IDataType::getFileNameForStream(name, path);
         if (!written_streams.emplace(stream_name).second)
             return;
@@ -337,8 +334,7 @@ void LogBlockOutputStream::writeData(const String & name, const IDataType & type
         if (streams.end() == it)
             throw Exception("Logical error: stream was not created when writing data in LogBlockOutputStream", ErrorCodes::LOGICAL_ERROR);
         it->second.compressed.next();
-    },
-                          {});
+    }, {});
 }
 
 
@@ -364,16 +360,15 @@ StorageLog::StorageLog(
     const std::string & name_,
     const ColumnsDescription & columns_,
     size_t max_compress_block_size_)
-    : IStorage{columns_}
-    , path(path_)
-    , name(name_)
-    , max_compress_block_size(max_compress_block_size_)
-    , file_checker(path + escapeForFileName(name) + '/' + "sizes.json")
+    : IStorage{columns_},
+    path(path_), name(name_),
+    max_compress_block_size(max_compress_block_size_),
+    file_checker(path + escapeForFileName(name) + '/' + "sizes.json")
 {
     if (path.empty())
         throw Exception("Storage " + getName() + " requires data path", ErrorCodes::INCORRECT_FILE_NAME);
 
-    /// create files if they do not exist
+     /// create files if they do not exist
     Poco::File(path + escapeForFileName(name) + '/').createDirectories();
 
     for (const auto & column : getColumns().getAllPhysical())
@@ -387,9 +382,10 @@ void StorageLog::addFiles(const String & column_name, const IDataType & type)
 {
     if (files.end() != files.find(column_name))
         throw Exception("Duplicate column with name " + column_name + " in constructor of StorageLog.",
-                        ErrorCodes::DUPLICATE_COLUMN);
+            ErrorCodes::DUPLICATE_COLUMN);
 
-    IDataType::StreamCallback stream_callback = [&](const IDataType::SubstreamPath & substream_path) {
+    IDataType::StreamCallback stream_callback = [&] (const IDataType::SubstreamPath & substream_path)
+    {
         String stream_name = IDataType::getFileNameForStream(column_name, substream_path);
 
         if (!files.count(stream_name))
@@ -477,11 +473,11 @@ const StorageLog::Marks & StorageLog::getMarksWithRealRowCount() const
       * If this is a data type with multiple stream, get the first stream, that we assume have real row count.
       * (Example: for Array data type, first stream is array sizes; and number of array sizes is the number of arrays).
       */
-    column_type.enumerateStreams([&](const IDataType::SubstreamPath & substream_path) {
+    column_type.enumerateStreams([&](const IDataType::SubstreamPath & substream_path)
+    {
         if (filename.empty())
             filename = IDataType::getFileNameForStream(column_name, substream_path);
-    },
-                                 {});
+    },  {});
 
     Files_t::const_iterator it = files.find(filename);
     if (files.end() == it)
@@ -539,8 +535,7 @@ BlockInputStreams StorageLog::read(
 
 
 BlockOutputStreamPtr StorageLog::write(
-    const ASTPtr & /*query*/,
-    const Settings & /*settings*/)
+    const ASTPtr & /*query*/, const Settings & /*settings*/)
 {
     loadMarks();
     return std::make_shared<LogBlockOutputStream>(*this);
@@ -555,18 +550,17 @@ bool StorageLog::checkData() const
 
 void registerStorageLog(StorageFactory & factory)
 {
-    factory.registerStorage("Log", [](const StorageFactory::Arguments & args) {
+    factory.registerStorage("Log", [](const StorageFactory::Arguments & args)
+    {
         if (!args.engine_args.empty())
             throw Exception(
                 "Engine " + args.engine_name + " doesn't support any arguments (" + toString(args.engine_args.size()) + " given)",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
         return StorageLog::create(
-            args.data_path,
-            args.table_name,
-            args.columns,
-            args.context.getSettingsRef().max_compress_block_size);
+            args.data_path, args.table_name, args.columns,
+            args.context.getSettings().max_compress_block_size);
     });
 }
 
-} // namespace DB
+}

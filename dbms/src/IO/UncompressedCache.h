@@ -1,34 +1,23 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/HashTable/Hash.h>
 #include <Common/LRUCache.h>
-#include <Common/ProfileEvents.h>
 #include <Common/SipHash.h>
+#include <Common/UInt128.h>
+#include <Common/ProfileEvents.h>
 #include <IO/BufferWithOwnMemory.h>
+
 
 namespace ProfileEvents
 {
-extern const Event UncompressedCacheHits;
-extern const Event UncompressedCacheMisses;
-extern const Event UncompressedCacheWeightLost;
-} // namespace ProfileEvents
+    extern const Event UncompressedCacheHits;
+    extern const Event UncompressedCacheMisses;
+    extern const Event UncompressedCacheWeightLost;
+}
 
 namespace DB
 {
+
+
 struct UncompressedCacheCell
 {
     Memory data;
@@ -37,21 +26,23 @@ struct UncompressedCacheCell
 
 struct UncompressedSizeWeightFunction
 {
-    size_t operator()(const UInt128 key, const UncompressedCacheCell & x) const { return sizeof(key) + x.data.size(); }
+    size_t operator()(const UncompressedCacheCell & x) const
+    {
+        return x.data.size();
+    }
 };
 
 
 /** Cache of decompressed blocks for implementation of CachedCompressedReadBuffer. thread-safe.
   */
-class UncompressedCache : public LRUCache<UInt128, UncompressedCacheCell, TrivialHash, UncompressedSizeWeightFunction>
+class UncompressedCache : public LRUCache<UInt128, UncompressedCacheCell, UInt128TrivialHash, UncompressedSizeWeightFunction>
 {
 private:
-    using Base = LRUCache<UInt128, UncompressedCacheCell, TrivialHash, UncompressedSizeWeightFunction>;
+    using Base = LRUCache<UInt128, UncompressedCacheCell, UInt128TrivialHash, UncompressedSizeWeightFunction>;
 
 public:
     UncompressedCache(size_t max_size_in_bytes)
-        : Base(max_size_in_bytes)
-    {}
+        : Base(max_size_in_bytes) {}
 
     /// Calculate key from path to file and offset.
     static UInt128 hash(const String & path_to_file, size_t offset)
@@ -61,7 +52,7 @@ public:
         SipHash hash;
         hash.update(path_to_file.data(), path_to_file.size() + 1);
         hash.update(offset);
-        hash.get128(key);
+        hash.get128(key.low, key.high);
 
         return key;
     }
@@ -87,4 +78,4 @@ private:
 
 using UncompressedCachePtr = std::shared_ptr<UncompressedCache>;
 
-} // namespace DB
+}

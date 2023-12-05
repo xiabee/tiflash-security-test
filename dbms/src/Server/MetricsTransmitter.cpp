@@ -1,37 +1,27 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include "MetricsTransmitter.h"
+
+#include <Interpreters/AsynchronousMetrics.h>
+#include <Interpreters/Context.h>
 
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
 #include <Common/setThreadName.h>
-#include <Interpreters/AsynchronousMetrics.h>
-#include <Interpreters/Context.h>
+
+#include <daemon/BaseDaemon.h>
+
 #include <Poco/Util/Application.h>
 #include <Poco/Util/LayeredConfiguration.h>
-#include <daemon/BaseDaemon.h>
 
 
 namespace DB
 {
+
 MetricsTransmitter::~MetricsTransmitter()
 {
     try
     {
         {
-            std::lock_guard lock{mutex};
+            std::lock_guard<std::mutex> lock{mutex};
             quit = true;
         }
 
@@ -53,7 +43,8 @@ void MetricsTransmitter::run()
 
     setThreadName("CHMetricsTrns");
 
-    const auto get_next_time = [](size_t seconds) {
+    const auto get_next_time = [](size_t seconds)
+    {
         /// To avoid time drift and transmit values exactly each interval:
         ///  next time aligned to system seconds
         /// (60s -> every minute at 00 seconds, 5s -> every minute:[00, 05, 15 ... 55]s, 3600 -> every hour:00:00
@@ -64,7 +55,7 @@ void MetricsTransmitter::run()
 
     std::vector<ProfileEvents::Count> prev_counters(ProfileEvents::end());
 
-    std::unique_lock lock{mutex};
+    std::unique_lock<std::mutex> lock{mutex};
 
     while (true)
     {
@@ -117,7 +108,7 @@ void MetricsTransmitter::transmit(std::vector<ProfileEvents::Count> & prev_count
         }
     }
 
-    if (!key_vals.empty())
+    if (key_vals.size())
         BaseDaemon::instance().writeToGraphite(key_vals, config_name);
 }
-} // namespace DB
+}

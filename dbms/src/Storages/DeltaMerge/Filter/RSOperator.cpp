@@ -1,23 +1,8 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Storages/DeltaMerge/Filter/And.h>
 #include <Storages/DeltaMerge/Filter/Equal.h>
 #include <Storages/DeltaMerge/Filter/Greater.h>
 #include <Storages/DeltaMerge/Filter/GreaterEqual.h>
 #include <Storages/DeltaMerge/Filter/In.h>
-#include <Storages/DeltaMerge/Filter/IsNull.h>
 #include <Storages/DeltaMerge/Filter/Less.h>
 #include <Storages/DeltaMerge/Filter/LessEqual.h>
 #include <Storages/DeltaMerge/Filter/Like.h>
@@ -33,6 +18,7 @@ namespace DB
 {
 namespace DM
 {
+
 // clang-format off
 RSOperatorPtr createAnd(const RSOperators & children)                                           { return std::make_shared<And>(children); }
 RSOperatorPtr createEqual(const Attr & attr, const Field & value)                               { return std::make_shared<Equal>(attr, value); }
@@ -47,7 +33,6 @@ RSOperatorPtr createNotEqual(const Attr & attr, const Field & value)            
 RSOperatorPtr createNotIn(const Attr & attr, const Fields & values)                             { return std::make_shared<NotIn>(attr, values); }
 RSOperatorPtr createNotLike(const Attr & attr, const Field & value)                             { return std::make_shared<NotLike>(attr, value); }
 RSOperatorPtr createOr(const RSOperators & children)                                            { return std::make_shared<Or>(children); }
-RSOperatorPtr createIsNull(const Attr & attr)                                                   { return std::make_shared<IsNull>(attr);}
 RSOperatorPtr createUnsupported(const String & content, const String & reason, bool is_not)     { return std::make_shared<Unsupported>(content, reason, is_not); }
 // clang-format on
 } // namespace DM

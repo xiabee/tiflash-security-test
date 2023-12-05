@@ -1,26 +1,9 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <Core/Defines.h>
 
 #include <Columns/Collator.h>
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnsCommon.h>
-#include <Common/HashTable/Hash.h>
 #include <DataStreams/ColumnGathererStream.h>
-#include <Storages/Transaction/CollatorUtils.h>
-#include <common/memcpy.h>
-#include <fmt/core.h>
-
 
 /// Used in the `reserve` method, when the number of rows is known, but sizes of elements are not.
 #define APPROX_STRING_SIZE 64
@@ -28,11 +11,12 @@
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int PARAMETER_OUT_OF_BOUND;
-extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
-} // namespace ErrorCodes
+    extern const int PARAMETER_OUT_OF_BOUND;
+    extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
+}
 
 
 MutableColumnPtr ColumnString::cloneResized(size_t to_size) const
@@ -40,7 +24,7 @@ MutableColumnPtr ColumnString::cloneResized(size_t to_size) const
     auto res = ColumnString::create();
 
     if (to_size == 0)
-        return res;
+        return std::move(res);
 
     size_t from_size = size();
 
@@ -75,7 +59,7 @@ MutableColumnPtr ColumnString::cloneResized(size_t to_size) const
         }
     }
 
-    return res;
+    return std::move(res);
 }
 
 
@@ -84,15 +68,10 @@ void ColumnString::insertRangeFrom(const IColumn & src, size_t start, size_t len
     if (length == 0)
         return;
 
-    const auto & src_concrete = static_cast<const ColumnString &>(src);
+    const ColumnString & src_concrete = static_cast<const ColumnString &>(src);
 
     if (start + length > src_concrete.offsets.size())
-        throw Exception(
-            fmt::format(
-                "Parameters are out of bound in ColumnString::insertRangeFrom method, start={}, length={}, src.size()={}",
-                start,
-                length,
-                src_concrete.size()),
+        throw Exception("Parameter out of bound in IColumnString::insertRangeFrom method.",
             ErrorCodes::PARAMETER_OUT_OF_BOUND);
 
     size_t nested_offset = src_concrete.offsetAt(start);
@@ -100,7 +79,7 @@ void ColumnString::insertRangeFrom(const IColumn & src, size_t start, size_t len
 
     size_t old_chars_size = chars.size();
     chars.resize(old_chars_size + nested_length);
-    inline_memcpy(&chars[old_chars_size], &src_concrete.chars[nested_offset], nested_length);
+    memcpy(&chars[old_chars_size], &src_concrete.chars[nested_offset], nested_length);
 
     if (start == 0 && offsets.empty())
     {
@@ -120,7 +99,7 @@ void ColumnString::insertRangeFrom(const IColumn & src, size_t start, size_t len
 
 ColumnPtr ColumnString::filter(const Filter & filt, ssize_t result_size_hint) const
 {
-    if (offsets.empty())
+    if (offsets.size() == 0)
         return ColumnString::create();
 
     auto res = ColumnString::create();
@@ -129,7 +108,7 @@ ColumnPtr ColumnString::filter(const Filter & filt, ssize_t result_size_hint) co
     Offsets & res_offsets = res->offsets;
 
     filterArraysImpl<UInt8>(chars, offsets, res_chars, res_offsets, filt, result_size_hint);
-    return res;
+    return std::move(res);
 }
 
 
@@ -179,7 +158,7 @@ ColumnPtr ColumnString::permute(const Permutation & perm, size_t limit) const
         res_offsets[i] = current_new_offset;
     }
 
-    return res;
+    return std::move(res);
 }
 
 
@@ -187,9 +166,7 @@ template <bool positive>
 struct ColumnString::less
 {
     const ColumnString & parent;
-    explicit less(const ColumnString & parent_)
-        : parent(parent_)
-    {}
+    explicit less(const ColumnString & parent_) : parent(parent_) {}
     bool operator()(size_t lhs, size_t rhs) const
     {
         size_t left_len = parent.sizeAt(lhs);
@@ -240,7 +217,7 @@ ColumnPtr ColumnString::replicate(const Offsets & replicate_offsets) const
     auto res = ColumnString::create();
 
     if (0 == col_size)
-        return res;
+        return std::move(res);
 
     Chars_t & res_chars = res->chars;
     Offsets & res_offsets = res->offsets;
@@ -263,16 +240,14 @@ ColumnPtr ColumnString::replicate(const Offsets & replicate_offsets) const
 
             res_chars.resize(res_chars.size() + string_size);
             memcpySmallAllowReadWriteOverflow15(
-                &res_chars[res_chars.size() - string_size],
-                &chars[prev_string_offset],
-                string_size);
+                &res_chars[res_chars.size() - string_size], &chars[prev_string_offset], string_size);
         }
 
         prev_replicate_offset = replicate_offsets[i];
         prev_string_offset = offsets[i];
     }
 
-    return res;
+    return std::move(res);
 }
 
 
@@ -319,230 +294,56 @@ void ColumnString::getExtremes(Field & min, Field & max) const
 
 int ColumnString::compareAtWithCollationImpl(size_t n, size_t m, const IColumn & rhs_, const ICollator & collator) const
 {
-    const auto & rhs = static_cast<const ColumnString &>(rhs_);
+    const ColumnString & rhs = static_cast<const ColumnString &>(rhs_);
 
-    auto a = getDataAt(n);
-    auto b = rhs.getDataAt(m);
-
-    return collator.compare(a.data, a.size, b.data, b.size);
+    return collator.compare(
+        reinterpret_cast<const char *>(&chars[offsetAt(n)]), sizeAt(n),
+        reinterpret_cast<const char *>(&rhs.chars[rhs.offsetAt(m)]), rhs.sizeAt(m));
 }
 
-// Derived must implement function `int compare(const char *, size_t, const char *, size_t)`.
-template <bool positive, typename Derived>
-struct ColumnString::LessWithCollation
+
+template <bool positive>
+struct ColumnString::lessWithCollation
 {
     const ColumnString & parent;
-    const Derived & inner;
+    const ICollator & collator;
 
-    LessWithCollation(const ColumnString & parent_, const Derived & inner_)
-        : parent(parent_)
-        , inner(inner_)
-    {}
+    lessWithCollation(const ColumnString & parent_, const ICollator & collator_) : parent(parent_), collator(collator_) {}
 
-    FLATTEN_INLINE_PURE inline bool operator()(size_t lhs, size_t rhs) const
+    bool operator()(size_t lhs, size_t rhs) const
     {
-        int res = inner.compare(
-            reinterpret_cast<const char *>(&parent.chars[parent.offsetAt(lhs)]),
-            parent.sizeAt(lhs) - 1, // Skip last zero byte.
-            reinterpret_cast<const char *>(&parent.chars[parent.offsetAt(rhs)]),
-            parent.sizeAt(rhs) - 1 // Skip last zero byte.
-        );
+        int res = collator.compare(
+            reinterpret_cast<const char *>(&parent.chars[parent.offsetAt(lhs)]), parent.sizeAt(lhs),
+            reinterpret_cast<const char *>(&parent.chars[parent.offsetAt(rhs)]), parent.sizeAt(rhs));
 
-        if constexpr (positive)
-        {
-            return (res < 0);
-        }
-        else
-        {
-            return (res > 0);
-        }
-    }
-};
-
-template <bool padding>
-struct CompareBinCollator
-{
-    static FLATTEN_INLINE_PURE inline int compare(const char * s1, size_t length1, const char * s2, size_t length2)
-    {
-        return DB::BinCollatorCompare<padding>(s1, length1, s2, length2);
-    }
-};
-
-// common util functions
-template <>
-struct ColumnString::LessWithCollation<false, void>
-{
-    // `CollationCmpImpl` must implement function `int compare(const char *, size_t, const char *, size_t)`.
-    template <typename CollationCmpImpl>
-    static void getPermutationWithCollationImpl(const ColumnString & src, const CollationCmpImpl & collator_cmp_impl, bool reverse, size_t limit, Permutation & res)
-    {
-        size_t s = src.offsets.size();
-        res.resize(s);
-        for (size_t i = 0; i < s; ++i)
-            res[i] = i;
-
-        if (limit >= s)
-            limit = 0;
-
-        if (limit)
-        {
-            if (reverse)
-                std::partial_sort(res.begin(), res.begin() + limit, res.end(), LessWithCollation<false, CollationCmpImpl>(src, collator_cmp_impl));
-            else
-                std::partial_sort(res.begin(), res.begin() + limit, res.end(), LessWithCollation<true, CollationCmpImpl>(src, collator_cmp_impl));
-        }
-        else
-        {
-            if (reverse)
-                std::sort(res.begin(), res.end(), LessWithCollation<false, CollationCmpImpl>(src, collator_cmp_impl));
-            else
-                std::sort(res.begin(), res.end(), LessWithCollation<true, CollationCmpImpl>(src, collator_cmp_impl));
-        }
+        return positive ? (res < 0) : (res > 0);
     }
 };
 
 void ColumnString::getPermutationWithCollationImpl(const ICollator & collator, bool reverse, size_t limit, Permutation & res) const
 {
-    using PermutationWithCollationUtils = ColumnString::LessWithCollation<false, void>;
+    size_t s = offsets.size();
+    res.resize(s);
+    for (size_t i = 0; i < s; ++i)
+        res[i] = i;
 
-    switch (TiDB::GetTiDBCollatorType(&collator))
-    {
-    case TiDB::ITiDBCollator::CollatorType::UTF8MB4_BIN:
-    case TiDB::ITiDBCollator::CollatorType::UTF8_BIN:
-    case TiDB::ITiDBCollator::CollatorType::LATIN1_BIN:
-    case TiDB::ITiDBCollator::CollatorType::ASCII_BIN:
-    {
-        CompareBinCollator<true> cmp_impl;
-        PermutationWithCollationUtils::getPermutationWithCollationImpl(*this, cmp_impl, reverse, limit, res);
-        break;
-    }
-    case TiDB::ITiDBCollator::CollatorType::BINARY:
-    {
-        CompareBinCollator<false> cmp_impl;
-        PermutationWithCollationUtils::getPermutationWithCollationImpl(*this, cmp_impl, reverse, limit, res);
-        break;
-    }
-    default:
-    {
-        PermutationWithCollationUtils::getPermutationWithCollationImpl(*this, collator, reverse, limit, res);
-    }
-    }
-}
+    if (limit >= s)
+        limit = 0;
 
-void ColumnString::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
-{
-    auto s = offsets.size();
-
-    if (hash.getData().size() != s)
-        throw Exception(fmt::format("Size of WeakHash32 does not match size of column: column size is {}, hash size is {}", s, hash.getData().size()), ErrorCodes::LOGICAL_ERROR);
-
-    UInt32 * hash_data = hash.getData().data();
-
-    if (collator != nullptr)
+    if (limit)
     {
-        switch (collator->getCollatorType())
-        {
-        case TiDB::ITiDBCollator::CollatorType::UTF8MB4_BIN:
-        case TiDB::ITiDBCollator::CollatorType::LATIN1_BIN:
-        case TiDB::ITiDBCollator::CollatorType::ASCII_BIN:
-        case TiDB::ITiDBCollator::CollatorType::UTF8_BIN:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&](const std::string_view & view, size_t) {
-                auto sort_key = BinCollatorSortKey<true>(view.data(), view.size());
-                *hash_data = ::updateWeakHash32(reinterpret_cast<const UInt8 *>(sort_key.data), sort_key.size, *hash_data);
-                ++hash_data;
-            });
-            break;
-        }
-        case TiDB::ITiDBCollator::CollatorType::BINARY:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&](const std::string_view & view, size_t) {
-                auto sort_key = BinCollatorSortKey<false>(view.data(), view.size());
-                *hash_data = ::updateWeakHash32(reinterpret_cast<const UInt8 *>(sort_key.data), sort_key.size, *hash_data);
-                ++hash_data;
-            });
-            break;
-        }
-        default:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&](const std::string_view & view, size_t) {
-                auto sort_key = collator->sortKey(view.data(), view.size(), sort_key_container);
-                *hash_data = ::updateWeakHash32(reinterpret_cast<const UInt8 *>(sort_key.data), sort_key.size, *hash_data);
-                ++hash_data;
-            });
-            break;
-        }
-        }
+        if (reverse)
+            std::partial_sort(res.begin(), res.begin() + limit, res.end(), lessWithCollation<false>(*this, collator));
+        else
+            std::partial_sort(res.begin(), res.begin() + limit, res.end(), lessWithCollation<true>(*this, collator));
     }
     else
     {
-        // Skip last zero byte.
-        LoopOneColumn(chars, offsets, offsets.size(), [&](const std::string_view & view, size_t) {
-            *hash_data = ::updateWeakHash32(reinterpret_cast<const UInt8 *>(view.data()), view.size(), *hash_data);
-            ++hash_data;
-        });
+        if (reverse)
+            std::sort(res.begin(), res.end(), lessWithCollation<false>(*this, collator));
+        else
+            std::sort(res.begin(), res.end(), lessWithCollation<true>(*this, collator));
     }
 }
 
-void ColumnString::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
-{
-    if (collator != nullptr)
-    {
-        switch (collator->getCollatorType())
-        {
-        case TiDB::ITiDBCollator::CollatorType::UTF8MB4_BIN:
-        case TiDB::ITiDBCollator::CollatorType::LATIN1_BIN:
-        case TiDB::ITiDBCollator::CollatorType::ASCII_BIN:
-        case TiDB::ITiDBCollator::CollatorType::UTF8_BIN:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&hash_values](const std::string_view & view, size_t i) {
-                auto sort_key = BinCollatorSortKey<true>(view.data(), view.size());
-                size_t string_size = sort_key.size;
-                hash_values[i].update(reinterpret_cast<const char *>(&string_size), sizeof(string_size));
-                hash_values[i].update(sort_key.data, sort_key.size);
-            });
-            break;
-        }
-        case TiDB::ITiDBCollator::CollatorType::BINARY:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&hash_values](const std::string_view & view, size_t i) {
-                auto sort_key = BinCollatorSortKey<false>(view.data(), view.size());
-                size_t string_size = sort_key.size;
-                hash_values[i].update(reinterpret_cast<const char *>(&string_size), sizeof(string_size));
-                hash_values[i].update(sort_key.data, sort_key.size);
-            });
-            break;
-        }
-        default:
-        {
-            // Skip last zero byte.
-            LoopOneColumn(chars, offsets, offsets.size(), [&](const std::string_view & view, size_t i) {
-                auto sort_key = collator->sortKey(view.data(), view.size(), sort_key_container);
-                size_t string_size = sort_key.size;
-                hash_values[i].update(reinterpret_cast<const char *>(&string_size), sizeof(string_size));
-                hash_values[i].update(sort_key.data, sort_key.size);
-            });
-            break;
-        }
-        }
-    }
-    else
-    {
-        for (size_t i = 0; i < offsets.size(); ++i)
-        {
-            size_t string_size = sizeAt(i);
-            size_t offset = offsetAt(i);
-
-            hash_values[i].update(reinterpret_cast<const char *>(&string_size), sizeof(string_size));
-            hash_values[i].update(reinterpret_cast<const char *>(&chars[offset]), string_size);
-        }
-    }
 }
-
-
-} // namespace DB

@@ -1,17 +1,3 @@
-# Copyright 2023 PingCAP, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 add_executable (hashes_test hashes_test.cpp)
 target_link_libraries (hashes_test dbms)
 
@@ -23,6 +9,9 @@ target_link_libraries (sip_hash_perf clickhouse_common_io)
 
 add_executable (auto_array auto_array.cpp)
 target_link_libraries (auto_array clickhouse_common_io)
+
+add_executable (lru_cache lru_cache.cpp)
+target_link_libraries (lru_cache clickhouse_common_io)
 
 add_executable (hash_table hash_table.cpp)
 target_link_libraries (hash_table clickhouse_common_io)
@@ -74,6 +63,9 @@ add_executable (integer_hash_tables_and_hashes integer_hash_tables_and_hashes.cp
 target_include_directories (integer_hash_tables_and_hashes BEFORE PRIVATE ${SPARCEHASH_INCLUDE_DIR})
 target_link_libraries (integer_hash_tables_and_hashes clickhouse_common_io)
 
+add_executable (allocator allocator.cpp)
+target_link_libraries (allocator clickhouse_common_io)
+
 add_executable (cow_columns cow_columns.cpp)
 target_link_libraries (cow_columns clickhouse_common_io)
 
@@ -83,18 +75,11 @@ target_link_libraries (stopwatch clickhouse_common_io)
 add_executable (persisted_container persisted_container.cpp)
 target_link_libraries (persisted_container clickhouse_common_io)
 
-# performance tests
+add_executable(decimal_test_decimal_type gtest_decimal_type.cpp)
+target_link_libraries(decimal_test_decimal_type clickhouse_common_io gtest_main)
 
-add_executable (uint128_perf uint128_perf.cpp)
-target_link_libraries (uint128_perf clickhouse_common_io)
+add_executable(mytime_test gtest_mytime.cpp)
+target_link_libraries(mytime_test clickhouse_common_io clickhouse_functions gtest_main)
 
-add_executable (mpmc_queue_perftest mpmc_queue_perftest.cpp)
-target_link_libraries (mpmc_queue_perftest clickhouse_common_io)
-
-add_executable (allocator_perf allocator_perf.cpp)
-target_link_libraries (allocator_perf clickhouse_common_io)
-
-add_executable(bench_common
-    bench_logger.cpp
-)
-target_link_libraries(bench_common benchmark::benchmark_main clickhouse_common_io)
+add_executable(rw_lock_test gtest_rw_lock.cpp)
+target_link_libraries(rw_lock_test clickhouse_common_io clickhouse_functions gtest_main)

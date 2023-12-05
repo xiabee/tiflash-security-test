@@ -1,26 +1,10 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/RegionsRangeIndex.h>
 
 namespace DB
 {
-bool TiKVRangeKeyCmp::operator()(const TiKVRangeKey & x, const TiKVRangeKey & y) const
-{
-    return x.compare(y) < 0;
-}
+
+bool TiKVRangeKeyCmp::operator()(const TiKVRangeKey & x, const TiKVRangeKey & y) const { return x.compare(y) < 0; }
 
 void RegionsRangeIndex::add(const RegionPtr & new_region)
 {
@@ -30,14 +14,13 @@ void RegionsRangeIndex::add(const RegionPtr & new_region)
     auto end_it = split(new_range.second);
     if (begin_it == end_it)
         throw Exception(
-            std::string(__PRETTY_FUNCTION__) + ": range of region " + toString(new_region->id()) + " is empty",
-            ErrorCodes::LOGICAL_ERROR);
+            std::string(__PRETTY_FUNCTION__) + ": range of region " + toString(new_region->id()) + " is empty", ErrorCodes::LOGICAL_ERROR);
 
     for (auto it = begin_it; it != end_it; ++it)
         it->second.region_map.emplace(new_region->id(), new_region);
 }
 
-void RegionsRangeIndex::remove(const RegionRange & range, RegionID region_id)
+void RegionsRangeIndex::remove(const RegionRange & range, const RegionID region_id)
 {
     auto begin_it = root.find(range.first);
     if (begin_it == root.end())
@@ -49,8 +32,7 @@ void RegionsRangeIndex::remove(const RegionRange & range, RegionID region_id)
 
     if (begin_it == end_it)
         throw Exception(
-            std::string(__PRETTY_FUNCTION__) + ": range of region " + toString(region_id) + " is empty",
-            ErrorCodes::LOGICAL_ERROR);
+            std::string(__PRETTY_FUNCTION__) + ": range of region " + toString(region_id) + " is empty", ErrorCodes::LOGICAL_ERROR);
 
     for (auto it = begin_it; it != end_it; ++it)
     {
@@ -73,15 +55,9 @@ RegionMap RegionsRangeIndex::findByRangeOverlap(const RegionRange & range) const
     return res;
 }
 
-RegionsRangeIndex::RegionsRangeIndex()
-{
-    clear();
-}
+RegionsRangeIndex::RegionsRangeIndex() { clear(); }
 
-const RegionsRangeIndex::RootMap & RegionsRangeIndex::getRoot() const
-{
-    return root;
-}
+const RegionsRangeIndex::RootMap & RegionsRangeIndex::getRoot() const { return root; }
 
 void RegionsRangeIndex::clear()
 {
@@ -121,7 +97,7 @@ void RegionsRangeIndex::tryMergeEmpty(RootMap::iterator remove_it)
 
 RegionsRangeIndex::RootMap::iterator RegionsRangeIndex::split(const TiKVRangeKey & new_start)
 {
-    const auto do_split = [this](RootMap::iterator begin_it, const TiKVRangeKey & new_start) {
+    const auto doSplit = [this](RootMap::iterator begin_it, const TiKVRangeKey & new_start) {
         begin_it--;
         auto & ori = begin_it->second;
         auto tar_it = root.emplace(new_start.copy(), IndexNode{}).first;
@@ -135,7 +111,7 @@ RegionsRangeIndex::RootMap::iterator RegionsRangeIndex::split(const TiKVRangeKey
     if (begin_it->first.compare(new_start) == 0)
         return begin_it;
     else
-        return do_split(begin_it, new_start);
+        return doSplit(begin_it, new_start);
 }
 
 } // namespace DB

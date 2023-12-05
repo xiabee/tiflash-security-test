@@ -1,38 +1,25 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <IO/ZlibInflatingReadBuffer.h>
 
 
 namespace DB
 {
+
 ZlibInflatingReadBuffer::ZlibInflatingReadBuffer(
-    ReadBuffer & in_,
-    ZlibCompressionMethod compression_method,
-    size_t buf_size,
-    char * existing_memory,
-    size_t alignment)
+        ReadBuffer & in_,
+        ZlibCompressionMethod compression_method,
+        size_t buf_size,
+        char * existing_memory,
+        size_t alignment)
     : BufferWithOwnMemory<ReadBuffer>(buf_size, existing_memory, alignment)
     , in(in_)
     , eof(false)
 {
-    zstr.zalloc = Z_NULL;
-    zstr.zfree = Z_NULL;
-    zstr.opaque = Z_NULL;
-    zstr.next_in = 0;
-    zstr.avail_in = 0;
-    zstr.next_out = 0;
+    zstr.zalloc    = Z_NULL;
+    zstr.zfree     = Z_NULL;
+    zstr.opaque    = Z_NULL;
+    zstr.next_in   = 0;
+    zstr.avail_in  = 0;
+    zstr.next_out  = 0;
     zstr.avail_out = 0;
 
     int window_bits = 15;
@@ -95,4 +82,4 @@ bool ZlibInflatingReadBuffer::nextImpl()
     return true;
 }
 
-} // namespace DB
+}

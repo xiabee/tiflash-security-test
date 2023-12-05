@@ -1,45 +1,37 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/Exception.h>
-#include <Common/ProfileEvents.h>
-#include <Common/Stopwatch.h>
-#include <IO/ReadBufferFromFileDescriptor.h>
-#include <IO/WriteHelpers.h>
 #include <errno.h>
 #include <time.h>
-
 #include <optional>
+#include <Common/ProfileEvents.h>
+#include <Common/Stopwatch.h>
+#include <Common/Exception.h>
+#include <Common/CurrentMetrics.h>
+#include <IO/ReadBufferFromFileDescriptor.h>
+#include <IO/WriteHelpers.h>
 
 
 namespace ProfileEvents
 {
-extern const Event ReadBufferFromFileDescriptorRead;
-extern const Event ReadBufferFromFileDescriptorReadFailed;
-extern const Event ReadBufferFromFileDescriptorReadBytes;
-extern const Event Seek;
-} // namespace ProfileEvents
+    extern const Event ReadBufferFromFileDescriptorRead;
+    extern const Event ReadBufferFromFileDescriptorReadFailed;
+    extern const Event ReadBufferFromFileDescriptorReadBytes;
+    extern const Event Seek;
+}
+
+namespace CurrentMetrics
+{
+    extern const Metric Read;
+}
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int CANNOT_READ_FROM_FILE_DESCRIPTOR;
-extern const int ARGUMENT_OUT_OF_BOUND;
-extern const int CANNOT_SEEK_THROUGH_FILE;
-extern const int CANNOT_SELECT;
-} // namespace ErrorCodes
+    extern const int CANNOT_READ_FROM_FILE_DESCRIPTOR;
+    extern const int ARGUMENT_OUT_OF_BOUND;
+    extern const int CANNOT_SEEK_THROUGH_FILE;
+    extern const int CANNOT_SELECT;
+}
 
 
 std::string ReadBufferFromFileDescriptor::getFileName() const
@@ -61,6 +53,7 @@ bool ReadBufferFromFileDescriptor::nextImpl()
 
         ssize_t res = 0;
         {
+            CurrentMetrics::Increment metric_increment{CurrentMetrics::Read};
             res = ::read(fd, internal_buffer.begin(), internal_buffer.size());
         }
         if (!res)
@@ -77,7 +70,7 @@ bool ReadBufferFromFileDescriptor::nextImpl()
 
         if (profile_callback)
         {
-            ProfileInfo info; // NOLINT
+            ProfileInfo info;
             info.bytes_requested = internal_buffer.size();
             info.bytes_read = res;
             info.nanoseconds = watch->elapsed();
@@ -120,6 +113,8 @@ off_t ReadBufferFromFileDescriptor::doSeek(off_t offset, int whence)
     }
     else
     {
+        ProfileEvents::increment(ProfileEvents::Seek);
+
         pos = working_buffer.end();
         off_t res = doSeekInFile(new_pos, SEEK_SET);
         if (-1 == res)
@@ -129,8 +124,7 @@ off_t ReadBufferFromFileDescriptor::doSeek(off_t offset, int whence)
     }
 }
 
-off_t ReadBufferFromFileDescriptor::doSeekInFile(off_t offset, int whence)
-{
+off_t ReadBufferFromFileDescriptor::doSeekInFile(off_t offset, int whence) {
     return ::lseek(fd, offset, whence);
 }
 
@@ -141,9 +135,9 @@ bool ReadBufferFromFileDescriptor::poll(size_t timeout_microseconds)
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(fd, &fds);
-    timeval timeout = {time_t(timeout_microseconds / 1000000), suseconds_t(timeout_microseconds % 1000000)};
+    timeval timeout = { time_t(timeout_microseconds / 1000000), suseconds_t(timeout_microseconds % 1000000) };
 
-    int res = select(1, &fds, nullptr, nullptr, &timeout);
+    int res = select(1, &fds, 0, 0, &timeout);
 
     if (-1 == res)
         throwFromErrno("Cannot select", ErrorCodes::CANNOT_SELECT);
@@ -151,4 +145,4 @@ bool ReadBufferFromFileDescriptor::poll(size_t timeout_microseconds)
     return res > 0;
 }
 
-} // namespace DB
+}

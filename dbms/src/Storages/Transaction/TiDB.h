@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Core/Field.h>
@@ -20,7 +6,6 @@
 #include <IO/WriteHelpers.h>
 #include <Storages/Transaction/StorageEngineType.h>
 #include <Storages/Transaction/Types.h>
-#include <tipb/schema.pb.h>
 
 #include <optional>
 
@@ -45,8 +30,10 @@ struct SchemaNameMapper;
 
 namespace TiDB
 {
+
 using DB::ColumnID;
 using DB::DatabaseID;
+using DB::Exception;
 using DB::String;
 using DB::TableID;
 using DB::Timestamp;
@@ -117,8 +104,7 @@ enum TP
     M(NoDefaultValue, (1 << 12)) \
     M(OnUpdateNow, (1 << 13))    \
     M(PartKey, (1 << 14))        \
-    M(Num, (1 << 15))            \
-    M(GeneratedColumn, (1 << 23))
+    M(Num, (1 << 15))
 
 enum ColumnFlag
 {
@@ -181,6 +167,7 @@ struct ColumnInfo
 
     ColumnID id = -1;
     String name;
+    Int32 offset = -1;
     Poco::Dynamic::Var origin_default_value;
     Poco::Dynamic::Var default_value;
     Poco::Dynamic::Var default_bit_value;
@@ -198,19 +185,10 @@ struct ColumnInfo
 #ifdef M
 #error "Please undefine macro M first."
 #endif
-#define M(f, v)                      \
-    inline bool has##f##Flag() const \
-    {                                \
-        return (flag & (v)) != 0;    \
-    }                                \
-    inline void set##f##Flag()       \
-    {                                \
-        flag |= (v);                 \
-    }                                \
-    inline void clear##f##Flag()     \
-    {                                \
-        flag &= (~(v));              \
-    }
+#define M(f, v)                                                    \
+    inline bool has##f##Flag() const { return (flag & (v)) != 0; } \
+    inline void set##f##Flag() { flag |= (v); }                    \
+    inline void clear##f##Flag() { flag &= (~(v)); }
     COLUMN_FLAGS(M)
 #undef M
 
@@ -219,15 +197,9 @@ struct ColumnInfo
     DB::Field getDecimalValue(const String &) const;
     Int64 getEnumIndex(const String &) const;
     UInt64 getSetValue(const String &) const;
-    static Int64 getTimeValue(const String &);
-    static Int64 getYearValue(const String &);
-    static UInt64 getBitValue(const String &);
-
-private:
-    /// please be very careful when you have to use offset,
-    /// because we never update offset when DDL action changes.
-    /// Thus, our offset will not exactly correspond the order of columns.
-    Int32 offset = -1;
+    Int64 getTimeValue(const String &) const;
+    Int64 getYearValue(const String &) const;
+    UInt64 getBitValue(const String &) const;
 };
 
 enum PartitionType
@@ -314,13 +286,8 @@ struct IndexColumnInfo
     void deserialize(Poco::JSON::Object::Ptr json);
 
     String name;
-    Int32 length;
-
-private:
-    /// please be very careful when you have to use offset,
-    /// because we never update offset when DDL action changes.
-    /// Thus, our offset will not exactly correspond the order of columns.
     Int32 offset;
+    Int32 length;
 };
 struct IndexInfo
 {
@@ -350,17 +317,11 @@ struct TableInfo
 
     TableInfo(const TableInfo &) = default;
 
-    TableInfo & operator=(const TableInfo &) = default;
-
-    explicit TableInfo(Poco::JSON::Object::Ptr json);
-
-    explicit TableInfo(const String & table_info_json);
+    TableInfo(const String & table_info_json);
 
     String serialize() const;
 
     void deserialize(const String & json_str);
-
-    void deserialize(Poco::JSON::Object::Ptr obj);
 
     // The meaning of this ID changed after we support TiDB partition table.
     // It is the physical table ID, i.e. table ID for non-partition table,
@@ -406,12 +367,7 @@ struct TableInfo
 
     bool isLogicalPartitionTable() const { return is_partition_table && belonging_table_id == DB::InvalidTableID && partition.enable; }
 
-    /// should not be called if is_common_handle = false.
-    /// when use IndexInfo, please avoid to use the offset info
-    /// the offset value may be wrong in some cases,
-    /// due to we will not update IndexInfo except RENAME DDL action,
-    /// but DDL like add column / drop column may change the offset of columns
-    /// Thus, please be very careful when you must have to use offset information !!!!!
+    /// should not be called if is_common_handle = false
     const IndexInfo & getPrimaryIndexInfo() const { return index_infos[0]; }
 
     IndexInfo & getPrimaryIndexInfo() { return index_infos[0]; }
@@ -423,6 +379,5 @@ String genJsonNull();
 
 tipb::FieldType columnInfoToFieldType(const ColumnInfo & ci);
 ColumnInfo fieldTypeToColumnInfo(const tipb::FieldType & field_type);
-ColumnInfo toTiDBColumnInfo(const tipb::ColumnInfo & tipb_column_info);
 
 } // namespace TiDB

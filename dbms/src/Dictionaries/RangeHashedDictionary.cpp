@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Dictionaries/RangeHashedDictionary.h>
 #include <Dictionaries/RangeDictionaryBlockInputStream.h>
 
@@ -90,7 +76,7 @@ void RangeHashedDictionary::getString(
         if (it != std::end(attr))
         {
             const auto date = dates[i];
-            const auto & ranges_and_values = it->getMapped();
+            const auto & ranges_and_values = it->second;
             const auto val_it = std::find_if(std::begin(ranges_and_values), std::end(ranges_and_values),
                 [date] (const Value<StringRef> & v) { return v.range.contains(date); });
 
@@ -273,7 +259,7 @@ void RangeHashedDictionary::getItemsImpl(
         if (it != std::end(attr))
         {
             const auto date = dates[i];
-            const auto & ranges_and_values = it->getMapped();
+            const auto & ranges_and_values = it->second;
             const auto val_it = std::find_if(std::begin(ranges_and_values), std::end(ranges_and_values),
                 [date] (const Value<AttributeType> & v) { return v.range.contains(date); });
 
@@ -295,7 +281,7 @@ void RangeHashedDictionary::setAttributeValueImpl(Attribute & attribute, const K
 
     if (it != map.end())
     {
-        auto & values = it->getMapped();
+        auto & values = it->second;
 
         const auto insert_it = std::lower_bound(std::begin(values), std::end(values), range,
             [] (const Value<T> & lhs, const Range & range) {
@@ -334,7 +320,7 @@ void RangeHashedDictionary::setAttributeValue(Attribute & attribute, const Key i
 
             if (it != map.end())
             {
-                auto & values = it->getMapped();
+                auto & values = it->second;
 
                 const auto insert_it = std::lower_bound(std::begin(values), std::end(values), range,
                     [] (const Value<StringRef> & lhs, const Range & range)
@@ -408,9 +394,9 @@ void RangeHashedDictionary::getIdsAndDates(const Attribute& attribute, PaddedPOD
 
     for (const auto & key : attr)
     {
-        for (const auto & value : key.getMapped())
+        for (const auto & value : key.second)
         {
-            ids.push_back(key.getKey());
+            ids.push_back(key.first);
             start_dates.push_back(value.range.first);
             end_dates.push_back(value.range.second);
         }

@@ -1,34 +1,23 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Core/QueryProcessingStage.h>
-#include <DataStreams/IBlockInputStream.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/ExpressionActions.h>
-#include <Interpreters/ExpressionAnalyzer.h>
 #include <Interpreters/IInterpreter.h>
+#include <Interpreters/ExpressionAnalyzer.h>
+#include <Interpreters/ExpressionActions.h>
+#include <DataStreams/IBlockInputStream.h>
 #include <Storages/Transaction/Types.h>
 
-#include <memory>
+
+namespace Poco { class Logger; }
 
 namespace DB
 {
+
 class ExpressionAnalyzer;
 class ASTSelectQuery;
 struct SubqueryForSet;
+
 
 /** Interprets the SELECT query. Returns the stream of blocks with the results of the query before `to_stage` stage.
   */
@@ -95,7 +84,7 @@ private:
           * It has a special meaning, since reading from it should be done after reading from the main streams.
           * It is appended to the main streams in UnionBlockInputStream or ParallelAggregatingBlockInputStream.
           */
-        BlockInputStreams streams_with_non_joined_data;
+        BlockInputStreamPtr stream_with_non_joined_data;
 
         BlockInputStreamPtr & firstStream() { return streams.at(0); }
 
@@ -105,19 +94,17 @@ private:
             for (auto & stream : streams)
                 transform(stream);
 
-            for (auto & stream : streams_with_non_joined_data)
-                transform(stream);
+            if (stream_with_non_joined_data)
+                transform(stream_with_non_joined_data);
         }
 
         bool hasMoreThanOneStream() const
         {
-            return streams.size() + streams_with_non_joined_data.size() > 1;
+            return streams.size() + (stream_with_non_joined_data ? 1 : 0) > 1;
         }
     };
 
-    struct OnlyAnalyzeTag
-    {
-    };
+    struct OnlyAnalyzeTag {};
     InterpreterSelectQuery(
         OnlyAnalyzeTag,
         const ASTPtr & query_ptr_,
@@ -132,14 +119,14 @@ private:
 
     struct AnalysisResult
     {
-        bool has_join = false;
-        bool has_where = false;
+        bool has_join       = false;
+        bool has_where      = false;
         bool need_aggregate = false;
-        bool has_having = false;
-        bool has_order_by = false;
-        bool has_limit_by = false;
+        bool has_having     = false;
+        bool has_order_by   = false;
+        bool has_limit_by   = false;
 
-        ExpressionActionsPtr before_join; /// including JOIN
+        ExpressionActionsPtr before_join;   /// including JOIN
         ExpressionActionsPtr before_where;
         ExpressionActionsPtr before_aggregation;
         ExpressionActionsPtr before_having;
@@ -218,7 +205,7 @@ private:
     /// Used when we read from prepared input, not table or subquery.
     BlockInputStreamPtr input;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 
-} // namespace DB
+}

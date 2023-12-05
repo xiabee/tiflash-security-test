@@ -1,53 +1,40 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/RedactHelpers.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 
 namespace DB::DM
 {
+
 const Int64 int_handle_min = std::numeric_limits<HandleID>::min();
 const Int64 int_handle_max = std::numeric_limits<HandleID>::max();
 
 String getIntHandleMinKey()
 {
-    WriteBufferFromOwnString ss;
+    std::stringstream ss;
     DB::EncodeInt64(int_handle_min, ss);
-    return ss.releaseStr();
+    return ss.str();
 }
 
 String getIntHandleMaxKey()
 {
-    WriteBufferFromOwnString ss;
+    std::stringstream ss;
     DB::EncodeInt64(int_handle_max, ss);
-    ss.write('\0');
-    return ss.releaseStr();
+    ss.put('\0');
+    return ss.str();
 }
 
-const RowKeyValue RowKeyValue::INT_HANDLE_MIN_KEY = RowKeyValue(false, std::make_shared<String>(getIntHandleMinKey()), int_handle_min);
-const RowKeyValue RowKeyValue::INT_HANDLE_MAX_KEY = RowKeyValue(false, std::make_shared<String>(getIntHandleMaxKey()), int_handle_max);
+const RowKeyValue RowKeyValue::INT_HANDLE_MIN_KEY    = RowKeyValue(false, std::make_shared<String>(getIntHandleMinKey()), int_handle_min);
+const RowKeyValue RowKeyValue::INT_HANDLE_MAX_KEY    = RowKeyValue(false, std::make_shared<String>(getIntHandleMaxKey()), int_handle_max);
 const RowKeyValue RowKeyValue::COMMON_HANDLE_MIN_KEY = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagBytes), 0);
 const RowKeyValue RowKeyValue::COMMON_HANDLE_MAX_KEY = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagMax), 0);
-const RowKeyValue RowKeyValue::EMPTY_STRING_KEY = RowKeyValue(true, std::make_shared<String>(""), 0);
+const RowKeyValue RowKeyValue::EMPTY_STRING_KEY      = RowKeyValue(true, std::make_shared<String>(""), 0);
 
 RowKeyValue RowKeyValueRef::toRowKeyValue() const
 {
     if (data == nullptr)
     {
-        WriteBufferFromOwnString ss;
+        std::stringstream ss;
         DB::EncodeInt64(int_value, ss);
-        return RowKeyValue(is_common_handle, std::make_shared<String>(ss.releaseStr()), int_value);
+        return RowKeyValue(is_common_handle, std::make_shared<String>(ss.str()), int_value);
     }
     else
     {
@@ -56,7 +43,7 @@ RowKeyValue RowKeyValueRef::toRowKeyValue() const
 }
 
 std::unordered_map<TableID, RowKeyRange::TableRangeMinMax> RowKeyRange::table_min_max_data;
-std::shared_mutex RowKeyRange::table_mutex;
+std::shared_mutex                                          RowKeyRange::table_mutex;
 
 const RowKeyRange::TableRangeMinMax & RowKeyRange::getTableMinMaxData(TableID table_id, bool is_common_handle)
 {

@@ -1,20 +1,5 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/Page/WriteBatch.h>
 
@@ -22,35 +7,27 @@ namespace DB
 {
 namespace DM
 {
+
 struct WriteBatches : private boost::noncopyable
 {
-    NamespaceId ns_id;
     WriteBatch log;
     WriteBatch data;
     WriteBatch meta;
 
-    PageIds written_log;
-    PageIds written_data;
+    PageIds writtenLog;
+    PageIds writtenData;
 
     WriteBatch removed_log;
     WriteBatch removed_data;
     WriteBatch removed_meta;
 
     StoragePool & storage_pool;
-    bool should_roll_back = false;
+    bool          should_roll_back = false;
 
-    WriteLimiterPtr write_limiter;
+    RateLimiterPtr rate_limiter;
 
-    explicit WriteBatches(StoragePool & storage_pool_, const WriteLimiterPtr & write_limiter_ = nullptr)
-        : ns_id(storage_pool_.getNamespaceId())
-        , log(ns_id)
-        , data(ns_id)
-        , meta(ns_id)
-        , removed_log(ns_id)
-        , removed_data(ns_id)
-        , removed_meta(ns_id)
-        , storage_pool(storage_pool_)
-        , write_limiter(write_limiter_)
+    WriteBatches(StoragePool & storage_pool_, const RateLimiterPtr & rate_limiter_ = nullptr)
+        : storage_pool(storage_pool_), rate_limiter(rate_limiter_)
     {
     }
 
@@ -58,14 +35,15 @@ struct WriteBatches : private boost::noncopyable
     {
         if constexpr (DM_RUN_CHECK)
         {
-            auto check_empty = [&](const WriteBatch & wb, const String & name) {
+            Logger * logger      = &Logger::get("WriteBatches");
+            auto     check_empty = [&](const WriteBatch & wb, const String & name) {
                 if (!wb.empty())
                 {
                     StackTrace trace;
-                    LOG_ERROR(Logger::get(),
-                              "!!!=========================Modifications in {} haven't persisted=========================!!! Stack trace: {}",
-                              name,
-                              trace.toString());
+                    LOG_ERROR(logger,
+                              "!!!=========================Modifications in " + name
+                                      + " haven't persisted=========================!!! Stack trace: "
+                                  << trace.toString());
                 }
             };
             check_empty(log, "log");
@@ -90,19 +68,20 @@ struct WriteBatches : private boost::noncopyable
 
         if constexpr (DM_RUN_CHECK)
         {
-            auto check = [](const WriteBatch & wb, const String & what) {
+            Logger * logger = &Logger::get("WriteBatches");
+            auto     check  = [](const WriteBatch & wb, const String & what, Logger * logger) {
                 if (wb.empty())
                     return;
-                for (const auto & w : wb.getWrites())
+                for (auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type == WriteBatchWriteType::DEL))
+                    if (unlikely(w.type == WriteBatch::WriteType::DEL))
                         throw Exception("Unexpected deletes in " + what);
                 }
-                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(logger, "Write into " + what + " : " + wb.toString());
             };
 
-            check(log, "log");
-            check(data, "data");
+            check(log, "log", logger);
+            check(data, "data", logger);
         }
 
         for (auto & w : log.getWrites())
@@ -110,13 +89,13 @@ struct WriteBatches : private boost::noncopyable
         for (auto & w : data.getWrites())
             data_write_pages.push_back(w.page_id);
 
-        storage_pool.logWriter()->write(std::move(log), write_limiter);
-        storage_pool.dataWriter()->write(std::move(data), write_limiter);
+        storage_pool.log().write(std::move(log), rate_limiter);
+        storage_pool.data().write(std::move(data), rate_limiter);
 
         for (auto page_id : log_write_pages)
-            written_log.push_back(page_id);
+            writtenLog.push_back(page_id);
         for (auto page_id : data_write_pages)
-            written_data.push_back(page_id);
+            writtenData.push_back(page_id);
 
         log.clear();
         data.clear();
@@ -124,56 +103,60 @@ struct WriteBatches : private boost::noncopyable
 
     void rollbackWrittenLogAndData()
     {
-        WriteBatch log_wb(ns_id);
-        for (auto p : written_log)
+        WriteBatch log_wb;
+        for (auto p : writtenLog)
             log_wb.delPage(p);
-        WriteBatch data_wb(ns_id);
-        for (auto p : written_data)
+        WriteBatch data_wb;
+        for (auto p : writtenData)
             data_wb.delPage(p);
 
         if constexpr (DM_RUN_CHECK)
         {
-            auto check = [](const WriteBatch & wb, const String & what) {
+            Logger * logger = &Logger::get("WriteBatches");
+
+            auto check = [](const WriteBatch & wb, const String & what, Logger * logger) {
                 if (wb.empty())
                     return;
-                for (const auto & w : wb.getWrites())
+                for (auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatchWriteType::DEL))
+                    if (unlikely(w.type != WriteBatch::WriteType::DEL))
                         throw Exception("Expected deletes in " + what);
                 }
-                LOG_TRACE(Logger::get(), "Rollback remove from {} : {}", what, wb.toString());
+                LOG_TRACE(logger, "Rollback remove from " + what + " : " + wb.toString());
             };
 
-            check(log_wb, "log_wb");
-            check(data_wb, "data_wb");
+            check(log_wb, "log_wb", logger);
+            check(data_wb, "data_wb", logger);
         }
 
-        storage_pool.logWriter()->write(std::move(log_wb), write_limiter);
-        storage_pool.dataWriter()->write(std::move(data_wb), write_limiter);
+        storage_pool.log().write(std::move(log_wb), nullptr);
+        storage_pool.data().write(std::move(data_wb), nullptr);
 
-        written_log.clear();
-        written_data.clear();
+        writtenLog.clear();
+        writtenData.clear();
     }
 
     void writeMeta()
     {
         if constexpr (DM_RUN_CHECK)
         {
-            auto check = [](const WriteBatch & wb, const String & what) {
+            Logger * logger = &Logger::get("WriteBatches");
+
+            auto check = [](const WriteBatch & wb, const String & what, Logger * logger) {
                 if (wb.empty())
                     return;
-                for (const auto & w : wb.getWrites())
+                for (auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatchWriteType::PUT))
+                    if (unlikely(w.type != WriteBatch::WriteType::PUT))
                         throw Exception("Expected puts in " + what);
                 }
-                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(logger, "Write into " + what + " : " + wb.toString());
             };
 
-            check(meta, "meta");
+            check(meta, "meta", logger);
         }
 
-        storage_pool.metaWriter()->write(std::move(meta), write_limiter);
+        storage_pool.meta().write(std::move(meta), rate_limiter);
         meta.clear();
     }
 
@@ -181,25 +164,27 @@ struct WriteBatches : private boost::noncopyable
     {
         if constexpr (DM_RUN_CHECK)
         {
-            auto check = [](const WriteBatch & wb, const String & what) {
+            Logger * logger = &Logger::get("WriteBatches");
+
+            auto check = [](const WriteBatch & wb, const String & what, Logger * logger) {
                 if (wb.empty())
                     return;
-                for (const auto & w : wb.getWrites())
+                for (auto & w : wb.getWrites())
                 {
-                    if (unlikely(w.type != WriteBatchWriteType::DEL))
+                    if (unlikely(w.type != WriteBatch::WriteType::DEL))
                         throw Exception("Expected deletes in " + what);
                 }
-                LOG_TRACE(Logger::get(), "Write into {} : {}", what, wb.toString());
+                LOG_TRACE(logger, "Write into " + what + " : " + wb.toString());
             };
 
-            check(removed_log, "removed_log");
-            check(removed_data, "removed_data");
-            check(removed_meta, "removed_meta");
+            check(removed_log, "removed_log", logger);
+            check(removed_data, "removed_data", logger);
+            check(removed_meta, "removed_meta", logger);
         }
 
-        storage_pool.logWriter()->write(std::move(removed_log), write_limiter);
-        storage_pool.dataWriter()->write(std::move(removed_data), write_limiter);
-        storage_pool.metaWriter()->write(std::move(removed_meta), write_limiter);
+        storage_pool.log().write(std::move(removed_log), rate_limiter);
+        storage_pool.data().write(std::move(removed_data), rate_limiter);
+        storage_pool.meta().write(std::move(removed_meta), rate_limiter);
 
         removed_log.clear();
         removed_data.clear();
@@ -219,8 +204,8 @@ struct WriteBatches : private boost::noncopyable
         data.clear();
         meta.clear();
 
-        written_log.clear();
-        written_data.clear();
+        writtenLog.clear();
+        writtenData.clear();
 
         removed_log.clear();
         removed_data.clear();

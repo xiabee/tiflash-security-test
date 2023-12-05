@@ -1,23 +1,8 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/ColumnsDescription.h>
-#include <Storages/Transaction/Types.h>
 
 #include <ctime>
 #include <functional>
@@ -29,6 +14,7 @@ class ThreadPool;
 
 namespace DB
 {
+
 class Context;
 
 class IStorage;
@@ -38,6 +24,7 @@ class IAST;
 using ASTPtr = std::shared_ptr<IAST>;
 
 struct Settings;
+using Timestamp = UInt64;
 
 
 /** Allows to iterate over tables.
@@ -109,10 +96,7 @@ public:
     /// Change the table structure in metadata.
     /// You must call under the TableStructureLock of the corresponding table . If engine_modifier is empty, then engine does not change.
     virtual void alterTable(
-        const Context & context,
-        const String & name,
-        const ColumnsDescription & columns,
-        const ASTModifier & engine_modifier)
+        const Context & context, const String & name, const ColumnsDescription & columns, const ASTModifier & engine_modifier)
         = 0;
 
     /// Returns time of table's metadata change, 0 if there is no corresponding metadata file.

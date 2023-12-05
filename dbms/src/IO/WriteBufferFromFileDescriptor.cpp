@@ -1,47 +1,42 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <port/unistd.h>
+#include <errno.h>
 
 #include <Common/Exception.h>
 #include <Common/ProfileEvents.h>
+#include <Common/CurrentMetrics.h>
+
 #include <IO/WriteBufferFromFileDescriptor.h>
 #include <IO/WriteHelpers.h>
-#include <errno.h>
-#include <port/unistd.h>
 
 
 namespace ProfileEvents
 {
 extern const Event FileFSync;
 extern const Event WriteBufferFromFileDescriptorWrite;
+extern const Event WriteBufferFromFileDescriptorWriteFailed;
 extern const Event WriteBufferFromFileDescriptorWriteBytes;
-} // namespace ProfileEvents
+}
+
+namespace CurrentMetrics
+{
+    extern const Metric Write;
+}
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int CANNOT_WRITE_TO_FILE_DESCRIPTOR;
-extern const int CANNOT_FSYNC;
-extern const int CANNOT_SEEK_THROUGH_FILE;
-extern const int CANNOT_TRUNCATE_FILE;
-extern const int CANNOT_CLOSE_FILE;
-} // namespace ErrorCodes
+    extern const int CANNOT_WRITE_TO_FILE_DESCRIPTOR;
+    extern const int CANNOT_FSYNC;
+    extern const int CANNOT_SEEK_THROUGH_FILE;
+    extern const int CANNOT_TRUNCATE_FILE;
+}
 
 
 void WriteBufferFromFileDescriptor::nextImpl()
 {
-    if (offset() == 0)
+    if (!offset())
         return;
 
     size_t bytes_written = 0;
@@ -51,11 +46,13 @@ void WriteBufferFromFileDescriptor::nextImpl()
 
         ssize_t res = 0;
         {
+            CurrentMetrics::Increment metric_increment{CurrentMetrics::Write};
             res = ::write(fd, working_buffer.begin() + bytes_written, offset() - bytes_written);
         }
 
         if ((-1 == res || 0 == res) && errno != EINTR)
         {
+            ProfileEvents::increment(ProfileEvents::WriteBufferFromFileDescriptorWriteFailed);
             throwFromErrno("Cannot write to file " + getFileName(), ErrorCodes::CANNOT_WRITE_TO_FILE_DESCRIPTOR);
         }
 
@@ -79,9 +76,7 @@ WriteBufferFromFileDescriptor::WriteBufferFromFileDescriptor(
     size_t buf_size,
     char * existing_memory,
     size_t alignment)
-    : WriteBufferFromFileBase(buf_size, existing_memory, alignment)
-    , fd(fd_)
-{}
+    : WriteBufferFromFileBase(buf_size, existing_memory, alignment), fd(fd_) {}
 
 
 WriteBufferFromFileDescriptor::~WriteBufferFromFileDescriptor()
@@ -103,15 +98,6 @@ off_t WriteBufferFromFileDescriptor::getPositionInFile()
     return seek(0, SEEK_CUR);
 }
 
-void WriteBufferFromFileDescriptor::close()
-{
-    next();
-
-    if (0 != ::close(fd))
-        throw Exception("Cannot close file", ErrorCodes::CANNOT_CLOSE_FILE);
-
-    fd = -1;
-}
 
 void WriteBufferFromFileDescriptor::sync()
 {
@@ -142,4 +128,4 @@ void WriteBufferFromFileDescriptor::doTruncate(off_t length)
         throwFromErrno("Cannot truncate file " + getFileName(), ErrorCodes::CANNOT_TRUNCATE_FILE);
 }
 
-} // namespace DB
+}

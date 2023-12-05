@@ -1,25 +1,11 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Parsers/ASTFunction.h>
-#include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/CommonParsers.h>
 #include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/ExpressionListParsers.h>
-#include <Parsers/ParserSampleRatio.h>
+#include <Parsers/ASTFunction.h>
+#include <Parsers/ASTIdentifier.h>
+#include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ParserSelectQuery.h>
+#include <Parsers/ParserSampleRatio.h>
 #include <Parsers/ParserTablesInSelectQuery.h>
 
 
@@ -28,7 +14,7 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int SYNTAX_ERROR;
+    extern const int SYNTAX_ERROR;
 }
 
 
@@ -77,6 +63,47 @@ bool ParserTableExpression::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
 }
 
 
+bool ParserArrayJoin::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
+{
+    auto res = std::make_shared<ASTArrayJoin>();
+
+    /// [LEFT] ARRAY JOIN expr list
+    Pos saved_pos = pos;
+    bool has_array_join = false;
+
+    if (ParserKeyword("LEFT ARRAY JOIN").ignore(pos, expected))
+    {
+        res->kind = ASTArrayJoin::Kind::Left;
+        has_array_join = true;
+    }
+    else
+    {
+        pos = saved_pos;
+
+        /// INNER may be specified explicitly, otherwise it is assumed as default.
+        ParserKeyword("INNER").ignore(pos, expected);
+
+        if (ParserKeyword("ARRAY JOIN").ignore(pos, expected))
+        {
+            res->kind = ASTArrayJoin::Kind::Inner;
+            has_array_join = true;
+        }
+    }
+
+    if (!has_array_join)
+        return false;
+
+    if (!ParserExpressionList(false).parse(pos, res->expression_list, expected))
+        return false;
+
+    if (res->expression_list)
+        res->children.emplace_back(res->expression_list);
+
+    node = res;
+    return true;
+}
+
+
 bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
     auto res = std::make_shared<ASTTablesInSelectQueryElement>();
@@ -85,6 +112,9 @@ bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expec
     {
         if (!ParserTableExpression().parse(pos, res->table_expression, expected))
             return false;
+    }
+    else if (ParserArrayJoin().parse(pos, res->array_join, expected))
+    {
     }
     else
     {
@@ -186,6 +216,8 @@ bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expec
         res->children.emplace_back(res->table_expression);
     if (res->table_join)
         res->children.emplace_back(res->table_join);
+    if (res->array_join)
+        res->children.emplace_back(res->array_join);
 
     node = res;
     return true;
@@ -210,4 +242,4 @@ bool ParserTablesInSelectQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & e
     return true;
 }
 
-} // namespace DB
+}

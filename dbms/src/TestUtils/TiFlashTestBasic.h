@@ -1,34 +1,15 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/Exception.h>
-#include <Core/ColumnWithTypeAndName.h>
-#include <Core/ColumnsWithTypeAndName.h>
-#include <DataTypes/DataTypeDecimal.h>
+#include <Common/UnifiedLogPatternFormatter.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/IDataType.h>
 #include <Interpreters/Context.h>
+#include <Poco/ConsoleChannel.h>
 #include <Poco/File.h>
+#include <Poco/FormattingChannel.h>
 #include <Poco/Path.h>
+#include <Poco/PatternFormatter.h>
 #include <Poco/SortedDirectoryIterator.h>
-#include <TestUtils/TiFlashTestEnv.h>
-#include <TestUtils/TiFlashTestException.h>
-#include <fmt/core.h>
-
-#include <string>
 
 #if !__clang__
 #pragma GCC diagnostic push
@@ -51,50 +32,28 @@ namespace DB
 {
 namespace tests
 {
-#define CATCH                                                                          \
-    catch (const ::DB::tests::TiFlashTestException & e)                                \
-    {                                                                                  \
-        std::string text = e.displayText();                                            \
-        text += "\n\n";                                                                \
-        if (text.find("Stack trace") == std::string::npos)                             \
-            text += fmt::format("Stack trace:\n{}\n", e.getStackTrace().toString());   \
-        FAIL() << text;                                                                \
-    }                                                                                  \
-    catch (const ::DB::Exception & e)                                                  \
-    {                                                                                  \
-        std::string text = fmt::format("Code: {}. {}\n\n", e.code(), e.displayText()); \
-        if (text.find("Stack trace") == std::string::npos)                             \
-            text += fmt::format("Stack trace:\n{}\n", e.getStackTrace().toString());   \
-        FAIL() << text;                                                                \
-    }                                                                                  \
-    catch (...)                                                                        \
-    {                                                                                  \
-        ::DB::tryLogCurrentException(__PRETTY_FUNCTION__);                             \
-        FAIL();                                                                        \
+
+#define CATCH                                                                                      \
+    catch (const Exception & e)                                                                    \
+    {                                                                                              \
+        std::string text = e.displayText();                                                        \
+                                                                                                   \
+        auto embedded_stack_trace_pos = text.find("Stack trace");                                  \
+        std::cerr << "Code: " << e.code() << ". " << text << std::endl << std::endl;               \
+        if (std::string::npos == embedded_stack_trace_pos)                                         \
+            std::cerr << "Stack trace:" << std::endl << e.getStackTrace().toString() << std::endl; \
+                                                                                                   \
+        throw;                                                                                     \
     }
 
-/**
-  * GTest related helper functions
-  */
-
 /// helper functions for comparing DataType
-::testing::AssertionResult DataTypeCompare(
+::testing::AssertionResult DataTypeCompare( //
     const char * lhs_expr,
     const char * rhs_expr,
     const DataTypePtr & lhs,
     const DataTypePtr & rhs);
-
 #define ASSERT_DATATYPE_EQ(val1, val2) ASSERT_PRED_FORMAT2(::DB::tests::DataTypeCompare, val1, val2)
 #define EXPECT_DATATYPE_EQ(val1, val2) EXPECT_PRED_FORMAT2(::DB::tests::DataTypeCompare, val1, val2)
-
-::testing::AssertionResult fieldCompare(
-    const char * lhs_expr,
-    const char * rhs_expr,
-    const Field & lhs,
-    const Field & rhs);
-
-#define ASSERT_FIELD_EQ(val1, val2) ASSERT_PRED_FORMAT2(::DB::tests::fieldCompare, val1, val2)
-#define EXPECT_FIELD_EQ(val1, val2) EXPECT_PRED_FORMAT2(::DB::tests::fieldCompare, val1, val2)
 
 // A simple helper for getting DataType from type name
 inline DataTypePtr typeFromString(const String & str)
@@ -114,16 +73,76 @@ inline DataTypes typesFromString(const String & str)
     return data_types;
 }
 
-#define CHECK_TESTS_WITH_DATA_ENABLED                                                     \
-    if (!TiFlashTestEnv::isTestsWithDataEnabled())                                        \
-    {                                                                                     \
-        const auto * test_info = ::testing::UnitTest::GetInstance()->current_test_info(); \
-        LOG_INFO(&Poco::Logger::get("GTEST"),                                             \
-                 fmt::format(                                                             \
-                     "Test: {}.{} is disabled.",                                          \
-                     test_info->test_case_name(),                                         \
-                     test_info->name()));                                                 \
-        return;                                                                           \
+class TiFlashTestEnv
+{
+public:
+    static String getTemporaryPath() { return Poco::Path("./tmp/").absolute().toString(); }
+
+    static std::pair<Strings, Strings> getPathPool(const Strings & testdata_path = {})
+    {
+        Strings result;
+        if (!testdata_path.empty())
+            for (const auto & p : testdata_path)
+                result.push_back(Poco::Path{p}.absolute().toString());
+        else
+            result.push_back(Poco::Path{getTemporaryPath()}.absolute().toString());
+        return std::make_pair(result, result);
     }
+
+    static void setupLogger(const String & level = "trace")
+    {
+        Poco::AutoPtr<Poco::ConsoleChannel> channel = new Poco::ConsoleChannel(std::cerr);
+        Poco::AutoPtr<UnifiedLogPatternFormatter> formatter(new UnifiedLogPatternFormatter());
+        formatter->setProperty("pattern", "%L%Y-%m-%d %H:%M:%S.%i [%I] <%p> %s: %t");
+        Poco::AutoPtr<Poco::FormattingChannel> formatting_channel(new Poco::FormattingChannel(formatter, channel));
+        Logger::root().setChannel(formatting_channel);
+        Logger::root().setLevel(level);
+    }
+
+    // If you want to run these tests, you should set this envrionment variablle
+    // For example:
+    //     ALSO_RUN_WITH_TEST_DATA=1 ./dbms/gtests_dbms --gtest_filter='IDAsPath*'
+    static bool isTestsWithDataEnabled() { return (Poco::Environment::get("ALSO_RUN_WITH_TEST_DATA", "0") == "1"); }
+
+    static Strings findTestDataPath(const String & name)
+    {
+        const static std::vector<String> SEARCH_PATH = {"../tests/testdata/", "/tests/testdata/"};
+        for (auto & prefix : SEARCH_PATH)
+        {
+            String path = prefix + name;
+            if (auto f = Poco::File(path); f.exists() && f.isDirectory())
+            {
+                Strings paths;
+                Poco::SortedDirectoryIterator dir_end;
+                for (Poco::SortedDirectoryIterator dir_it(f); dir_it != dir_end; ++dir_it)
+                    paths.emplace_back(path + "/" + dir_it.name() + "/");
+                return paths;
+            }
+        }
+        throw Exception("Can not find testdata with name[" + name + "]");
+    }
+
+    static Context getContext(const DB::Settings & settings = DB::Settings(), Strings testdata_path = {});
+
+    static void initializeGlobalContext();
+    static Context & getGlobalContext() { return *global_context; }
+    static void shutdown();
+
+private:
+    static std::unique_ptr<Context> global_context;
+
+private:
+    TiFlashTestEnv() = delete;
+};
+
+#define CHECK_TESTS_WITH_DATA_ENABLED                                                                        \
+    if (!TiFlashTestEnv::isTestsWithDataEnabled())                                                           \
+    {                                                                                                        \
+        LOG_INFO(&Logger::get("GTEST"),                                                                      \
+            "Test: " << ::testing::UnitTest::GetInstance()->current_test_info()->test_case_name() << "."     \
+                     << ::testing::UnitTest::GetInstance()->current_test_info()->name() << " is disabled."); \
+        return;                                                                                              \
+    }
+
 } // namespace tests
 } // namespace DB

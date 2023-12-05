@@ -1,32 +1,20 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <IO/WriteBufferFromHTTPServerResponse.h>
 
+#include <Poco/Version.h>
+#include <Poco/Net/HTTPServerResponse.h>
 #include <Common/Exception.h>
+#include <IO/WriteBufferFromString.h>
+#include <IO/HTTPCommon.h>
 #include <Common/NetException.h>
 #include <Common/Stopwatch.h>
-#include <IO/HTTPCommon.h>
 #include <IO/Progress.h>
-#include <IO/WriteBufferFromHTTPServerResponse.h>
-#include <IO/WriteBufferFromString.h>
-#include <Poco/Net/HTTPServerResponse.h>
-#include <Poco/Version.h>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int LOGICAL_ERROR;
+    extern const int LOGICAL_ERROR;
 }
 
 
@@ -60,8 +48,7 @@ void WriteBufferFromHTTPServerResponse::finishSendHeaders()
 #if POCO_CLICKHOUSE_PATCH
             /// Send end of headers delimiter.
             if (response_header_ostr)
-                *response_header_ostr << "\r\n"
-                                      << std::flush;
+                *response_header_ostr << "\r\n" << std::flush;
 #else
             /// Newline autosent by response.send()
             /// if nothing to send in body:
@@ -81,7 +68,7 @@ void WriteBufferFromHTTPServerResponse::finishSendHeaders()
 void WriteBufferFromHTTPServerResponse::nextImpl()
 {
     {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
 
         startSendHeaders();
 
@@ -108,7 +95,7 @@ void WriteBufferFromHTTPServerResponse::nextImpl()
                 else
                     throw Exception("Logical error: unknown compression method passed to WriteBufferFromHTTPServerResponse",
                                     ErrorCodes::LOGICAL_ERROR);
-                    /// Use memory allocated for the outer buffer in the buffer pointed to by out. This avoids extra allocation and copy.
+                /// Use memory allocated for the outer buffer in the buffer pointed to by out. This avoids extra allocation and copy.
 
 #if !POCO_CLICKHOUSE_PATCH
                 response_body_ostr = &(response.send());
@@ -130,6 +117,7 @@ void WriteBufferFromHTTPServerResponse::nextImpl()
         }
 
         finishSendHeaders();
+
     }
 
     if (out)
@@ -159,7 +147,7 @@ WriteBufferFromHTTPServerResponse::WriteBufferFromHTTPServerResponse(
 
 void WriteBufferFromHTTPServerResponse::onProgress(const Progress & progress)
 {
-    std::lock_guard lock(mutex);
+    std::lock_guard<std::mutex> lock(mutex);
 
     /// Cannot add new headers if body was started to send.
     if (headers_finished_sending)
@@ -178,8 +166,7 @@ void WriteBufferFromHTTPServerResponse::onProgress(const Progress & progress)
         accumulated_progress.writeJSON(progress_string_writer);
 
 #if POCO_CLICKHOUSE_PATCH
-        *response_header_ostr << "X-ClickHouse-Progress: " << progress_string_writer.str() << "\r\n"
-                              << std::flush;
+        *response_header_ostr << "X-ClickHouse-Progress: " << progress_string_writer.str() << "\r\n" << std::flush;
 #endif
     }
 }
@@ -194,7 +181,7 @@ void WriteBufferFromHTTPServerResponse::finalize()
     else
     {
         /// If no remaining data, just send headers.
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
         startSendHeaders();
         finishSendHeaders();
     }
@@ -213,4 +200,4 @@ WriteBufferFromHTTPServerResponse::~WriteBufferFromHTTPServerResponse()
     }
 }
 
-} // namespace DB
+}

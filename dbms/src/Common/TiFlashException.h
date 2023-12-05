@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Common/Exception.h>
@@ -25,6 +11,7 @@
 
 namespace DB
 {
+
 /// A central place for defining your error class and error code.
 /// C(error_class, error...)
 /// E(error_code, description, workaround, message_template)
@@ -36,7 +23,6 @@ namespace DB
 ///   - Use clang-format to format your code
 ///   - Use semicolon(;) to split errors
 ///   - After adding an error, please execute `tiflash errgen <tics-dir>/errors.toml`
-// clang-format off
 #define ERROR_CLASS_LIST                                                                                                             \
     C(PageStorage,                                                                                                                   \
         E(FileSizeNotMatch, "Some files' size don't match their metadata.",                                                          \
@@ -90,29 +76,7 @@ namespace DB
             "better providing information about your cluster(log, topology information etc.).",                                      \
             "");                                                                                                                     \
         E(MemoryLimitExceeded, "TiFlash memory limit exceeded.",                                                                     \
-            "Please modify the config parameters 'max_memory_usage' and 'max_memory_usage_for_all_queries'.", "");                   \
-        E(RegionError, "Region is unavailable.",                                                                                     \
-            "A certain Raft Group is not available, such as the number of replicas is not enough.\n"                                 \
-            "This error usually occurs when the TiFlash server is busy or the TiFlash node is down.\n",                              \
-            "");                                                                                                                     \
-        )                                                                                                                            \
-    C(Planner,                                                                                                                       \
-        E(BadRequest, "Bad TiDB DAGRequest.",                                                                                        \
-            "This error is usually caused by incorrect TiDB DAGRequest. \n"                                                          \
-            "Please contact with developer, \n"                                                                                      \
-            "better providing information about your cluster(log, topology information etc.).",                                      \
-            "");                                                                                                                     \
-        E(Unimplemented, "Some features are unimplemented.",                                                                         \
-            "This error may caused by unmatched TiDB and TiFlash versions, \n"                                                       \
-            "and should not occur in common case. \n"                                                                                \
-            "Please contact with developer, \n"                                                                                      \
-            "better providing information about your cluster(log, topology information etc.).",                                      \
-            "");                                                                                                                     \
-        E(Internal, "TiFlash Planner internal error.",                                                                               \
-            "Please contact with developer, \n"                                                                                      \
-            "better providing information about your cluster(log, topology information etc.).",                                      \
-            "");                                                                                                                     \
-        )                                                                                                                            \
+            "Please modify the config parameters 'max_memory_usage' and 'max_memory_usage_for_all_queries'.", "");)                  \
     C(Table,                                                                                                                         \
         E(SchemaVersionError, "Schema version of target table in TiFlash is different from that in query.",                          \
             "TiFlash will sync the newest schema from TiDB before processing every query. \n"                                        \
@@ -154,25 +118,7 @@ namespace DB
             "better providing information about your cluster(log, topology information etc.).",                                      \
             "");)                                                                                                                    \
     C(Types, E(Truncated, "Data is truncated during conversion.", "", ""); E(WrongValue, "Input value is in wrong format", "", "");) \
-    C(Expression, E(DivisionByZero, "Division by 0.", "", "");)                                                                      \
-    C(Checksum,                                                                                                                      \
-        E(Missing, "Checksum info for disk I/O checksum was expected but not found.",                                                \
-            "This may be caused by a failure during data file format upgrade or file lost; \n"                                       \
-            "please contact with developer if you don't know what is going on.",                                                     \
-            "");                                                                                                                     \
-        E(DataCorruption, "Checksum hash mismatch was detected.",                                                                    \
-            "This usually indicates a disk failure happened at a TiFlash node, \n"                                                   \
-            "you may need to examine the health of your servers.",                                                                   \
-            "");                                                                                                                     \
-        E(IOFailure, "There are failed IO operations during checksum loading or writing.",                                           \
-            "Please check the permission of your data directories, \n"                                                               \
-            "if the problem persists, please contact the developer.",                                                                \
-            "");                                                                                                                     \
-        E(Internal, "Checksum internal error.",                                                                                      \
-            "Please contact with developer, \n"                                                                                      \
-            "better providing information about your cluster(log, topology information etc.).",                                      \
-            "");)
-// clang-format on
+    C(Expression, E(DivisionByZero, "Division by 0.", "", "");)
 
 /// TiFlashError is core struct of standard error,
 /// which contains all information about an error except message.
@@ -206,39 +152,73 @@ ERROR_CLASS_LIST
 
 
 /// TiFlashErrorRegistry will registers and checks all errors when TiFlash startup
-class TiFlashErrorRegistry : public ext::Singleton<TiFlashErrorRegistry>
+class TiFlashErrorRegistry : public ext::singleton<TiFlashErrorRegistry>
 {
 public:
-    friend ext::Singleton<TiFlashErrorRegistry>;
+    friend ext::singleton<TiFlashErrorRegistry>;
 
-    static TiFlashError simpleGet(const std::string & error_class, const std::string & error_code);
+    static TiFlashError simpleGet(const std::string & error_class, const std::string & error_code)
+    {
+        auto & _instance = instance();
+        auto error = _instance.get(error_class, error_code);
+        if (error.has_value())
+        {
+            return error.value();
+        }
+        else
+        {
+            throw Exception("Unregistered TiFlashError: FLASH:" + error_class + ":" + error_code);
+        }
+    }
 
-    static TiFlashError simpleGet(const std::string & error_class, int error_code);
+    static TiFlashError simpleGet(const std::string & error_class, int error_code)
+    {
+        return simpleGet(error_class, std::to_string(error_code));
+    }
 
-    std::optional<TiFlashError> get(const std::string & error_class, const std::string & error_code) const;
+    std::optional<TiFlashError> get(const std::string & error_class, const std::string & error_code) const
+    {
+        auto error = all_errors.find({error_class, error_code});
+        if (error != all_errors.end())
+        {
+            return error->second;
+        }
+        else
+        {
+            return {};
+        }
+    }
 
-    std::optional<TiFlashError> get(const std::string & error_class, int error_code) const;
+    std::optional<TiFlashError> get(const std::string & error_class, int error_code) const
+    {
+        return get(error_class, std::to_string(error_code));
+    }
 
-    std::vector<TiFlashError> allErrors() const;
+    std::vector<TiFlashError> allErrors() const
+    {
+        std::vector<TiFlashError> res;
+        res.reserve(all_errors.size());
+        for (auto error : all_errors)
+        {
+            res.push_back(error.second);
+        }
+        return res;
+    }
 
 protected:
-    TiFlashErrorRegistry();
-    ~TiFlashErrorRegistry();
+    TiFlashErrorRegistry() { initialize(); }
 
 private:
-    void registerError(const std::string & error_class, const std::string & error_code, const std::string & description, const std::string & workaround, const std::string & message_template = "");
+    void registerError(const std::string & error_class, const std::string & error_code, const std::string & description,
+        const std::string & workaround, const std::string & message_template = "");
 
-    void registerErrorWithNumericCode(const std::string & error_class, int error_code, const std::string & description, const std::string & workaround, const std::string & message_template = "");
+    void registerErrorWithNumericCode(const std::string & error_class, int error_code, const std::string & description,
+        const std::string & workaround, const std::string & message_template = "");
 
     void initialize();
 
-    struct Errors;
-
-    Errors & errors();
-    Errors & errors() const;
-
 private:
-    Errors * inner_data; // PImpl
+    std::map<std::pair<std::string, std::string>, TiFlashError> all_errors;
 };
 
 /// TiFlashException implements TiDB's standardized error.
@@ -246,10 +226,7 @@ private:
 class TiFlashException : public Exception
 {
 public:
-    TiFlashException(const std::string & _msg, const TiFlashError & _error)
-        : Exception(_msg)
-        , error(_error)
-    {}
+    TiFlashException(const std::string & _msg, const TiFlashError & _error) : Exception(_msg), error(_error) {}
 
     const char * name() const throw() override { return "DB::TiFlashException"; }
     const char * className() const throw() override { return "DB::TiFlashException"; }

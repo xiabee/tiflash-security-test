@@ -1,30 +1,6 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Common/HashTable/HashMap.h>
-#include <Common/nocopyable.h>
-
-namespace DB
-{
-namespace ErrorCodes
-{
-extern const int NO_AVAILABLE_DATA;
-extern const int INCORRECT_DATA;
-} // namespace ErrorCodes
-} // namespace DB
 
 
 /** Replacement of the hash table for a small number (<10) of keys.
@@ -37,22 +13,27 @@ extern const int INCORRECT_DATA;
   *  you should check if the table is not full,
   *  and do a `fallback` in this case (for example, use a real hash table).
   */
-template <
+
+template
+<
     typename Key,
     typename Cell,
-    size_t capacity>
-class SmallTable : private boost::noncopyable
-    , protected Cell::State
+    size_t capacity
+>
+class SmallTable :
+    private boost::noncopyable,
+    protected Cell::State
 {
 protected:
     friend class const_iterator;
     friend class iterator;
     friend class Reader;
 
-    using Self = SmallTable;
+    using Self = SmallTable<Key, Cell, capacity>;
+    using cell_type = Cell;
 
-    size_t m_size = 0; /// Amount of elements.
-    Cell buf[capacity]; /// A piece of memory for all elements.
+    size_t m_size = 0;        /// Amount of elements.
+    Cell buf[capacity];       /// A piece of memory for all elements.
 
 
     /// Find a cell with the same key or an empty cell, starting from the specified position and then by the collision resolution chain.
@@ -83,19 +64,19 @@ protected:
 
 public:
     using key_type = Key;
-    using mapped_type = typename Cell::mapped_type;
     using value_type = typename Cell::value_type;
-    using cell_type = Cell;
+
 
     class Reader final : private Cell::State
     {
     public:
-        explicit Reader(DB::ReadBuffer & in_)
-            : in(in_)
+        Reader(DB::ReadBuffer & in_)
+        : in(in_)
         {
         }
 
-        DISALLOW_COPY(Reader);
+        Reader(const Reader &) = delete;
+        Reader & operator=(const Reader &) = delete;
 
         bool next()
         {
@@ -105,7 +86,7 @@ public:
                 DB::readVarUInt(size, in);
 
                 if (size > capacity)
-                    throw DB::Exception("Illegal size", DB::ErrorCodes::INCORRECT_DATA);
+                    throw DB::Exception("Illegal size");
 
                 is_initialized = true;
             }
@@ -134,27 +115,24 @@ public:
         DB::ReadBuffer & in;
         Cell cell;
         size_t read_count = 0;
-        size_t size = 0;
+        size_t size;
         bool is_eof = false;
         bool is_initialized = false;
     };
 
-    class iterator // NOLINT(readability-identifier-naming)
+    class iterator
     {
-        Self * container = nullptr;
-        Cell * ptr = nullptr;
+        Self * container;
+        Cell * ptr;
 
         friend class SmallTable;
 
     public:
-        iterator() = default;
-        iterator(Self * container_, Cell * ptr_)
-            : container(container_)
-            , ptr(ptr_)
-        {}
+        iterator() {}
+        iterator(Self * container_, Cell * ptr_) : container(container_), ptr(ptr_) {}
 
-        bool operator==(const iterator & rhs) const { return ptr == rhs.ptr; }
-        bool operator!=(const iterator & rhs) const { return ptr != rhs.ptr; }
+        bool operator== (const iterator & rhs) const { return ptr == rhs.ptr; }
+        bool operator!= (const iterator & rhs) const { return ptr != rhs.ptr; }
 
         iterator & operator++()
         {
@@ -162,33 +140,27 @@ public:
             return *this;
         }
 
-        Cell & operator*() const { return *ptr; }
-        Cell * operator->() const { return ptr; }
+        value_type & operator* () const { return ptr->getValue(); }
+        value_type * operator->() const { return &ptr->getValue(); }
 
         Cell * getPtr() const { return ptr; }
     };
 
 
-    class const_iterator // NOLINT(readability-identifier-naming)
+    class const_iterator
     {
-        const Self * container = nullptr;
-        const Cell * ptr = nullptr;
+        const Self * container;
+        const Cell * ptr;
 
         friend class SmallTable;
 
     public:
-        const_iterator() = default;
-        const_iterator(const Self * container_, const Cell * ptr_)
-            : container(container_)
-            , ptr(ptr_)
-        {}
-        explicit const_iterator(const iterator & rhs)
-            : container(rhs.container)
-            , ptr(rhs.ptr)
-        {}
+        const_iterator() {}
+        const_iterator(const Self * container_, const Cell * ptr_) : container(container_), ptr(ptr_) {}
+        const_iterator(const iterator & rhs) : container(rhs.container), ptr(rhs.ptr) {}
 
-        bool operator==(const const_iterator & rhs) const { return ptr == rhs.ptr; }
-        bool operator!=(const const_iterator & rhs) const { return ptr != rhs.ptr; }
+        bool operator== (const const_iterator & rhs) const { return ptr == rhs.ptr; }
+        bool operator!= (const const_iterator & rhs) const { return ptr != rhs.ptr; }
 
         const_iterator & operator++()
         {
@@ -196,23 +168,23 @@ public:
             return *this;
         }
 
-        const Cell & operator*() const { return *ptr; }
-        const Cell * operator->() const { return ptr; }
+        const value_type & operator* () const { return ptr->getValue(); }
+        const value_type * operator->() const { return &ptr->getValue(); }
 
         const Cell * getPtr() const { return ptr; }
     };
 
 
-    const_iterator begin() const { return iteratorTo(buf); }
-    iterator begin() { return iteratorTo(buf); }
+    const_iterator begin() const     { return iteratorTo(buf); }
+    iterator begin()                 { return iteratorTo(buf); }
 
-    const_iterator end() const { return iteratorTo(buf + m_size); }
-    iterator end() { return iteratorTo(buf + m_size); }
+    const_iterator end() const         { return iteratorTo(buf + m_size); }
+    iterator end()                     { return iteratorTo(buf + m_size); }
 
 
 protected:
-    const_iterator iteratorTo(const Cell * ptr) const { return const_iterator(this, ptr); }
-    iterator iteratorTo(Cell * ptr) { return iterator(this, ptr); }
+    const_iterator iteratorTo(const Cell * ptr) const     { return const_iterator(this, ptr); }
+    iterator iteratorTo(Cell * ptr)                     { return iterator(this, ptr); }
 
 
 public:
@@ -261,7 +233,7 @@ public:
         inserted = res == buf + m_size;
         if (inserted)
         {
-            new (res) Cell(x, *this);
+            new(res) Cell(x, *this);
             ++m_size;
         }
     }
@@ -278,7 +250,7 @@ public:
             if (res == buf + capacity)
                 return false;
 
-            new (res) Cell(x, *this);
+            new(res) Cell(x, *this);
             ++m_size;
         }
         return true;
@@ -294,13 +266,13 @@ public:
 
     void ALWAYS_INLINE insertUnique(Key x)
     {
-        new (&buf[m_size]) Cell(x, *this);
+        new(&buf[m_size]) Cell(x, *this);
         ++m_size;
     }
 
 
-    iterator ALWAYS_INLINE find(Key x) { return iteratorTo(findCell(x)); }
-    const_iterator ALWAYS_INLINE find(Key x) const { return iteratorTo(findCell(x)); }
+    iterator ALWAYS_INLINE find(Key x)                 { return iteratorTo(findCell(x)); }
+    const_iterator ALWAYS_INLINE find(Key x) const     { return iteratorTo(findCell(x)); }
 
 
     void write(DB::WriteBuffer & wb) const
@@ -334,7 +306,7 @@ public:
         DB::readVarUInt(new_size, rb);
 
         if (new_size > capacity)
-            throw DB::Exception("Illegal size", DB::ErrorCodes::INCORRECT_DATA);
+            throw DB::Exception("Illegal size");
 
         for (size_t i = 0; i < new_size; ++i)
             buf[i].read(rb);
@@ -352,7 +324,7 @@ public:
         DB::readText(new_size, rb);
 
         if (new_size > capacity)
-            throw DB::Exception("Illegal size", DB::ErrorCodes::INCORRECT_DATA);
+            throw DB::Exception("Illegal size");
 
         for (size_t i = 0; i < new_size; ++i)
         {
@@ -390,42 +362,45 @@ public:
 };
 
 
-struct HashUnused
-{
-};
+struct HashUnused {};
 
 
-template <
+template
+<
     typename Key,
-    size_t capacity>
+    size_t capacity
+>
 using SmallSet = SmallTable<Key, HashTableCell<Key, HashUnused>, capacity>;
 
 
-template <
+template
+<
     typename Key,
     typename Cell,
-    size_t capacity>
+    size_t capacity
+>
 class SmallMapTable : public SmallTable<Key, Cell, capacity>
 {
 public:
     using key_type = Key;
-    using mapped_type = typename Cell::mapped_type;
+    using mapped_type = typename Cell::Mapped;
     using value_type = typename Cell::value_type;
-    using cell_type = Cell;
 
     mapped_type & ALWAYS_INLINE operator[](Key x)
     {
         typename SmallMapTable::iterator it;
         bool inserted;
         this->emplace(x, it, inserted);
-        new (&it->getMapped()) mapped_type();
-        return it->getMapped();
+        new(&it->second) mapped_type();
+        return it->second;
     }
 };
 
 
-template <
+template
+<
     typename Key,
     typename Mapped,
-    size_t capacity>
+    size_t capacity
+>
 using SmallMap = SmallMapTable<Key, HashMapCell<Key, Mapped, HashUnused>, capacity>;

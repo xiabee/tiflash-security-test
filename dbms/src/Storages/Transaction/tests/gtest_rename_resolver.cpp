@@ -1,20 +1,6 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+#include <Storages/Transaction/SchemaBuilder-internal.h>
+#include <Storages/Transaction/SchemaBuilder.h>
 #include <TestUtils/TiFlashTestBasic.h>
-#include <TiDB/Schema/SchemaBuilder-internal.h>
-#include <TiDB/Schema/SchemaBuilder.h>
 
 namespace DB::tests
 {
@@ -138,10 +124,10 @@ inline ::testing::AssertionResult ColumnNameWithIDPairsCompare( //
         return ::testing::AssertionSuccess();
     else
         return ::testing::internal::EqFailure(lhs_expr,
-                                              rhs_expr,
-                                              "<" + lhs.first.toString() + "," + lhs.second.toString() + ">",
-                                              "<" + rhs.first.toString() + "," + rhs.second.toString() + ">",
-                                              false);
+            rhs_expr,
+            "<" + lhs.first.toString() + "," + lhs.second.toString() + ">",
+            "<" + rhs.first.toString() + "," + rhs.second.toString() + ">",
+            false);
 }
 #define ASSERT_COLUMN_NAME_ID_PAIR_EQ(val1, val2) ASSERT_PRED_FORMAT2(::DB::tests::ColumnNameWithIDPairsCompare, val1, val2)
 

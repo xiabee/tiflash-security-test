@@ -1,30 +1,17 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
-#include <Common/grpcpp.h>
 #include <Core/Types.h>
 #include <IO/createReadBufferFromFileBase.h>
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
 #include <Poco/Util/LayeredConfiguration.h>
 #include <common/logger_useful.h>
+#include <grpc++/grpc++.h>
 
 #include <set>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int INVALID_CONFIG_PARAMETER;
@@ -45,9 +32,9 @@ struct TiFlashSecurityConfig
     grpc::SslCredentialsOptions options;
 
 public:
-    TiFlashSecurityConfig() = default;
+    TiFlashSecurityConfig() {}
 
-    TiFlashSecurityConfig(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log)
+    TiFlashSecurityConfig(Poco::Util::LayeredConfiguration & config, Poco::Logger * log)
     {
         if (config.has("security"))
         {
@@ -81,11 +68,7 @@ public:
             {
                 has_tls_config = true;
                 LOG_INFO(
-                    log,
-                    "security config is set: ca path is {} cert path is {} key path is {}",
-                    ca_path,
-                    cert_path,
-                    key_path);
+                    log, "security config is set: ca path is " << ca_path << " cert path is " << cert_path << " key path is " << key_path);
             }
 
             if (config.has("security.cert_allowed_cn") && has_tls_config)
@@ -105,14 +88,15 @@ public:
 
     void parseAllowedCN(String verify_cns)
     {
+
         if (verify_cns.size() > 2 && verify_cns[0] == '[' && verify_cns[verify_cns.size() - 1] == ']')
         {
             verify_cns = verify_cns.substr(1, verify_cns.size() - 2);
         }
         Poco::StringTokenizer string_tokens(verify_cns, ",");
-        for (const auto & string_token : string_tokens)
+        for (auto it = string_tokens.begin(); it != string_tokens.end(); it++)
         {
-            std::string cn = Poco::trim(string_token);
+            std::string cn = Poco::trim(*it);
             if (cn.size() > 2 && cn[0] == '\"' && cn[cn.size() - 1] == '\"')
             {
                 cn = cn.substr(1, cn.size() - 2);
@@ -122,22 +106,28 @@ public:
     }
 
 
-    bool checkGrpcContext(const grpc::ServerContext * grpc_context) const
+    bool checkGrpcContext(grpc::ServerContext * grpc_context) const
     {
         if (allowed_common_names.empty() || grpc_context == nullptr)
         {
             return true;
         }
         auto auth_context = grpc_context->auth_context();
-        for (auto && [property_name, common_name] : *auth_context)
+        for (auto it = auth_context->begin(); it != auth_context->end(); it++)
         {
-            if (property_name == GRPC_X509_CN_PROPERTY_NAME && allowed_common_names.count(String(common_name.data(), common_name.size())))
-                return true;
+            if ((*it).first.compare(GRPC_X509_CN_PROPERTY_NAME) == 0)
+            {
+                auto common_name = (*it).second;
+                if (allowed_common_names.count(String(common_name.data())))
+                {
+                    return true;
+                }
+            }
         }
         return false;
     }
 
-    grpc::SslCredentialsOptions readAndCacheSecurityInfo()
+    grpc::SslCredentialsOptions ReadAndCacheSecurityInfo()
     {
         if (inited)
         {
@@ -151,7 +141,7 @@ public:
     }
 
 private:
-    static String readFile(const String & filename)
+    String readFile(const String & filename)
     {
         if (filename.empty())
         {

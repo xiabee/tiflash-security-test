@@ -1,32 +1,15 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <memory>
 
-#include <Common/FailPoint.h>
+#include <boost/range/join.hpp>
+
+#include <Poco/File.h>
+#include <Poco/FileStream.h>
+
 #include <Common/escapeForFileName.h>
-#include <DataTypes/DataTypeFactory.h>
-#include <DataTypes/DataTypesNumber.h>
-#include <DataTypes/NestedUtils.h>
-#include <Databases/DatabaseFactory.h>
-#include <Databases/IDatabase.h>
+
 #include <Encryption/WriteBufferFromFileProvider.h>
 #include <IO/WriteHelpers.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/ExpressionActions.h>
-#include <Interpreters/ExpressionAnalyzer.h>
-#include <Interpreters/InterpreterCreateQuery.h>
-#include <Interpreters/InterpreterInsertQuery.h>
-#include <Interpreters/InterpreterSelectWithUnionQuery.h>
+
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTIdentifier.h>
@@ -36,17 +19,32 @@
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
-#include <Poco/File.h>
-#include <Poco/FileStream.h>
+
 #include <Storages/StorageFactory.h>
 #include <Storages/StorageLog.h>
 
-#include <boost/range/join.hpp>
-#include <memory>
+#include <Interpreters/Context.h>
+#include <Interpreters/DDLWorker.h>
+#include <Interpreters/ExpressionActions.h>
+#include <Interpreters/ExpressionAnalyzer.h>
+#include <Interpreters/InterpreterCreateQuery.h>
+#include <Interpreters/InterpreterInsertQuery.h>
+#include <Interpreters/InterpreterSelectWithUnionQuery.h>
+
+#include <DataTypes/DataTypeFactory.h>
+#include <DataTypes/DataTypesNumber.h>
+#include <DataTypes/NestedUtils.h>
+
+#include <Databases/DatabaseFactory.h>
+#include <Databases/IDatabase.h>
+
+#include <Common/FailPoint.h>
+#include <Common/ZooKeeper/ZooKeeper.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int TABLE_ALREADY_EXISTS;
@@ -65,14 +63,14 @@ extern const char exception_between_create_database_meta_and_directory[];
 }
 
 
-InterpreterCreateQuery::InterpreterCreateQuery(const ASTPtr & query_ptr_, Context & context_)
-    : query_ptr(query_ptr_)
-    , context(context_)
-{}
+InterpreterCreateQuery::InterpreterCreateQuery(const ASTPtr & query_ptr_, Context & context_) : query_ptr(query_ptr_), context(context_) {}
 
 
 BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
 {
+    if (!create.cluster.empty())
+        return executeDDLQueryOnCluster(query_ptr, context, {create.database});
+
     String database_name = create.database;
 
     if (create.if_not_exists && context.isDatabaseExist(database_name))
@@ -129,7 +127,8 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
         String statement = statement_stream.str();
 
         /// Exclusive flag guarantees, that database is not created right now in another thread.
-        WriteBufferFromFileProvider out(context.getFileProvider(), metadata_file_tmp_path, EncryptionPath(metadata_file_tmp_path, ""), true, nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
+        WriteBufferFromFileProvider out(context.getFileProvider(), metadata_file_tmp_path, EncryptionPath(metadata_file_tmp_path, ""), true,
+            nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
         writeString(statement, out);
 
         out.next();
@@ -143,7 +142,8 @@ BlockIO InterpreterCreateQuery::createDatabase(ASTCreateQuery & create)
         context.addDatabase(database_name, database);
 
         if (need_write_metadata)
-            context.getFileProvider()->renameFile(metadata_file_tmp_path, EncryptionPath(metadata_file_tmp_path, ""), metadata_file_path, EncryptionPath(metadata_file_path, ""), true);
+            context.getFileProvider()->renameFile(metadata_file_tmp_path, EncryptionPath(metadata_file_tmp_path, ""), metadata_file_path,
+                EncryptionPath(metadata_file_path, ""), true);
 
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_between_create_database_meta_and_directory);
         // meta file (not temporary) of database exists means create database success,
@@ -219,8 +219,9 @@ static ColumnsAndDefaults parseColumns(const ASTExpressionList & column_list_ast
                 const auto tmp_column_name = final_column_name + "_tmp";
                 const auto data_type_ptr = columns.back().type.get();
 
-                default_expr_list->children.emplace_back(setAlias(makeASTFunction("CAST", std::make_shared<ASTIdentifier>(tmp_column_name), std::make_shared<ASTLiteral>(Field(data_type_ptr->getName()))),
-                                                                  final_column_name));
+                default_expr_list->children.emplace_back(setAlias(makeASTFunction("CAST", std::make_shared<ASTIdentifier>(tmp_column_name),
+                                                                      std::make_shared<ASTLiteral>(Field(data_type_ptr->getName()))),
+                    final_column_name));
                 default_expr_list->children.emplace_back(setAlias(col_decl.default_expression->clone(), tmp_column_name));
             }
             else
@@ -265,8 +266,7 @@ static ColumnsAndDefaults parseColumns(const ASTExpressionList & column_list_ast
                 explicit_type = block.getByName(column_name).type;
 
             defaults.emplace(
-                column_name,
-                ColumnDefault{columnDefaultKindFromString(col_decl_ptr->default_specifier), col_decl_ptr->default_expression});
+                column_name, ColumnDefault{columnDefaultKindFromString(col_decl_ptr->default_specifier), col_decl_ptr->default_expression});
         }
     }
 
@@ -370,9 +370,7 @@ ColumnsDescription InterpreterCreateQuery::getColumnsDescription(const ASTExpres
 
 
 ColumnsDescription InterpreterCreateQuery::setColumns(
-    ASTCreateQuery & create,
-    const Block & as_select_sample,
-    const StoragePtr & as_storage) const
+    ASTCreateQuery & create, const Block & as_select_sample, const StoragePtr & as_storage) const
 {
     ColumnsDescription res;
 
@@ -391,8 +389,7 @@ ColumnsDescription InterpreterCreateQuery::setColumns(
     }
     else
         throw Exception(
-            "Incorrect CREATE query: required list of column descriptions or AS section or SELECT.",
-            ErrorCodes::INCORRECT_QUERY);
+            "Incorrect CREATE query: required list of column descriptions or AS section or SELECT.", ErrorCodes::INCORRECT_QUERY);
 
     /// Even if query has list of columns, canonicalize it (unfold Nested columns).
     ASTPtr new_columns = formatColumns(res);
@@ -425,7 +422,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
     {
         if (create.is_temporary && create.storage->engine->name != "Memory")
             throw Exception("Temporary tables can only be created with ENGINE = Memory, not " + create.storage->engine->name,
-                            ErrorCodes::INCORRECT_QUERY);
+                ErrorCodes::INCORRECT_QUERY);
 
         return;
     }
@@ -450,8 +447,7 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
 
         if (as_create.is_view)
             throw Exception(
-                "Cannot CREATE a table AS " + as_database_name + "." + as_table_name + ", it is a View",
-                ErrorCodes::INCORRECT_QUERY);
+                "Cannot CREATE a table AS " + as_database_name + "." + as_table_name + ", it is a View", ErrorCodes::INCORRECT_QUERY);
 
         create.set(create.storage, as_create.storage->ptr());
     }
@@ -460,6 +456,15 @@ void InterpreterCreateQuery::setEngine(ASTCreateQuery & create) const
 
 BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
 {
+    if (!create.cluster.empty())
+    {
+        NameSet databases{create.database};
+        if (!create.to_table.empty())
+            databases.emplace(create.to_database);
+
+        return executeDDLQueryOnCluster(query_ptr, context, databases);
+    }
+
     String path = context.getPath();
     String current_database = context.getCurrentDatabase();
 
@@ -523,9 +528,7 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
               *  can throw an exception, even if IF NOT EXISTS is specified.
               */
             guard = context.getDDLGuardIfTableDoesntExist(
-                database_name,
-                table_name,
-                "Table " + database_name + "." + table_name + " is creating or attaching right now");
+                database_name, table_name, "Table " + database_name + "." + table_name + " is creating or attaching right now");
 
             if (!guard)
             {
@@ -539,15 +542,15 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
             return {};
 
         res = StorageFactory::instance().get(create,
-                                             data_path,
-                                             table_name,
-                                             database_name,
-                                             database->getEngineName(),
-                                             context,
-                                             context.getGlobalContext(),
-                                             columns,
-                                             create.attach,
-                                             false);
+            data_path,
+            table_name,
+            database_name,
+            database->getEngineName(),
+            context,
+            context.getGlobalContext(),
+            columns,
+            create.attach,
+            false);
 
         if (create.is_temporary)
             context.getSessionContext().addExternalTable(table_name, res, query_ptr);
@@ -569,9 +572,7 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
         insert->select = create.select->clone();
 
         return InterpreterInsertQuery(
-                   insert,
-                   create.is_temporary ? context.getSessionContext() : context,
-                   context.getSettingsRef().insert_allow_materialized_columns)
+            insert, create.is_temporary ? context.getSessionContext() : context, context.getSettingsRef().insert_allow_materialized_columns)
             .execute();
     }
 

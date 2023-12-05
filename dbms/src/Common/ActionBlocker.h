@@ -1,24 +1,10 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
-#include <Common/nocopyable.h>
 
 #include <atomic>
 
 namespace DB
 {
+
 /// An atomic variable that is used to block and interrupt certain actions
 /// If it is not zero then actions related with it should be considered as interrupted
 class ActionBlocker
@@ -42,8 +28,7 @@ public:
     /// Blocks related action while a BlockerHolder instance exists
     struct LockHolder
     {
-        explicit LockHolder(const ActionBlocker * var_ = nullptr)
-            : var(var_)
+        explicit LockHolder(const ActionBlocker * var_ = nullptr) : var(var_)
         {
             if (var)
                 ++var->counter;
@@ -61,7 +46,8 @@ public:
             return *this;
         }
 
-        DISALLOW_COPY(LockHolder);
+        LockHolder(const LockHolder & other) = delete;
+        LockHolder & operator=(const LockHolder & other) = delete;
 
         ~LockHolder()
         {
@@ -74,4 +60,4 @@ public:
     };
 };
 
-} // namespace DB
+}

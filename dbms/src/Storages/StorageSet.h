@@ -1,26 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Storages/IStorage.h>
-
 #include <ext/shared_ptr_helper.h>
+
+#include <Storages/IStorage.h>
 
 
 namespace DB
 {
+
 class Set;
 using SetPtr = std::shared_ptr<Set>;
 
@@ -49,7 +36,7 @@ protected:
     String path;
     String table_name;
 
-    UInt64 increment = 0; /// For the backup file names.
+    UInt64 increment = 0;    /// For the backup file names.
 
     /// Restore from backup.
     void restore();
@@ -68,10 +55,9 @@ private:
   *  and also written to a file-backup, for recovery after a restart.
   * Reading from the table is not possible directly - it is possible to specify only the right part of the IN statement.
   */
-class StorageSet : public ext::SharedPtrHelper<StorageSet>
-    , public StorageSetOrJoinBase
+class StorageSet : public ext::shared_ptr_helper<StorageSet>, public StorageSetOrJoinBase
 {
-    friend struct ext::SharedPtrHelper<StorageSet>;
+friend struct ext::shared_ptr_helper<StorageSet>;
 
 public:
     String getName() const override { return "Set"; }
@@ -92,4 +78,4 @@ protected:
         const ColumnsDescription & columns_);
 };
 
-} // namespace DB
+}

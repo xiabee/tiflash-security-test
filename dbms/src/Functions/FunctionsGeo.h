@@ -1,29 +1,14 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Columns/ColumnConst.h>
-#include <Columns/ColumnsNumber.h>
-#include <Common/typeid_cast.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <Functions/FunctionHelpers.h>
+#include <Columns/ColumnsNumber.h>
+#include <Columns/ColumnConst.h>
+#include <Common/typeid_cast.h>
 #include <Functions/IFunction.h>
-#include <math.h>
-
-#include <array>
+#include <Functions/FunctionHelpers.h>
 #include <ext/range.h>
+#include <math.h>
+#include <array>
 
 #define DEGREES_IN_RADIANS (M_PI / 180.0)
 #define EARTH_RADIUS_IN_METERS 6372797.560856
@@ -31,21 +16,16 @@
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int ARGUMENT_OUT_OF_BOUND;
-extern const int ILLEGAL_COLUMN;
-extern const int LOGICAL_ERROR;
-} // namespace ErrorCodes
+    extern const int ARGUMENT_OUT_OF_BOUND;
+    extern const int ILLEGAL_COLUMN;
+    extern const int LOGICAL_ERROR;
+}
 
-static inline Float64 degToRad(Float64 angle)
-{
-    return angle * DEGREES_IN_RADIANS;
-}
-static inline Float64 radToDeg(Float64 angle)
-{
-    return angle / DEGREES_IN_RADIANS;
-}
+static inline Float64 degToRad(Float64 angle) { return angle * DEGREES_IN_RADIANS; }
+static inline Float64 radToDeg(Float64 angle) { return angle / DEGREES_IN_RADIANS; }
 
 /**
  *  The function calculates distance in meters between two points on Earth specified by longitude and latitude in degrees.
@@ -57,10 +37,12 @@ static inline Float64 radToDeg(Float64 angle)
 class FunctionGreatCircleDistance : public IFunction
 {
 public:
+
     static constexpr auto name = "greatCircleDistance";
     static FunctionPtr create(const Context &) { return std::make_shared<FunctionGreatCircleDistance>(); }
 
 private:
+
     enum class instr_type : uint8_t
     {
         get_float_64,
@@ -88,7 +70,7 @@ private:
         return std::make_shared<DataTypeFloat64>();
     }
 
-    instrs_t getInstructions(const Block & block, const ColumnNumbers & arguments, bool & out_const) const
+    instrs_t getInstructions(const Block & block, const ColumnNumbers & arguments, bool & out_const)
     {
         instrs_t result;
         out_const = true;
@@ -108,16 +90,19 @@ private:
             }
             else
                 throw Exception("Illegal column " + column->getName() + " of argument of function " + getName(),
-                                ErrorCodes::ILLEGAL_COLUMN);
+                    ErrorCodes::ILLEGAL_COLUMN);
         }
 
         return result;
     }
 
     /// https://en.wikipedia.org/wiki/Great-circle_distance
-    Float64 greatCircleDistance(Float64 lon1Deg, Float64 lat1Deg, Float64 lon2Deg, Float64 lat2Deg) const
+    Float64 greatCircleDistance(Float64 lon1Deg, Float64 lat1Deg, Float64 lon2Deg, Float64 lat2Deg)
     {
-        if (lon1Deg < -180 || lon1Deg > 180 || lon2Deg < -180 || lon2Deg > 180 || lat1Deg < -90 || lat1Deg > 90 || lat2Deg < -90 || lat2Deg > 90)
+        if (lon1Deg < -180 || lon1Deg > 180 ||
+            lon2Deg < -180 || lon2Deg > 180 ||
+            lat1Deg < -90 || lat1Deg > 90 ||
+            lat2Deg < -90 || lat2Deg > 90)
         {
             throw Exception("Arguments values out of bounds for function " + getName(), ErrorCodes::ARGUMENT_OUT_OF_BOUND);
         }
@@ -132,7 +117,7 @@ private:
     }
 
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) override
     {
         const auto size = block.rows();
 
@@ -190,10 +175,12 @@ private:
 class FunctionPointInEllipses : public IFunction
 {
 public:
+
     static constexpr auto name = "pointInEllipses";
     static FunctionPtr create(const Context &) { return std::make_shared<FunctionPointInEllipses>(); }
 
 private:
+
     struct Ellipse
     {
         Float64 x;
@@ -237,7 +224,7 @@ private:
         return std::make_shared<DataTypeUInt8>();
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) override
     {
         const auto size = block.rows();
 
@@ -270,14 +257,14 @@ private:
         for (const auto idx : ext::range(0, 2))
         {
             const auto column = block.getByPosition(arguments[idx]).column.get();
-            if (typeid_cast<const ColumnConst *>(column))
+            if (typeid_cast<const ColumnConst *> (column))
             {
                 ++const_cnt;
             }
-            else if (!typeid_cast<const ColumnVector<Float64> *>(column))
+            else if (!typeid_cast<const ColumnVector<Float64> *> (column))
             {
                 throw Exception("Illegal column " + column->getName() + " of argument of function " + getName(),
-                                ErrorCodes::ILLEGAL_COLUMN);
+                    ErrorCodes::ILLEGAL_COLUMN);
             }
         }
 
@@ -285,35 +272,35 @@ private:
         const auto col_y = block.getByPosition(arguments[1]).column.get();
         if (const_cnt == 0)
         {
-            const auto col_vec_x = static_cast<const ColumnVector<Float64> *>(col_x);
-            const auto col_vec_y = static_cast<const ColumnVector<Float64> *>(col_y);
+                const auto col_vec_x = static_cast<const ColumnVector<Float64> *> (col_x);
+                const auto col_vec_y = static_cast<const ColumnVector<Float64> *> (col_y);
 
-            auto dst = ColumnVector<UInt8>::create();
-            auto & dst_data = dst->getData();
-            dst_data.resize(size);
+                auto dst = ColumnVector<UInt8>::create();
+                auto & dst_data = dst->getData();
+                dst_data.resize(size);
 
-            size_t start_index = 0;
-            for (const auto row : ext::range(0, size))
-            {
-                dst_data[row] = isPointInEllipses(col_vec_x->getData()[row], col_vec_y->getData()[row], ellipses, ellipses_count, start_index);
+                size_t start_index = 0;
+                for (const auto row : ext::range(0, size))
+                {
+                    dst_data[row] = isPointInEllipses(col_vec_x->getData()[row], col_vec_y->getData()[row], ellipses, ellipses_count, start_index);
+                }
+
+                block.getByPosition(result).column = std::move(dst);
             }
-
-            block.getByPosition(result).column = std::move(dst);
-        }
-        else if (const_cnt == 2)
-        {
-            const auto col_const_x = static_cast<const ColumnConst *>(col_x);
-            const auto col_const_y = static_cast<const ColumnConst *>(col_y);
-            size_t start_index = 0;
-            UInt8 res = isPointInEllipses(col_const_x->getValue<Float64>(), col_const_y->getValue<Float64>(), ellipses, ellipses_count, start_index);
-            block.getByPosition(result).column = DataTypeUInt8().createColumnConst(size, UInt64(res));
-        }
-        else
-        {
-            throw Exception(
-                "Illegal types " + col_x->getName() + ", " + col_y->getName() + " of arguments 1, 2 of function " + getName() + ". Both must be either const or vector",
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
-        }
+            else if (const_cnt == 2)
+            {
+                const auto col_const_x = static_cast<const ColumnConst *> (col_x);
+                const auto col_const_y = static_cast<const ColumnConst *> (col_y);
+                size_t start_index = 0;
+                UInt8 res = isPointInEllipses(col_const_x->getValue<Float64>(), col_const_y->getValue<Float64>(), ellipses, ellipses_count, start_index);
+                block.getByPosition(result).column = DataTypeUInt8().createColumnConst(size, UInt64(res));
+            }
+            else
+            {
+                throw Exception(
+                    "Illegal types " + col_x->getName() + ", " + col_y->getName() + " of arguments 1, 2 of function " + getName() + ". Both must be either const or vector",
+                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            }
     }
 
     static bool isPointInEllipses(Float64 x, Float64 y, const Ellipse * ellipses, size_t ellipses_count, size_t & start_index)
@@ -325,7 +312,7 @@ private:
             double p1 = ((x - el.x) / el.a);
             double p2 = ((y - el.y) / el.b);
             if (x <= el.x + el.a && x >= el.x - el.a && y <= el.y + el.b && y >= el.y - el.b /// Bounding box check
-                && p1 * p1 + p2 * p2 <= 1.0) /// Precise check
+                && p1 * p1 + p2 * p2 <= 1.0)    /// Precise check
             {
                 start_index = index;
                 return true;
@@ -340,6 +327,6 @@ private:
     }
 };
 
-} // namespace DB
+}
 
 #undef DEGREES_IN_RADIANS

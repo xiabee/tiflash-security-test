@@ -1,27 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
+#include <DataTypes/DataTypeString.h>
 #include <Columns/ColumnString.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/StringView.h>
 #include <Common/typeid_cast.h>
-#include <DataTypes/DataTypeString.h>
 #include <Functions/FunctionHelpers.h>
 #include <Functions/FunctionsString.h>
-#include <fmt/core.h>
+#include <Functions/FunctionsStringArray.h>
 
 #ifdef __APPLE__
 #include <common/apple_memrchr.h>
@@ -30,6 +16,7 @@
 
 namespace DB
 {
+
 /** URL processing functions.
   * All functions are not strictly follow RFC, instead they are maximally simplified for performance reasons.
   *
@@ -120,7 +107,7 @@ inline StringView getURLHost(const StringView & url)
     if (end - pos < 2 || *(pos) != '/' || *(pos + 1) != '/')
         return StringView();
 
-    const char * start_of_host = (pos += 2);
+    const char *start_of_host = (pos += 2);
     for (; pos < end; ++pos)
     {
         if (*pos == '@')
@@ -191,10 +178,10 @@ struct ExtractFirstSignificantSubdomain
         res_data = tmp;
         res_size = domain_length;
 
-        const auto * begin = tmp;
-        const auto * end = begin + domain_length;
+        auto begin = tmp;
+        auto end = begin + domain_length;
         const char * last_3_periods[3]{};
-        const auto * pos = static_cast<const char *>(memchr(begin, '.', domain_length));
+        auto pos = static_cast<const char *>(memchr(begin, '.', domain_length));
 
         while (pos)
         {
@@ -216,7 +203,7 @@ struct ExtractFirstSignificantSubdomain
         if (!last_3_periods[2])
             last_3_periods[2] = begin - 1;
 
-        if (!strncmp(last_3_periods[1] + 1, "com.", 4) /// Note that in ColumnString every value has zero byte after it.
+        if (!strncmp(last_3_periods[1] + 1, "com.", 4)        /// Note that in ColumnString every value has zero byte after it.
             || !strncmp(last_3_periods[1] + 1, "net.", 4)
             || !strncmp(last_3_periods[1] + 1, "org.", 4)
             || !strncmp(last_3_periods[1] + 1, "co.", 3))
@@ -421,7 +408,7 @@ struct ExtractWWW
             if (end - pos < 2 || *(pos) != '/' || *(pos + 1) != '/')
                 return;
 
-            const char * start_of_host = (pos += 2);
+            const char *start_of_host = (pos += 2);
             for (; pos < end; ++pos)
             {
                 if (*pos == '@')
@@ -443,12 +430,11 @@ struct ExtractWWW
 struct ExtractURLParameterImpl
 {
     static void vector(const ColumnString::Chars_t & data,
-                       const ColumnString::Offsets & offsets,
-                       std::string pattern,
-                       ColumnString::Chars_t & res_data,
-                       ColumnString::Offsets & res_offsets)
+                        const ColumnString::Offsets & offsets,
+                        std::string pattern,
+                        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
-        res_data.reserve(data.size() / 5);
+        res_data.reserve(data.size()  / 5);
         res_offsets.resize(offsets.size());
 
         pattern += '=';
@@ -517,10 +503,9 @@ struct ExtractURLParameterImpl
 struct CutURLParameterImpl
 {
     static void vector(const ColumnString::Chars_t & data,
-                       const ColumnString::Offsets & offsets,
-                       std::string pattern,
-                       ColumnString::Chars_t & res_data,
-                       ColumnString::Offsets & res_offsets)
+                        const ColumnString::Offsets & offsets,
+                        std::string pattern,
+                        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         res_data.reserve(data.size());
         res_offsets.resize(offsets.size());
@@ -585,12 +570,361 @@ struct CutURLParameterImpl
 };
 
 
+class ExtractURLParametersImpl
+{
+private:
+    Pos pos;
+    Pos end;
+    bool first;
+
+public:
+    static constexpr auto name = "extractURLParameters";
+    static String getName() { return name; }
+
+    static size_t getNumberOfArguments() { return 1; }
+
+    static void checkArguments(const DataTypes & arguments)
+    {
+        if (!arguments[0]->isString())
+            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
+            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+    }
+
+    void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
+
+    /// Returns the position of the argument that is the column of rows
+    size_t getStringsArgumentPosition()
+    {
+        return 0;
+    }
+
+    /// Called for each next string.
+    void set(Pos pos_, Pos end_)
+    {
+        pos = pos_;
+        end = end_;
+        first = true;
+    }
+
+    /// Get the next token, if any, or return false.
+    bool get(Pos & token_begin, Pos & token_end)
+    {
+        if (pos == nullptr)
+            return false;
+
+        if (first)
+        {
+            first = false;
+            pos = strpbrk(pos, "?#");
+            if (pos == nullptr)
+                return false;
+            ++pos;
+        }
+
+        while (true)
+        {
+            token_begin = pos;
+            pos = strpbrk(pos, "=&#?");
+            if (pos == nullptr)
+                return false;
+
+            if (*pos == '?')
+            {
+                ++pos;
+                continue;
+            }
+
+            break;
+        }
+
+        if (*pos == '&' || *pos == '#')
+        {
+            token_end = pos++;
+        }
+        else
+        {
+            ++pos;
+            pos = strpbrk(pos, "&#");
+            if (pos == nullptr)
+                token_end = end;
+            else
+                token_end = pos++;
+        }
+
+        return true;
+    }
+};
+
+class ExtractURLParameterNamesImpl
+{
+private:
+    Pos pos;
+    Pos end;
+    bool first;
+
+public:
+    static constexpr auto name = "extractURLParameterNames";
+    static String getName() { return name; }
+
+    static size_t getNumberOfArguments() { return 1; }
+
+    static void checkArguments(const DataTypes & arguments)
+    {
+        if (!arguments[0]->isString())
+            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
+            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+    }
+
+    /// Returns the position of the argument that is the column of rows
+    size_t getStringsArgumentPosition()
+    {
+        return 0;
+    }
+
+    void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
+
+    /// Called for each next string.
+    void set(Pos pos_, Pos end_)
+    {
+        pos = pos_;
+        end = end_;
+        first = true;
+    }
+
+    /// Get the next token, if any, or return false.
+    bool get(Pos & token_begin, Pos & token_end)
+    {
+        if (pos == nullptr)
+            return false;
+
+        if (first)
+        {
+            first = false;
+            pos = strpbrk(pos, "?#");
+        }
+        else
+            pos = strpbrk(pos, "&#");
+
+        if (pos == nullptr)
+            return false;
+        ++pos;
+
+        while (true)
+        {
+            token_begin = pos;
+
+            pos = strpbrk(pos, "=&#?");
+            if (pos == nullptr)
+                return false;
+            else
+                token_end = pos;
+
+            if (*pos == '?')
+            {
+                ++pos;
+                continue;
+            }
+
+            break;
+        }
+
+        return true;
+    }
+};
+
+class URLHierarchyImpl
+{
+private:
+    Pos begin;
+    Pos pos;
+    Pos end;
+
+public:
+    static constexpr auto name = "URLHierarchy";
+    static String getName() { return name; }
+
+    static size_t getNumberOfArguments() { return 1; }
+
+    static void checkArguments(const DataTypes & arguments)
+    {
+        if (!arguments[0]->isString())
+            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
+            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+    }
+
+    void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
+
+    /// Returns the position of the argument that is the column of rows
+    size_t getStringsArgumentPosition()
+    {
+        return 0;
+    }
+
+    /// Called for each next string.
+    void set(Pos pos_, Pos end_)
+    {
+        begin = pos = pos_;
+        end = end_;
+    }
+
+    /// Get the next token, if any, or return false.
+    bool get(Pos & token_begin, Pos & token_end)
+    {
+        /// Code from URLParser.
+        if (pos == end)
+            return false;
+
+        if (pos == begin)
+        {
+            /// Let's parse everything that goes before the path
+
+            /// Assume that the protocol has already been changed to lowercase.
+            while (pos < end && ((*pos > 'a' && *pos < 'z') || (*pos > '0' && *pos < '9')))
+                ++pos;
+
+            /** We will calculate the hierarchy only for URLs in which there is a protocol, and after it there are two slashes.
+             * (http, file - fit, mailto, magnet - do not fit), and after two slashes still at least something is there
+             * For the rest, simply return the full URL as the only element of the hierarchy.
+             */
+            if (pos == begin || pos == end || !(*pos++ == ':' && pos < end && *pos++ == '/' && pos < end && *pos++ == '/' && pos < end))
+            {
+                pos = end;
+                token_begin = begin;
+                token_end = end;
+                return true;
+            }
+
+            /// The domain for simplicity is everything that after the protocol and two slashes, until the next slash or `?` or `#`
+            while (pos < end && !(*pos == '/' || *pos == '?' || *pos == '#'))
+                ++pos;
+
+            if (pos != end)
+                ++pos;
+
+            token_begin = begin;
+            token_end = pos;
+
+            return true;
+        }
+
+        /// We go to the next `/` or `?` or `#`, skipping all those at the beginning.
+        while (pos < end && (*pos == '/' || *pos == '?' || *pos == '#'))
+            ++pos;
+        if (pos == end)
+            return false;
+        while (pos < end && !(*pos == '/' || *pos == '?' || *pos == '#'))
+            ++pos;
+
+        if (pos != end)
+            ++pos;
+
+        token_begin = begin;
+        token_end = pos;
+
+        return true;
+    }
+};
+
+
+class URLPathHierarchyImpl
+{
+private:
+    Pos begin;
+    Pos pos;
+    Pos end;
+    Pos start;
+
+public:
+    static constexpr auto name = "URLPathHierarchy";
+    static String getName() { return name; }
+
+    static size_t getNumberOfArguments() { return 1; }
+
+    static void checkArguments(const DataTypes & arguments)
+    {
+        if (!arguments[0]->isString())
+            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
+            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+    }
+
+    void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
+
+    /// Returns the position of the argument that is the column of rows
+    size_t getStringsArgumentPosition()
+    {
+        return 0;
+    }
+
+    /// Called for each next string.
+    void set(Pos pos_, Pos end_)
+    {
+        begin = pos = pos_;
+        start = begin;
+        end = end_;
+    }
+
+    /// Get the next token, if any, or return false.
+    bool get(Pos & token_begin, Pos & token_end)
+    {
+        /// Code from URLParser.
+
+        if (pos == end)
+            return false;
+
+        if (pos == begin)
+        {
+            /// Let's parse everything that goes before the path
+
+            /// Assume that the protocol has already been changed to lowercase.
+            while (pos < end && ((*pos > 'a' && *pos < 'z') || (*pos > '0' && *pos < '9')))
+                ++pos;
+
+            /** We will calculate the hierarchy only for URLs in which there is a protocol, and after it there are two slashes.
+             * (http, file - fit, mailto, magnet - do not fit), and after two slashes still at least something is there.
+             * For the rest, just return an empty array.
+             */
+            if (pos == begin || pos == end || !(*pos++ == ':' && pos < end && *pos++ == '/' && pos < end && *pos++ == '/' && pos < end))
+            {
+                pos = end;
+                return false;
+            }
+
+            /// The domain for simplicity is everything that after the protocol and the two slashes, until the next slash or `?` or `#`
+            while (pos < end && !(*pos == '/' || *pos == '?' || *pos == '#'))
+                ++pos;
+
+            start = pos;
+
+            if (pos != end)
+                ++pos;
+        }
+
+        /// We go to the next `/` or `?` or `#`, skipping all those at the beginning.
+        while (pos < end && (*pos == '/' || *pos == '?' || *pos == '#'))
+            ++pos;
+        if (pos == end)
+            return false;
+        while (pos < end && !(*pos == '/' || *pos == '?' || *pos == '#'))
+            ++pos;
+
+        if (pos != end)
+            ++pos;
+
+        token_begin = start;
+        token_end = pos;
+
+        return true;
+    }
+};
+
+
 /** Select part of string using the Extractor.
   */
 template <typename Extractor>
 struct ExtractSubstringImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
+        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         size_t size = offsets.size();
         res_offsets.resize(size);
@@ -618,7 +952,7 @@ struct ExtractSubstringImpl
     }
 
     static void constant(const std::string & data,
-                         std::string & res_data)
+        std::string & res_data)
     {
         Pos start;
         size_t length;
@@ -626,7 +960,7 @@ struct ExtractSubstringImpl
         res_data.assign(start, length);
     }
 
-    static void vectorFixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
+    static void vector_fixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
     {
         throw Exception("Column of type FixedString is not supported by URL functions", ErrorCodes::ILLEGAL_COLUMN);
     }
@@ -638,7 +972,8 @@ struct ExtractSubstringImpl
 template <typename Extractor>
 struct CutSubstringImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
+        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         res_data.reserve(data.size());
         size_t size = offsets.size();
@@ -659,13 +994,9 @@ struct CutSubstringImpl
 
             res_data.resize(res_data.size() + offsets[i] - prev_offset - length);
             memcpySmallAllowReadWriteOverflow15(
-                &res_data[res_offset],
-                current,
-                start - current);
+                &res_data[res_offset], current, start - current);
             memcpySmallAllowReadWriteOverflow15(
-                &res_data[res_offset + start - current],
-                start + length,
-                offsets[i] - start_index - length);
+                &res_data[res_offset + start - current], start + length, offsets[i] - start_index - length);
             res_offset += offsets[i] - prev_offset - length;
 
             res_offsets[i] = res_offset;
@@ -674,7 +1005,7 @@ struct CutSubstringImpl
     }
 
     static void constant(const std::string & data,
-                         std::string & res_data)
+        std::string & res_data)
     {
         Pos start;
         size_t length;
@@ -684,7 +1015,7 @@ struct CutSubstringImpl
         res_data.append(start + length, data.data() + data.size());
     }
 
-    static void vectorFixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
+    static void vector_fixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
     {
         throw Exception("Column of type FixedString is not supported by URL functions", ErrorCodes::ILLEGAL_COLUMN);
     }
@@ -694,12 +1025,14 @@ struct CutSubstringImpl
 /// Percent decode of url data.
 struct DecodeURLComponentImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets);
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
+        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets);
 
     static void constant(const std::string & data,
-                         std::string & res_data);
+        std::string & res_data);
 
-    static void vectorFixed(const ColumnString::Chars_t & data, size_t n, ColumnString::Chars_t & res_data);
+    static void vector_fixed(const ColumnString::Chars_t & data, size_t n,
+        ColumnString::Chars_t & res_data);
 };
 
-} // namespace DB
+}

@@ -1,35 +1,25 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include "StatusFile.h"
 
-#include <Common/ClickHouseRevision.h>
-#include <IO/LimitReadBuffer.h>
-#include <IO/Operators.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/WriteBufferFromFileDescriptor.h>
-#include <Poco/File.h>
-#include <common/LocalDateTime.h>
-#include <common/logger_useful.h>
-#include <fcntl.h>
-#include <sys/file.h>
-#include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <fcntl.h>
+
+#include <Poco/File.h>
+#include <common/logger_useful.h>
+#include <Common/ClickHouseRevision.h>
+#include <common/LocalDateTime.h>
+
+#include <IO/ReadBufferFromFile.h>
+#include <IO/LimitReadBuffer.h>
+#include <IO/WriteBufferFromFileDescriptor.h>
+#include <IO/Operators.h>
 
 
 namespace DB
 {
+
+
 StatusFile::StatusFile(const std::string & path_)
     : path(path_)
 {
@@ -44,9 +34,9 @@ StatusFile::StatusFile(const std::string & path_)
         }
 
         if (!contents.empty())
-            LOG_INFO(&Poco::Logger::get("StatusFile"), "Status file {} already exists - unclean restart. Contents:\n{}", path, contents);
+            LOG_INFO(&Logger::get("StatusFile"), "Status file " << path << " already exists - unclean restart. Contents:\n" << contents);
         else
-            LOG_INFO(&Poco::Logger::get("StatusFile"), "Status file {} already exists and is empty - probably unclean hardware restart.", path);
+            LOG_INFO(&Logger::get("StatusFile"), "Status file " << path << " already exists and is empty - probably unclean hardware restart.");
     }
 
     fd = open(path.c_str(), O_WRONLY | O_CREAT, 0666);
@@ -93,10 +83,12 @@ StatusFile::~StatusFile()
     char buf[128];
 
     if (0 != close(fd))
-        LOG_ERROR(&Poco::Logger::get("StatusFile"), "Cannot close file {}, errno: {}, strerror: {}", path, errno, strerror_r(errno, buf, sizeof(buf)));
+        LOG_ERROR(&Logger::get("StatusFile"), "Cannot close file " << path << ", errno: "
+            << errno << ", strerror: " << strerror_r(errno, buf, sizeof(buf)));
 
     if (0 != unlink(path.c_str()))
-        LOG_ERROR(&Poco::Logger::get("StatusFile"), "Cannot unlink file {}, errno: {}, strerror: {}", path, errno, strerror_r(errno, buf, sizeof(buf)));
+        LOG_ERROR(&Logger::get("StatusFile"), "Cannot unlink file " << path << ", errno: "
+            << errno << ", strerror: " << strerror_r(errno, buf, sizeof(buf)));
 }
 
-} // namespace DB
+}

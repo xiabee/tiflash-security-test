@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
@@ -22,6 +8,7 @@ namespace DB
 {
 namespace DM
 {
+
 class DeltaIndex;
 using DeltaIndexPtr = std::shared_ptr<DeltaIndex>;
 
@@ -49,9 +36,7 @@ public:
         TupleRefs idx_mapping;
 
         Update(size_t delete_ranges_offset_, size_t rows_offset_, const IColumn::Permutation & sort_perm)
-            : delete_ranges_offset(delete_ranges_offset_)
-            , rows_offset(rows_offset_)
-            , idx_mapping(sort_perm.size())
+            : delete_ranges_offset(delete_ranges_offset_), rows_offset(rows_offset_), idx_mapping(sort_perm.size())
         {
             for (size_t pos = 0; pos < sort_perm.size(); ++pos)
                 idx_mapping[sort_perm[pos]] = pos;
@@ -87,8 +72,8 @@ private:
     DeltaIndexPtr tryCloneInner(size_t placed_deletes_limit, const Updates * updates = nullptr)
     {
         DeltaTreePtr delta_tree_copy;
-        size_t placed_rows_copy = 0;
-        size_t placed_deletes_copy = 0;
+        size_t       placed_rows_copy    = 0;
+        size_t       placed_deletes_copy = 0;
         // Make sure the delta index do not place more deletes than `placed_deletes_limit`.
         // Because delete ranges can break MVCC view.
         {
@@ -96,8 +81,8 @@ private:
             // Safe to reuse the copy of the existing DeltaIndex
             if (placed_deletes <= placed_deletes_limit)
             {
-                delta_tree_copy = delta_tree;
-                placed_rows_copy = placed_rows;
+                delta_tree_copy     = delta_tree;
+                placed_rows_copy    = placed_rows;
                 placed_deletes_copy = placed_deletes;
             }
         }
@@ -105,7 +90,7 @@ private:
         if (delta_tree_copy)
         {
             auto new_delta_tree = std::make_shared<DefaultDeltaTree>(*delta_tree_copy);
-            auto new_index = std::make_shared<DeltaIndex>(new_delta_tree, placed_rows_copy, placed_deletes_copy);
+            auto new_index      = std::make_shared<DeltaIndex>(new_delta_tree, placed_rows_copy, placed_deletes_copy);
             // try to do some updates before return it if need
             if (updates)
                 new_index->applyUpdates(*updates);
@@ -119,18 +104,10 @@ private:
     }
 
 public:
-    DeltaIndex()
-        : id(++NEXT_DELTA_INDEX_ID)
-        , delta_tree(std::make_shared<DefaultDeltaTree>())
-        , placed_rows(0)
-        , placed_deletes(0)
-    {}
+    DeltaIndex() : id(++NEXT_DELTA_INDEX_ID), delta_tree(std::make_shared<DefaultDeltaTree>()), placed_rows(0), placed_deletes(0) {}
 
     DeltaIndex(const DeltaTreePtr & delta_tree_, size_t placed_rows_, size_t placed_deletes_)
-        : id(++NEXT_DELTA_INDEX_ID)
-        , delta_tree(delta_tree_)
-        , placed_rows(placed_rows_)
-        , placed_deletes(placed_deletes_)
+        : id(++NEXT_DELTA_INDEX_ID), delta_tree(delta_tree_), placed_rows(placed_rows_), placed_deletes(placed_deletes_)
     {
     }
 
@@ -145,13 +122,10 @@ public:
 
     String toString()
     {
-        std::scoped_lock lock(mutex);
-        return fmt::format("<placed_rows={} placed_deletes={} tree_entries={} tree_inserts={} tree_deletes={}>",
-                           placed_rows,
-                           placed_deletes,
-                           delta_tree->numEntries(),
-                           delta_tree->numInserts(),
-                           delta_tree->numDeletes());
+        std::stringstream s;
+        s << "{placed rows:" << placed_rows << ", deletes:" << placed_deletes << ", delta tree: " << delta_tree->numEntries() << "|"
+          << delta_tree->numInserts() << "|" << delta_tree->numDeletes() << "}";
+        return s.str();
     }
 
     UInt64 getId() const { return id; }
@@ -177,8 +151,8 @@ public:
     void update(const DeltaTreePtr & delta_tree_, size_t placed_rows_, size_t placed_deletes_)
     {
         std::scoped_lock lock(mutex);
-        delta_tree = delta_tree_;
-        placed_rows = placed_rows_;
+        delta_tree     = delta_tree_;
+        placed_rows    = placed_rows_;
         placed_deletes = placed_deletes_;
     }
 
@@ -189,8 +163,8 @@ public:
         if ((maybe_advanced.placed_rows >= placed_rows && maybe_advanced.placed_deletes >= placed_deletes)
             && !(maybe_advanced.placed_rows == placed_rows && maybe_advanced.placed_deletes == placed_deletes))
         {
-            delta_tree = maybe_advanced.delta_tree;
-            placed_rows = maybe_advanced.placed_rows;
+            delta_tree     = maybe_advanced.delta_tree;
+            placed_rows    = maybe_advanced.placed_rows;
             placed_deletes = maybe_advanced.placed_deletes;
             return true;
         }

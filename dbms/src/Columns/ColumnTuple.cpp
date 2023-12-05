@@ -1,32 +1,18 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Columns/ColumnTuple.h>
-#include <DataStreams/ColumnGathererStream.h>
-
 #include <ext/map.h>
 #include <ext/range.h>
+#include <DataStreams/ColumnGathererStream.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int ILLEGAL_COLUMN;
-extern const int NOT_IMPLEMENTED;
-extern const int CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE;
-} // namespace ErrorCodes
+    extern const int ILLEGAL_COLUMN;
+    extern const int NOT_IMPLEMENTED;
+    extern const int CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE;
+}
 
 
 std::string ColumnTuple::getName() const
@@ -66,7 +52,7 @@ ColumnTuple::Ptr ColumnTuple::create(const Columns & columns)
     auto column_tuple = ColumnTuple::create(MutableColumns());
     column_tuple->columns = columns;
 
-    return column_tuple;
+    return std::move(column_tuple);
 }
 
 MutableColumnPtr ColumnTuple::cloneEmpty() const
@@ -81,14 +67,14 @@ MutableColumnPtr ColumnTuple::cloneEmpty() const
 
 Field ColumnTuple::operator[](size_t n) const
 {
-    return Tuple{ext::map<TupleBackend>(columns, [n](const auto & column) { return (*column)[n]; })};
+    return Tuple{ext::map<TupleBackend>(columns, [n] (const auto & column) { return (*column)[n]; })};
 }
 
 void ColumnTuple::get(size_t n, Field & res) const
 {
     const size_t tuple_size = columns.size();
     res = Tuple(TupleBackend(tuple_size));
-    TupleBackend & res_arr = DB::get<Tuple &>(res).toUnderType();
+    TupleBackend & res_arr = DB::get<Tuple &>(res).t;
     for (const auto i : ext::range(0, tuple_size))
         columns[i]->get(n, res_arr[i]);
 }
@@ -105,7 +91,7 @@ void ColumnTuple::insertData(const char *, size_t)
 
 void ColumnTuple::insert(const Field & x)
 {
-    const TupleBackend & tuple = DB::get<const Tuple &>(x).toUnderType();
+    const TupleBackend & tuple = DB::get<const Tuple &>(x).t;
 
     const size_t tuple_size = columns.size();
     if (tuple.size() != tuple_size)
@@ -117,7 +103,7 @@ void ColumnTuple::insert(const Field & x)
 
 void ColumnTuple::insertFrom(const IColumn & src_, size_t n)
 {
-    const auto & src = static_cast<const ColumnTuple &>(src_);
+    const ColumnTuple & src = static_cast<const ColumnTuple &>(src_);
 
     const size_t tuple_size = columns.size();
     if (src.columns.size() != tuple_size)
@@ -139,16 +125,16 @@ void ColumnTuple::popBack(size_t n)
         column->assumeMutableRef().popBack(n);
 }
 
-StringRef ColumnTuple::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
+StringRef ColumnTuple::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator> collator, String & sort_key_container) const
 {
     size_t values_size = 0;
-    for (const auto & column : columns)
+    for (auto & column : columns)
         values_size += column->serializeValueIntoArena(n, arena, begin, collator, sort_key_container).size;
 
     return StringRef(begin, values_size);
 }
 
-const char * ColumnTuple::deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr & collator)
+const char * ColumnTuple::deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator> collator)
 {
     for (auto & column : columns)
         pos = column->assumeMutableRef().deserializeAndInsertFromArena(pos, collator);
@@ -156,27 +142,16 @@ const char * ColumnTuple::deserializeAndInsertFromArena(const char * pos, const 
     return pos;
 }
 
-void ColumnTuple::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
+void ColumnTuple::updateHashWithValue(size_t n, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator> collator, String & sort_key_container) const
 {
-    for (const auto & column : columns)
+    for (auto & column : columns)
         column->updateHashWithValue(n, hash, collator, sort_key_container);
 }
 
-void ColumnTuple::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
+void ColumnTuple::updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> & collator, String & sort_key_container) const
 {
-    for (const auto & column : columns)
+    for (auto & column : columns)
         column->updateHashWithValues(hash_values, collator, sort_key_container);
-}
-
-void ColumnTuple::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
-{
-    auto s = size();
-
-    if (hash.getData().size() != s)
-        throw Exception("Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is " + std::to_string(hash.getData().size()), ErrorCodes::LOGICAL_ERROR);
-
-    for (const auto & column : columns)
-        column->updateWeakHash32(hash, collator, sort_key_container);
 }
 
 void ColumnTuple::insertRangeFrom(const IColumn & src, size_t start, size_t length)
@@ -185,8 +160,7 @@ void ColumnTuple::insertRangeFrom(const IColumn & src, size_t start, size_t leng
     for (size_t i = 0; i < tuple_size; ++i)
         columns[i]->assumeMutableRef().insertRangeFrom(
             *static_cast<const ColumnTuple &>(src).columns[i],
-            start,
-            length);
+            start, length);
 }
 
 ColumnPtr ColumnTuple::filter(const Filter & filt, ssize_t result_size_hint) const
@@ -243,30 +217,6 @@ MutableColumns ColumnTuple::scatter(ColumnIndex num_columns, const Selector & se
     return res;
 }
 
-void ColumnTuple::scatterTo(ScatterColumns & scatterColumns, const Selector & selector) const
-{
-    const size_t tuple_size = columns.size();
-    ColumnIndex scattered_num_columns = scatterColumns.size();
-    std::vector<MutableColumns> scattered_tuple_elements(tuple_size);
-    for (size_t tuple_element_idx = 0; tuple_element_idx < tuple_size; ++tuple_element_idx)
-    {
-        for (size_t scatter_idx = 0; scatter_idx < scattered_num_columns; ++scatter_idx)
-        {
-            auto col = static_cast<ColumnTuple &>(scatterColumns[scatter_idx]->assumeMutableRef()).columns[tuple_element_idx]->assumeMutable();
-            scattered_tuple_elements[tuple_element_idx].push_back(std::move(col));
-        }
-        columns[tuple_element_idx]->scatterTo(scattered_tuple_elements[tuple_element_idx], selector);
-    }
-
-    for (size_t scattered_idx = 0; scattered_idx < scattered_num_columns; ++scattered_idx)
-    {
-        MutableColumns new_columns(tuple_size);
-        for (size_t tuple_element_idx = 0; tuple_element_idx < tuple_size; ++tuple_element_idx)
-            new_columns[tuple_element_idx] = std::move(scattered_tuple_elements[tuple_element_idx][scattered_idx]);
-        scatterColumns[scattered_idx] = ColumnTuple::create(std::move(new_columns));
-    }
-}
-
 int ColumnTuple::compareAt(size_t n, size_t m, const IColumn & rhs, int nan_direction_hint) const
 {
     const size_t tuple_size = columns.size();
@@ -290,11 +240,11 @@ struct ColumnTuple::Less
             plain_columns.push_back(column.get());
     }
 
-    bool operator()(size_t a, size_t b) const
+    bool operator() (size_t a, size_t b) const
     {
-        for (const auto * plain_column : plain_columns)
+        for (ColumnRawPtrs::const_iterator it = plain_columns.begin(); it != plain_columns.end(); ++it)
         {
-            int res = plain_column->compareAt(a, b, *plain_column, nan_direction_hint);
+            int res = (*it)->compareAt(a, b, **it, nan_direction_hint);
             if (res < 0)
                 return positive;
             else if (res > 0)
@@ -373,8 +323,8 @@ void ColumnTuple::getExtremes(Field & min, Field & max) const
     min = Tuple(TupleBackend(tuple_size));
     max = Tuple(TupleBackend(tuple_size));
 
-    auto & min_backend = min.get<Tuple &>().toUnderType();
-    auto & max_backend = max.get<Tuple &>().toUnderType();
+    auto & min_backend = min.get<Tuple &>().t;
+    auto & max_backend = max.get<Tuple &>().t;
 
     for (const auto i : ext::range(0, tuple_size))
         columns[i]->getExtremes(min_backend[i], max_backend[i]);
@@ -387,4 +337,5 @@ void ColumnTuple::forEachSubcolumn(ColumnCallback callback)
 }
 
 
-} // namespace DB
+
+}

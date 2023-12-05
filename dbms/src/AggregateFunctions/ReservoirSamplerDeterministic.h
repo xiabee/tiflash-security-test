@@ -1,55 +1,40 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
+#include <limits>
+#include <algorithm>
+#include <climits>
+#include <sstream>
 #include <AggregateFunctions/ReservoirSampler.h>
+#include <common/Types.h>
 #include <Common/HashTable/Hash.h>
-#include <Common/NaNUtils.h>
-#include <Common/PODArray.h>
 #include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
+#include <Common/PODArray.h>
+#include <Common/NaNUtils.h>
 #include <Poco/Exception.h>
-#include <common/types.h>
-
-#include <algorithm>
-#include <climits>
-#include <limits>
-#include <sstream>
 
 
-/// Implementation of Reservoir Sampling algorithm. Incrementally selects from the added objects a random subset of the `sample_count` size.
-/// Can approximately get quantiles.
-/// The `quantile` call takes O(sample_count log sample_count), if after the previous call `quantile` there was at least one call to insert. Otherwise, O(1).
-/// That is, it makes sense to first add, then get quantiles without adding.
+ /// Implementation of Reservoir Sampling algorithm. Incrementally selects from the added objects a random subset of the `sample_count` size.
+ /// Can approximately get quantiles.
+ /// The `quantile` call takes O(sample_count log sample_count), if after the previous call `quantile` there was at least one call to insert. Otherwise, O(1).
+ /// That is, it makes sense to first add, then get quantiles without adding.
 
 
 namespace DB
 {
 namespace ErrorCodes
 {
-extern const int MEMORY_LIMIT_EXCEEDED;
+    extern const int MEMORY_LIMIT_EXCEEDED;
 }
-} // namespace DB
+}
 
 
 namespace detail
 {
 const size_t DEFAULT_SAMPLE_COUNT = 8192;
 const auto MAX_SKIP_DEGREE = sizeof(UInt32) * 8;
-} // namespace detail
+}
 
 /// What if there is not a single value - throw an exception, or return 0 or NaN in the case of double?
 enum class ReservoirSamplerDeterministicOnEmpty
@@ -59,7 +44,7 @@ enum class ReservoirSamplerDeterministicOnEmpty
 };
 
 template <typename T,
-          ReservoirSamplerDeterministicOnEmpty OnEmpty = ReservoirSamplerDeterministicOnEmpty::THROW>
+    ReservoirSamplerDeterministicOnEmpty OnEmpty = ReservoirSamplerDeterministicOnEmpty::THROW>
 class ReservoirSamplerDeterministic
 {
     bool good(const UInt32 hash)
@@ -229,7 +214,8 @@ private:
         if (sorted)
             return;
         sorted = true;
-        std::sort(samples.begin(), samples.end(), [](const std::pair<T, UInt32> & lhs, const std::pair<T, UInt32> & rhs) {
+        std::sort(samples.begin(), samples.end(), [] (const std::pair<T, UInt32> & lhs, const std::pair<T, UInt32> & rhs)
+        {
             return lhs.first < rhs.first;
         });
     }

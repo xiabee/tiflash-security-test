@@ -1,29 +1,22 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/CurrentMetrics.h>
-#include <Common/MemoryTracker.h>
-#include <Common/setThreadName.h>
-#include <Common/wrapInvocable.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
 #include <Poco/Event.h>
+
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <Common/setThreadName.h>
+#include <Common/CurrentMetrics.h>
 #include <common/ThreadPool.h>
+#include <Common/MemoryTracker.h>
+
+
+namespace CurrentMetrics
+{
+    extern const Metric QueryThread;
+}
 
 namespace DB
 {
+
 /** Executes another BlockInputStream in a separate thread.
   * This serves two purposes:
   * 1. Allows you to make the different stages of the query execution pipeline work in parallel.
@@ -104,10 +97,10 @@ protected:
         /// If there were no calculations yet, calculate the first block synchronously
         if (!started)
         {
-            calculate();
+            calculate(current_memory_tracker);
             started = true;
         }
-        else /// If the calculations are already in progress - wait for the result
+        else    /// If the calculations are already in progress - wait for the result
             pool.wait();
 
         if (exception)
@@ -128,18 +121,22 @@ protected:
     void next()
     {
         ready.reset();
-        pool.schedule(wrapInvocable(true, [this] { calculate(); }));
+        pool.schedule(std::bind(&AsynchronousBlockInputStream::calculate, this, current_memory_tracker));
     }
 
 
     /// Calculations that can be performed in a separate thread
-    void calculate()
+    void calculate(MemoryTracker * memory_tracker)
     {
+        CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryThread};
+
         try
         {
             if (first)
             {
                 first = false;
+                setThreadName("AsyncBlockInput");
+                current_memory_tracker = memory_tracker;
                 children.back()->readPrefix();
             }
 
@@ -154,4 +151,5 @@ protected:
     }
 };
 
-} // namespace DB
+}
+

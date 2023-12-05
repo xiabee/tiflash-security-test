@@ -1,38 +1,26 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <fcntl.h>
 
-#include <Common/ProfileEvents.h>
 #include <IO/ReadBufferFromFile.h>
 #include <IO/WriteHelpers.h>
-#include <fcntl.h>
+#include <Common/ProfileEvents.h>
 
 
 namespace ProfileEvents
 {
-extern const Event FileOpen;
-extern const Event FileOpenFailed;
-} // namespace ProfileEvents
+    extern const Event FileOpen;
+    extern const Event FileOpenFailed;
+}
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int FILE_DOESNT_EXIST;
-extern const int CANNOT_OPEN_FILE;
-extern const int CANNOT_CLOSE_FILE;
-} // namespace ErrorCodes
+    extern const int FILE_DOESNT_EXIST;
+    extern const int CANNOT_OPEN_FILE;
+    extern const int CANNOT_CLOSE_FILE;
+}
 
 
 ReadBufferFromFile::ReadBufferFromFile(
@@ -41,8 +29,7 @@ ReadBufferFromFile::ReadBufferFromFile(
     int flags,
     char * existing_memory,
     size_t alignment)
-    : ReadBufferFromFileDescriptor(-1, buf_size, existing_memory, alignment)
-    , file_name(file_name_)
+    : ReadBufferFromFileDescriptor(-1, buf_size, existing_memory, alignment), file_name(file_name_)
 {
     ProfileEvents::increment(ProfileEvents::FileOpen);
 
@@ -77,8 +64,9 @@ ReadBufferFromFile::ReadBufferFromFile(
     size_t buf_size,
     char * existing_memory,
     size_t alignment)
-    : ReadBufferFromFileDescriptor(fd, buf_size, existing_memory, alignment)
-    , file_name(original_file_name.empty() ? "(fd = " + toString(fd) + ")" : original_file_name)
+    :
+    ReadBufferFromFileDescriptor(fd, buf_size, existing_memory, alignment),
+    file_name(original_file_name.empty() ? "(fd = " + toString(fd) + ")" : original_file_name)
 {
 }
 
@@ -101,4 +89,4 @@ void ReadBufferFromFile::close()
     metric_increment.destroy();
 }
 
-} // namespace DB
+}

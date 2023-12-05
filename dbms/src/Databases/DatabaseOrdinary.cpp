@@ -1,16 +1,5 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <Poco/DirectoryIterator.h>
+#include <common/logger_useful.h>
 
 #include <Common/FailPoint.h>
 #include <Common/Stopwatch.h>
@@ -27,14 +16,12 @@
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/parseQuery.h>
-#include <Poco/DirectoryIterator.h>
 #include <common/ThreadPool.h>
-#include <common/logger_useful.h>
-#include <fmt/core.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int TABLE_ALREADY_EXISTS;
@@ -73,10 +60,10 @@ String getDatabaseMetadataPath(const String & base_path)
 } // namespace detail
 
 DatabaseOrdinary::DatabaseOrdinary(String name_, const String & metadata_path_, const Context & context)
-    : DatabaseWithOwnTablesBase(std::move(name_))
-    , metadata_path(metadata_path_)
-    , data_path(context.getPath() + "data/" + escapeForFileName(name) + "/")
-    , log(&Poco::Logger::get("DatabaseOrdinary (" + name + ")"))
+    : DatabaseWithOwnTablesBase(std::move(name_)),
+      metadata_path(metadata_path_),
+      data_path(context.getPath() + "data/" + escapeForFileName(name) + "/"),
+      log(&Logger::get("DatabaseOrdinary (" + name + ")"))
 {
     Poco::File(data_path).createDirectories();
 }
@@ -94,7 +81,7 @@ void DatabaseOrdinary::loadTables(Context & context, ThreadPool * thread_pool, b
     std::sort(file_names.begin(), file_names.end());
 
     size_t total_tables = file_names.size();
-    LOG_INFO(log, "Total {} tables.", total_tables);
+    LOG_INFO(log, "Total " << total_tables << " tables.");
 
     String data_path = context.getPath() + "data/" + escapeForFileName(name) + "/";
 
@@ -109,7 +96,7 @@ void DatabaseOrdinary::loadTables(Context & context, ThreadPool * thread_pool, b
             /// Messages, so that it's not boring to wait for the server to load for a long time.
             if ((++tables_processed) % PRINT_MESSAGE_EACH_N_TABLES == 0 || watch.compareAndRestart(PRINT_MESSAGE_EACH_N_SECONDS))
             {
-                LOG_INFO(log, "{:.2f}%", tables_processed * 100.0 / total_tables);
+                LOG_INFO(log, std::fixed << std::setprecision(2) << tables_processed * 100.0 / total_tables << "%");
                 watch.restart();
             }
 
@@ -125,9 +112,7 @@ void DatabaseOrdinary::loadTables(Context & context, ThreadPool * thread_pool, b
         auto begin = file_names.begin() + i * bunch_size;
         auto end = (i + 1 == num_bunches) ? file_names.end() : (file_names.begin() + (i + 1) * bunch_size);
 
-        auto task = [task_function, begin, end] {
-            return task_function(begin, end);
-        };
+        auto task = std::bind(task_function, begin, end);
 
         if (thread_pool)
             thread_pool->schedule(task);
@@ -159,9 +144,9 @@ void DatabaseOrdinary::createTable(const Context & context, const String & table
     /// But there is protection from it - see using DDLGuard in InterpreterCreateQuery.
 
     {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
         if (tables.find(table_name) != tables.end())
-            throw Exception(fmt::format("Table {}.{} already exists.", name, table_name), ErrorCodes::TABLE_ALREADY_EXISTS);
+            throw Exception("Table " + name + "." + table_name + " already exists.", ErrorCodes::TABLE_ALREADY_EXISTS);
     }
 
     String table_metadata_path = getTableMetadataPath(table_name);
@@ -172,7 +157,8 @@ void DatabaseOrdinary::createTable(const Context & context, const String & table
         statement = getTableDefinitionFromCreateQuery(query);
 
         /// Exclusive flags guarantees, that table is not created right now in another thread. Otherwise, exception will be thrown.
-        WriteBufferFromFileProvider out(context.getFileProvider(), table_metadata_tmp_path, EncryptionPath(table_metadata_tmp_path, ""), true, nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
+        WriteBufferFromFileProvider out(context.getFileProvider(), table_metadata_tmp_path, EncryptionPath(table_metadata_tmp_path, ""),
+            true, nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
         writeString(statement, out);
         out.next();
         if (settings.fsync_metadata)
@@ -184,12 +170,13 @@ void DatabaseOrdinary::createTable(const Context & context, const String & table
     {
         /// Add a table to the map of known tables.
         {
-            std::lock_guard lock(mutex);
+            std::lock_guard<std::mutex> lock(mutex);
             if (!tables.emplace(table_name, table).second)
-                throw Exception(fmt::format("Table {}.{} already exists.", name, table_name), ErrorCodes::TABLE_ALREADY_EXISTS);
+                throw Exception("Table " + name + "." + table_name + " already exists.", ErrorCodes::TABLE_ALREADY_EXISTS);
         }
 
-        context.getFileProvider()->renameFile(table_metadata_tmp_path, EncryptionPath(table_metadata_tmp_path, ""), table_metadata_path, EncryptionPath(table_metadata_path, ""), true);
+        context.getFileProvider()->renameFile(table_metadata_tmp_path, EncryptionPath(table_metadata_tmp_path, ""), table_metadata_path,
+            EncryptionPath(table_metadata_path, ""), true);
     }
     catch (...)
     {
@@ -221,12 +208,9 @@ void DatabaseOrdinary::removeTable(const Context & /*context*/, const String & t
 }
 
 void DatabaseOrdinary::renameTable(
-    const Context & context,
-    const String & table_name,
-    IDatabase & to_database,
-    const String & to_table_name)
+    const Context & context, const String & table_name, IDatabase & to_database, const String & to_table_name)
 {
-    auto * to_database_concrete = typeid_cast<DatabaseOrdinary *>(&to_database);
+    DatabaseOrdinary * to_database_concrete = typeid_cast<DatabaseOrdinary *>(&to_database);
 
     if (!to_database_concrete)
         throw Exception("Moving tables between databases of different engines is not supported", ErrorCodes::NOT_IMPLEMENTED);
@@ -234,15 +218,13 @@ void DatabaseOrdinary::renameTable(
     StoragePtr table = tryGetTable(context, table_name);
 
     if (!table)
-        throw Exception(fmt::format("Table {}.{} doesn't exist.", name, table_name), ErrorCodes::UNKNOWN_TABLE);
+        throw Exception("Table " + name + "." + table_name + " doesn't exist.", ErrorCodes::UNKNOWN_TABLE);
 
     /// Notify the table that it is renamed. If the table does not support renaming, exception is thrown.
     try
     {
         table->rename(
-            fmt::format("{}/data/{}/", context.getPath(), escapeForFileName(to_database_concrete->name)),
-            to_database_concrete->name,
-            to_table_name);
+            context.getPath() + "/data/" + escapeForFileName(to_database_concrete->name) + "/", to_database_concrete->name, to_table_name);
     }
     catch (const Exception & e)
     {
@@ -259,7 +241,7 @@ void DatabaseOrdinary::renameTable(
 
     ASTPtr ast = DatabaseLoading::getQueryFromMetadata(context, detail::getTableMetadataPath(metadata_path, table_name));
     if (!ast)
-        throw Exception(fmt::format("There is no metadata file for table {}", table_name), ErrorCodes::FILE_DOESNT_EXIST);
+        throw Exception("There is no metadata file for table " + table_name, ErrorCodes::FILE_DOESNT_EXIST);
     ASTCreateQuery & ast_create_query = typeid_cast<ASTCreateQuery &>(*ast);
     ast_create_query.table = to_table_name;
 
@@ -296,9 +278,9 @@ ASTPtr DatabaseOrdinary::getCreateTableQueryImpl(const Context & context, const 
         /// Handle system.* tables for which there are no table.sql files.
         bool has_table = tryGetTable(context, table_name) != nullptr;
 
-        const auto * msg = has_table ? "There is no CREATE TABLE query for table " : "There is no metadata file for table ";
+        auto msg = has_table ? "There is no CREATE TABLE query for table " : "There is no metadata file for table ";
 
-        throw Exception(fmt::format("{}{}", msg, table_name), ErrorCodes::CANNOT_GET_CREATE_TABLE_QUERY);
+        throw Exception(msg + table_name, ErrorCodes::CANNOT_GET_CREATE_TABLE_QUERY);
     }
 
     return ast;
@@ -339,7 +321,7 @@ void DatabaseOrdinary::shutdown()
 
     Tables tables_snapshot;
     {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
         tables_snapshot = tables;
     }
 
@@ -348,7 +330,7 @@ void DatabaseOrdinary::shutdown()
         kv.second->shutdown();
     }
 
-    std::lock_guard lock(mutex);
+    std::lock_guard<std::mutex> lock(mutex);
     tables.clear();
 }
 
@@ -373,16 +355,12 @@ void DatabaseOrdinary::drop(const Context & context)
     if (auto meta_file = Poco::File(detail::getDatabaseMetadataPath(getMetadataPath())); meta_file.exists())
     {
         context.getFileProvider()->deleteRegularFile(
-            detail::getDatabaseMetadataPath(getMetadataPath()),
-            EncryptionPath(detail::getDatabaseMetadataPath(getMetadataPath()), ""));
+            detail::getDatabaseMetadataPath(getMetadataPath()), EncryptionPath(detail::getDatabaseMetadataPath(getMetadataPath()), ""));
     }
 }
 
 void DatabaseOrdinary::alterTable(
-    const Context & context,
-    const String & name,
-    const ColumnsDescription & columns,
-    const ASTModifier & storage_modifier)
+    const Context & context, const String & name, const ColumnsDescription & columns, const ASTModifier & storage_modifier)
 {
     /// Read the definition of the table and replace the necessary parts with new ones.
 
@@ -394,13 +372,7 @@ void DatabaseOrdinary::alterTable(
     {
         char in_buf[METADATA_FILE_BUFFER_SIZE];
         ReadBufferFromFileProvider in(
-            context.getFileProvider(),
-            table_metadata_path,
-            EncryptionPath(table_metadata_path, ""),
-            METADATA_FILE_BUFFER_SIZE,
-            /*read_limiter*/ nullptr,
-            -1,
-            in_buf);
+            context.getFileProvider(), table_metadata_path, EncryptionPath(table_metadata_path, ""), METADATA_FILE_BUFFER_SIZE, -1, in_buf);
         readStringUntilEOF(statement, in);
     }
 
@@ -421,8 +393,9 @@ void DatabaseOrdinary::alterTable(
     EncryptionPath encryption_path
         = use_target_encrypt_info ? EncryptionPath(table_metadata_path, "") : EncryptionPath(table_metadata_tmp_path, "");
     {
-        bool create_new_encryption_info = !use_target_encrypt_info && !statement.empty();
-        WriteBufferFromFileProvider out(context.getFileProvider(), table_metadata_tmp_path, encryption_path, create_new_encryption_info, nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
+        bool create_new_encryption_info = !use_target_encrypt_info && statement.size();
+        WriteBufferFromFileProvider out(context.getFileProvider(), table_metadata_tmp_path, encryption_path, create_new_encryption_info,
+            nullptr, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
         writeString(statement, out);
         out.next();
         if (context.getSettingsRef().fsync_metadata)
@@ -433,7 +406,8 @@ void DatabaseOrdinary::alterTable(
     try
     {
         /// rename atomically replaces the old file with the new one.
-        context.getFileProvider()->renameFile(table_metadata_tmp_path, encryption_path, table_metadata_path, EncryptionPath(table_metadata_path, ""), !use_target_encrypt_info);
+        context.getFileProvider()->renameFile(table_metadata_tmp_path, encryption_path, table_metadata_path,
+            EncryptionPath(table_metadata_path, ""), !use_target_encrypt_info);
     }
     catch (...)
     {
@@ -442,15 +416,9 @@ void DatabaseOrdinary::alterTable(
     }
 }
 
-String DatabaseOrdinary::getDataPath() const
-{
-    return data_path;
-}
+String DatabaseOrdinary::getDataPath() const { return data_path; }
 
-String DatabaseOrdinary::getMetadataPath() const
-{
-    return metadata_path;
-}
+String DatabaseOrdinary::getMetadataPath() const { return metadata_path; }
 
 String DatabaseOrdinary::getTableMetadataPath(const String & table_name) const
 {

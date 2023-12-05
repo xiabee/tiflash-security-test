@@ -1,42 +1,31 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <Interpreters/convertFieldToType.h>
 
-#include <Common/FieldVisitors.h>
-#include <Common/MyTime.h>
-#include <Common/NaNUtils.h>
-#include <Common/typeid_cast.h>
-#include <Core/AccurateComparison.h>
+#include <IO/ReadBufferFromString.h>
+#include <IO/ReadHelpers.h>
+
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDateTime.h>
-#include <DataTypes/DataTypeEnum.h>
-#include <DataTypes/DataTypeFixedString.h>
 #include <DataTypes/DataTypeMyDate.h>
 #include <DataTypes/DataTypeMyDateTime.h>
-#include <DataTypes/DataTypeMyDuration.h>
+#include <DataTypes/DataTypeEnum.h>
+#include <DataTypes/DataTypeFixedString.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypeTuple.h>
-#include <DataTypes/DataTypeUUID.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/ReadBufferFromString.h>
-#include <IO/ReadHelpers.h>
-#include <Interpreters/convertFieldToType.h>
+
+#include <Common/FieldVisitors.h>
+#include <Common/NaNUtils.h>
+#include <Common/MyTime.h>
+#include <Common/typeid_cast.h>
+#include <Core/AccurateComparison.h>
+#include <DataTypes/DataTypeUUID.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
@@ -55,6 +44,7 @@ extern const int TYPE_MISMATCH;
 
 namespace
 {
+
 template <typename From, typename To>
 static Field convertNumericTypeImpl(const Field & from)
 {
@@ -73,7 +63,7 @@ static Field convertNumericTypeImpl(const Field & from)
 template <typename From, typename To>
 static Field convertDecimalTypeImpl(const Field & from)
 {
-    const auto & decimal_field = from.safeGet<DecimalField<From>>();
+    auto decimal_field = from.safeGet<DecimalField<From>>();
     // FIXME:: There is some bugs when `to` is int;
     return Field(typename NearestFieldType<To>::Type(static_cast<To>(decimal_field)));
 }
@@ -117,7 +107,7 @@ static Field convertStringToDecimalType(const Field & from, const DataTypeDecima
 {
     using FieldType = typename DataTypeDecimal<T>::FieldType;
 
-    const auto & str_value = from.get<String>();
+    const String & str_value = from.get<String>();
     T value = type.parseFromString(str_value);
     return DecimalField<FieldType>(value, type.getScale());
 }
@@ -128,7 +118,7 @@ static Field convertDecimalToDecimalType(const Field & from, const DataTypeDecim
     // TODO:: Refine this, Consider overflow!!
     if constexpr (sizeof(From) <= sizeof(To))
     {
-        const auto & field = from.get<DecimalField<From>>();
+        auto field = from.get<DecimalField<From>>();
         if (field.getScale() <= type.getScale())
         {
             ScaleType scale = type.getScale() - field.getScale();
@@ -166,10 +156,10 @@ static Field convertDecimalType(const Field & from, const To & type)
         ErrorCodes::TYPE_MISMATCH);
 }
 
-DayNum stringToDate(const String & s)
+DayNum_t stringToDate(const String & s)
 {
     ReadBufferFromString in(s);
-    DayNum date{};
+    DayNum_t date{};
 
     readDateText(date, in);
     if (!in.eof())
@@ -227,29 +217,28 @@ Field convertFieldToTypeImpl(const Field & src, const IDataType & type)
             return convertNumericType<Float32>(src, type);
         if (typeid_cast<const DataTypeFloat64 *>(&type))
             return convertNumericType<Float64>(src, type);
-        if (const auto * ptype = typeid_cast<const DataTypeDecimal32 *>(&type))
+        if (auto * ptype = typeid_cast<const DataTypeDecimal32 *>(&type))
             return convertDecimalType(src, *ptype);
-        if (const auto * ptype = typeid_cast<const DataTypeDecimal64 *>(&type))
+        if (auto * ptype = typeid_cast<const DataTypeDecimal64 *>(&type))
             return convertDecimalType(src, *ptype);
-        if (const auto * ptype = typeid_cast<const DataTypeDecimal128 *>(&type))
+        if (auto * ptype = typeid_cast<const DataTypeDecimal128 *>(&type))
             return convertDecimalType(src, *ptype);
-        if (const auto * ptype = typeid_cast<const DataTypeDecimal256 *>(&type))
+        if (auto * ptype = typeid_cast<const DataTypeDecimal256 *>(&type))
             return convertDecimalType(src, *ptype);
 
         const bool is_date = typeid_cast<const DataTypeDate *>(&type);
         const bool is_my_date = typeid_cast<const DataTypeMyDate *>(&type);
-        const bool is_duration = typeid_cast<const DataTypeMyDuration *>(&type);
         bool is_datetime = false;
         bool is_my_datetime = false;
         bool is_enum = false;
         bool is_uuid = false;
 
-        if (!is_date && !is_my_date && !is_duration)
+        if (!is_date && !is_my_date)
             if (!(is_datetime = typeid_cast<const DataTypeDateTime *>(&type)))
-                if (!(is_my_datetime = typeid_cast<const DataTypeMyDateTime *>(&type)))
-                    if (!(is_uuid = typeid_cast<const DataTypeUUID *>(&type)))
-                        if (!(is_enum = dynamic_cast<const IDataTypeEnum *>(&type)))
-                            throw Exception{"Logical error: unknown numeric type " + type.getName(), ErrorCodes::LOGICAL_ERROR};
+            if (!(is_my_datetime = typeid_cast<const DataTypeMyDateTime *>(&type)))
+                if (!(is_uuid = typeid_cast<const DataTypeUUID *>(&type)))
+                    if (!(is_enum = dynamic_cast<const IDataTypeEnum *>(&type)))
+                        throw Exception{"Logical error: unknown numeric type " + type.getName(), ErrorCodes::LOGICAL_ERROR};
 
         /// Numeric values for Enums should not be used directly in IN section
         if (src.getType() == Field::Types::Int64 && !is_enum)
@@ -290,13 +279,13 @@ Field convertFieldToTypeImpl(const Field & src, const IDataType & type)
         if (src.getType() == Field::Types::String)
             return src;
     }
-    else if (const auto * type_array = typeid_cast<const DataTypeArray *>(&type))
+    else if (const DataTypeArray * type_array = typeid_cast<const DataTypeArray *>(&type))
     {
         if (src.getType() == Field::Types::Array)
         {
-            const auto nested_type = removeNullable(type_array->getNestedType());
+            const DataTypePtr nested_type = removeNullable(type_array->getNestedType());
 
-            const auto & src_arr = src.get<Array>();
+            const Array & src_arr = src.get<Array>();
             size_t src_arr_size = src_arr.size();
 
             Array res(src_arr_size);
@@ -306,7 +295,7 @@ Field convertFieldToTypeImpl(const Field & src, const IDataType & type)
             return res;
         }
     }
-    else if (const auto * type_tuple = typeid_cast<const DataTypeTuple *>(&type))
+    else if (const DataTypeTuple * type_tuple = typeid_cast<const DataTypeTuple *>(&type))
     {
         if (src.getType() == Field::Types::Tuple)
         {
@@ -316,8 +305,8 @@ Field convertFieldToTypeImpl(const Field & src, const IDataType & type)
 
             if (dst_tuple_size != src_tuple_size)
                 throw Exception("Bad size of tuple in IN or VALUES section. Expected size: " + toString(dst_tuple_size)
-                                    + ", actual size: " + toString(src_tuple_size),
-                                ErrorCodes::TYPE_MISMATCH);
+                        + ", actual size: " + toString(src_tuple_size),
+                    ErrorCodes::TYPE_MISMATCH);
 
             TupleBackend res(dst_tuple_size);
             for (size_t i = 0; i < dst_tuple_size; ++i)
@@ -344,11 +333,13 @@ Field convertFieldToType(const Field & from_value, const IDataType & to_type, co
 
     if (to_type.isNullable())
     {
-        const auto & nullable_type = static_cast<const DataTypeNullable &>(to_type);
-        const auto & nested_type = nullable_type.getNestedType();
+        const DataTypeNullable & nullable_type = static_cast<const DataTypeNullable &>(to_type);
+        const DataTypePtr & nested_type = nullable_type.getNestedType();
         return convertFieldToTypeImpl(from_value, *nested_type);
     }
     else
         return convertFieldToTypeImpl(from_value, to_type);
 }
+
+
 } // namespace DB

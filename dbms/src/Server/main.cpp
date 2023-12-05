@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/ClickHouseRevision.h>
 #include <Common/ErrorExporter.h>
 #include <Common/TiFlashBuildInfo.h>
@@ -25,23 +11,17 @@
 #include <utility> /// pair
 #include <vector>
 
+#if USE_TCMALLOC
+#include <gperftools/malloc_extension.h>
+#endif
+
 #if ENABLE_CLICKHOUSE_SERVER
 #include "Server.h"
 #endif
-#if ENABLE_TIFLASH_DTTOOL
-#include <Server/DTTool/DTTool.h>
-#endif
-#if ENABLE_TIFLASH_DTWORKLOAD
-#include <Storages/DeltaMerge/workload/DTWorkload.h>
-#endif
-#if ENABLE_TIFLASH_PAGEWORKLOAD
-#include <Storages/Page/workload/PSWorkload.h>
-#endif
-#if ENABLE_TIFLASH_PAGECTL
-#include <Storages/Page/tools/PageCtl/PageStorageCtl.h>
+#if ENABLE_CLICKHOUSE_LOCAL
+#include "LocalServer.h"
 #endif
 #include <Common/StringUtils/StringUtils.h>
-#include <Server/DTTool/DTTool.h>
 
 /// Universal executable for various clickhouse applications
 #if ENABLE_CLICKHOUSE_SERVER
@@ -49,6 +29,28 @@ int mainEntryClickHouseServer(int argc, char ** argv);
 #endif
 #if ENABLE_CLICKHOUSE_CLIENT
 int mainEntryClickHouseClient(int argc, char ** argv);
+#endif
+#if ENABLE_CLICKHOUSE_LOCAL
+int mainEntryClickHouseLocal(int argc, char ** argv);
+#endif
+#if ENABLE_CLICKHOUSE_BENCHMARK
+int mainEntryClickHouseBenchmark(int argc, char ** argv);
+#endif
+#if ENABLE_CLICKHOUSE_PERFORMANCE
+int mainEntryClickHousePerformanceTest(int argc, char ** argv);
+#endif
+#if ENABLE_CLICKHOUSE_TOOLS
+int mainEntryClickHouseExtractFromConfig(int argc, char ** argv);
+int mainEntryClickHouseCompressor(int argc, char ** argv);
+int mainEntryClickHouseFormat(int argc, char ** argv);
+#endif
+#if ENABLE_CLICKHOUSE_COPIER
+int mainEntryClickHouseClusterCopier(int argc, char ** argv);
+#endif
+
+#if USE_EMBEDDED_COMPILER
+int mainEntryClickHouseClang(int argc, char ** argv);
+int mainEntryClickHouseLLD(int argc, char ** argv);
 #endif
 
 extern "C" void print_raftstore_proxy_version();
@@ -79,7 +81,7 @@ int mainExportError(int argc, char ** argv)
     {
         // RAII
         DB::ErrorExporter exporter(wb);
-        for (const auto & error : all_errors)
+        for (auto error : all_errors)
         {
             exporter.writeError(error);
         }
@@ -89,31 +91,38 @@ int mainExportError(int argc, char ** argv)
 
 namespace
 {
+
 using MainFunc = int (*)(int, char **);
 
 
 /// Add an item here to register new application
 std::pair<const char *, MainFunc> clickhouse_applications[] = {
+#if ENABLE_CLICKHOUSE_LOCAL
+    {"local", mainEntryClickHouseLocal},
+#endif
 #if ENABLE_CLICKHOUSE_CLIENT
     {"client", mainEntryClickHouseClient},
+#endif
+#if ENABLE_CLICKHOUSE_BENCHMARK
+    {"benchmark", mainEntryClickHouseBenchmark},
 #endif
 #if ENABLE_CLICKHOUSE_SERVER
     {"server", mainEntryClickHouseServer},
 #endif
-#if ENABLE_TIFLASH_DTTOOL
-    {"dttool", DTTool::mainEntryTiFlashDTTool},
+#if ENABLE_CLICKHOUSE_PERFORMANCE
+    {"performance-test", mainEntryClickHousePerformanceTest},
 #endif
-#if ENABLE_TIFLASH_DTWORKLOAD
-    {"dtworkload", DB::DM::tests::DTWorkload::mainEntry},
+#if ENABLE_CLICKHOUSE_TOOLS
+    {"extract-from-config", mainEntryClickHouseExtractFromConfig}, {"compressor", mainEntryClickHouseCompressor},
+    {"format", mainEntryClickHouseFormat},
 #endif
-#if ENABLE_TIFLASH_PAGEWORKLOAD
-    {"pageworkload", DB::PS::tests::StressWorkload::mainEntry},
+#if ENABLE_CLICKHOUSE_COPIER
+    {"copier", mainEntryClickHouseClusterCopier},
 #endif
-#if ENABLE_TIFLASH_PAGECTL
-    {"pagectl", DB::PageStorageCtl::mainEntry},
+#if USE_EMBEDDED_COMPILER
+    {"clang", mainEntryClickHouseClang}, {"clang++", mainEntryClickHouseClang}, {"lld", mainEntryClickHouseLLD},
 #endif
-    {"version", mainEntryVersion},
-    {"errgen", mainExportError}};
+    {"version", mainEntryVersion}, {"errgen", mainExportError}};
 
 
 int printHelp(int, char **)
@@ -150,6 +159,19 @@ bool isClickhouseApp(const std::string & app_suffix, std::vector<char *> & argv)
 
 int main(int argc_, char ** argv_)
 {
+#if USE_EMBEDDED_COMPILER
+    if (argc_ >= 2 && 0 == strcmp(argv_[1], "-cc1"))
+        return mainEntryClickHouseClang(argc_, argv_);
+#endif
+
+#if USE_TCMALLOC
+    /** Without this option, tcmalloc returns memory to OS too frequently for medium-sized memory allocations
+      *  (like IO buffers, column vectors, hash tables, etc.),
+      *  that lead to page faults and significantly hurts performance.
+      */
+    MallocExtension::instance()->SetNumericProperty("tcmalloc.aggressive_memory_decommit", false);
+#endif
+
     std::vector<char *> argv(argv_, argv_ + argc_);
 
     /// Print a basic help if nothing was matched

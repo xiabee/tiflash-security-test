@@ -1,35 +1,21 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/Exception.h>
-#include <Poco/Timespan.h>
-#include <common/logger_useful.h>
-
-#include <boost/noncopyable.hpp>
-#include <condition_variable>
 #include <mutex>
+#include <condition_variable>
+#include <Poco/Timespan.h>
+#include <boost/noncopyable.hpp>
+
+#include <common/logger_useful.h>
+#include <Common/Exception.h>
 
 
 namespace DB
 {
-namespace ErrorCodes
-{
-extern const int LOGICAL_ERROR;
+    namespace ErrorCodes
+    {
+        extern const int LOGICAL_ERROR;
+    }
 }
-} // namespace DB
 
 /** A class from which you can inherit and get a pool of something. Used for database connection pools.
   * Descendant class must provide a method for creating a new object to place in the pool.
@@ -44,12 +30,12 @@ public:
     using Ptr = std::shared_ptr<PoolBase<TObject>>;
 
 private:
+
     /** The object with the flag, whether it is currently used. */
     struct PooledObject
     {
         PooledObject(ObjectPtr object_, PoolBase & pool_)
-            : object(object_)
-            , pool(pool_)
+            : object(object_), pool(pool_)
         {
         }
 
@@ -65,14 +51,10 @@ private:
       */
     struct PoolEntryHelper
     {
-        explicit PoolEntryHelper(PooledObject & data_)
-            : data(data_)
-        {
-            data.in_use = true;
-        }
+        PoolEntryHelper(PooledObject & data_) : data(data_) { data.in_use = true; }
         ~PoolEntryHelper()
         {
-            std::unique_lock lock(data.pool.mutex);
+            std::unique_lock<std::mutex> lock(data.pool.mutex);
             data.in_use = false;
             data.pool.available.notify_one();
         }
@@ -87,7 +69,7 @@ public:
     public:
         friend class PoolBase<Object>;
 
-        Entry() = default; /// For deferred initialization.
+        Entry() {}    /// For deferred initialization.
 
         /** The `Entry` object protects the resource from being used by another thread.
           * The following methods are forbidden for `rvalue`, so you can not write a similar to
@@ -100,10 +82,10 @@ public:
         Object & operator*() && = delete;
         const Object & operator*() const && = delete;
 
-        Object * operator->() & { return &*data->data.object; }
+        Object * operator->() &             { return &*data->data.object; }
         const Object * operator->() const & { return &*data->data.object; }
-        Object & operator*() & { return *data->data.object; }
-        const Object & operator*() const & { return *data->data.object; }
+        Object & operator*() &              { return *data->data.object; }
+        const Object & operator*() const &  { return *data->data.object; }
 
         bool isNull() const { return data == nullptr; }
 
@@ -117,17 +99,15 @@ public:
     private:
         std::shared_ptr<PoolEntryHelper> data;
 
-        explicit Entry(PooledObject & object)
-            : data(std::make_shared<PoolEntryHelper>(object))
-        {}
+        Entry(PooledObject & object) : data(std::make_shared<PoolEntryHelper>(object)) {}
     };
 
-    virtual ~PoolBase() = default;
+    virtual ~PoolBase() {}
 
     /** Allocates the object. Wait for free object in pool for 'timeout'. With 'timeout' < 0, the timeout is infinite. */
     Entry get(Poco::Timespan::TimeDiff timeout)
     {
-        std::unique_lock lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
 
         while (true)
         {
@@ -153,7 +133,7 @@ public:
 
     void reserve(size_t count)
     {
-        std::lock_guard lock(mutex);
+        std::lock_guard<std::mutex> lock(mutex);
 
         while (items.size() < count)
             items.emplace_back(std::make_shared<PooledObject>(allocObject(), *this));
@@ -171,11 +151,11 @@ private:
     std::condition_variable available;
 
 protected:
-    Poco::Logger * log;
 
-    PoolBase(unsigned max_items_, Poco::Logger * log_)
-        : max_items(max_items_)
-        , log(log_)
+    Logger * log;
+
+    PoolBase(unsigned max_items_, Logger * log_)
+       : max_items(max_items_), log(log_)
     {
         items.reserve(max_items);
     }
@@ -183,3 +163,4 @@ protected:
     /** Creates a new object to put into the pool. */
     virtual ObjectPtr allocObject() = 0;
 };
+

@@ -1,33 +1,23 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
-
-#include <Common/CurrentMetrics.h>
-#include <Common/HTMLForm.h>
-#include <Poco/Net/HTTPRequestHandler.h>
 
 #include "IServer.h"
 
+#include <Poco/Net/HTTPRequestHandler.h>
 
-namespace Poco
+#include <Common/CurrentMetrics.h>
+#include <Common/HTMLForm.h>
+
+
+namespace CurrentMetrics
 {
-class Logger;
+    extern const Metric HTTPConnection;
 }
+
+namespace Poco { class Logger; }
 
 namespace DB
 {
+
 class WriteBufferFromHTTPServerResponse;
 
 
@@ -65,8 +55,10 @@ private:
     IServer & server;
     Poco::Logger * log;
 
-    /// It is the name of the server that will be sent in an http-header X-ClickHouse-Server-Display-Name.
+    /// It is the name of the server that will be sent in an http-header X-ClickHouse-Server-Display-Name. 
     String server_display_name;
+
+    CurrentMetrics::Increment metric_increment{CurrentMetrics::HTTPConnection};
 
     /// Also initializes 'used_output'.
     void processQuery(
@@ -82,7 +74,7 @@ private:
         Poco::Net::HTTPServerResponse & response,
         Output & used_output);
 
-    static void pushDelayedResults(Output & used_output);
+    void pushDelayedResults(Output & used_output);
 };
 
-} // namespace DB
+}

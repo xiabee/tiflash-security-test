@@ -1,24 +1,9 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDateTime.h>
 #include <DataTypes/DataTypeEnum.h>
 #include <DataTypes/DataTypeFixedString.h>
-#include <DataTypes/DataTypeMyDateTime.h>
 #include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
@@ -29,6 +14,7 @@
 
 namespace DB
 {
+
 bool isSupportedDataTypeCast(const DataTypePtr & from, const DataTypePtr & to)
 {
     assert(from != nullptr && to != nullptr);
@@ -42,7 +28,7 @@ bool isSupportedDataTypeCast(const DataTypePtr & from, const DataTypePtr & to)
     {
         bool has_nullable = false;
         DataTypePtr from_not_null;
-        if (const auto * type_nullable = typeid_cast<const DataTypeNullable *>(from.get()))
+        if (const DataTypeNullable * type_nullable = typeid_cast<const DataTypeNullable *>(from.get()))
         {
             has_nullable = true;
             from_not_null = type_nullable->getNestedType();
@@ -53,7 +39,7 @@ bool isSupportedDataTypeCast(const DataTypePtr & from, const DataTypePtr & to)
         }
 
         DataTypePtr to_not_null;
-        if (const auto * type_nullable = typeid_cast<const DataTypeNullable *>(to.get()))
+        if (const DataTypeNullable * type_nullable = typeid_cast<const DataTypeNullable *>(to.get()))
         {
             has_nullable = true;
             to_not_null = type_nullable->getNestedType();
@@ -97,23 +83,15 @@ bool isSupportedDataTypeCast(const DataTypePtr & from, const DataTypePtr & to)
     if (from->isStringOrFixedString() && to->isStringOrFixedString())
     {
         size_t from_sz = std::numeric_limits<size_t>::max();
-        if (const auto * type_fixed_str = typeid_cast<const DataTypeFixedString *>(from.get()))
+        if (const DataTypeFixedString * type_fixed_str = typeid_cast<const DataTypeFixedString *>(from.get()))
             from_sz = type_fixed_str->getN();
         size_t to_sz = std::numeric_limits<size_t>::max();
-        if (const auto * type_fixed_str = typeid_cast<const DataTypeFixedString *>(to.get()))
+        if (const DataTypeFixedString * type_fixed_str = typeid_cast<const DataTypeFixedString *>(to.get()))
             to_sz = type_fixed_str->getN();
         return from_sz <= to_sz;
     }
 
-    if (from->getTypeId() == TypeIndex::MyDateTime && to->getTypeId() == TypeIndex::MyDateTime)
-    {
-        const auto * const from_mydatetime = checkAndGetDataType<DataTypeMyDateTime>(from.get());
-        const auto * const to_mydatetime = checkAndGetDataType<DataTypeMyDateTime>(to.get());
-        // Enlarging the `fsp` of `mydatetime`/`timestamp`/`time` is a lossless change, TiFlash should detect and change the data type in place.
-        // Narrowing down the `fsp` is a lossy change, TiDB will add a temporary column and reorganize the column data as other lossy type change.
-        return (from_mydatetime->getFraction() < to_mydatetime->getFraction());
-    }
-    /// For other cases of Date and DateTime, not supported
+    /// For Date and DateTime, not supported
     if (from->isDateOrDateTime() || to->isDateOrDateTime())
     {
         return false;
@@ -132,21 +110,21 @@ bool isSupportedDataTypeCast(const DataTypePtr & from, const DataTypePtr & to)
     if (from->isEnum() && to->isEnum())
     {
         /// support cast Enum to Enum if the from type is a subset of the target type
-        const auto * const from_enum8 = checkAndGetDataType<DataTypeEnum8>(from.get());
-        const auto * const to_enum8 = checkAndGetDataType<DataTypeEnum8>(to.get());
+        const auto from_enum8 = checkAndGetDataType<DataTypeEnum8>(from.get());
+        const auto to_enum8 = checkAndGetDataType<DataTypeEnum8>(to.get());
         if (from_enum8 && to_enum8)
         {
-            for (const auto & value : from_enum8->getValues())
+            for (auto & value : from_enum8->getValues())
             {
                 if (!to_enum8->hasElement(value.first) || to_enum8->getValue(value.first) != value.second)
                     return false;
             }
         }
-        const auto * const from_enum16 = checkAndGetDataType<DataTypeEnum16>(from.get());
-        const auto * const to_enum16 = checkAndGetDataType<DataTypeEnum16>(to.get());
+        const auto from_enum16 = checkAndGetDataType<DataTypeEnum16>(from.get());
+        const auto to_enum16 = checkAndGetDataType<DataTypeEnum16>(to.get());
         if (from_enum16 && to_enum16)
         {
-            for (const auto & value : from_enum16->getValues())
+            for (auto & value : from_enum16->getValues())
             {
                 if (!to_enum16->hasElement(value.first) || to_enum16->getValue(value.first) != value.second)
                     return false;

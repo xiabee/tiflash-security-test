@@ -1,36 +1,18 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+#include <Interpreters/ExpressionActions.h>
 #include <Columns/ColumnFunction.h>
 #include <Columns/ColumnsCommon.h>
 #include <Functions/IFunction.h>
-#include <Interpreters/ExpressionActions.h>
-#include <fmt/format.h>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int LOGICAL_ERROR;
+    extern const int LOGICAL_ERROR;
 }
 
-ColumnFunction::ColumnFunction(
-    size_t size,
-    FunctionBasePtr function,
-    const ColumnsWithTypeAndName & columns_to_capture)
-    : column_size(size)
-    , function(function)
+ColumnFunction::ColumnFunction(size_t size, FunctionBasePtr function, const ColumnsWithTypeAndName & columns_to_capture)
+        : size_(size), function(function)
 {
     appendArguments(columns_to_capture);
 }
@@ -46,16 +28,15 @@ MutableColumnPtr ColumnFunction::cloneResized(size_t size) const
 
 ColumnPtr ColumnFunction::replicate(const Offsets & offsets) const
 {
-    if (column_size != offsets.size())
-        throw Exception(
-            fmt::format("Size of offsets ({}) doesn't match size of column ({})", offsets.size(), column_size),
-            ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+    if (size_ != offsets.size())
+        throw Exception("Size of offsets (" + toString(offsets.size()) + ") doesn't match size of column ("
+                        + toString(size_) + ")", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
     ColumnsWithTypeAndName capture = captured_columns;
     for (auto & column : capture)
         column.column = column.column->replicate(offsets);
 
-    size_t replicated_size = 0 == column_size ? 0 : offsets.back();
+    size_t replicated_size = 0 == size_ ? 0 : offsets.back();
     return ColumnFunction::create(replicated_size, function, capture);
 }
 
@@ -70,10 +51,9 @@ ColumnPtr ColumnFunction::cut(size_t start, size_t length) const
 
 ColumnPtr ColumnFunction::filter(const Filter & filt, ssize_t result_size_hint) const
 {
-    if (column_size != filt.size())
-        throw Exception(
-            fmt::format("Size of filter ({}) doesn't match size of column ({})", filt.size(), column_size),
-            ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+    if (size_ != filt.size())
+        throw Exception("Size of filter (" + toString(filt.size()) + ") doesn't match size of column ("
+                        + toString(size_) + ")", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
     ColumnsWithTypeAndName capture = captured_columns;
     for (auto & column : capture)
@@ -91,14 +71,13 @@ ColumnPtr ColumnFunction::filter(const Filter & filt, ssize_t result_size_hint) 
 ColumnPtr ColumnFunction::permute(const Permutation & perm, size_t limit) const
 {
     if (limit == 0)
-        limit = column_size;
+        limit = size_;
     else
-        limit = std::min(column_size, limit);
+        limit = std::min(size_, limit);
 
     if (perm.size() < limit)
-        throw Exception(
-            fmt::format("Size of permutation ({}) is less than required ({})", perm.size(), limit),
-            ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+        throw Exception("Size of permutation (" + toString(perm.size()) + ") is less than required ("
+                        + toString(limit) + ")", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
     ColumnsWithTypeAndName capture = captured_columns;
     for (auto & column : capture)
@@ -107,14 +86,12 @@ ColumnPtr ColumnFunction::permute(const Permutation & perm, size_t limit) const
     return ColumnFunction::create(limit, function, capture);
 }
 
-std::vector<MutableColumnPtr> ColumnFunction::scatter(
-    IColumn::ColumnIndex num_columns,
-    const IColumn::Selector & selector) const
+std::vector<MutableColumnPtr> ColumnFunction::scatter(IColumn::ColumnIndex num_columns,
+                                                      const IColumn::Selector & selector) const
 {
-    if (column_size != selector.size())
-        throw Exception(
-            fmt::format("Size of selector ({}) doesn't match size of column ({})", selector.size(), column_size),
-            ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+    if (size_ != selector.size())
+        throw Exception("Size of selector (" + toString(selector.size()) + ") doesn't match size of column ("
+                        + toString(size_) + ")", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
     std::vector<size_t> counts;
     if (captured_columns.empty())
@@ -134,35 +111,30 @@ std::vector<MutableColumnPtr> ColumnFunction::scatter(
     for (IColumn::ColumnIndex part = 0; part < num_columns; ++part)
     {
         auto & capture = captures[part];
-        size_t s = capture.empty() ? counts[part] : capture.front().column->size();
-        columns.emplace_back(ColumnFunction::create(s, function, std::move(capture)));
+        size_t size__ = capture.empty() ? counts[part] : capture.front().column->size();
+        columns.emplace_back(ColumnFunction::create(size__, function, std::move(capture)));
     }
 
     return columns;
-}
-
-void ColumnFunction::scatterTo(ScatterColumns & columns [[maybe_unused]], const Selector & selector [[maybe_unused]]) const
-{
-    throw TiFlashException("ColumnFunction does not support scatterTo", Errors::Coprocessor::Unimplemented);
 }
 
 void ColumnFunction::insertDefault()
 {
     for (auto & column : captured_columns)
         column.column->assumeMutableRef().insertDefault();
-    ++column_size;
+    ++size_;
 }
 void ColumnFunction::popBack(size_t n)
 {
     for (auto & column : captured_columns)
         column.column->assumeMutableRef().popBack(n);
-    column_size -= n;
+    size_ -= n;
 }
 
 size_t ColumnFunction::byteSize() const
 {
     size_t total_size = 0;
-    for (const auto & column : captured_columns)
+    for (auto & column : captured_columns)
         total_size += column.column->byteSize();
 
     return total_size;
@@ -171,7 +143,7 @@ size_t ColumnFunction::byteSize() const
 size_t ColumnFunction::byteSize(size_t offset, size_t limit) const
 {
     size_t total_size = 0;
-    for (const auto & column : captured_columns)
+    for (auto & column : captured_columns)
         total_size += column.column->byteSize(offset, limit);
 
     return total_size;
@@ -180,7 +152,7 @@ size_t ColumnFunction::byteSize(size_t offset, size_t limit) const
 size_t ColumnFunction::allocatedBytes() const
 {
     size_t total_size = 0;
-    for (const auto & column : captured_columns)
+    for (auto & column : captured_columns)
         total_size += column.column->allocatedBytes();
 
     return total_size;
@@ -193,14 +165,10 @@ void ColumnFunction::appendArguments(const ColumnsWithTypeAndName & columns)
     auto wanna_capture = columns.size();
 
     if (were_captured + wanna_capture > args)
-        throw Exception(
-            fmt::format(
-                "Cannot capture {} columns because function {} has {} arguments{}.",
-                wanna_capture,
-                function->getName(),
-                args,
-                were_captured ? fmt::format(" and {} columns have already been captured", were_captured) : ""),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Cannot capture " + toString(wanna_capture) + " columns because function " + function->getName()
+                        + " has " + toString(args) + " arguments" +
+                        (were_captured ? " and " + toString(were_captured) + " columns have already been captured" : "")
+                        + ".", ErrorCodes::LOGICAL_ERROR);
 
     for (const auto & column : columns)
         appendArgument(column);
@@ -208,17 +176,13 @@ void ColumnFunction::appendArguments(const ColumnsWithTypeAndName & columns)
 
 void ColumnFunction::appendArgument(const ColumnWithTypeAndName & column)
 {
-    const auto & argument_types = function->getArgumentTypes();
+    const auto & argumnet_types = function->getArgumentTypes();
 
     auto index = captured_columns.size();
-    if (!column.type->equals(*argument_types[index]))
-        throw Exception(
-            fmt::format(
-                "Cannot capture column {} because it has incompatible type: got {}, but {} is expected.",
-                argument_types.size(),
-                column.type->getName(),
-                argument_types[index]->getName()),
-            ErrorCodes::LOGICAL_ERROR);
+    if (!column.type->equals(*argumnet_types[index]))
+        throw Exception("Cannot capture column " + std::to_string(argumnet_types.size()) +
+                        "because it has incompatible type: got " + column.type->getName() +
+                        ", but " + argumnet_types[index]->getName() + " is expected.", ErrorCodes::LOGICAL_ERROR);
 
     captured_columns.push_back(column);
 }
@@ -229,13 +193,8 @@ ColumnWithTypeAndName ColumnFunction::reduce() const
     auto captured = captured_columns.size();
 
     if (args != captured)
-        throw Exception(
-            fmt::format(
-                "Cannot call function {} because is has {} arguments but {} columns were captured.",
-                function->getName(),
-                args,
-                captured),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Cannot call function " + function->getName() + " because is has " + toString(args) +
+                        "arguments but " + toString(captured) + " columns were captured.", ErrorCodes::LOGICAL_ERROR);
 
     Block block(captured_columns);
     block.insert({nullptr, function->getReturnType(), ""});
@@ -249,4 +208,4 @@ ColumnWithTypeAndName ColumnFunction::reduce() const
     return block.getByPosition(captured_columns.size());
 }
 
-} // namespace DB
+}

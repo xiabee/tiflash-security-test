@@ -1,2 +1,0 @@
-race:dbms/src/Common/TiFlashMetrics.h
-race:DB::Context::setCancelTest

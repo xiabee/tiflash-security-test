@@ -1,93 +1,80 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <dlfcn.h>
 #include <Common/Exception.h>
 #include <Common/ShellCommand.h>
 #include <IO/WriteBufferFromVector.h>
 #include <IO/WriteHelpers.h>
-#include <dlfcn.h>
-#include <fcntl.h>
 #include <port/unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 
 
 namespace DB
 {
-namespace ErrorCodes
-{
-extern const int CANNOT_PIPE;
-extern const int CANNOT_DLSYM;
-extern const int CANNOT_FORK;
-extern const int CANNOT_WAITPID;
-extern const int CHILD_WAS_NOT_EXITED_NORMALLY;
-extern const int CANNOT_CREATE_CHILD_PROCESS;
-} // namespace ErrorCodes
-} // namespace DB
+    namespace ErrorCodes
+    {
+        extern const int CANNOT_PIPE;
+        extern const int CANNOT_DLSYM;
+        extern const int CANNOT_FORK;
+        extern const int CANNOT_WAITPID;
+        extern const int CHILD_WAS_NOT_EXITED_NORMALLY;
+        extern const int CANNOT_CREATE_CHILD_PROCESS;
+    }
+}
 
 
 namespace
 {
-struct Pipe
-{
-    union
+    struct Pipe
     {
-        int fds[2];
-        struct
+        union
         {
-            int read_fd;
-            int write_fd;
+            int fds[2];
+            struct
+            {
+                int read_fd;
+                int write_fd;
+            };
         };
+
+        Pipe()
+        {
+            #ifndef __APPLE__
+            if (0 != pipe2(fds, O_CLOEXEC))
+                DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
+            #else
+            if (0 != pipe(fds))
+                DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
+            if (0 != fcntl(fds[0], F_SETFD, FD_CLOEXEC))
+                DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
+            if (0 != fcntl(fds[1], F_SETFD, FD_CLOEXEC))
+                DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
+            #endif
+        }
+
+        ~Pipe()
+        {
+            if (read_fd >= 0)
+                close(read_fd);
+            if (write_fd >= 0)
+                close(write_fd);
+        }
     };
 
-    Pipe()
+    /// By these return codes from the child process, we learn (for sure) about errors when creating it.
+    enum class ReturnCodes : int
     {
-#ifndef __APPLE__
-        if (0 != pipe2(fds, O_CLOEXEC))
-            DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
-#else
-        if (0 != pipe(fds))
-            DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
-        if (0 != fcntl(fds[0], F_SETFD, FD_CLOEXEC))
-            DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
-        if (0 != fcntl(fds[1], F_SETFD, FD_CLOEXEC))
-            DB::throwFromErrno("Cannot create pipe", DB::ErrorCodes::CANNOT_PIPE);
-#endif
-    }
-
-    ~Pipe()
-    {
-        if (read_fd >= 0)
-            close(read_fd);
-        if (write_fd >= 0)
-            close(write_fd);
-    }
-};
-
-/// By these return codes from the child process, we learn (for sure) about errors when creating it.
-enum class ReturnCodes : int
-{
-    CANNOT_DUP_STDIN = 0x55555555, /// The value is not important, but it is chosen so that it's rare to conflict with the program return code.
-    CANNOT_DUP_STDOUT = 0x55555556,
-    CANNOT_DUP_STDERR = 0x55555557,
-    CANNOT_EXEC = 0x55555558,
-};
-} // namespace
+        CANNOT_DUP_STDIN    = 0x55555555,   /// The value is not important, but it is chosen so that it's rare to conflict with the program return code.
+        CANNOT_DUP_STDOUT   = 0x55555556,
+        CANNOT_DUP_STDERR   = 0x55555557,
+        CANNOT_EXEC         = 0x55555558,
+    };
+}
 
 
 namespace DB
 {
+
 ShellCommand::~ShellCommand()
 {
     if (!wait_called)
@@ -110,7 +97,7 @@ std::unique_ptr<ShellCommand> ShellCommand::executeImpl(const char * filename, c
     Pipe pipe_stdout;
     Pipe pipe_stderr;
 
-    pid_t pid = reinterpret_cast<pid_t (*)()>(real_vfork)();
+    pid_t pid = reinterpret_cast<pid_t(*)()>(real_vfork)();
 
     if (-1 == pid)
         throwFromErrno("Cannot vfork", ErrorCodes::CANNOT_FORK);
@@ -160,7 +147,7 @@ std::unique_ptr<ShellCommand> ShellCommand::execute(const std::string & command,
     std::vector<char> argv1("-c", &("-c"[3]));
     std::vector<char> argv2(command.data(), command.data() + command.size() + 1);
 
-    char * const argv[] = {argv0.data(), argv1.data(), argv2.data(), nullptr};
+    char * const argv[] = { argv0.data(), argv1.data(), argv2.data(), nullptr };
 
     return executeImpl("/bin/sh", argv, pipe_stdin_only);
 }
@@ -220,19 +207,19 @@ void ShellCommand::wait()
     {
         switch (retcode)
         {
-        case int(ReturnCodes::CANNOT_DUP_STDIN):
-            throw Exception("Cannot dup2 stdin of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case int(ReturnCodes::CANNOT_DUP_STDOUT):
-            throw Exception("Cannot dup2 stdout of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case int(ReturnCodes::CANNOT_DUP_STDERR):
-            throw Exception("Cannot dup2 stderr of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case int(ReturnCodes::CANNOT_EXEC):
-            throw Exception("Cannot execv in child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        default:
-            throw Exception("Child process was exited with return code " + toString(retcode), ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
+            case int(ReturnCodes::CANNOT_DUP_STDIN):
+                throw Exception("Cannot dup2 stdin of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
+            case int(ReturnCodes::CANNOT_DUP_STDOUT):
+                throw Exception("Cannot dup2 stdout of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
+            case int(ReturnCodes::CANNOT_DUP_STDERR):
+                throw Exception("Cannot dup2 stderr of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
+            case int(ReturnCodes::CANNOT_EXEC):
+                throw Exception("Cannot execv in child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
+            default:
+                throw Exception("Child process was exited with return code " + toString(retcode), ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
         }
     }
 }
 
 
-} // namespace DB
+}

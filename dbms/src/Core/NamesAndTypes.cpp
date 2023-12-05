@@ -1,63 +1,22 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/FmtUtils.h>
 #include <Core/NamesAndTypes.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <IO/ReadBuffer.h>
-#include <IO/ReadBufferFromString.h>
-#include <IO/ReadHelpers.h>
 #include <IO/WriteBuffer.h>
-#include <IO/WriteBufferFromString.h>
+#include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
-
+#include <IO/ReadBufferFromString.h>
+#include <IO/WriteBufferFromString.h>
 #include <sparsehash/dense_hash_map>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int THERE_IS_NO_COLUMN;
+    extern const int THERE_IS_NO_COLUMN;
 }
 
-String dumpJsonStructure(const NamesAndTypes & names_and_types)
-{
-    FmtBuffer bf;
-    bf.append("[");
-    bf.joinStr(
-        names_and_types.cbegin(),
-        names_and_types.cend(),
-        [](const auto & name_and_type, FmtBuffer & fb) {
-            fb.fmtAppend(
-                R"json({{"name":"{}","type":{}}})json",
-                name_and_type.name,
-                (name_and_type.type ? "\"" + name_and_type.type->getName() + "\"" : "null"));
-        },
-        ", ");
-    bf.append("]");
-    return bf.toString();
-}
-
-Names toNames(const NamesAndTypes & names_and_types)
-{
-    Names names;
-    names.reserve(names_and_types.size());
-    for (const auto & name_and_type : names_and_types)
-        names.push_back(name_and_type.name);
-    return names;
-}
 
 void NamesAndTypesList::readText(ReadBuffer & buf)
 {
@@ -189,4 +148,4 @@ bool NamesAndTypesList::contains(const String & name) const
     return false;
 }
 
-} // namespace DB
+}

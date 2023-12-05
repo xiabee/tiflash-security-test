@@ -1,24 +1,11 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/hex.h>
 #include <IO/WriteHelpers.h>
 #include <inttypes.h>
+#include <Common/hex.h>
 
 
 namespace DB
 {
+
 template <typename IteratorSrc, typename IteratorDst>
 void formatHex(IteratorSrc src, IteratorDst dst, const size_t num_bytes)
 {
@@ -61,6 +48,7 @@ void formatUUID(std::reverse_iterator<const UInt8 *> src16, UInt8 * dst36)
 }
 
 
+
 void writeException(const Exception & e, WriteBuffer & buf)
 {
     writeBinary(e.code(), buf);
@@ -75,12 +63,4 @@ void writeException(const Exception & e, WriteBuffer & buf)
         writeException(Exception(*e.nested()), buf);
 }
 
-void writePointerHex(const void * ptr, WriteBuffer & buf)
-{
-    writeString("0x", buf);
-    char hex_str[2 * sizeof(ptr)];
-    writeHexUIntLowercase(reinterpret_cast<uintptr_t>(ptr), hex_str);
-    buf.write(hex_str, 2 * sizeof(ptr));
 }
-
-} // namespace DB

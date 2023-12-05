@@ -1,28 +1,16 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnString.h>
 #include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypesNumber.h>
-#include <Functions/FunctionHelpers.h>
+#include <Functions/FunctionsArithmetic.h>
 #include <Functions/IFunction.h>
+#include <Functions/FunctionHelpers.h>
+
 
 namespace DB
 {
+
 /** Search and replace functions in strings:
   *
   * position(haystack, needle)     - the normal search for a substring in a string, returns the position (in bytes) of the found substring starting with 1, or 0 if no substring is found.
@@ -50,20 +38,14 @@ namespace DB
   * Warning! At this point, the arguments needle, pattern, n, replacement must be constants.
   */
 
-namespace ErrorCodes
-{
-extern const int ILLEGAL_COLUMN;
-}
-
 static const UInt8 CH_ESCAPE_CHAR = '\\';
 
-template <typename Impl, typename Name>
+template <typename Impl, typename Name, size_t num_args = 2>
 class FunctionsStringSearch : public IFunction
 {
-    static_assert(!(Impl::need_customized_escape_char && Impl::support_match_type));
-
 public:
     static constexpr auto name = Name::name;
+    static constexpr auto has_3_args = (num_args == 3);
     static FunctionPtr create(const Context &)
     {
         return std::make_shared<FunctionsStringSearch>();
@@ -74,65 +56,45 @@ public:
         return name;
     }
 
-    void setCollator(const TiDB::TiDBCollatorPtr & collator_) override { collator = collator_; }
+    void setCollator(std::shared_ptr<TiDB::ITiDBCollator> collator_) override { collator = collator_; }
 
     size_t getNumberOfArguments() const override
     {
-        return 0;
+        return num_args;
     }
-
-    bool isVariadic() const override { return true; }
-    ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {3}; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
         if (!arguments[0]->isString())
             throw Exception(
-                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         if (!arguments[1]->isString())
             throw Exception(
-                "Illegal type " + arguments[1]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
-        if constexpr (Impl::need_customized_escape_char)
-        {
-            if (!arguments[2]->isInteger())
-                throw Exception(
-                    "Illegal type " + arguments[2]->getName() + " of argument of function " + getName(),
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
-        }
-        else if constexpr (Impl::support_match_type)
-        {
-            if (arguments.size() > 2 && !arguments[2]->isString())
-                throw Exception(
-                    "Illegal type " + arguments[2]->getName() + " of argument of function " + getName(),
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
-        }
-        size_t max_arguments_number = Impl::need_customized_escape_char || Impl::support_match_type ? 3 : 2;
-        if (arguments.size() > max_arguments_number)
-            throw Exception("Too many arguments, only " + std::to_string(max_arguments_number) + " argument is supported for function " + getName());
+                "Illegal type " + arguments[1]->getName() + " of argument of function " + getName(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+        if (has_3_args && !arguments[2]->isInteger())
+            throw Exception(
+                    "Illegal type " + arguments[2]->getName() + " of argument of function " + getName(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeNumber<typename Impl::ResultType>>();
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override
     {
         using ResultType = typename Impl::ResultType;
 
         const ColumnPtr & column_haystack = block.getByPosition(arguments[0]).column;
         const ColumnPtr & column_needle = block.getByPosition(arguments[1]).column;
 
-        const auto * col_haystack_const = typeid_cast<const ColumnConst *>(&*column_haystack);
-        const auto * col_needle_const = typeid_cast<const ColumnConst *>(&*column_needle);
+        const ColumnConst * col_haystack_const = typeid_cast<const ColumnConst *>(&*column_haystack);
+        const ColumnConst * col_needle_const = typeid_cast<const ColumnConst *>(&*column_needle);
 
         UInt8 escape_char = CH_ESCAPE_CHAR;
-        String match_type;
-        if constexpr (Impl::need_customized_escape_char)
+        if (has_3_args)
         {
-            const auto * col_escape_const = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
+            auto * col_escape_const = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
             bool valid_args = true;
-            if (col_escape_const == nullptr)
+            if (col_needle_const == nullptr || col_escape_const == nullptr)
             {
                 valid_args = false;
             }
@@ -146,30 +108,21 @@ public:
                 }
                 else
                 {
-                    escape_char = static_cast<UInt8>(c);
+                    escape_char = (UInt8) c;
                 }
             }
             if (!valid_args)
             {
-                throw Exception("3rd arguments of function " + getName() + " must be constants and between 0 and 255.");
-            }
-        }
-        else if constexpr (Impl::support_match_type)
-        {
-            if (arguments.size() > 2)
-            {
-                const auto * col_match_type_const = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
-                if (col_match_type_const == nullptr)
-                    throw Exception("Match type argument of function " + getName() + " must be constant");
-                match_type = col_match_type_const->getValue<String>();
+                throw Exception("2nd and 3rd arguments of function " + getName() + " must "
+                      "be constants, and the 3rd argument must between 0 and 255.");
             }
         }
 
         if (col_haystack_const && col_needle_const)
         {
             ResultType res{};
-            auto needle_string = col_needle_const->getValue<String>();
-            Impl::constantConstant(col_haystack_const->getValue<String>(), needle_string, escape_char, match_type, collator, res);
+            String needle_string = col_needle_const->getValue<String>();
+            Impl::constant_constant(col_haystack_const->getValue<String>(), needle_string, escape_char, collator, res);
             block.getByPosition(result).column = block.getByPosition(result).type->createColumnConst(col_haystack_const->size(), toField(res));
             return;
         }
@@ -179,42 +132,38 @@ public:
         typename ColumnVector<ResultType>::Container & vec_res = col_res->getData();
         vec_res.resize(column_haystack->size());
 
-        const auto * col_haystack_vector = checkAndGetColumn<ColumnString>(&*column_haystack);
-        const auto * col_needle_vector = checkAndGetColumn<ColumnString>(&*column_needle);
+        const ColumnString * col_haystack_vector = checkAndGetColumn<ColumnString>(&*column_haystack);
+        const ColumnString * col_needle_vector = checkAndGetColumn<ColumnString>(&*column_needle);
 
         if (col_haystack_vector && col_needle_vector)
-            Impl::vectorVector(col_haystack_vector->getChars(),
-                               col_haystack_vector->getOffsets(),
-                               col_needle_vector->getChars(),
-                               col_needle_vector->getOffsets(),
-                               escape_char,
-                               match_type,
-                               collator,
-                               vec_res);
+            Impl::vector_vector(col_haystack_vector->getChars(),
+                col_haystack_vector->getOffsets(),
+                col_needle_vector->getChars(),
+                col_needle_vector->getOffsets(),
+                escape_char,
+                collator,
+                vec_res);
         else if (col_haystack_vector && col_needle_const)
         {
-            auto needle_string = col_needle_const->getValue<String>();
-            Impl::vectorConstant(col_haystack_vector->getChars(), col_haystack_vector->getOffsets(), needle_string, escape_char, match_type, collator, vec_res);
+            String needle_string = col_needle_const->getValue<String>();
+            Impl::vector_constant(col_haystack_vector->getChars(), col_haystack_vector->getOffsets(),
+                                  needle_string, escape_char, collator, vec_res);
         }
         else if (col_haystack_const && col_needle_vector)
-        {
-            auto haystack = col_haystack_const->getValue<String>();
-            const ColumnString::Chars_t & needle_chars = col_needle_vector->getChars();
-            const IColumn::Offsets & needle_offsets = col_needle_vector->getOffsets();
-            Impl::constantVector(haystack, needle_chars, needle_offsets, escape_char, match_type, collator, vec_res);
-        }
+            Impl::constant_vector(col_haystack_const->getValue<String>(), col_needle_vector->getChars(),
+                    col_needle_vector->getOffsets(), escape_char, collator, vec_res);
         else
             throw Exception("Illegal columns " + block.getByPosition(arguments[0]).column->getName() + " and "
-                                + block.getByPosition(arguments[1]).column->getName()
-                                + " of arguments of function "
-                                + getName(),
-                            ErrorCodes::ILLEGAL_COLUMN);
+                    + block.getByPosition(arguments[1]).column->getName()
+                    + " of arguments of function "
+                    + getName(),
+                ErrorCodes::ILLEGAL_COLUMN);
 
         block.getByPosition(result).column = std::move(col_res);
     }
 
 private:
-    TiDB::TiDBCollatorPtr collator = nullptr;
+    std::shared_ptr<TiDB::ITiDBCollator> collator;
 };
 
 
@@ -245,27 +194,25 @@ public:
     {
         if (!arguments[0]->isString())
             throw Exception(
-                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         if (!arguments[1]->isString())
             throw Exception(
-                "Illegal type " + arguments[1]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+                "Illegal type " + arguments[1]->getName() + " of argument of function " + getName(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeString>();
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override
     {
         const ColumnPtr column = block.getByPosition(arguments[0]).column;
         const ColumnPtr column_needle = block.getByPosition(arguments[1]).column;
 
-        const auto * col_needle = typeid_cast<const ColumnConst *>(&*column_needle);
+        const ColumnConst * col_needle = typeid_cast<const ColumnConst *>(&*column_needle);
         if (!col_needle)
             throw Exception("Second argument of function " + getName() + " must be constant string.", ErrorCodes::ILLEGAL_COLUMN);
 
-        if (const auto * col = checkAndGetColumn<ColumnString>(column.get()))
+        if (const ColumnString * col = checkAndGetColumn<ColumnString>(column.get()))
         {
             auto col_res = ColumnString::create();
 
@@ -281,4 +228,5 @@ public:
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
-} // namespace DB
+
+}

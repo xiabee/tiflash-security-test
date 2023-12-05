@@ -1,33 +1,20 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <AggregateFunctions/AggregateFunctionCombinatorFactory.h>
 #include <AggregateFunctions/AggregateFunctionCount.h>
 #include <AggregateFunctions/AggregateFunctionNothing.h>
 #include <AggregateFunctions/AggregateFunctionNull.h>
 #include <DataTypes/DataTypeNullable.h>
-#include <DataTypes/DataTypeTuple.h>
 
 #include <unordered_set>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
 extern const int ILLEGAL_TYPE_OF_ARGUMENT;
 }
 
+extern const String UniqRawResName;
 extern const std::unordered_set<String> hacking_return_non_null_agg_func_names;
 
 class AggregateFunctionCombinatorNull final : public IAggregateFunctionCombinator
@@ -45,15 +32,8 @@ public:
     }
 
     AggregateFunctionPtr transformAggregateFunction(
-        const AggregateFunctionPtr & nested_function,
-        const DataTypes & arguments,
-        const Array &) const override
+        const AggregateFunctionPtr & nested_function, const DataTypes & arguments, const Array &) const override
     {
-        /// group_concat reuses groupArray and groupUniqArray with the special warp function `AggregateFunctionGroupConcat` to process,
-        /// the warp function needs more complex arguments, including collators, sort descriptions and others, which are hard to deliver via Array type,
-        /// so it is specially added outside, instead of being added here, so directly return in this function.
-        if (nested_function && (nested_function->getName() == "groupArray" || nested_function->getName() == "groupUniqArray"))
-            return nested_function;
         bool has_nullable_types = false;
         bool has_null_types = false;
         for (const auto & arg_type : arguments)
@@ -68,6 +48,7 @@ public:
                 }
             }
         }
+
 
         /// Special case for 'count' function. It could be called with Nullable arguments
         /// - that means - count number of calls, when all arguments are not NULL.

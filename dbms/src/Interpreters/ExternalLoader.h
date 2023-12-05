@@ -1,36 +1,22 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/randomSeed.h>
-#include <Core/Types.h>
+#include <common/logger_useful.h>
+#include <Poco/Event.h>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <chrono>
+#include <tuple>
 #include <Interpreters/IExternalLoadable.h>
 #include <Interpreters/IExternalLoaderConfigRepository.h>
-#include <Poco/Event.h>
-#include <common/logger_useful.h>
-
-#include <chrono>
-#include <mutex>
+#include <Core/Types.h>
 #include <pcg_random.hpp>
-#include <thread>
-#include <tuple>
-#include <unordered_map>
+#include <Common/randomSeed.h>
 
 
 namespace DB
 {
+
 class Context;
 
 struct ExternalLoaderUpdateSettings
@@ -42,10 +28,9 @@ struct ExternalLoaderUpdateSettings
 
     ExternalLoaderUpdateSettings() = default;
     ExternalLoaderUpdateSettings(UInt64 check_period_sec, UInt64 backoff_initial_sec, UInt64 backoff_max_sec)
-        : check_period_sec(check_period_sec)
-        , backoff_initial_sec(backoff_initial_sec)
-        , backoff_max_sec(backoff_max_sec)
-    {}
+            : check_period_sec(check_period_sec),
+              backoff_initial_sec(backoff_initial_sec),
+              backoff_max_sec(backoff_max_sec) {}
 };
 
 
@@ -109,8 +94,7 @@ public:
                    const ExternalLoaderUpdateSettings & update_settings,
                    const ExternalLoaderConfigSettings & config_settings,
                    std::unique_ptr<IExternalLoaderConfigRepository> config_repository,
-                   Poco::Logger * log,
-                   const std::string & loadable_object_name);
+                   Logger * log, const std::string & loadable_object_name);
     virtual ~ExternalLoader();
 
     /// Forcibly reloads all loadable objects.
@@ -123,17 +107,14 @@ public:
     LoadablePtr tryGetLoadable(const std::string & name) const;
 
 protected:
-    virtual std::unique_ptr<IExternalLoadable> create(const std::string & name, const Configuration & config, const std::string & config_prefix) = 0;
+    virtual std::unique_ptr<IExternalLoadable> create(const std::string & name, const Configuration & config,
+                                                      const std::string & config_prefix) = 0;
 
     class LockedObjectsMap
     {
     public:
-        LockedObjectsMap(std::mutex & mutex, const ObjectsMap & objects_map)
-            : lock(mutex)
-            , objects_map(objects_map)
-        {}
+        LockedObjectsMap(std::mutex & mutex, const ObjectsMap & objects_map) : lock(mutex), objects_map(objects_map) {}
         const ObjectsMap & get() { return objects_map; }
-
     private:
         std::unique_lock<std::mutex> lock;
         const ObjectsMap & objects_map;
@@ -146,6 +127,7 @@ protected:
     void init(bool throw_on_error);
 
 private:
+
     bool is_initialized = false;
 
     /// Protects only objects map.
@@ -175,7 +157,7 @@ private:
     std::thread reloading_thread;
     Poco::Event destroy;
 
-    Poco::Logger * log;
+    Logger * log;
     /// Loadable object name to use in log messages.
     std::string object_name;
 
@@ -183,8 +165,9 @@ private:
 
     /// Check objects definitions in config files and reload or/and add new ones if the definition is changed
     /// If loadable_name is not empty, load only loadable object with name loadable_name
-    void reloadFromConfigFiles(bool throw_on_error, bool force_reload = false, const std::string & only_dictionary = "");
-    void reloadFromConfigFile(const std::string & config_path, bool throw_on_error, bool force_reload, const std::string & loadable_name);
+    void reloadFromConfigFiles(bool throw_on_error, bool force_reload = false, const std::string & loadable_name = "");
+    void reloadFromConfigFile(const std::string & config_path, bool throw_on_error, bool force_reload,
+                              const std::string & loadable_name);
 
     /// Check config files and update expired loadable objects
     void reloadAndUpdate(bool throw_on_error = false);
@@ -194,4 +177,4 @@ private:
     LoadablePtr getLoadableImpl(const std::string & name, bool throw_on_error) const;
 };
 
-} // namespace DB
+}

@@ -1,26 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Core/ColumnNumbers.h>
-#include <DataTypes/IDataType.h>
-#include <Functions/FunctionHelpers.h>
 #include <Functions/IFunction.h>
+#include <Functions/FunctionHelpers.h>
+#include <DataTypes/IDataType.h>
+#include <Core/ColumnNumbers.h>
 
 namespace DB
 {
+
 class Block;
 class Context;
 
@@ -37,7 +24,7 @@ public:
     bool useDefaultImplementationForNulls() const override { return false; }
     bool useDefaultImplementationForConstants() const override { return true; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
 /// Implements the function isNotNull which returns true if a value
@@ -53,7 +40,7 @@ public:
     bool useDefaultImplementationForNulls() const override { return false; }
     bool useDefaultImplementationForConstants() const override { return true; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
 /// Implements the function coalesce which takes a set of arguments and
@@ -64,19 +51,34 @@ class FunctionCoalesce : public IFunction
 public:
     static constexpr auto name = "coalesce";
     static FunctionPtr create(const Context & context);
-    FunctionCoalesce(const Context & context)
-        : context(context)
-    {}
+    FunctionCoalesce(const Context & context) : context(context) {}
 
     std::string getName() const override;
     bool useDefaultImplementationForNulls() const override { return false; }
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 
 private:
     const Context & context;
+};
+
+/// Implements the function ifNull which takes 2 arguments and returns
+/// the value of the 1st argument if it is not null. Otherwise it returns
+/// the value of the 2nd argument.
+class FunctionIfNull : public IFunction
+{
+public:
+    static constexpr auto name = "ifNull";
+    static FunctionPtr create(const Context & context);
+
+    std::string getName() const override;
+    size_t getNumberOfArguments() const override { return 2; }
+    bool useDefaultImplementationForNulls() const override { return false; }
+    bool useDefaultImplementationForConstants() const override { return true; }
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
 /// Implements the function nullIf which takes 2 arguments and returns
@@ -93,7 +95,7 @@ public:
     bool useDefaultImplementationForNulls() const override { return false; }
     bool useDefaultImplementationForConstants() const override { return true; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
 /// Implements the function assumeNotNull which takes 1 argument and works as follows:
@@ -111,7 +113,7 @@ public:
     bool useDefaultImplementationForNulls() const override { return false; }
     bool useDefaultImplementationForConstants() const override { return true; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
 /// If value is not Nullable or NULL, wraps it to Nullable.
@@ -126,7 +128,7 @@ public:
     bool useDefaultImplementationForNulls() const override { return false; }
     bool useDefaultImplementationForConstants() const override { return true; }
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override;
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override;
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override;
 };
 
-} // namespace DB
+}

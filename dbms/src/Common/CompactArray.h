@@ -1,31 +1,17 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/nocopyable.h>
-#include <Core/Defines.h>
 #include <IO/ReadBuffer.h>
-#include <IO/ReadHelpers.h>
 #include <IO/WriteBuffer.h>
+#include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
+#include <Core/Defines.h>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int NO_AVAILABLE_DATA;
+    extern const int NO_AVAILABLE_DATA;
 }
 
 
@@ -36,7 +22,7 @@ extern const int NO_AVAILABLE_DATA;
   * simulates an array of `content_width`-bit values.
   */
 template <typename BucketIndex, UInt8 content_width, size_t bucket_count>
-class __attribute__((packed)) CompactArray final
+class __attribute__ ((packed)) CompactArray final
 {
 public:
     class Reader;
@@ -92,7 +78,7 @@ public:
 private:
     /// number of bytes in bitset
     static constexpr size_t BITSET_SIZE = (static_cast<size_t>(bucket_count) * content_width + 7) / 8;
-    UInt8 bitset[BITSET_SIZE] = {0};
+    UInt8 bitset[BITSET_SIZE] = { 0 };
 };
 
 /** A class for sequentially reading cells from a compact array on a disk.
@@ -101,12 +87,13 @@ template <typename BucketIndex, UInt8 content_width, size_t bucket_count>
 class CompactArray<BucketIndex, content_width, bucket_count>::Reader final
 {
 public:
-    explicit Reader(ReadBuffer & in_)
+    Reader(ReadBuffer & in_)
         : in(in_)
     {
     }
 
-    DISALLOW_COPY(Reader);
+    Reader(const Reader &) = delete;
+    Reader & operator=(const Reader &) = delete;
 
     bool next()
     {
@@ -191,7 +178,7 @@ class CompactArray<BucketIndex, content_width, bucket_count>::Locus final
     friend class CompactArray::Reader;
 
 public:
-    ALWAYS_INLINE explicit operator UInt8() const
+    ALWAYS_INLINE operator UInt8() const
     {
         if (content_l == content_r)
             return read(*content_l);
@@ -225,7 +212,7 @@ public:
 private:
     Locus() = default;
 
-    explicit Locus(BucketIndex bucket_index)
+    Locus(BucketIndex bucket_index)
     {
         init(bucket_index);
     }
@@ -268,4 +255,5 @@ private:
     static_assert(bucket_count <= (std::numeric_limits<size_t>::max() / content_width), "Invalid parameter value");
 };
 
-} // namespace DB
+}
+

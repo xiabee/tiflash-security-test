@@ -1,23 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <AggregateFunctions/IAggregateFunction.h>
-#include <Columns/IColumn.h>
 #include <Common/Arena.h>
+
+#include <AggregateFunctions/IAggregateFunction.h>
+
+#include <Columns/IColumn.h>
+
 #include <Core/Field.h>
+
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
@@ -25,6 +15,8 @@
 
 namespace DB
 {
+
+
 /** Column of states of aggregate functions.
   * Presented as an array of pointers to the states of aggregate functions (data).
   * The states themselves are stored in one of the pools (arenas).
@@ -70,7 +62,7 @@ private:
     /// Array of pointers to aggregation states, that are placed in arenas.
     Container data;
 
-    ColumnAggregateFunction() = default;
+    ColumnAggregateFunction() {}
 
     /// Create a new column that has another column as a source.
     MutablePtr createView() const
@@ -80,23 +72,18 @@ private:
         return res;
     }
 
-    explicit ColumnAggregateFunction(const AggregateFunctionPtr & func_)
+    ColumnAggregateFunction(const AggregateFunctionPtr & func_)
         : func(func_)
     {
     }
 
     ColumnAggregateFunction(const AggregateFunctionPtr & func_, const Arenas & arenas_)
-        : arenas(arenas_)
-        , func(func_)
+        : arenas(arenas_), func(func_)
     {
     }
 
     ColumnAggregateFunction(const ColumnAggregateFunction & src_)
-        : COWPtrHelper<IColumn, ColumnAggregateFunction>(src_)
-        , arenas(src_.arenas)
-        , func(src_.func)
-        , src(src_.getPtr())
-        , data(src_.data.begin(), src_.data.end())
+        : arenas(src_.arenas), func(src_.func), src(src_.getPtr()), data(src_.data.begin(), src_.data.end())
     {
     }
 
@@ -138,10 +125,10 @@ public:
 
     void insertFrom(const IColumn & src, size_t n) override;
 
-    void insertFrom(ConstAggregateDataPtr __restrict place);
+    void insertFrom(ConstAggregateDataPtr place);
 
     /// Merge state at last row with specified state in another column.
-    void insertMergeFrom(ConstAggregateDataPtr __restrict place);
+    void insertMergeFrom(ConstAggregateDataPtr place);
 
     void insertMergeFrom(const IColumn & src, size_t n);
 
@@ -151,15 +138,13 @@ public:
 
     void insertDefault() override;
 
-    StringRef serializeValueIntoArena(size_t n, Arena & dst, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
+    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
 
-    const char * deserializeAndInsertFromArena(const char * src_arena, const TiDB::TiDBCollatorPtr &) override;
+    const char * deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator>) override;
 
-    void updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateHashWithValue(size_t n, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
 
-    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const override;
-
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const override;
 
     size_t byteSize() const override;
 
@@ -176,8 +161,6 @@ public:
     ColumnPtr replicate(const Offsets & offsets) const override;
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override;
-
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override;
 
     void gather(ColumnGathererStream & gatherer_stream) override;
 
@@ -203,4 +186,4 @@ public:
 };
 
 
-} // namespace DB
+}

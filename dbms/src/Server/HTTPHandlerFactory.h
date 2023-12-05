@@ -1,26 +1,12 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Poco/Net/HTTPRequestHandlerFactory.h>
 #include <Poco/Net/HTTPServerRequest.h>
 #include <Poco/Net/HTTPServerResponse.h>
 #include <common/logger_useful.h>
-
-#include "HTTPHandler.h"
 #include "IServer.h"
+#include "HTTPHandler.h"
+#include "InterserverIOHTTPHandler.h"
 #include "NotFoundHandler.h"
 #include "PingRequestHandler.h"
 #include "RootRequestHandler.h"
@@ -28,31 +14,30 @@
 
 namespace DB
 {
+
 template <typename HandlerType>
 class HTTPRequestHandlerFactory : public Poco::Net::HTTPRequestHandlerFactory
 {
 private:
     IServer & server;
-    Poco::Logger * log;
+    Logger * log;
     std::string name;
 
 public:
-    HTTPRequestHandlerFactory(IServer & server_, const std::string & name_)
-        : server(server_)
-        , log(&Poco::Logger::get(name_))
-        , name(name_)
+    HTTPRequestHandlerFactory(IServer & server_, const std::string & name_) : server(server_), log(&Logger::get(name_)), name(name_)
     {
     }
 
     Poco::Net::HTTPRequestHandler * createRequestHandler(const Poco::Net::HTTPServerRequest & request) override
     {
-        LOG_TRACE(
-            log,
-            "HTTP Request for {}. Method: {}, Address: {}, User-Agent: {}",
-            name,
-            request.getMethod(),
-            request.clientAddress().toString(),
-            (request.has("User-Agent") ? request.get("User-Agent") : "none"));
+        LOG_TRACE(log,
+            "HTTP Request for " << name << ". "
+                                << "Method: "
+                                << request.getMethod()
+                                << ", Address: "
+                                << request.clientAddress().toString()
+                                << ", User-Agent: "
+                                << (request.has("User-Agent") ? request.get("User-Agent") : "none"));
 
         const auto & uri = request.getURI();
 
@@ -80,5 +65,6 @@ public:
 };
 
 using HTTPHandlerFactory = HTTPRequestHandlerFactory<HTTPHandler>;
+using InterserverIOHTTPHandlerFactory = HTTPRequestHandlerFactory<InterserverIOHTTPHandler>;
 
-} // namespace DB
+}

@@ -1,36 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/Logger.h>
-#include <Core/Types.h>
-#include <Storages/Page/Config.h>
-#include <Storages/Page/ExternalPageCallbacks.h>
-#include <Storages/Page/FileUsage.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/PageDefines.h>
-#include <Storages/Page/PageUtil.h>
-#include <Storages/Page/Snapshot.h>
-#include <Storages/Page/WALRecoveryMode.h>
+#include <Storages/Page/PageFile.h>
+#include <Storages/Page/VersionSet/PageEntriesVersionSet.h>
+#include <Storages/Page/VersionSet/PageEntriesVersionSetWithDelta.h>
 #include <Storages/Page/WriteBatch.h>
-#include <common/logger_useful.h>
-#include <fmt/format.h>
 
-#include <condition_variable>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <queue>
 #include <set>
@@ -38,282 +15,280 @@
 #include <type_traits>
 #include <unordered_map>
 
-
 namespace DB
 {
+
 class FileProvider;
 using FileProviderPtr = std::shared_ptr<FileProvider>;
+class TiFlashMetrics;
+using TiFlashMetricsPtr = std::shared_ptr<TiFlashMetrics>;
 class PathCapacityMetrics;
 using PathCapacityMetricsPtr = std::shared_ptr<PathCapacityMetrics>;
 class PSDiskDelegator;
 using PSDiskDelegatorPtr = std::shared_ptr<PSDiskDelegator>;
-class Context;
-class PageStorage;
-using PageStoragePtr = std::shared_ptr<PageStorage>;
-class RegionPersister;
 
-namespace ErrorCodes
-{
-extern const int LOGICAL_ERROR;
-} // namespace ErrorCodes
-
-
-enum class PageStorageRunMode : UInt8
-{
-    ONLY_V2 = 1,
-    ONLY_V3 = 2,
-    MIX_MODE = 3,
-};
 
 /**
- * A storage system stored pages. Pages are serialized objects referenced by PageID. Store Page with the same PageID
- * will cover the old ones.
- * Users should call #gc() constantly to release disk space.
+ * A storage system stored pages. Pages are serialized objects referenced by PageId. Store Page with the same PageId
+ * will covered the old ones. The file used to persist the Pages called PageFile. The meta data of a Page, like the
+ * latest PageFile the Page is stored , the offset in file, and checksum, are cached in memory. Users should call
+ * #gc() constantly to clean up the sparse PageFiles and release disk space.
  *
- * This class is multi-threads safe. Support multi threads write, and multi threads read.
+ * This class is multi-threads safe. Support single thread write, and multi threads read.
  */
 class PageStorage : private boost::noncopyable
 {
 public:
-    using SnapshotPtr = PageStorageSnapshotPtr;
-
-    void reloadSettings(const PageStorageConfig & new_config)
+    struct Config
     {
-        config.reload(new_config);
-        reloadConfig();
-    }
-    PageStorageConfig getSettings() const { return config; }
+        Config() = default;
 
-    // Use a more easy gc config for v2 when all of its data will be transformed to v3.
-    static PageStorageConfig getEasyGCConfig()
+        bool sync_on_write = true;
+
+        size_t file_roll_size  = PAGE_FILE_ROLL_SIZE;
+        size_t file_max_size   = PAGE_FILE_MAX_SIZE;
+        size_t file_small_size = PAGE_FILE_SMALL_SIZE;
+
+        size_t file_meta_roll_size = PAGE_META_ROLL_SIZE;
+
+        Float64 gc_max_valid_rate = 0.35;
+        size_t  gc_min_bytes      = PAGE_FILE_ROLL_SIZE;
+        size_t  gc_min_files      = 10;
+        // Minimum number of legacy files to be selected for compaction
+        size_t gc_min_legacy_num = 3;
+
+        size_t  gc_max_expect_legacy_files = 100;
+        Float64 gc_max_valid_rate_bound    = 1.0;
+
+        // Maximum write concurrency. Must not be changed once the PageStorage object is created.
+        size_t num_write_slots = 1;
+
+        // Maximum seconds of reader / writer idle time.
+        // 0 for never reclaim idle file descriptor.
+        Seconds open_file_max_idle_time{15};
+
+        // Probability to do gc when write is low.
+        // The probability is `prob_do_gc_when_write_is_low` out of 1000.
+        size_t prob_do_gc_when_write_is_low = 10;
+
+        ::DB::MVCC::VersionSetConfig version_set_config;
+
+        void reload(const Config & rhs);
+
+        String toDebugString() const;
+    };
+
+    struct ListPageFilesOption
     {
-        PageStorageConfig gc_config;
-        gc_config.file_roll_size = PAGE_FILE_SMALL_SIZE;
-        return gc_config;
-    }
+        ListPageFilesOption() {}
+
+        bool remove_tmp_files  = false;
+        bool ignore_legacy     = false;
+        bool ignore_checkpoint = false;
+        bool remove_invalid_files = false;
+    };
+
+    using VersionedPageEntries = PageEntriesVersionSetWithDelta;
+
+    using SnapshotPtr   = VersionedPageEntries::SnapshotPtr;
+    using WriterPtr     = std::unique_ptr<PageFile::Writer>;
+    using ReaderPtr     = std::shared_ptr<PageFile::Reader>;
+    using OpenReadFiles = std::map<PageFileIdAndLevel, ReaderPtr>;
+
+    using MetaMergingQueue
+        = std::priority_queue<PageFile::MetaMergingReaderPtr, std::vector<PageFile::MetaMergingReaderPtr>, PageFile::MergingPtrComparator>;
+
+    using PathAndIdsVec        = std::vector<std::pair<String, std::set<PageId>>>;
+    using ExternalPagesScanner = std::function<PathAndIdsVec()>;
+    using ExternalPagesRemover
+        = std::function<void(const PathAndIdsVec & pengding_external_pages, const std::set<PageId> & valid_normal_pages)>;
+
+    // Statistics for write
+    struct StatisticsInfo
+    {
+        size_t puts    = 0;
+        size_t refs    = 0;
+        size_t deletes = 0;
+        size_t upserts = 0;
+        bool   empty() const { return puts == 0 && refs == 0 && deletes == 0 && upserts == 0; }
+        String toString() const;
+        void   mergeEdits(const PageEntriesEdit & edit);
+
+        bool equals(const StatisticsInfo & rhs);
+    };
 
 public:
-    static PageStoragePtr
-    create(
-        String name,
-        PSDiskDelegatorPtr delegator,
-        const PageStorageConfig & config,
-        const FileProviderPtr & file_provider,
-        Context & global_ctx,
-        bool use_v3 = false,
-        bool no_more_insert_to_v2 = false);
+    PageStorage(String                  name,
+                PSDiskDelegatorPtr      delegator, //
+                const Config &          config_,
+                const FileProviderPtr & file_provider_,
+                TiFlashMetricsPtr       metrics_ = nullptr);
 
-    PageStorage(
-        String name,
-        PSDiskDelegatorPtr delegator_,
-        const PageStorageConfig & config_,
-        const FileProviderPtr & file_provider_)
-        : storage_name(std::move(name))
-        , delegator(std::move(delegator_))
-        , config(config_)
-        , file_provider(file_provider_)
-    {
-    }
+    void restore();
 
-    virtual ~PageStorage() = default;
+    PageId getMaxId();
 
-    virtual void restore() = 0;
+    void write(WriteBatch && write_batch, const RateLimiterPtr & rate_limiter = nullptr);
 
-    virtual void drop() = 0;
-
-    // Get the max id from PageStorage.
-    //
-    // For V2, every table have its own three PageStorage (meta/data/log).
-    // So this function return the Page id starts from 0 and is continuously incremented to
-    // new pages.
-    // For V3, PageStorage is global(distinguish by ns_id for different table).
-    // In order to avoid Page id from being reused (and cause troubles while restoring WAL from disk),
-    // this function returns the global max id regardless of ns_id. This causes the ids in a table
-    // to not be continuously incremented.
-    // Note that Page id 1 in each ns_id is special.
-    virtual PageId getMaxId() = 0;
-
-    virtual SnapshotPtr getSnapshot(const String & tracing_id) = 0;
-
+    SnapshotPtr getSnapshot();
     // Get some statistics of all living snapshots and the oldest living snapshot.
-    virtual SnapshotsStatistics getSnapshotsStat() const = 0;
+    // Return < num of snapshots,
+    //          living time(seconds) of the oldest snapshot,
+    //          created thread id of the oldest snapshot      >
+    std::tuple<size_t, double, unsigned> getSnapshotsStat() const;
 
-    virtual FileUsageStatistics getFileUsageStatistics() const
-    {
-        // return all zeros by default
-        return FileUsageStatistics{};
-    }
+    PageEntry getEntry(PageId page_id, SnapshotPtr snapshot = {});
+    Page      read(PageId page_id, SnapshotPtr snapshot = {});
+    PageMap   read(const std::vector<PageId> & page_ids, SnapshotPtr snapshot = {});
+    void      read(const std::vector<PageId> & page_ids, const PageHandler & handler, SnapshotPtr snapshot = {});
 
-    virtual size_t getNumberOfPages() = 0;
-
-    virtual std::set<PageId> getAliveExternalPageIds(NamespaceId ns_id) = 0;
-
-    void write(WriteBatch && write_batch, const WriteLimiterPtr & write_limiter = nullptr)
-    {
-        writeImpl(std::move(write_batch), write_limiter);
-    }
-
-    // If we can't get the entry.
-    // Then the null entry will be return
-    PageEntry getEntry(NamespaceId ns_id, PageId page_id, SnapshotPtr snapshot = {})
-    {
-        return getEntryImpl(ns_id, page_id, snapshot);
-    }
-
-    Page read(NamespaceId ns_id, PageId page_id, const ReadLimiterPtr & read_limiter = nullptr, SnapshotPtr snapshot = {}, bool throw_on_not_exist = true)
-    {
-        return readImpl(ns_id, page_id, read_limiter, snapshot, throw_on_not_exist);
-    }
-
-    PageMap read(NamespaceId ns_id, const PageIds & page_ids, const ReadLimiterPtr & read_limiter = nullptr, SnapshotPtr snapshot = {}, bool throw_on_not_exist = true)
-    {
-        return readImpl(ns_id, page_ids, read_limiter, snapshot, throw_on_not_exist);
-    }
-
-    using FieldIndices = std::vector<size_t>;
+    using FieldIndices   = std::vector<size_t>;
     using PageReadFields = std::pair<PageId, FieldIndices>;
+    PageMap read(const std::vector<PageReadFields> & page_fields, SnapshotPtr snapshot = {});
 
-    PageMap read(NamespaceId ns_id, const std::vector<PageReadFields> & page_fields, const ReadLimiterPtr & read_limiter = nullptr, SnapshotPtr snapshot = {}, bool throw_on_not_exist = true)
-    {
-        return readImpl(ns_id, page_fields, read_limiter, snapshot, throw_on_not_exist);
-    }
+    void traverse(const std::function<void(const Page & page)> & acceptor, SnapshotPtr snapshot = {});
+    void traversePageEntries(const std::function<void(PageId page_id, const PageEntry & page)> & acceptor, SnapshotPtr snapshot);
 
-    Page read(NamespaceId ns_id, const PageReadFields & page_field, const ReadLimiterPtr & read_limiter = nullptr, SnapshotPtr snapshot = {}, bool throw_on_not_exist = true)
-    {
-        return readImpl(ns_id, page_field, read_limiter, snapshot, throw_on_not_exist);
-    }
+    void drop();
 
-    void traverse(const std::function<void(const DB::Page & page)> & acceptor, SnapshotPtr snapshot = {})
-    {
-        traverseImpl(acceptor, snapshot);
-    }
-
-    PageId getNormalPageId(NamespaceId ns_id, PageId page_id, SnapshotPtr snapshot = {}, bool throw_on_not_exist = true)
-    {
-        return getNormalPageIdImpl(ns_id, page_id, snapshot, throw_on_not_exist);
-    }
+    void reloadSettings(const Config & new_config) { config.reload(new_config); }
 
     // We may skip the GC to reduce useless reading by default.
-    bool gc(bool not_skip = false, const WriteLimiterPtr & write_limiter = nullptr, const ReadLimiterPtr & read_limiter = nullptr)
+    bool gc(bool not_skip = false);
+
+    PageId getNormalPageId(PageId page_id, SnapshotPtr snapshot = {});
+
+    // Register two callback:
+    // `scanner` for scanning avaliable external page ids.
+    // `remover` will be called with living normal page ids after gc run a round.
+    void registerExternalPagesCallbacks(ExternalPagesScanner scanner, ExternalPagesRemover remover);
+
+    FileProviderPtr getFileProvider() const { return file_provider; }
+
+    static PageFileSet listAllPageFiles(const FileProviderPtr &     file_provider,
+                                        PSDiskDelegatorPtr &        delegator,
+                                        Poco::Logger *              page_file_log,
+                                        const ListPageFilesOption & option = ListPageFilesOption());
+
+    static PageFormat::Version getMaxDataVersion(const FileProviderPtr & file_provider, PSDiskDelegatorPtr & delegator);
+
+    struct PersistState
     {
-        return gcImpl(not_skip, write_limiter, read_limiter);
-    }
+        // use to protect reading WriteBatches from writable PageFile's meta in GC
+        size_t meta_offset = 0;
+        // use to protect that legacy compactor won't exceed the sequence of minimum persisted
+        WriteBatch::SequenceID sequence = 0;
+    };
 
-    virtual void shutdown() {}
+    struct WritingFilesSnapshot
+    {
+        using const_iterator = std::map<PageFileIdAndLevel, PersistState>::const_iterator;
 
-    // Register and unregister external pages GC callbacks
-    // Note that user must ensure that it is safe to call `scanner` and `remover` even after unregister.
-    virtual void registerExternalPagesCallbacks(const ExternalPageCallbacks & callbacks) = 0;
-    virtual void unregisterExternalPagesCallbacks(NamespaceId /*ns_id*/){};
+        PageFileIdAndLevel     minFileIDLevel() const;
+        WriteBatch::SequenceID minPersistedSequence() const;
 
-#ifndef DBMS_PUBLIC_GTEST
-protected:
-#endif
-    virtual void writeImpl(WriteBatch && write_batch, const WriteLimiterPtr & write_limiter) = 0;
+        const_iterator find(const PageFileIdAndLevel & id) const { return states.find(id); }
+        const_iterator end() const { return states.end(); }
+        bool           contains(const PageFileIdAndLevel & id) const { return states.count(id) > 0; }
 
-    virtual PageEntry getEntryImpl(NamespaceId ns_id, PageId page_id, SnapshotPtr snapshot) = 0;
+        std::map<PageFileIdAndLevel, PersistState> states;
+    };
 
-    virtual Page readImpl(NamespaceId ns_id, PageId page_id, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist) = 0;
+private:
+    WriterPtr checkAndRenewWriter(PageFile &     page_file,
+                                  const String & parent_path_hint,
+                                  WriterPtr &&   old_writer  = nullptr,
+                                  const String & logging_msg = "");
+    ReaderPtr getReader(const PageFileIdAndLevel & file_id_level);
 
-    virtual PageMap readImpl(NamespaceId ns_id, const PageIds & page_ids, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist) = 0;
+    static constexpr const char * ARCHIVE_SUBDIR = "archive";
 
-    virtual PageMap readImpl(NamespaceId ns_id, const std::vector<PageReadFields> & page_fields, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist) = 0;
+    void archivePageFiles(const PageFileSet & page_files_to_archive, bool remove_size);
 
-    virtual Page readImpl(NamespaceId ns_id, const PageReadFields & page_field, const ReadLimiterPtr & read_limiter, SnapshotPtr snapshot, bool throw_on_not_exist) = 0;
+    std::tuple<size_t, size_t> //
+    gcRemoveObsoleteData(PageFileSet &                        page_files,
+                         const PageFileIdAndLevel &           writing_file_id_level,
+                         const std::set<PageFileIdAndLevel> & live_files);
 
-    virtual void traverseImpl(const std::function<void(const DB::Page & page)> & acceptor, SnapshotPtr snapshot) = 0;
+    void getWritingSnapshot(std::lock_guard<std::mutex> &, WritingFilesSnapshot & writing_snapshot) const;
 
-    virtual PageId getNormalPageIdImpl(NamespaceId ns_id, PageId page_id, SnapshotPtr snapshot, bool throw_on_not_exist) = 0;
+    friend class LegacyCompactor;
 
-    virtual bool gcImpl(bool not_skip, const WriteLimiterPtr & write_limiter, const ReadLimiterPtr & read_limiter) = 0;
+    template <typename SnapshotPtr>
+    friend class DataCompactor;
 
-    virtual void reloadConfig() {}
+private:
+    String             storage_name; // Identify between different Storage
+    PSDiskDelegatorPtr delegator;    // Get paths for storing data
+    Config             config;
 
-    String storage_name; // Identify between different Storage
-    PSDiskDelegatorPtr delegator; // Get paths for storing data
-    PageStorageConfig config;
     FileProviderPtr file_provider;
+
+    struct WritingPageFile
+    {
+        PageFile     file;
+        PersistState persisted{};
+    };
+    std::mutex write_mutex; // A mutex protect `idle_writers`,`write_files` and `statistics`.
+
+    // TODO: Wrap `write_mutex_cv`, `write_files`, `idle_writers` to be a standalone class
+    std::condition_variable      write_mutex_cv;
+    std::vector<WritingPageFile> write_files;
+    std::deque<WriterPtr>        idle_writers;
+    StatisticsInfo               statistics;
+
+    // A sequence number to keep ordering between multi-writers.
+    std::atomic<WriteBatch::SequenceID> write_batch_seq = 0;
+
+    OpenReadFiles open_read_files;
+    std::mutex    open_read_files_mutex; // A mutex only used to protect open_read_files.
+
+    Poco::Logger * page_file_log;
+    Poco::Logger * log;
+
+    VersionedPageEntries versioned_page_entries;
+
+    std::atomic<bool> gc_is_running = false;
+
+    ExternalPagesScanner external_pages_scanner = nullptr;
+    ExternalPagesRemover external_pages_remover = nullptr;
+
+    StatisticsInfo last_gc_statistics;
+
+    // For reporting metrics to prometheus
+    TiFlashMetricsPtr metrics;
+
+private:
+    WriterPtr checkAndRenewWriter(WritingPageFile &  page_file,
+                                  PageFileIdAndLevel max_page_file_id_lvl_hint,
+                                  const String &     parent_path_hint,
+                                  WriterPtr &&       old_writer  = nullptr,
+                                  const String &     logging_msg = "");
 };
 
-// An impl class to hide the details for PageReaderImplMixed
-class PageReaderImpl;
-// A class to wrap read with a specify snapshot
 class PageReader : private boost::noncopyable
 {
 public:
     /// Not snapshot read.
-    explicit PageReader(const PageStorageRunMode & run_mode_, NamespaceId ns_id_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_, ReadLimiterPtr read_limiter_);
-
+    explicit PageReader(PageStorage & storage_) : storage(storage_), snap() {}
     /// Snapshot read.
-    PageReader(const PageStorageRunMode & run_mode_, NamespaceId ns_id_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_, PageStorage::SnapshotPtr snap_, ReadLimiterPtr read_limiter_);
+    PageReader(PageStorage & storage_, const PageStorage::SnapshotPtr & snap_) : storage(storage_), snap(snap_) {}
+    PageReader(PageStorage & storage_, PageStorage::SnapshotPtr && snap_) : storage(storage_), snap(std::move(snap_)) {}
 
-    ~PageReader();
-
-    DB::Page read(PageId page_id) const;
-
-    PageMap read(const PageIds & page_ids) const;
+    Page    read(PageId page_id) const { return storage.read(page_id, snap); }
+    PageMap read(const std::vector<PageId> & page_ids) const { return storage.read(page_ids, snap); }
+    void    read(const std::vector<PageId> & page_ids, PageHandler & handler) const { storage.read(page_ids, handler, snap); }
 
     using PageReadFields = PageStorage::PageReadFields;
-    PageMap read(const std::vector<PageReadFields> & page_fields) const;
+    PageMap read(const std::vector<PageReadFields> & page_fields) const { return storage.read(page_fields, snap); }
 
-    PageId getNormalPageId(PageId page_id) const;
-
-    PageEntry getPageEntry(PageId page_id) const;
-
-    PageStorage::SnapshotPtr getSnapshot(const String & tracing_id) const;
-
-    // Get some statistics of all living snapshots and the oldest living snapshot.
-    SnapshotsStatistics getSnapshotsStat() const;
-
-    FileUsageStatistics getFileUsageStatistics() const;
-
-    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool only_v2 = false, bool only_v3 = false) const;
+    PageId    getNormalPageId(PageId page_id) const { return storage.getNormalPageId(page_id, snap); }
+    UInt64    getPageChecksum(PageId page_id) const { return storage.getEntry(page_id, snap).checksum; }
+    PageEntry getPageEntry(PageId page_id) const { return storage.getEntry(page_id, snap); }
 
 private:
-    std::unique_ptr<PageReaderImpl> impl;
+    PageStorage &            storage;
+    PageStorage::SnapshotPtr snap;
 };
-using PageReaderPtr = std::shared_ptr<PageReader>;
-
-class PageWriter : private boost::noncopyable
-{
-public:
-    PageWriter(PageStorageRunMode run_mode_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_)
-        : run_mode(run_mode_)
-        , storage_v2(storage_v2_)
-        , storage_v3(storage_v3_)
-    {
-    }
-
-    void write(WriteBatch && write_batch, WriteLimiterPtr write_limiter) const;
-
-    friend class RegionPersister;
-
-    // Only used for META and KVStore write del.
-    void writeIntoV2(WriteBatch && write_batch, WriteLimiterPtr write_limiter) const;
-
-    // Only used for DATA transform data
-    void writeIntoV3(WriteBatch && write_batch, WriteLimiterPtr write_limiter) const;
-
-#ifndef DBMS_PUBLIC_GTEST
-private:
-#endif
-    void writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr write_limiter) const;
-
-    // A wrap of getSettings only used for `RegionPersister::gc`
-    PageStorageConfig getSettings() const;
-
-    // A wrap of reloadSettings only used for `RegionPersister::gc`
-    void reloadSettings(const PageStorageConfig & new_config) const;
-
-    // A wrap of gc only used for `RegionPersister::gc`
-    bool gc(bool not_skip, const WriteLimiterPtr & write_limiter, const ReadLimiterPtr & read_limiter) const;
-
-private:
-    PageStorageRunMode run_mode;
-    PageStoragePtr storage_v2;
-    PageStoragePtr storage_v3;
-};
-using PageWriterPtr = std::shared_ptr<PageWriter>;
-
 
 } // namespace DB

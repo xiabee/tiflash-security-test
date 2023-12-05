@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Storages/Transaction/RegionCFDataBase.h>
 #include <Storages/Transaction/RegionCFDataTrait.h>
 #include <Storages/Transaction/RegionData.h>
@@ -19,6 +5,7 @@
 
 namespace DB
 {
+
 using CFModifyFlag = RecordKVFormat::CFModifyFlag;
 
 template <typename Trait>
@@ -155,8 +142,7 @@ size_t RegionCFDataBase<Trait>::getSize() const
 }
 
 template <typename Trait>
-RegionCFDataBase<Trait>::RegionCFDataBase(RegionCFDataBase && region)
-    : data(std::move(region.data))
+RegionCFDataBase<Trait>::RegionCFDataBase(RegionCFDataBase && region) : data(std::move(region.data))
 {}
 
 template <typename Trait>
@@ -235,7 +221,7 @@ size_t RegionCFDataBase<Trait>::serialize(WriteBuffer & buf) const
 template <typename Trait>
 size_t RegionCFDataBase<Trait>::deserialize(ReadBuffer & buf, RegionCFDataBase & new_region_data)
 {
-    auto size = readBinary2<size_t>(buf);
+    size_t size = readBinary2<size_t>(buf);
     size_t cf_data_size = 0;
     for (size_t i = 0; i < size; ++i)
     {
@@ -265,6 +251,7 @@ template struct RegionCFDataBase<RegionLockCFDataTrait>;
 
 namespace RecordKVFormat
 {
+
 // https://github.com/tikv/tikv/blob/master/components/txn_types/src/lock.rs
 inline void decodeLockCfValue(DecodedLockCFValue & res)
 {
@@ -275,18 +262,18 @@ inline void decodeLockCfValue(DecodedLockCFValue & res)
     kvrpcpb::Op lock_type = kvrpcpb::Op_MIN;
     switch (readUInt8(data, len))
     {
-    case LockType::Put:
-        lock_type = kvrpcpb::Op::Put;
-        break;
-    case LockType::Delete:
-        lock_type = kvrpcpb::Op::Del;
-        break;
-    case LockType::Lock:
-        lock_type = kvrpcpb::Op::Lock;
-        break;
-    case LockType::Pessimistic:
-        lock_type = kvrpcpb::Op::PessimisticLock;
-        break;
+        case LockType::Put:
+            lock_type = kvrpcpb::Op::Put;
+            break;
+        case LockType::Delete:
+            lock_type = kvrpcpb::Op::Del;
+            break;
+        case LockType::Lock:
+            lock_type = kvrpcpb::Op::Lock;
+            break;
+        case LockType::Pessimistic:
+            lock_type = kvrpcpb::Op::PessimisticLock;
+            break;
     }
     res.lock_type = lock_type;
     res.primary_lock = readVarString<std::string_view>(data, len);
@@ -300,73 +287,57 @@ inline void decodeLockCfValue(DecodedLockCFValue & res)
             char flag = readUInt8(data, len);
             switch (flag)
             {
-            case SHORT_VALUE_PREFIX:
-            {
-                size_t str_len = readUInt8(data, len);
-                if (len < str_len)
-                    throw Exception("content len shorter than short value len", ErrorCodes::LOGICAL_ERROR);
-                // no need short value
-                readRawString<std::nullptr_t>(data, len, str_len);
-                break;
-            };
-            case MIN_COMMIT_TS_PREFIX:
-            {
-                res.min_commit_ts = readUInt64(data, len);
-                break;
-            }
-            case FOR_UPDATE_TS_PREFIX:
-            {
-                res.lock_for_update_ts = readUInt64(data, len);
-                break;
-            }
-            case TXN_SIZE_PREFIX:
-            {
-                res.txn_size = readUInt64(data, len);
-                break;
-            }
-            case ASYNC_COMMIT_PREFIX:
-            {
-                res.use_async_commit = true;
-                const auto * start = data;
-                UInt64 cnt = readVarUInt(data, len);
-                for (UInt64 i = 0; i < cnt; ++i)
+                case SHORT_VALUE_PREFIX:
                 {
-                    readVarString<std::nullptr_t>(data, len);
-                }
-                const auto * end = data;
-                res.secondaries = {start, static_cast<size_t>(end - start)};
-                break;
-            }
-            case ROLLBACK_TS_PREFIX:
-            {
-                UInt64 cnt = readVarUInt(data, len);
-                for (UInt64 i = 0; i < cnt; ++i)
+                    size_t str_len = readUInt8(data, len);
+                    if (len < str_len)
+                        throw Exception("content len shorter than short value len", ErrorCodes::LOGICAL_ERROR);
+                    // no need short value
+                    readRawString<nullptr_t>(data, len, str_len);
+                    break;
+                };
+                case MIN_COMMIT_TS_PREFIX:
                 {
-                    readUInt64(data, len);
+                    res.min_commit_ts = readUInt64(data, len);
+                    break;
                 }
-                break;
-            }
-            case LAST_CHANGE_PREFIX:
-            {
-                // Used to accelerate TiKV MVCC scan, useless for TiFlash.
-                UInt64 last_change_ts = readUInt64(data, len);
-                UInt64 versions_to_last_change = readVarUInt(data, len);
-                UNUSED(last_change_ts);
-                UNUSED(versions_to_last_change);
-                break;
-            }
-            case TXN_SOURCE_PREFIX_FOR_LOCK:
-            {
-                // Used for CDC, useless for TiFlash.
-                UInt64 txn_source_prefic = readVarUInt(data, len);
-                UNUSED(txn_source_prefic);
-                break;
-            }
-            default:
-            {
-                std::string msg = std::string("invalid flag ") + flag + " in lock value " + value.toDebugString();
-                throw Exception(msg, ErrorCodes::LOGICAL_ERROR);
-            }
+                case FOR_UPDATE_TS_PREFIX:
+                {
+                    res.lock_for_update_ts = readUInt64(data, len);
+                    break;
+                }
+                case TXN_SIZE_PREFIX:
+                {
+                    res.txn_size = readUInt64(data, len);
+                    break;
+                }
+                case ASYNC_COMMIT_PREFIX:
+                {
+                    res.use_async_commit = true;
+                    auto start = data;
+                    UInt64 cnt = readVarUInt(data, len);
+                    for (UInt64 i = 0; i < cnt; ++i)
+                    {
+                        readVarString<nullptr_t>(data, len);
+                    }
+                    auto end = data;
+                    res.secondaries = {start, static_cast<size_t>(end - start)};
+                    break;
+                }
+                case ROLLBACK_TS_PREFIX:
+                {
+                    UInt64 cnt = readVarUInt(data, len);
+                    for (UInt64 i = 0; i < cnt; ++i)
+                    {
+                        readUInt64(data, len);
+                    }
+                    break;
+                }
+                default:
+                {
+                    std::string msg = std::string("invalid flag ") + flag + " in lock value " + value.toDebugString();
+                    throw Exception(msg, ErrorCodes::LOGICAL_ERROR);
+                }
             }
         }
     }
@@ -375,8 +346,7 @@ inline void decodeLockCfValue(DecodedLockCFValue & res)
 }
 
 DecodedLockCFValue::DecodedLockCFValue(std::shared_ptr<const TiKVKey> key_, std::shared_ptr<const TiKVValue> val_)
-    : key(std::move(key_))
-    , val(std::move(val_))
+    : key(std::move(key_)), val(std::move(val_))
 {
     decodeLockCfValue(*this);
 }
@@ -395,7 +365,7 @@ void DecodedLockCFValue::intoLockInfo(kvrpcpb::LockInfo & res) const
 
     if (use_async_commit)
     {
-        const auto * data = secondaries.data();
+        auto data = secondaries.data();
         auto len = secondaries.size();
         UInt64 cnt = readVarUInt(data, len);
         for (UInt64 i = 0; i < cnt; ++i)

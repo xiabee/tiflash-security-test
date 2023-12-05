@@ -1,38 +1,25 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <IO/ZlibDeflatingWriteBuffer.h>
 
 
 namespace DB
 {
+
 ZlibDeflatingWriteBuffer::ZlibDeflatingWriteBuffer(
-    WriteBuffer & out_,
-    ZlibCompressionMethod compression_method,
-    int compression_level,
-    size_t buf_size,
-    char * existing_memory,
-    size_t alignment)
+        WriteBuffer & out_,
+        ZlibCompressionMethod compression_method,
+        int compression_level,
+        size_t buf_size,
+        char * existing_memory,
+        size_t alignment)
     : BufferWithOwnMemory<WriteBuffer>(buf_size, existing_memory, alignment)
     , out(out_)
 {
-    zstr.zalloc = Z_NULL;
-    zstr.zfree = Z_NULL;
-    zstr.opaque = Z_NULL;
-    zstr.next_in = 0;
-    zstr.avail_in = 0;
-    zstr.next_out = 0;
+    zstr.zalloc    = Z_NULL;
+    zstr.zfree     = Z_NULL;
+    zstr.opaque    = Z_NULL;
+    zstr.next_in   = 0;
+    zstr.avail_in  = 0;
+    zstr.next_out  = 0;
     zstr.avail_out = 0;
 
     int window_bits = 15;
@@ -85,7 +72,8 @@ void ZlibDeflatingWriteBuffer::nextImpl()
 
         if (rc != Z_OK)
             throw Exception(std::string("deflate failed: ") + zError(rc), ErrorCodes::ZLIB_DEFLATE_FAILED);
-    } while (zstr.avail_in > 0 || zstr.avail_out == 0);
+    }
+    while (zstr.avail_in > 0 || zstr.avail_out == 0);
 }
 
 void ZlibDeflatingWriteBuffer::finish()
@@ -113,4 +101,4 @@ void ZlibDeflatingWriteBuffer::finish()
     finished = true;
 }
 
-} // namespace DB
+}

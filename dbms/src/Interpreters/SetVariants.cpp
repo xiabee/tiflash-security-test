@@ -1,29 +1,16 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Columns/ColumnConst.h>
 #include <Columns/ColumnString.h>
+#include <Columns/ColumnConst.h>
 #include <Common/typeid_cast.h>
 #include <Interpreters/SetVariants.h>
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int UNKNOWN_SET_DATA_VARIANT;
-extern const int LOGICAL_ERROR;
-} // namespace ErrorCodes
+    extern const int UNKNOWN_SET_DATA_VARIANT;
+    extern const int LOGICAL_ERROR;
+}
 
 template <typename Variant>
 void SetVariantsTemplate<Variant>::init(Type type_)
@@ -32,18 +19,15 @@ void SetVariantsTemplate<Variant>::init(Type type_)
 
     switch (type)
     {
-    case Type::EMPTY:
-        break;
+        case Type::EMPTY: break;
 
-#define M(NAME)                                                             \
-    case Type::NAME:                                                        \
-        (NAME) = std::make_unique<typename decltype(NAME)::element_type>(); \
-        break;
+    #define M(NAME) \
+        case Type::NAME: NAME = std::make_unique<typename decltype(NAME)::element_type>(); break;
         APPLY_FOR_SET_VARIANTS(M)
-#undef M
+    #undef M
 
-    default:
-        throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
+        default:
+            throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
     }
 }
 
@@ -52,17 +36,15 @@ size_t SetVariantsTemplate<Variant>::getTotalRowCount() const
 {
     switch (type)
     {
-    case Type::EMPTY:
-        return 0;
+        case Type::EMPTY: return 0;
 
-#define M(NAME)      \
-    case Type::NAME: \
-        return (NAME)->data.size();
+    #define M(NAME) \
+        case Type::NAME: return NAME->data.size();
         APPLY_FOR_SET_VARIANTS(M)
-#undef M
+    #undef M
 
-    default:
-        throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
+        default:
+            throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
     }
 }
 
@@ -71,22 +53,20 @@ size_t SetVariantsTemplate<Variant>::getTotalByteCount() const
 {
     switch (type)
     {
-    case Type::EMPTY:
-        return 0;
+        case Type::EMPTY: return 0;
 
-#define M(NAME)      \
-    case Type::NAME: \
-        return (NAME)->data.getBufferSizeInBytes();
+    #define M(NAME) \
+        case Type::NAME: return NAME->data.getBufferSizeInBytes();
         APPLY_FOR_SET_VARIANTS(M)
-#undef M
+    #undef M
 
-    default:
-        throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
+        default:
+            throw Exception("Unknown Set variant.", ErrorCodes::UNKNOWN_SET_DATA_VARIANT);
     }
 }
 
 template <typename Variant>
-typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::chooseMethod(const ColumnRawPtrs & key_columns, Sizes & key_sizes, const TiDB::TiDBCollators & collators)
+typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::chooseMethod(const ColumnRawPtrs & key_columns, Sizes & key_sizes)
 {
     /// Check if at least one of the specified keys is nullable.
     /// Create a set of nested key columns from the corresponding key columns.
@@ -100,7 +80,7 @@ typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::choose
     {
         if (col->isColumnNullable())
         {
-            const auto & nullable_col = static_cast<const ColumnNullable &>(*col);
+            const ColumnNullable & nullable_col = static_cast<const ColumnNullable &>(*col);
             nested_key_columns.push_back(&nullable_col.getNestedColumn());
             has_nullable_key = true;
         }
@@ -138,7 +118,7 @@ typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::choose
                 return Type::nullable_keys128;
             else
                 throw Exception{"Logical error: numeric column has sizeOfField not in 1, 2, 4, 8.",
-                                ErrorCodes::LOGICAL_ERROR};
+                    ErrorCodes::LOGICAL_ERROR};
         }
 
         if (all_fixed && !has_dec)
@@ -171,8 +151,8 @@ typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::choose
             return Type::key64;
         if (size_of_field == 16)
             return Type::keys128;
-        //        if (size_of_field == sizeof(Decimal))
-        //            return Type::key_decimal;
+//        if (size_of_field == sizeof(Decimal))
+//            return Type::key_decimal;
         throw Exception("Logical error: numeric column has sizeOfField not in 1, 2, 4, 8, 16.", ErrorCodes::LOGICAL_ERROR);
     }
 
@@ -186,32 +166,7 @@ typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::choose
     if (keys_size == 1
         && (typeid_cast<const ColumnString *>(nested_key_columns[0])
             || (nested_key_columns[0]->isColumnConst() && typeid_cast<const ColumnString *>(&static_cast<const ColumnConst *>(nested_key_columns[0])->getDataColumn()))))
-    {
-        if (collators.empty() || !collators[0])
-            return Type::key_strbin;
-        else
-        {
-            switch (collators[0]->getCollatorType())
-            {
-            case TiDB::ITiDBCollator::CollatorType::UTF8MB4_BIN:
-            case TiDB::ITiDBCollator::CollatorType::UTF8_BIN:
-            case TiDB::ITiDBCollator::CollatorType::LATIN1_BIN:
-            case TiDB::ITiDBCollator::CollatorType::ASCII_BIN:
-            {
-                return Type::key_strbinpadding;
-            }
-            case TiDB::ITiDBCollator::CollatorType::BINARY:
-            {
-                return Type::key_strbin;
-            }
-            default:
-            {
-                // for CI COLLATION, use original way
-                return Type::key_string;
-            }
-            }
-        }
-    }
+        return Type::key_string;
 
     if (keys_size == 1 && typeid_cast<const ColumnFixedString *>(nested_key_columns[0]))
         return Type::key_fixed_string;
@@ -223,4 +178,4 @@ typename SetVariantsTemplate<Variant>::Type SetVariantsTemplate<Variant>::choose
 template struct SetVariantsTemplate<NonClearableSet>;
 template struct SetVariantsTemplate<ClearableSet>;
 
-} // namespace DB
+}

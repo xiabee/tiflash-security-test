@@ -1,26 +1,14 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <AggregateFunctions/IAggregateFunction.h>
-#include <Columns/ColumnVector.h>
-#include <DataTypes/DataTypesNumber.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteHelpers.h>
-
 #include <cmath>
+
+#include <IO/WriteHelpers.h>
+#include <IO/ReadHelpers.h>
+
+#include <AggregateFunctions/IAggregateFunction.h>
+
+#include <DataTypes/DataTypesNumber.h>
+#include <Columns/ColumnVector.h>
 
 
 /** This is simple, not numerically stable
@@ -37,6 +25,7 @@
 
 namespace DB
 {
+
 enum class VarianceMode
 {
     Population,
@@ -185,12 +174,9 @@ struct CorrMoments
 
 enum class StatisticsFunctionKind
 {
-    varPop,
-    varSamp,
-    stddevPop,
-    stddevSamp,
-    covarPop,
-    covarSamp,
+    varPop, varSamp,
+    stddevPop, stddevSamp,
+    covarPop, covarSamp,
     corr
 };
 
@@ -210,20 +196,13 @@ public:
     {
         switch (Kind)
         {
-        case StatisticsFunctionKind::varPop:
-            return "varPop";
-        case StatisticsFunctionKind::varSamp:
-            return "varSamp";
-        case StatisticsFunctionKind::stddevPop:
-            return "stddevPop";
-        case StatisticsFunctionKind::stddevSamp:
-            return "stddevSamp";
-        case StatisticsFunctionKind::covarPop:
-            return "covarPop";
-        case StatisticsFunctionKind::covarSamp:
-            return "covarSamp";
-        case StatisticsFunctionKind::corr:
-            return "corr";
+            case StatisticsFunctionKind::varPop: return "varPop";
+            case StatisticsFunctionKind::varSamp: return "varSamp";
+            case StatisticsFunctionKind::stddevPop: return "stddevPop";
+            case StatisticsFunctionKind::stddevSamp: return "stddevSamp";
+            case StatisticsFunctionKind::covarPop: return "covarPop";
+            case StatisticsFunctionKind::covarSamp: return "covarSamp";
+            case StatisticsFunctionKind::corr: return "corr";
         }
     }
 
@@ -232,7 +211,7 @@ public:
         return std::make_shared<DataTypeNumber<ResultType>>();
     }
 
-    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena *) const override
+    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena *) const override
     {
         if constexpr (Kind == StatisticsFunctionKind::covarPop || Kind == StatisticsFunctionKind::covarSamp || Kind == StatisticsFunctionKind::corr)
             this->data(place).add(
@@ -243,59 +222,45 @@ public:
                 static_cast<const ColumnVector<T1> &>(*columns[0]).getData()[row_num]);
     }
 
-    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena *) const override
+    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena *) const override
     {
         this->data(place).merge(this->data(rhs));
     }
 
-    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
     {
         this->data(place).write(buf);
     }
 
-    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena *) const override
+    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena *) const override
     {
         this->data(place).read(buf);
     }
 
-    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena *) const override
+    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
     {
         const auto & data = this->data(place);
         auto & dst = static_cast<ColumnVector<ResultType> &>(to).getData();
 
-        if constexpr (Kind == StatisticsFunctionKind::varPop)
-            dst.push_back(data.template get<VarianceMode::Population, VariancePower::Original>());
-        else if constexpr (Kind == StatisticsFunctionKind::varSamp)
-            dst.push_back(data.template get<VarianceMode::Sample, VariancePower::Original>());
-        else if constexpr (Kind == StatisticsFunctionKind::stddevPop)
-            dst.push_back(data.template get<VarianceMode::Population, VariancePower::Sqrt>());
-        else if constexpr (Kind == StatisticsFunctionKind::stddevSamp)
-            dst.push_back(data.template get<VarianceMode::Sample, VariancePower::Sqrt>());
-        else if constexpr (Kind == StatisticsFunctionKind::covarPop)
-            dst.push_back(data.template get<VarianceMode::Population>());
-        else if constexpr (Kind == StatisticsFunctionKind::covarSamp)
-            dst.push_back(data.template get<VarianceMode::Sample>());
-        else if constexpr (Kind == StatisticsFunctionKind::corr)
-            dst.push_back(data.get());
+             if constexpr (Kind == StatisticsFunctionKind::varPop) dst.push_back(data.template get<VarianceMode::Population, VariancePower::Original>());
+        else if constexpr (Kind == StatisticsFunctionKind::varSamp) dst.push_back(data.template get<VarianceMode::Sample, VariancePower::Original>());
+        else if constexpr (Kind == StatisticsFunctionKind::stddevPop) dst.push_back(data.template get<VarianceMode::Population, VariancePower::Sqrt>());
+        else if constexpr (Kind == StatisticsFunctionKind::stddevSamp) dst.push_back(data.template get<VarianceMode::Sample, VariancePower::Sqrt>());
+        else if constexpr (Kind == StatisticsFunctionKind::covarPop) dst.push_back(data.template get<VarianceMode::Population>());
+        else if constexpr (Kind == StatisticsFunctionKind::covarSamp) dst.push_back(data.template get<VarianceMode::Sample>());
+        else if constexpr (Kind == StatisticsFunctionKind::corr) dst.push_back(data.get());
     }
 
     const char * getHeaderFilePath() const override { return __FILE__; }
 };
 
 
-template <typename T>
-using AggregateFunctionVarPopSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::varPop>;
-template <typename T>
-using AggregateFunctionVarSampSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::varSamp>;
-template <typename T>
-using AggregateFunctionStddevPopSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::stddevPop>;
-template <typename T>
-using AggregateFunctionStddevSampSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::stddevSamp>;
-template <typename T1, typename T2>
-using AggregateFunctionCovarPopSimple = AggregateFunctionVarianceSimple<T1, T2, CovarMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::covarPop>;
-template <typename T1, typename T2>
-using AggregateFunctionCovarSampSimple = AggregateFunctionVarianceSimple<T1, T2, CovarMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::covarSamp>;
-template <typename T1, typename T2>
-using AggregateFunctionCorrSimple = AggregateFunctionVarianceSimple<T1, T2, CorrMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::corr>;
+template <typename T> using AggregateFunctionVarPopSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::varPop>;
+template <typename T> using AggregateFunctionVarSampSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::varSamp>;
+template <typename T> using AggregateFunctionStddevPopSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::stddevPop>;
+template <typename T> using AggregateFunctionStddevSampSimple = AggregateFunctionVarianceSimple<T, T, VarMoments<VarianceCalcType<T, T>>, StatisticsFunctionKind::stddevSamp>;
+template <typename T1, typename T2> using AggregateFunctionCovarPopSimple = AggregateFunctionVarianceSimple<T1, T2, CovarMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::covarPop>;
+template <typename T1, typename T2> using AggregateFunctionCovarSampSimple = AggregateFunctionVarianceSimple<T1, T2, CovarMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::covarSamp>;
+template <typename T1, typename T2> using AggregateFunctionCorrSimple = AggregateFunctionVarianceSimple<T1, T2, CorrMoments<VarianceCalcType<T1, T2>>, StatisticsFunctionKind::corr>;
 
-} // namespace DB
+}

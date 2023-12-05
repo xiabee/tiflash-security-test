@@ -1,33 +1,22 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Columns/ColumnArray.h>
-#include <Columns/ColumnConst.h>
-#include <Columns/ColumnFixedString.h>
-#include <Columns/ColumnNullable.h>
-#include <Columns/ColumnString.h>
 #include <Columns/ColumnVector.h>
+#include <Columns/ColumnArray.h>
+#include <Columns/ColumnString.h>
+#include <Columns/ColumnFixedString.h>
+#include <Columns/ColumnConst.h>
+#include <Columns/ColumnNullable.h>
+
 #include <Common/typeid_cast.h>
-#include <Functions/FunctionHelpers.h>
+
 #include <Functions/GatherUtils/IArraySource.h>
 #include <Functions/GatherUtils/IValueSource.h>
 #include <Functions/GatherUtils/Slices.h>
+#include <Functions/FunctionHelpers.h>
 
 namespace DB::GatherUtils
 {
+
 template <typename T>
 struct NumericArraySource : public ArraySourceImpl<NumericArraySource<T>>
 {
@@ -41,8 +30,7 @@ struct NumericArraySource : public ArraySourceImpl<NumericArraySource<T>>
     ColumnArray::Offset prev_offset = 0;
 
     explicit NumericArraySource(const ColumnArray & arr)
-        : elements(typeid_cast<const ColumnVector<T> &>(arr.getData()).getData())
-        , offsets(arr.getOffsets())
+            : elements(typeid_cast<const ColumnVector<T> &>(arr.getData()).getData()), offsets(arr.getOffsets())
     {
     }
 
@@ -131,22 +119,17 @@ struct ConstSource : public Base
     size_t row_num = 0;
 
     explicit ConstSource(const ColumnConst & col)
-        : Base(static_cast<const typename Base::Column &>(col.getDataColumn()))
-        , total_rows(col.size())
+            : Base(static_cast<const typename Base::Column &>(col.getDataColumn())), total_rows(col.size())
     {
     }
 
     template <typename ColumnType>
-    ConstSource(const ColumnType & col, size_t total_rows)
-        : Base(col)
-        , total_rows(total_rows)
+    ConstSource(const ColumnType & col, size_t total_rows) : Base(col), total_rows(total_rows)
     {
     }
 
     template <typename ColumnType>
-    ConstSource(const ColumnType & col, const NullMap & null_map, size_t total_rows)
-        : Base(col, null_map)
-        , total_rows(total_rows)
+    ConstSource(const ColumnType & col, const NullMap & null_map, size_t total_rows) : Base(col, null_map), total_rows(total_rows)
     {
     }
 
@@ -158,8 +141,8 @@ struct ConstSource : public Base
             visitor.visit(*this);
         else
             throw Exception(
-                "accept(ArraySourceVisitor &) is not implemented for " + demangle(typeid(ConstSource<Base>).name())
-                + " because " + demangle(typeid(Base).name()) + " is not derived from IArraySource ");
+                    "accept(ArraySourceVisitor &) is not implemented for " + demangle(typeid(ConstSource<Base>).name())
+                    + " because " + demangle(typeid(Base).name()) + " is not derived from IArraySource ");
     }
 
     virtual void accept(ValueSourceVisitor & visitor) // override
@@ -168,8 +151,8 @@ struct ConstSource : public Base
             visitor.visit(*this);
         else
             throw Exception(
-                "accept(ValueSourceVisitor &) is not implemented for " + demangle(typeid(ConstSource<Base>).name())
-                + " because " + demangle(typeid(Base).name()) + " is not derived from IValueSource ");
+                    "accept(ValueSourceVisitor &) is not implemented for " + demangle(typeid(ConstSource<Base>).name())
+                    + " because " + demangle(typeid(Base).name()) + " is not derived from IValueSource ");
     }
 
     void next()
@@ -215,8 +198,7 @@ struct StringSource
     ColumnString::Offset prev_offset = 0;
 
     explicit StringSource(const ColumnString & col)
-        : elements(col.getChars())
-        , offsets(col.getOffsets())
+            : elements(col.getChars()), offsets(col.getOffsets())
     {
     }
 
@@ -296,7 +278,7 @@ struct FixedStringSource
     size_t row_num = 0;
 
     explicit FixedStringSource(const ColumnFixedString & col)
-        : string_size(col.getN())
+            : string_size(col.getN())
     {
         const auto & chars = col.getChars();
         pos = chars.data();
@@ -381,9 +363,7 @@ struct DynamicStringSource final : IStringSource
 {
     Impl impl;
 
-    explicit DynamicStringSource(const IColumn & col)
-        : impl(static_cast<const typename Impl::Column &>(col))
-    {}
+    explicit DynamicStringSource(const IColumn & col) : impl(static_cast<const typename Impl::Column &>(col)) {}
 
     void next() override { impl.next(); }
     bool isEnd() const override { return impl.isEnd(); }
@@ -419,8 +399,7 @@ struct GenericArraySource : public ArraySourceImpl<GenericArraySource>
     ColumnArray::Offset prev_offset = 0;
 
     explicit GenericArraySource(const ColumnArray & arr)
-        : elements(arr.getData())
-        , offsets(arr.getOffsets())
+            : elements(arr.getData()), offsets(arr.getOffsets())
     {
     }
 
@@ -503,15 +482,14 @@ template <typename ArraySource>
 struct NullableArraySource : public ArraySource
 {
     using Slice = NullableSlice<typename ArraySource::Slice>;
-    using ArraySource::offsets;
     using ArraySource::prev_offset;
     using ArraySource::row_num;
+    using ArraySource::offsets;
 
     const NullMap & null_map;
 
     NullableArraySource(const ColumnArray & arr, const NullMap & null_map)
-        : ArraySource(arr)
-        , null_map(null_map)
+            : ArraySource(arr), null_map(null_map)
     {
     }
 
@@ -668,10 +646,7 @@ struct NullableValueSource : public ValueSource
     const NullMap & null_map;
 
     template <typename Column>
-    explicit NullableValueSource(const Column & col, const NullMap & null_map)
-        : ValueSource(col)
-        , null_map(null_map)
-    {}
+    explicit NullableValueSource(const Column & col, const NullMap & null_map) : ValueSource(col), null_map(null_map) {}
 
     void accept(ValueSourceVisitor & visitor) override { visitor.visit(*this); }
 
@@ -683,4 +658,4 @@ struct NullableValueSource : public ValueSource
     }
 };
 
-} // namespace DB::GatherUtils
+}

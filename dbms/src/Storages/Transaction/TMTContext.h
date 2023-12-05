@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Poco/Util/AbstractConfiguration.h>
@@ -23,9 +9,8 @@
 
 namespace DB
 {
-class Context;
 
-class PathPool;
+class Context;
 
 class KVStore;
 using KVStorePtr = std::shared_ptr<KVStore>;
@@ -43,10 +28,6 @@ class GCManager;
 using GCManagerPtr = std::shared_ptr<GCManager>;
 
 struct TiFlashRaftConfig;
-
-// We define a shared ptr here, because TMTContext / SchemaSyncer / IndexReader all need to
-// `share` the resource of cluster.
-using KVClusterPtr = std::shared_ptr<pingcap::kv::Cluster>;
 
 class TMTContext : private boost::noncopyable
 {
@@ -79,11 +60,12 @@ public:
 
     Context & getContext();
 
-    const Context & getContext() const;
+    bool isBgFlushDisabled() const { return disable_bg_flush; }
 
     explicit TMTContext(Context & context_, const TiFlashRaftConfig & raft_config, const pingcap::ClusterConfig & cluster_config_);
 
     SchemaSyncerPtr getSchemaSyncer() const;
+    void setSchemaSyncer(SchemaSyncerPtr);
 
     pingcap::pd::ClientPtr getPDClient() const;
 
@@ -91,7 +73,7 @@ public:
 
     MPPTaskManagerPtr getMPPTaskManager();
 
-    void restore(PathPool & path_pool, const TiFlashRaftProxyHelper * proxy_helper = nullptr);
+    void restore(const TiFlashRaftProxyHelper * proxy_helper = nullptr);
 
     const std::unordered_set<std::string> & getIgnoreDatabases() const;
 
@@ -112,10 +94,7 @@ public:
 
     UInt64 replicaReadMaxThread() const;
     UInt64 batchReadIndexTimeout() const;
-    // timeout for wait index (ms). "0" means wait infinitely
-    UInt64 waitIndexTimeout() const;
     Int64 waitRegionReadyTimeout() const;
-    uint64_t readIndexWorkerTick() const;
 
 private:
     Context & context;
@@ -137,10 +116,10 @@ private:
 
     ::TiDB::StorageEngine engine;
 
+    bool disable_bg_flush;
+
     std::atomic_uint64_t replica_read_max_thread;
     std::atomic_uint64_t batch_read_index_timeout_ms;
-    std::atomic_uint64_t wait_index_timeout_ms;
-    std::atomic_uint64_t read_index_worker_tick_ms;
     std::atomic_int64_t wait_region_ready_timeout_sec;
 };
 

@@ -1,43 +1,29 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Common/StringUtils/StringUtils.h>
-#include <Common/escapeForFileName.h>
-#include <DataStreams/NativeBlockInputStream.h>
-#include <DataStreams/NativeBlockOutputStream.h>
-#include <IO/CompressedReadBuffer.h>
-#include <IO/CompressedWriteBuffer.h>
+#include <Storages/StorageSet.h>
+#include <Storages/StorageFactory.h>
 #include <IO/ReadBufferFromFile.h>
+#include <IO/CompressedReadBuffer.h>
 #include <IO/WriteBufferFromFile.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <DataStreams/NativeBlockOutputStream.h>
+#include <DataStreams/NativeBlockInputStream.h>
+#include <Common/escapeForFileName.h>
+#include <Common/StringUtils/StringUtils.h>
 #include <Interpreters/Set.h>
 #include <Poco/DirectoryIterator.h>
-#include <Storages/StorageFactory.h>
-#include <Storages/StorageSet.h>
-#include <fmt/core.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
 
 namespace ErrorCodes
 {
-extern const int INCORRECT_FILE_NAME;
+    extern const int INCORRECT_FILE_NAME;
 }
 
 
@@ -45,9 +31,7 @@ class SetOrJoinBlockOutputStream : public IBlockOutputStream
 {
 public:
     SetOrJoinBlockOutputStream(StorageSetOrJoinBase & table_,
-                               const String & backup_path_,
-                               const String & backup_tmp_path_,
-                               const String & backup_file_name_);
+        const String & backup_path_, const String & backup_tmp_path_, const String & backup_file_name_);
 
     Block getHeader() const override { return table.getSampleBlock(); }
     void write(const Block & block) override;
@@ -59,22 +43,19 @@ private:
     String backup_tmp_path;
     String backup_file_name;
     WriteBufferFromFile backup_buf;
-    CompressedWriteBuffer<> compressed_backup_buf;
+    CompressedWriteBuffer compressed_backup_buf;
     NativeBlockOutputStream backup_stream;
 };
 
 
 SetOrJoinBlockOutputStream::SetOrJoinBlockOutputStream(StorageSetOrJoinBase & table_,
-                                                       const String & backup_path_,
-                                                       const String & backup_tmp_path_,
-                                                       const String & backup_file_name_)
-    : table(table_)
-    , backup_path(backup_path_)
-    , backup_tmp_path(backup_tmp_path_)
-    , backup_file_name(backup_file_name_)
-    , backup_buf(backup_tmp_path + backup_file_name)
-    , compressed_backup_buf(backup_buf)
-    , backup_stream(compressed_backup_buf, 0, table.getSampleBlock())
+    const String & backup_path_, const String & backup_tmp_path_, const String & backup_file_name_)
+    : table(table_),
+    backup_path(backup_path_), backup_tmp_path(backup_tmp_path_),
+    backup_file_name(backup_file_name_),
+    backup_buf(backup_tmp_path + backup_file_name),
+    compressed_backup_buf(backup_buf),
+    backup_stream(compressed_backup_buf, 0, table.getSampleBlock())
 {
 }
 
@@ -97,6 +78,7 @@ void SetOrJoinBlockOutputStream::writeSuffix()
 }
 
 
+
 BlockOutputStreamPtr StorageSetOrJoinBase::write(const ASTPtr & /*query*/, const Settings & /*settings*/)
 {
     ++increment;
@@ -108,8 +90,7 @@ StorageSetOrJoinBase::StorageSetOrJoinBase(
     const String & path_,
     const String & table_name_,
     const ColumnsDescription & columns_)
-    : IStorage{columns_}
-    , table_name(table_name_)
+    : IStorage{columns_}, table_name(table_name_)
 {
     if (path_.empty())
         throw Exception("Join and Set storages require data path", ErrorCodes::INCORRECT_FILE_NAME);
@@ -118,12 +99,13 @@ StorageSetOrJoinBase::StorageSetOrJoinBase(
 }
 
 
+
 StorageSet::StorageSet(
     const String & path_,
     const String & name_,
     const ColumnsDescription & columns_)
-    : StorageSetOrJoinBase{path_, name_, columns_}
-    , set(std::make_shared<Set>(SizeLimits()))
+    : StorageSetOrJoinBase{path_, name_, columns_},
+    set(std::make_shared<Set>(SizeLimits()))
 {
     Block header = getSampleBlock();
     header = header.sortColumns();
@@ -133,14 +115,8 @@ StorageSet::StorageSet(
 }
 
 
-void StorageSet::insertBlock(const Block & block)
-{
-    set->insertFromBlock(block, /*fill_set_elements=*/false);
-}
-size_t StorageSet::getSize() const
-{
-    return set->getTotalRowCount();
-};
+void StorageSet::insertBlock(const Block & block) { set->insertFromBlock(block, /*fill_set_elements=*/false); }
+size_t StorageSet::getSize() const { return set->getTotalRowCount(); };
 
 
 void StorageSetOrJoinBase::restore()
@@ -152,7 +128,7 @@ void StorageSetOrJoinBase::restore()
         return;
     }
 
-    static const auto * const file_suffix = ".bin";
+    static const auto file_suffix = ".bin";
     static const auto file_suffix_size = strlen(".bin");
 
     Poco::DirectoryIterator dir_end;
@@ -165,7 +141,7 @@ void StorageSetOrJoinBase::restore()
             && dir_it->getSize() > 0)
         {
             /// Calculate the maximum number of available files with a backup to add the following files with large numbers.
-            auto file_num = parse<UInt64>(name.substr(0, name.size() - file_suffix_size));
+            UInt64 file_num = parse<UInt64>(name.substr(0, name.size() - file_suffix_size));
             if (file_num > increment)
                 increment = file_num;
 
@@ -187,13 +163,11 @@ void StorageSetOrJoinBase::restoreFromFile(const String & file_path)
     backup_stream.readSuffix();
 
     /// TODO Add speed, compressed bytes, data volume in memory, compression ratio ... Generalize all statistics logging in project.
-    LOG_INFO(
-        &Poco::Logger::get("StorageSetOrJoinBase"),
-        "Loaded from backup file {}. {} rows, {:.2f} MiB. State has {} unique rows",
-        file_path,
-        backup_stream.getProfileInfo().rows,
-        backup_stream.getProfileInfo().bytes / 1048576.0,
-        getSize());
+    LOG_INFO(&Logger::get("StorageSetOrJoinBase"), std::fixed << std::setprecision(2)
+        << "Loaded from backup file " << file_path << ". "
+        << backup_stream.getProfileInfo().rows << " rows, "
+        << backup_stream.getProfileInfo().bytes / 1048576.0 << " MiB. "
+        << "State has " << getSize() << " unique rows.");
 }
 
 
@@ -210,10 +184,11 @@ void StorageSetOrJoinBase::rename(const String & new_path_to_db, const String & 
 
 void registerStorageSet(StorageFactory & factory)
 {
-    factory.registerStorage("Set", [](const StorageFactory::Arguments & args) {
+    factory.registerStorage("Set", [](const StorageFactory::Arguments & args)
+    {
         if (!args.engine_args.empty())
             throw Exception(
-                fmt::format("Engine {} doesn't support any arguments ({} given)", args.engine_name, args.engine_args.size()),
+                "Engine " + args.engine_name + " doesn't support any arguments (" + toString(args.engine_args.size()) + " given)",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
         return StorageSet::create(args.data_path, args.table_name, args.columns);
@@ -221,4 +196,4 @@ void registerStorageSet(StorageFactory & factory)
 }
 
 
-} // namespace DB
+}

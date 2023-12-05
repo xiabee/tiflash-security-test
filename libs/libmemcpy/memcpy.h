@@ -1,25 +1,7 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+#include <cstddef>
 
-#include <common/defines.h>
 #include <emmintrin.h>
 
-#include <cstddef>
-#include <cstdint>
-
-namespace legacy
-{
 
 /** Custom memcpy implementation for ClickHouse.
   * It has the following benefits over using glibc's implementation:
@@ -111,7 +93,8 @@ namespace legacy
   * See https://habr.com/en/company/yandex/blog/457612/
   */
 
-ALWAYS_INLINE static inline void * inline_memcpy(void * __restrict dst_, const void * __restrict src_, size_t size)
+
+static inline void * inline_memcpy(void * __restrict dst_, const void * __restrict src_, size_t size)
 {
     /// We will use pointer arithmetic, so char pointer will be used.
     /// Note that __restrict makes sense (otherwise compiler will reload data from memory
@@ -135,20 +118,20 @@ tail:
         if (size >= 8)
         {
             /// Chunks of 8..16 bytes.
-            tiflash_compiler_builtin_memcpy(dst + size - 8, src + size - 8, 8);
-            tiflash_compiler_builtin_memcpy(dst, src, 8);
+            __builtin_memcpy(dst + size - 8, src + size - 8, 8);
+            __builtin_memcpy(dst, src, 8);
         }
         else if (size >= 4)
         {
             /// Chunks of 4..7 bytes.
-            tiflash_compiler_builtin_memcpy(dst + size - 4, src + size - 4, 4);
-            tiflash_compiler_builtin_memcpy(dst, src, 4);
+            __builtin_memcpy(dst + size - 4, src + size - 4, 4);
+            __builtin_memcpy(dst, src, 4);
         }
         else if (size >= 2)
         {
             /// Chunks of 2..3 bytes.
-            tiflash_compiler_builtin_memcpy(dst + size - 2, src + size - 2, 2);
-            tiflash_compiler_builtin_memcpy(dst, src, 2);
+            __builtin_memcpy(dst + size - 2, src + size - 2, 2);
+            __builtin_memcpy(dst, src, 2);
         }
         else if (size >= 1)
         {
@@ -165,14 +148,14 @@ tail:
             /// Medium size, not enough for full loop unrolling.
 
             /// We will copy the last 16 bytes.
-            tiflash_compiler_builtin_memcpy(dst + size - 16, src + size - 16, 16);
+            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + size - 16), _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + size - 16)));
 
             /// Then we will copy every 16 bytes from the beginning in a loop.
             /// The last loop iteration will possibly overwrite some part of already copied last 16 bytes.
             /// This is Ok, similar to the code for small sizes above.
             while (size > 16)
             {
-                tiflash_compiler_builtin_memcpy(dst, src, 16);
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), _mm_loadu_si128(reinterpret_cast<const __m128i *>(src)));
                 dst += 16;
                 src += 16;
                 size -= 16;
@@ -188,7 +171,8 @@ tail:
             /// If not aligned - we will copy first 16 bytes with unaligned stores.
             if (padding > 0)
             {
-                tiflash_compiler_builtin_memcpy(dst, src, 16);
+                __m128i head = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(dst), head);
                 dst += padding;
                 src += padding;
                 size -= padding;
@@ -201,23 +185,23 @@ tail:
 
             while (size >= 128)
             {
-                c0 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 0);
-                c1 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 1);
-                c2 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 2);
-                c3 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 3);
-                c4 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 4);
-                c5 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 5);
-                c6 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 6);
-                c7 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src) + 7);
+                c0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 0);
+                c1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 1);
+                c2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 2);
+                c3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 3);
+                c4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 4);
+                c5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 5);
+                c6 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 6);
+                c7 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src) + 7);
                 src += 128;
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 0), c0);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 1), c1);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 2), c2);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 3), c3);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 4), c4);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 5), c5);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 6), c6);
-                _mm_store_si128((reinterpret_cast<__m128i *>(dst) + 7), c7);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 0), c0);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 1), c1);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 2), c2);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 3), c3);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 4), c4);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 5), c5);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 6), c6);
+                _mm_store_si128((reinterpret_cast<__m128i*>(dst) + 7), c7);
                 dst += 128;
 
                 size -= 128;
@@ -227,6 +211,6 @@ tail:
             goto tail;
         }
     }
+
     return ret;
 }
-} // namespace legacy

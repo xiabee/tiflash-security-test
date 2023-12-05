@@ -1,55 +1,38 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #if !(defined(__FreeBSD__) || defined(__APPLE__) || defined(_MSC_VER))
 
+#include <IO/ReadBufferFromFileBase.h>
+#include <IO/ReadBuffer.h>
+#include <IO/BufferWithOwnMemory.h>
+#include <Core/Defines.h>
 #include <Common/AIO.h>
 #include <Common/CurrentMetrics.h>
-#include <Common/nocopyable.h>
-#include <Core/Defines.h>
-#include <IO/BufferWithOwnMemory.h>
-#include <IO/ReadBuffer.h>
-#include <IO/ReadBufferFromFileBase.h>
-#include <fcntl.h>
-#include <unistd.h>
-
-#include <limits>
 #include <string>
+#include <limits>
+#include <unistd.h>
+#include <fcntl.h>
 
 
 namespace CurrentMetrics
 {
-extern const Metric OpenFileForRead;
+    extern const Metric OpenFileForRead;
 }
 
 namespace DB
 {
+
 /** Class for asynchronous data reading.
   */
 class ReadBufferAIO : public ReadBufferFromFileBase
 {
 public:
-    explicit ReadBufferAIO(
-        const std::string & filename_,
-        size_t buffer_size_ = DBMS_DEFAULT_BUFFER_SIZE,
-        int flags_ = -1,
+    ReadBufferAIO(const std::string & filename_, size_t buffer_size_ = DBMS_DEFAULT_BUFFER_SIZE, int flags_ = -1,
         char * existing_memory_ = nullptr);
     ~ReadBufferAIO() override;
 
-    DISALLOW_COPY(ReadBufferAIO);
+    ReadBufferAIO(const ReadBufferAIO &) = delete;
+    ReadBufferAIO & operator=(const ReadBufferAIO &) = delete;
 
     void setMaxBytes(size_t max_bytes_read_);
     off_t getPositionInFile() override { return first_unread_pos_in_file - (working_buffer.end() - pos); }
@@ -124,6 +107,6 @@ private:
     CurrentMetrics::Increment metric_increment{CurrentMetrics::OpenFileForRead};
 };
 
-} // namespace DB
+}
 
 #endif

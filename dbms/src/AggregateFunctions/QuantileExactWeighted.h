@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Common/HashTable/HashMap.h>
@@ -20,9 +6,10 @@
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int NOT_IMPLEMENTED;
+    extern const int NOT_IMPLEMENTED;
 }
 
 /** Calculates quantile by counting number of occurences for each value in a hash map.
@@ -37,11 +24,11 @@ struct QuantileExactWeighted
 
     /// When creating, the hash table must be small.
     using Map = HashMap<
-        Value,
-        Weight,
+        Value, Weight,
         HashCRC32<Value>,
         HashTableGrower<4>,
-        HashTableAllocatorWithStackMemory<sizeof(std::pair<Value, Weight>) * (1 << 3)>>;
+        HashTableAllocatorWithStackMemory<sizeof(std::pair<Value, Weight>) * (1 << 3)>
+    >;
 
     Map map;
 
@@ -61,7 +48,7 @@ struct QuantileExactWeighted
     void merge(const QuantileExactWeighted & rhs)
     {
         for (const auto & pair : rhs.map)
-            map[pair.getKey()] += pair.getMapped();
+            map[pair.first] += pair.second;
     }
 
     void serialize(WriteBuffer & buf) const
@@ -96,8 +83,8 @@ struct QuantileExactWeighted
         UInt64 sum_weight = 0;
         for (const auto & pair : map)
         {
-            sum_weight += pair.getMapped();
-            array[i] = pair.getValue();
+            sum_weight += pair.second;
+            array[i] = pair;
             ++i;
         }
 
@@ -146,8 +133,8 @@ struct QuantileExactWeighted
         UInt64 sum_weight = 0;
         for (const auto & pair : map)
         {
-            sum_weight += pair.getMapped();
-            array[i] = pair.getValue();
+            sum_weight += pair.second;
+            array[i] = pair;
             ++i;
         }
 
@@ -198,4 +185,4 @@ struct QuantileExactWeighted
     }
 };
 
-} // namespace DB
+}

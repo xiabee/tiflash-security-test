@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 #include <Columns/ColumnVector.h>
 #include <Columns/ColumnString.h>
@@ -122,7 +108,7 @@ ColumnPtr RangeDictionaryBlockInputStream<DictionaryType, Key>::getColumnFromAtt
 {
     auto column_vector = ColumnVector<AttributeType>::create(ids.size());
     (dictionary.*getter)(attribute.name, ids, dates, column_vector->getData());
-    return column_vector;
+    return std::move(column_vector);
 }
 
 template <typename DictionaryType, typename Key>
@@ -132,7 +118,7 @@ ColumnPtr RangeDictionaryBlockInputStream<DictionaryType, Key>::getColumnFromAtt
 {
     auto column_string = ColumnString::create();
     dictionary.getString(attribute.name, ids, dates, column_string.get());
-    return column_string;
+    return std::move(column_string);
 }
 
 template <typename DictionaryType, typename Key>
@@ -143,7 +129,7 @@ ColumnPtr RangeDictionaryBlockInputStream<DictionaryType, Key>::getColumnFromPOD
     column_vector->getData().reserve(array.size());
     for (T value : array)
         column_vector->insert(value);
-    return column_vector;
+    return std::move(column_vector);
 }
 
 

@@ -1,17 +1,3 @@
-# Copyright 2023 PingCAP, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 mysql> drop table if exists test.t
 mysql> create table test.t(a char(64), suite int not null)
 mysql> alter table test.t set tiflash replica 1
@@ -39,15 +25,15 @@ mysql> set sql_mode=''; set tidb_allow_mpp=1; set tidb_isolation_read_engines='t
 ## Test suite 1 - Disallow zero day
 # The sql_mode does not effect the result set
 #mysql> set sql_mode='NO_ZERO_IN_DATE,NO_ZERO_DATE'; set tidb_allow_mpp=1; set tidb_isolation_read_engines='tiflash'; explain select a, ifnull(str_to_date(a, '%d/%m/%Y'),str_to_date('00/00/0000', '%d/%m/%Y')) as date, count(*) as cnt from test.t where suite = 1 group by a,date order by a
-#mysql> set sql_mode='NO_ZERO_IN_DATE,NO_ZERO_DATE'; set tidb_allow_mpp=1; set tidb_isolation_read_engines='tiflash'; select a, ifnull(str_to_date(a, '%d/%m/%Y'),str_to_date('00/00/0000', '%d/%m/%Y')) as date, count(*) as cnt from test.t where suite = 1 group by a,date order by a
-#+------------+------------+-----+
-#| a          | date       | cnt |
-#+------------+------------+-----+
-#| 0/0/2012   | NULL       |   1 |
-#| 00/00/0000 | NULL       |   1 |
-#| 13/05/2019 | 2019-05-13 |   1 |
-#| abc        | NULL       |   1 |
-#+------------+------------+-----+
+mysql> set sql_mode='NO_ZERO_IN_DATE,NO_ZERO_DATE'; set tidb_allow_mpp=1; set tidb_isolation_read_engines='tiflash'; select a, ifnull(str_to_date(a, '%d/%m/%Y'),str_to_date('00/00/0000', '%d/%m/%Y')) as date, count(*) as cnt from test.t where suite = 1 group by a,date order by a
++------------+------------+-----+
+| a          | date       | cnt |
++------------+------------+-----+
+| 0/0/2012   | NULL       |   1 |
+| 00/00/0000 | NULL       |   1 |
+| 13/05/2019 | 2019-05-13 |   1 |
+| abc        | NULL       |   1 |
++------------+------------+-----+
 
 ## Test suite 2 - showing datetime with fractions
 #mysql> set sql_mode=''; set tidb_allow_mpp=1; set tidb_isolation_read_engines='tiflash'; explain select a, str_to_date(a, '%d/%b/%Y  %H:%i:%S.%f') as date from test.t where suite = 2 group by a,date order by a

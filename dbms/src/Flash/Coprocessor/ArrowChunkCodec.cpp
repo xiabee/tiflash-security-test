@@ -1,37 +1,24 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
+
 #include <Flash/Coprocessor/ArrowColCodec.h>
 #include <IO/Endian.h>
 
 namespace DB
 {
+
 class ArrowChunkCodecStream : public ChunkCodecStream
 {
 public:
-    explicit ArrowChunkCodecStream(const std::vector<tipb::FieldType> & field_types)
-        : ChunkCodecStream(field_types)
+    explicit ArrowChunkCodecStream(const std::vector<tipb::FieldType> & field_types) : ChunkCodecStream(field_types)
     {
         ti_chunk = std::make_unique<TiDBChunk>(field_types);
     }
 
     String getString() override
     {
-        WriteBufferFromOwnString ss;
+        std::stringstream ss;
         ti_chunk->encodeChunk(ss);
-        return ss.releaseStr();
+        return ss.str();
     }
     void clear() override { ti_chunk->clear(); }
     void encode(const Block & block, size_t start, size_t end) override;
@@ -44,8 +31,9 @@ void ArrowChunkCodecStream::encode(const Block & block, size_t start, size_t end
     ti_chunk->buildDAGChunkFromBlock(block, field_types, start, end);
 }
 
-Block ArrowChunkCodec::decode(const String & row_data, const DAGSchema & schema)
+Block ArrowChunkCodec::decode(const tipb::Chunk & chunk, const DAGSchema & schema)
 {
+    const String & row_data = chunk.rows_data();
     const char * start = row_data.c_str();
     const char * pos = start;
     int column_index = 0;
@@ -59,7 +47,7 @@ Block ArrowChunkCodec::decode(const String & row_data, const DAGSchema & schema)
         std::vector<UInt8> null_bitmap;
         const auto & field = schema[column_index];
         const auto & name = field.first;
-        auto data_type = getDataTypeByColumnInfoForComputingLayer(field.second);
+        auto data_type = getDataTypeByColumnInfo(field.second);
         if (null_count > 0)
         {
             auto bit_map_length = (length + 7) / 8;

@@ -1,27 +1,11 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Storages/DeltaMerge/File/ColumnCache.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
-#include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
-#include <Storages/Page/Page.h>
 #include <Storages/Page/PageStorage.h>
-#include <Storages/Page/WriteBatch.h>
+
 
 namespace DB
 {
@@ -38,72 +22,26 @@ using StableValueSpacePtr = std::shared_ptr<StableValueSpace>;
 class StableValueSpace : public std::enable_shared_from_this<StableValueSpace>
 {
 public:
-    StableValueSpace(PageId id_)
-        : id(id_)
-        , log(Logger::get())
-    {}
-
-    static StableValueSpacePtr restore(DMContext & context, PageId id);
-
-    /**
-     * Resets the logger by using the one from the segment.
-     * Segment_log is not available when constructing, because usually
-     * at that time the segment has not been constructed yet.
-     */
-    void resetLogger(const LoggerPtr & segment_log)
-    {
-        log = segment_log;
-    }
+    StableValueSpace(PageId id_) : id(id_), log(&Logger::get("StableValueSpace")) {}
 
     // Set DMFiles for this value space.
     // If this value space is logical split, specify `range` and `dm_context` so that we can get more precise
     // bytes and rows.
     void setFiles(const DMFiles & files_, const RowKeyRange & range, DMContext * dm_context = nullptr);
 
-    PageId getId() const { return id; }
-    void saveMeta(WriteBatch & meta_wb);
+    PageId          getId() { return id; }
+    void            saveMeta(WriteBatch & meta_wb);
+    const DMFiles & getDMFiles() { return files; }
+    String          getDMFilesString();
 
     size_t getRows() const;
     size_t getBytes() const;
-
-    /**
-     * Return the underlying DTFiles.
-     * DTFiles are not fully included in the segment range will be also included in the result.
-     * Note: Out-of-range DTFiles may be produced by logical split.
-     */
-    const DMFiles & getDMFiles() const { return files; }
-
-    String getDMFilesString();
-
-    /**
-     * Return the total on-disk size of the underlying DTFiles.
-     * DTFiles are not fully included in the segment range will be also counted in.
-     * Note: Out-of-range DTFiles may be produced by logical split.
-     */
-    size_t getDMFilesBytesOnDisk() const;
-
-    /**
-     * Return the total number of packs of the underlying DTFiles.
-     * Packs that are not included in the segment range will be also counted in.
-     * Note: Out-of-range packs may be produced by logical split.
-     */
-    size_t getDMFilesPacks() const;
-
-    /**
-     * Return the total number of rows of the underlying DTFiles.
-     * Rows from packs that are not included in the segment range will be also counted in.
-     * Note: Out-of-range rows may be produced by logical split.
-     */
-    size_t getDMFilesRows() const;
-
-    /**
-     * Return the total size of the data of the underlying DTFiles.
-     * Rows from packs that are not included in the segment range will be also counted in.
-     * Note: Out-of-range rows may be produced by logical split.
-     */
-    size_t getDMFilesBytes() const;
+    size_t getBytesOnDisk() const;
+    size_t getPacks() const;
 
     void enableDMFilesGC();
+
+    static StableValueSpacePtr restore(DMContext & context, PageId id);
 
     void recordRemovePacksPages(WriteBatches & wbs) const;
 
@@ -135,8 +73,7 @@ public:
     struct Snapshot;
     using SnapshotPtr = std::shared_ptr<Snapshot>;
 
-    struct Snapshot : public std::enable_shared_from_this<Snapshot>
-        , private boost::noncopyable
+    struct Snapshot : public std::enable_shared_from_this<Snapshot>, private boost::noncopyable
     {
         StableValueSpacePtr stable;
 
@@ -144,23 +81,21 @@ public:
         UInt64 valid_rows;
         UInt64 valid_bytes;
 
-        bool is_common_handle;
+        bool   is_common_handle;
         size_t rowkey_column_size;
 
         /// TODO: The members below are not actually snapshots, they should not be here.
 
         ColumnCachePtrs column_caches;
 
-        Snapshot(StableValueSpacePtr stable_)
-            : stable(stable_)
-            , log(stable->log)
-        {}
+        Snapshot() : log(&Logger::get("StableValueSpace::Snapshot")) {}
 
-        SnapshotPtr clone() const
+        SnapshotPtr clone()
         {
-            auto c = std::make_shared<Snapshot>(stable);
-            c->id = id;
-            c->valid_rows = valid_rows;
+            auto c         = std::make_shared<Snapshot>();
+            c->stable      = stable;
+            c->id          = id;
+            c->valid_rows  = valid_rows;
             c->valid_bytes = valid_bytes;
 
             for (size_t i = 0; i < column_caches.size(); i++)
@@ -171,69 +106,35 @@ public:
             return c;
         }
 
-        PageId getId() const { return id; }
+        PageId getId() { return id; }
 
-        size_t getRows() const { return valid_rows; }
-        size_t getBytes() const { return valid_bytes; }
+        size_t getRows() { return valid_rows; }
+        size_t getBytes() { return valid_bytes; }
 
-        /**
-         * Return the underlying DTFiles.
-         * DTFiles are not fully included in the segment range will be also included in the result.
-         * Note: Out-of-range DTFiles may be produced by logical split.
-         */
-        const DMFiles & getDMFiles() const { return stable->getDMFiles(); }
+        const DMFiles & getDMFiles() { return stable->getDMFiles(); }
 
-        /**
-         * Return the total number of packs of the underlying DTFiles.
-         * Packs that are not included in the segment range will be also counted in.
-         * Note: Out-of-range packs may be produced by logical split.
-         */
-        size_t getDMFilesPacks() const { return stable->getDMFilesPacks(); }
-
-        /**
-         * Return the total number of rows of the underlying DTFiles.
-         * Rows from packs that are not included in the segment range will be also counted in.
-         * Note: Out-of-range rows may be produced by logical split.
-         */
-        size_t getDMFilesRows() const { return stable->getDMFilesRows(); };
-
-        /**
-         * Return the total size of the data of the underlying DTFiles.
-         * Rows from packs that are not included in the segment range will be also counted in.
-         * Note: Out-of-range rows may be produced by logical split.
-         */
-        size_t getDMFilesBytes() const { return stable->getDMFilesBytes(); };
+        size_t getPacks()
+        {
+            size_t packs = 0;
+            for (auto & file : getDMFiles())
+                packs += file->getPacks();
+            return packs;
+        }
 
         ColumnCachePtrs & getColumnCaches() { return column_caches; }
 
-        SkippableBlockInputStreamPtr getInputStream(const DMContext & context, //
+        SkippableBlockInputStreamPtr getInputStream(const DMContext &     context, //
                                                     const ColumnDefines & read_columns,
-                                                    const RowKeyRanges & rowkey_ranges,
+                                                    const RowKeyRange &   rowkey_range,
                                                     const RSOperatorPtr & filter,
-                                                    UInt64 max_data_version,
-                                                    size_t expected_block_size,
-                                                    bool enable_handle_clean_read,
-                                                    bool is_fast_scan = false,
-                                                    bool enable_del_clean_read = false);
+                                                    UInt64                max_data_version,
+                                                    size_t                expected_block_size,
+                                                    bool                  enable_clean_read);
 
-        RowsAndBytes getApproxRowsAndBytes(const DMContext & context, const RowKeyRange & range) const;
-
-        struct AtLeastRowsAndBytesResult
-        {
-            size_t rows = 0;
-            size_t bytes = 0;
-            RSResult first_pack_intersection = RSResult::None;
-            RSResult last_pack_intersection = RSResult::None;
-        };
-
-        /**
-         * Get the rows and bytes calculated from packs that is **fully contained** by the given range.
-         * If the pack is partially intersected, then it is not counted.
-         */
-        AtLeastRowsAndBytesResult getAtLeastRowsAndBytes(const DMContext & context, const RowKeyRange & range) const;
+        RowsAndBytes getApproxRowsAndBytes(const DMContext & context, const RowKeyRange & range);
 
     private:
-        LoggerPtr log;
+        Logger * log;
     };
 
     SnapshotPtr createSnapshot();
@@ -245,18 +146,17 @@ private:
 
     // Valid rows is not always the sum of rows in file,
     // because after logical split, two segments could reference to a same file.
-    UInt64 valid_rows; /* At most. The actual valid rows may be lower than this value. */
-    UInt64 valid_bytes; /* At most. The actual valid bytes may be lower than this value. */
-
+    UInt64  valid_rows;
+    UInt64  valid_bytes;
     DMFiles files;
 
-    StableProperty property;
+    StableProperty    property;
     std::atomic<bool> is_property_cached = false;
 
-    LoggerPtr log;
+    Logger * log;
 };
 
-using StableSnapshot = StableValueSpace::Snapshot;
+using StableSnapshot    = StableValueSpace::Snapshot;
 using StableSnapshotPtr = StableValueSpace::SnapshotPtr;
 
 } // namespace DM

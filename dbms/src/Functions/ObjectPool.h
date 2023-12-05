@@ -1,26 +1,14 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 #include <map>
 #include <memory>
-#include <mutex>
 #include <stack>
+#include <mutex>
 
 
 namespace DB
 {
+
+
 /** Pool for objects that cannot be used from different threads simultaneously.
   * Allows to create an object for each thread.
   * Pool has unbounded size and objects are not destroyed before destruction of pool.
@@ -34,6 +22,7 @@ template <typename T>
 class SimpleObjectPool
 {
 protected:
+
     /// Hold all avaiable objects in stack.
     std::mutex mutex;
     std::stack<std::unique_ptr<T>> stack;
@@ -44,13 +33,11 @@ protected:
     {
         SimpleObjectPool<T> * parent;
 
-        Deleter(SimpleObjectPool<T> * parent_ = nullptr)
-            : parent{parent_}
-        {}
+        Deleter(SimpleObjectPool<T> * parent_ = nullptr) : parent{parent_} {}
 
         void operator()(T * owning_ptr) const
         {
-            std::lock_guard lock{parent->mutex};
+            std::lock_guard<std::mutex> lock{parent->mutex};
             parent->stack.emplace(owning_ptr);
         }
     };
@@ -63,18 +50,18 @@ public:
     template <typename Factory>
     Pointer get(Factory && f)
     {
-        std::unique_lock lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
 
         if (stack.empty())
         {
             lock.unlock();
-            return {f(), this};
+            return { f(), this };
         }
 
         auto object = stack.top().release();
         stack.pop();
 
-        return {object, this};
+        return { object, this };
     }
 
     /// Like get(), but creates object using default constructor.
@@ -90,6 +77,7 @@ template <typename T, typename Key>
 class ObjectPoolMap
 {
 private:
+
     using Object = SimpleObjectPool<T>;
 
     /// Key -> objects
@@ -99,12 +87,13 @@ private:
     std::mutex mutex;
 
 public:
+
     using Pointer = typename Object::Pointer;
 
     template <typename Factory>
     Pointer get(const Key & key, Factory && f)
     {
-        std::unique_lock lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
 
         auto it = container.find(key);
         if (container.end() == it)
@@ -115,4 +104,4 @@ public:
 };
 
 
-} // namespace DB
+}

@@ -1,61 +1,43 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #if !(defined(__FreeBSD__) || defined(__APPLE__) || defined(_MSC_VER))
 
+#include <IO/WriteBufferFromFileBase.h>
+#include <IO/WriteBuffer.h>
+#include <IO/BufferWithOwnMemory.h>
+#include <Core/Defines.h>
 #include <Common/AIO.h>
 #include <Common/CurrentMetrics.h>
-#include <Common/nocopyable.h>
-#include <Core/Defines.h>
-#include <IO/BufferWithOwnMemory.h>
-#include <IO/WriteBuffer.h>
-#include <IO/WriteBufferFromFileBase.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 #include <string>
+#include <unistd.h>
+#include <fcntl.h>
 
 
 namespace CurrentMetrics
 {
-extern const Metric OpenFileForWrite;
+    extern const Metric OpenFileForWrite;
 }
 
 namespace DB
 {
+
 /** Class for asynchronous data writing.
   */
 class WriteBufferAIO : public WriteBufferFromFileBase
 {
 public:
-    explicit WriteBufferAIO(
-        const std::string & filename_,
-        size_t buffer_size_ = DBMS_DEFAULT_BUFFER_SIZE,
-        int flags_ = -1,
-        mode_t mode_ = 0666,
+    WriteBufferAIO(const std::string & filename_, size_t buffer_size_ = DBMS_DEFAULT_BUFFER_SIZE, int flags_ = -1, mode_t mode_ = 0666,
         char * existing_memory_ = nullptr);
     ~WriteBufferAIO() override;
 
-    DISALLOW_COPY(WriteBufferAIO);
+    WriteBufferAIO(const WriteBufferAIO &) = delete;
+    WriteBufferAIO & operator=(const WriteBufferAIO &) = delete;
 
     off_t getPositionInFile() override;
     void sync() override;
     std::string getFileName() const override { return filename; }
     int getFD() const override { return fd; }
-    void close() override;
 
 private:
     void nextImpl() override;
@@ -116,6 +98,6 @@ private:
     CurrentMetrics::Increment metric_increment{CurrentMetrics::OpenFileForWrite};
 };
 
-} // namespace DB
+}
 
 #endif

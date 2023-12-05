@@ -1,37 +1,16 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/FailPoint.h>
-#include <Core/ColumnWithTypeAndName.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
 #include <Storages/DeltaMerge/File/DMFileWriter.h>
-#include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
-#include <TestUtils/FunctionTestUtils.h>
-#include <TestUtils/InputStreamTestUtils.h>
-#include <common/types.h>
 
-#include <algorithm>
-#include <vector>
+#include "dm_basic_include.h"
 
 namespace DB
 {
+
 namespace FailPoints
 {
 extern const char exception_before_dmfile_remove_encryption[];
@@ -42,92 +21,95 @@ namespace DM
 {
 namespace tests
 {
-TEST(DMFileWriterFlagsTest, SetClearFlags)
+
+TEST(DMFileWriterFlags_test, SetClearFlags)
 {
     using Flags = DMFileWriter::Flags;
 
     Flags flags;
 
     bool f = false;
+    flags.setRateLimit(f);
+    EXPECT_FALSE(flags.needRateLimit());
     flags.setSingleFile(f);
     EXPECT_FALSE(flags.isSingleFile());
 
     f = true;
+    flags.setRateLimit(f);
+    EXPECT_TRUE(flags.needRateLimit());
     flags.setSingleFile(f);
     EXPECT_TRUE(flags.isSingleFile());
 }
 
-enum class DMFileMode
-{
-    SingleFile,
-    DirectoryLegacy,
-    DirectoryChecksum
-};
-
-String paramToString(const ::testing::TestParamInfo<DMFileMode> & info)
+String paramToString(const ::testing::TestParamInfo<DMFile::Mode> & info)
 {
     const auto mode = info.param;
 
     String name;
     switch (mode)
     {
-    case DMFileMode::SingleFile:
+    case DMFile::Mode::SINGLE_FILE:
         name = "single_file";
         break;
-    case DMFileMode::DirectoryLegacy:
+    case DMFile::Mode::FOLDER:
         name = "folder";
-        break;
-    case DMFileMode::DirectoryChecksum:
-        name = "folder_checksum";
         break;
     }
     return name;
 }
 
 using DMFileBlockOutputStreamPtr = std::shared_ptr<DMFileBlockOutputStream>;
-using DMFileBlockInputStreamPtr = std::shared_ptr<DMFileBlockInputStream>;
+using DMFileBlockInputStreamPtr  = std::shared_ptr<DMFileBlockInputStream>;
 
-class DMFileTest
-    : public DB::base::TiFlashStorageTestBasic
-    , public testing::WithParamInterface<DMFileMode>
+class DMFile_Test : public ::testing::Test, //
+                    public testing::WithParamInterface<DMFile::Mode>
 {
 public:
-    DMFileTest()
-        : dm_file(nullptr)
-    {}
+    DMFile_Test() : parent_path(DB::tests::TiFlashTestEnv::getTemporaryPath() + "/dm_file_tests"), dm_file(nullptr) {}
 
     static void SetUpTestCase() {}
 
     void SetUp() override
     {
-        TiFlashStorageTestBasic::SetUp();
+        dropFiles();
 
-        auto mode = GetParam();
-        bool single_file_mode = (mode == DMFileMode::SingleFile);
-        auto configuration = (mode == DMFileMode::DirectoryChecksum ? std::make_optional<DMChecksumConfig>() : std::nullopt);
+        auto mode             = GetParam();
+        bool single_file_mode = mode == DMFile::Mode::SINGLE_FILE;
 
-        parent_path = TiFlashStorageTestBasic::getTemporaryPath();
-        path_pool = std::make_unique<StoragePathPool>(db_context->getPathPool().withTable("test", "DMFileTest", false));
-        storage_pool = std::make_unique<StoragePool>(*db_context, /*ns_id*/ 100, *path_pool, "test.t1");
-        dm_file = DMFile::create(1, parent_path, single_file_mode, std::move(configuration));
-        table_columns = std::make_shared<ColumnDefines>();
-        column_cache = std::make_shared<ColumnCache>();
+        auto ctx       = DMTestEnv::getContext();
+        auto settings  = DB::Settings();
+        path_pool      = std::make_unique<StoragePathPool>(ctx.getPathPool().withTable("test", "t1", false));
+        storage_pool   = std::make_unique<StoragePool>("test.t1", *path_pool, ctx, settings);
+        dm_file        = DMFile::create(1, parent_path, single_file_mode);
+        db_context     = std::make_unique<Context>(DMTestEnv::getContext(settings));
+        table_columns_ = std::make_shared<ColumnDefines>();
+        column_cache_  = std::make_shared<ColumnCache>();
 
         reload();
+    }
+
+    void dropFiles()
+    {
+        if (Poco::File file(parent_path); file.exists())
+        {
+            file.remove(true);
+        }
     }
 
     // Update dm_context.
     void reload(const ColumnDefinesPtr & cols = DMTestEnv::getDefaultColumns())
     {
-        TiFlashStorageTestBasic::reload();
-        if (table_columns != cols)
-            *table_columns = *cols;
-        *path_pool = db_context->getPathPool().withTable("test", "t1", false);
+        if (table_columns_ != cols)
+            *table_columns_ = *cols;
+
+        auto ctx   = DMTestEnv::getContext();
+        *path_pool = ctx.getPathPool().withTable("test", "t1", false);
         dm_context = std::make_unique<DMContext>( //
             *db_context,
             *path_pool,
             *storage_pool,
-            /*min_version_*/ 0,
+            /*hash_salt*/ 0,
+            0,
             settings.not_compress_columns,
             false,
             1,
@@ -136,11 +118,11 @@ public:
 
     DMFilePtr restoreDMFile()
     {
-        auto file_id = dm_file->fileId();
-        auto page_id = dm_file->pageId();
-        auto parent_path = dm_file->parentPath();
+        auto file_id       = dm_file->fileId();
+        auto ref_id        = dm_file->refId();
+        auto parent_path   = dm_file->parentPath();
         auto file_provider = dbContext().getFileProvider();
-        return DMFile::restore(file_provider, file_id, page_id, parent_path, DMFile::ReadMetaMode::all());
+        return DMFile::restore(file_provider, file_id, ref_id, parent_path, /*read_meta=*/true);
     }
 
 
@@ -149,21 +131,22 @@ public:
     Context & dbContext() { return *db_context; }
 
 private:
-    std::unique_ptr<DMContext> dm_context{};
+    std::unique_ptr<Context>   db_context;
+    std::unique_ptr<DMContext> dm_context;
     /// all these var live as ref in dm_context
-    std::unique_ptr<StoragePathPool> path_pool{};
-    std::unique_ptr<StoragePool> storage_pool{};
-    ColumnDefinesPtr table_columns;
-    DeltaMergeStore::Settings settings;
+    std::unique_ptr<StoragePathPool> path_pool;
+    std::unique_ptr<StoragePool>     storage_pool;
+    ColumnDefinesPtr                 table_columns_;
+    DeltaMergeStore::Settings        settings;
 
 protected:
-    String parent_path;
-    DMFilePtr dm_file;
-    ColumnCachePtr column_cache;
+    const String   parent_path;
+    DMFilePtr      dm_file;
+    ColumnCachePtr column_cache_;
 };
 
 
-TEST_P(DMFileTest, WriteRead)
+TEST_P(DMFile_Test, WriteRead)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -172,12 +155,10 @@ try
 
     DMFileBlockOutputStream::BlockProperty block_property1;
     block_property1.effective_num_rows = 1;
-    block_property1.gc_hint_version = 1;
-    block_property1.deleted_rows = 1;
+    block_property1.gc_hint_version    = 1;
     DMFileBlockOutputStream::BlockProperty block_property2;
     block_property2.effective_num_rows = 2;
-    block_property2.gc_hint_version = 2;
-    block_property2.deleted_rows = 2;
+    block_property2.gc_hint_version    = 2;
     std::vector<DMFileBlockOutputStream::BlockProperty> block_propertys;
     block_propertys.push_back(block_property1);
     block_propertys.push_back(block_property2);
@@ -187,7 +168,7 @@ try
         Block block1 = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write / 2, false);
         // Block 2: [64, 128)
         Block block2 = DMTestEnv::prepareSimpleWriteBlock(num_rows_write / 2, num_rows_write, false);
-        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
+        auto  stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
         stream->writePrefix();
         stream->write(block1, block_property1);
         stream->write(block2, block_property2);
@@ -199,16 +180,34 @@ try
 
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 
     /// Test restore the file from disk and read
@@ -220,56 +219,72 @@ try
         ASSERT_EQ(propertys.property_size(), 2);
         for (int i = 0; i < propertys.property_size(); i++)
         {
-            const auto & property = propertys.property(i);
+            auto & property = propertys.property(i);
             ASSERT_EQ((size_t)property.num_rows(), (size_t)block_propertys[i].effective_num_rows);
             ASSERT_EQ((size_t)property.gc_hint_version(), (size_t)block_propertys[i].effective_num_rows);
-            ASSERT_EQ((size_t)property.deleted_rows(), (size_t)block_propertys[i].deleted_rows);
         }
     }
     {
         // Test read after restore
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileTest, GcFlag)
+TEST_P(DMFile_Test, GcFlag)
 try
 {
     // clean
     auto file_provider = dbContext().getFileProvider();
-    auto id = dm_file->fileId();
+    auto id            = dm_file->fileId();
     dm_file->remove(file_provider);
     dm_file.reset();
 
-    auto mode = GetParam();
-    bool single_file_mode = mode == DMFileMode::SingleFile;
-    auto configuration = mode == DMFileMode::DirectoryChecksum ? std::make_optional<DMChecksumConfig>() : std::nullopt;
+    auto mode             = GetParam();
+    bool single_file_mode = mode == DMFile::Mode::SINGLE_FILE;
 
-    dm_file = DMFile::create(id, parent_path, single_file_mode, std::move(configuration));
+    dm_file = DMFile::create(id, parent_path, single_file_mode);
     // Right after created, the fil is not abled to GC and it is ignored by `listAllInPath`
     EXPECT_FALSE(dm_file->canGC());
     DMFile::ListOptions options;
     options.only_list_can_gc = true;
-    auto scan_ids = DMFile::listAllInPath(file_provider, parent_path, options);
-    ASSERT_TRUE(scan_ids.empty());
+    auto scanIds             = DMFile::listAllInPath(file_provider, parent_path, options);
+    ASSERT_TRUE(scanIds.empty());
 
     {
         // Write some data and finialize the file
-        auto cols = DMTestEnv::getDefaultColumns();
-        auto num_rows_write = 128UL;
-        Block block1 = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write / 2, false);
-        Block block2 = DMTestEnv::prepareSimpleWriteBlock(num_rows_write / 2, num_rows_write, false);
-        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
+        auto  cols           = DMTestEnv::getDefaultColumns();
+        auto  num_rows_write = 128UL;
+        Block block1         = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write / 2, false);
+        Block block2         = DMTestEnv::prepareSimpleWriteBlock(num_rows_write / 2, num_rows_write, false);
+        auto  stream         = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
         DMFileBlockOutputStream::BlockProperty block_property;
         stream->writePrefix();
@@ -282,31 +297,31 @@ try
     ASSERT_FALSE(dm_file->canGC());
     options.only_list_can_gc = false;
     // Now the file can be scaned
-    scan_ids = DMFile::listAllInPath(file_provider, parent_path, options);
-    ASSERT_EQ(scan_ids.size(), 1UL);
-    EXPECT_EQ(*scan_ids.begin(), id);
+    scanIds = DMFile::listAllInPath(file_provider, parent_path, options);
+    ASSERT_EQ(scanIds.size(), 1UL);
+    EXPECT_EQ(*scanIds.begin(), id);
     options.only_list_can_gc = true;
-    scan_ids = DMFile::listAllInPath(file_provider, parent_path, options);
-    EXPECT_TRUE(scan_ids.empty());
+    scanIds                  = DMFile::listAllInPath(file_provider, parent_path, options);
+    EXPECT_TRUE(scanIds.empty());
 
     // After enable GC, the file can be scaned with `can_gc=true`
     dm_file->enableGC();
     ASSERT_TRUE(dm_file->canGC());
     options.only_list_can_gc = false;
-    scan_ids = DMFile::listAllInPath(file_provider, parent_path, options);
-    ASSERT_EQ(scan_ids.size(), 1UL);
-    EXPECT_EQ(*scan_ids.begin(), id);
+    scanIds                  = DMFile::listAllInPath(file_provider, parent_path, options);
+    ASSERT_EQ(scanIds.size(), 1UL);
+    EXPECT_EQ(*scanIds.begin(), id);
     options.only_list_can_gc = true;
-    scan_ids = DMFile::listAllInPath(file_provider, parent_path, options);
-    ASSERT_EQ(scan_ids.size(), 1UL);
-    EXPECT_EQ(*scan_ids.begin(), id);
+    scanIds                  = DMFile::listAllInPath(file_provider, parent_path, options);
+    ASSERT_EQ(scanIds.size(), 1UL);
+    EXPECT_EQ(*scanIds.begin(), id);
 }
 CATCH
 
-/// DMFileTest.InterruptedDrop_0 and InterruptedDrop_1 test that if deleting file
+/// DMFile_Test.InterruptedDrop_0 and InterruptedDrop_1 test that if deleting file
 /// is interrupted by accident, we can safely ignore those broken files.
 
-TEST_P(DMFileTest, InterruptedDrop0)
+TEST_P(DMFile_Test, InterruptedDrop_0)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -317,7 +332,7 @@ try
         // Prepare for write
         Block block1 = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write / 2, false);
         Block block2 = DMTestEnv::prepareSimpleWriteBlock(num_rows_write / 2, num_rows_write, false);
-        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
+        auto  stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
         DMFileBlockOutputStream::BlockProperty block_property;
         stream->writePrefix();
@@ -329,16 +344,34 @@ try
 
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 
     FailPointHelper::enableFailPoint(FailPoints::exception_before_dmfile_remove_encryption);
@@ -356,12 +389,12 @@ try
     // The broken file is ignored
     DMFile::ListOptions options;
     options.only_list_can_gc = true;
-    auto res = DMFile::listAllInPath(file_provider, parent_path, options);
+    auto res                 = DMFile::listAllInPath(file_provider, parent_path, options);
     EXPECT_TRUE(res.empty());
 }
 CATCH
 
-TEST_P(DMFileTest, InterruptedDrop1)
+TEST_P(DMFile_Test, InterruptedDrop_1)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -372,7 +405,7 @@ try
         // Prepare for write
         Block block1 = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write / 2, false);
         Block block2 = DMTestEnv::prepareSimpleWriteBlock(num_rows_write / 2, num_rows_write, false);
-        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
+        auto  stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
         DMFileBlockOutputStream::BlockProperty block_property;
         stream->writePrefix();
@@ -384,16 +417,34 @@ try
 
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 
     FailPointHelper::enableFailPoint(FailPoints::exception_before_dmfile_remove_from_disk);
@@ -411,21 +462,21 @@ try
     // The broken file is ignored
     DMFile::ListOptions options;
     options.only_list_can_gc = true;
-    auto res = DMFile::listAllInPath(file_provider, parent_path, options);
+    auto res                 = DMFile::listAllInPath(file_provider, parent_path, options);
     EXPECT_TRUE(res.empty());
 }
 CATCH
 
 /// Test reading rows with some filters
 
-TEST_P(DMFileTest, ReadFilteredByHandle)
+TEST_P(DMFile_Test, ReadFilteredByHandle)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
 
     const Int64 num_rows_write = 1024;
-    const Int64 nparts = 5;
-    const Int64 span_per_part = num_rows_write / nparts;
+    const Int64 nparts         = 5;
+    const Int64 span_per_part  = num_rows_write / nparts;
 
     {
         // Prepare some packs in DMFile
@@ -436,40 +487,58 @@ try
         DMFileBlockOutputStream::BlockProperty block_property;
         for (size_t i = 0; i < nparts; ++i)
         {
-            auto pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
-            Block block = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
+            auto  pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
+            Block block  = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
             stream->write(block, block_property);
             pk_beg += num_rows_write / nparts;
         }
         stream->writeSuffix();
     }
 
-    HandleRanges ranges{
-        HandleRange{0, span_per_part}, // only first part
-        HandleRange{800, num_rows_write},
-        HandleRange{256, 700}, //
-        HandleRange::newNone(), // none
-        HandleRange{0, num_rows_write}, // full range
-        HandleRange::newAll(), // full range
-    };
+    HandleRanges ranges;
+    ranges.emplace_back(HandleRange{0, span_per_part}); // only first part
+    ranges.emplace_back(HandleRange{800, num_rows_write});
+    ranges.emplace_back(HandleRange{256, 700});          //
+    ranges.emplace_back(HandleRange::newNone());         // none
+    ranges.emplace_back(HandleRange{0, num_rows_write}); // full range
+    ranges.emplace_back(HandleRange::newAll());          // full range
     auto test_read_range = [&](const HandleRange & range) {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::fromHandleRange(range)}, std::make_shared<ScanContext>()); // Filtered by read_range
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::fromHandleRange(range), // Filtered by read_range
+            EMPTY_FILTER,
+            column_cache_,
+            IdSetPtr{});
 
-        Int64 expect_first_pk = static_cast<int>(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
-        Int64 expect_last_pk = std::min(num_rows_write, //
-                                        static_cast<int>(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
+        Int64 num_rows_read = 0;
+        stream->readPrefix();
+        Int64 expect_first_pk = int(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
+        Int64 expect_last_pk  = std::min(num_rows_write, //
+                                        int(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
                                             + (range.end % span_per_part ? span_per_part : 0));
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(expect_first_pk, expect_last_pk)),
-            }))
-            << fmt::format("range: {}, first: {}, last: {}", range.toDebugString(), expect_first_pk, expect_last_pk);
+        Int64 cur_pk          = expect_first_pk;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++)
+                    << "range: " << range.toDebugString() << ", cur_pk: " << cur_pk << ", first pk: " << expect_first_pk;
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, expect_last_pk - expect_first_pk) //
+            << "range: " << range.toDebugString()                  //
+            << ", first: " << expect_first_pk << ", last: " << expect_last_pk;
     };
 
     for (const auto & range : ranges)
@@ -492,14 +561,14 @@ namespace
 {
 RSOperatorPtr toRSFilter(const ColumnDefine & cd, const HandleRange & range)
 {
-    Attr attr = {cd.name, cd.id, cd.type};
-    auto left = createGreaterEqual(attr, Field(range.start), -1);
+    Attr attr  = {cd.name, cd.id, cd.type};
+    auto left  = createGreaterEqual(attr, Field(range.start), -1);
     auto right = createLess(attr, Field(range.end), -1);
     return createAnd({left, right});
 }
 } // namespace
 
-TEST_P(DMFileTest, ReadFilteredByRoughSetFilter)
+TEST_P(DMFile_Test, ReadFilteredByRoughSetFilter)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -510,8 +579,8 @@ try
     reload(cols);
 
     const Int64 num_rows_write = 1024;
-    const Int64 nparts = 5;
-    const Int64 span_per_part = num_rows_write / nparts;
+    const Int64 nparts         = 5;
+    const Int64 span_per_part  = num_rows_write / nparts;
 
     {
         // Prepare some packs in DMFile
@@ -522,47 +591,69 @@ try
         size_t pk_beg = 0;
         for (size_t i = 0; i < nparts; ++i)
         {
-            size_t pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
-            Block block = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
-            block.insert(DB::tests::createColumn<Int64>(
-                createNumbers<Int64>(pk_beg, pk_end),
-                i64_cd.name,
-                i64_cd.id));
+            auto  pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
+            Block block  = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
+
+            auto col = i64_cd.type->createColumn();
+            for (size_t i = pk_beg; i < pk_end; i++)
+            {
+                col->insert(toField(Int64(i)));
+            }
+            ColumnWithTypeAndName i64(std::move(col), i64_cd.type, i64_cd.name, i64_cd.id);
+            block.insert(i64);
+
             stream->write(block, block_property);
             pk_beg += num_rows_write / nparts;
         }
         stream->writeSuffix();
     }
 
-    HandleRanges ranges{
-        HandleRange{0, span_per_part}, // only first part
-        HandleRange{800, num_rows_write},
-        HandleRange{256, 700}, //
-        HandleRange::newNone(), // none
-        HandleRange{0, num_rows_write}, // full range
-        HandleRange::newAll(), // full range
-    };
+    HandleRanges ranges;
+    ranges.emplace_back(HandleRange{0, span_per_part}); // only first part
+    ranges.emplace_back(HandleRange{800, num_rows_write});
+    ranges.emplace_back(HandleRange{256, 700});          //
+    ranges.emplace_back(HandleRange::newNone());         // none
+    ranges.emplace_back(HandleRange{0, num_rows_write}); // full range
+    ranges.emplace_back(HandleRange::newAll());          // full range
     auto test_read_filter = [&](const HandleRange & range) {
         // Filtered by rough set filter
         auto filter = toRSFilter(i64_cd, range);
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .setRSOperator(filter) // Filtered by rough set filter
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            filter, // Filtered by rough set filter
+            column_cache_,
+            IdSetPtr{});
 
-        Int64 expect_first_pk = static_cast<int>(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
-        Int64 expect_last_pk = std::min(num_rows_write, //
-                                        static_cast<int>(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
+        Int64 num_rows_read = 0;
+        stream->readPrefix();
+        Int64 expect_first_pk = int(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
+        Int64 expect_last_pk  = std::min(num_rows_write, //
+                                        int(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
                                             + (range.end % span_per_part ? span_per_part : 0));
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(expect_first_pk, expect_last_pk)),
-            }))
-            << fmt::format("range: {}, first: {}, last: {}", range.toDebugString(), expect_first_pk, expect_last_pk);
+        Int64 cur_pk          = expect_first_pk;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(i64_cd.name));
+            auto   col = in.getByName(i64_cd.name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++)
+                    << "range: " << range.toDebugString() << ", cur_pk: " << cur_pk << ", first pk: " << expect_first_pk;
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, expect_last_pk - expect_first_pk) //
+            << "range: " << range.toDebugString()                  //
+            << ", first: " << expect_first_pk << ", last: " << expect_last_pk;
     };
 
     for (const auto & range : ranges)
@@ -582,7 +673,7 @@ try
 CATCH
 
 // Test rough filter with some unsupported operations
-TEST_P(DMFileTest, ReadFilteredByRoughSetFilterWithUnsupportedOperation)
+TEST_P(DMFile_Test, ReadFilteredByRoughSetFilterWithUnsupportedOperation)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -593,8 +684,8 @@ try
     reload(cols);
 
     const Int64 num_rows_write = 1024;
-    const Int64 nparts = 5;
-    const Int64 span_per_part = num_rows_write / nparts;
+    const Int64 nparts         = 5;
+    const Int64 span_per_part  = num_rows_write / nparts;
 
     {
         // Prepare some packs in DMFile
@@ -605,12 +696,17 @@ try
         size_t pk_beg = 0;
         for (size_t i = 0; i < nparts; ++i)
         {
-            size_t pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
-            Block block = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
-            block.insert(DB::tests::createColumn<Int64>(
-                createNumbers<Int64>(pk_beg, pk_end),
-                i64_cd.name,
-                i64_cd.id));
+            auto  pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
+            Block block  = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
+
+            auto col = i64_cd.type->createColumn();
+            for (size_t i = pk_beg; i < pk_end; i++)
+            {
+                col->insert(toField(Int64(i)));
+            }
+            ColumnWithTypeAndName i64(std::move(col), i64_cd.type, i64_cd.name, i64_cd.id);
+            block.insert(i64);
+
             stream->write(block, block_property);
             pk_beg += num_rows_write / nparts;
         }
@@ -618,7 +714,7 @@ try
     }
 
     std::vector<std::pair<DM::RSOperatorPtr, size_t>> filters;
-    DM::RSOperatorPtr one_part_filter = toRSFilter(i64_cd, HandleRange{0, span_per_part});
+    DM::RSOperatorPtr                                 one_part_filter = toRSFilter(i64_cd, HandleRange{0, span_per_part});
     // <filter, num_rows_should_read>
     filters.emplace_back(one_part_filter, span_per_part); // only first part
     // <filter, num_rows_should_read>
@@ -629,27 +725,43 @@ try
     filters.emplace_back(createOr({one_part_filter, createUnsupported("test", "test", false)}), num_rows_write);
     auto test_read_filter = [&](const DM::RSOperatorPtr & filter, const size_t num_rows_should_read) {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .setRSOperator(filter) // Filtered by rough set filter
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            filter, // Filtered by rough set filter
+            column_cache_,
+            IdSetPtr{});
 
+        Int64 num_rows_read = 0;
+        stream->readPrefix();
         Int64 expect_first_pk = 0;
-        Int64 expect_last_pk = num_rows_should_read;
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(expect_first_pk, expect_last_pk)),
-            }))
-            << fmt::format("first: {}, last: {}", expect_first_pk, expect_last_pk);
+        Int64 expect_last_pk  = num_rows_should_read;
+        Int64 cur_pk          = expect_first_pk;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(i64_cd.name));
+            auto   col = in.getByName(i64_cd.name);
+            auto & c   = col.column;
+            for (size_t j = 0; j < c->size(); j++)
+            {
+                EXPECT_EQ(c->getInt(j), cur_pk++) << "cur_pk: " << cur_pk << ", first pk: " << expect_first_pk;
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, expect_last_pk - expect_first_pk) //
+            << "first: " << expect_first_pk << ", last: " << expect_last_pk;
     };
 
     for (size_t i = 0; i < filters.size(); ++i)
     {
-        const auto & filter = filters[i].first;
-        const auto num_rows_should_read = filters[i].second;
+        const auto & filter               = filters[i].first;
+        const auto   num_rows_should_read = filters[i].second;
         SCOPED_TRACE("Test reading with idx: " + DB::toString(i) + ", filter range:" + filter->toDebugString());
         test_read_filter(filter, num_rows_should_read);
     }
@@ -658,22 +770,22 @@ try
     dm_file = restoreDMFile();
     for (size_t i = 0; i < filters.size(); ++i)
     {
-        const auto & filter = filters[i].first;
-        const auto num_rows_should_read = filters[i].second;
+        const auto & filter               = filters[i].first;
+        const auto   num_rows_should_read = filters[i].second;
         SCOPED_TRACE("Test reading with idx: " + DB::toString(i) + ", filter range:" + filter->toDebugString() + " after restoring DTFile");
         test_read_filter(filter, num_rows_should_read);
     }
 }
 CATCH
 
-TEST_P(DMFileTest, ReadFilteredByPackIndices)
+TEST_P(DMFile_Test, ReadFilteredByPackIndices)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
 
     const Int64 num_rows_write = 1024;
-    const Int64 nparts = 5;
-    const Int64 span_per_part = num_rows_write / nparts;
+    const Int64 nparts         = 5;
+    const Int64 span_per_part  = num_rows_write / nparts;
 
     {
         // Prepare some packs in DMFile
@@ -684,8 +796,8 @@ try
         size_t pk_beg = 0;
         for (size_t i = 0; i < nparts; ++i)
         {
-            auto pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
-            Block block = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
+            auto  pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
+            Block block  = DMTestEnv::prepareSimpleWriteBlock(pk_beg, pk_end, false);
             stream->write(block, block_property);
             pk_beg += num_rows_write / nparts;
         }
@@ -704,32 +816,50 @@ try
             id_set_ptr = std::make_shared<IdSet>(test_sets[test_index]);
 
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .setReadPacks(id_set_ptr) // filter by pack index
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            EMPTY_FILTER,
+            column_cache_,
+            id_set_ptr);
 
-        Int64 expect_first_pk = 0;
-        Int64 expect_last_pk = 0;
+        Int64 num_rows_read = 0;
+        stream->readPrefix();
+        Int64 expect_first_pk = 0, expect_last_pk = 0;
         if (id_set_ptr && !id_set_ptr->empty())
         {
             expect_first_pk = *(id_set_ptr->begin()) * span_per_part;
-            auto last_id = *(id_set_ptr->rbegin());
-            expect_last_pk = (last_id == nparts - 1) ? num_rows_write : (last_id + 1) * span_per_part;
+            auto last_id    = *(id_set_ptr->rbegin());
+            expect_last_pk  = (last_id == nparts - 1) ? num_rows_write : (last_id + 1) * span_per_part;
         }
         else if (!id_set_ptr)
         {
             // not filter if it is nullptr
             expect_last_pk = num_rows_write;
         }
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(expect_first_pk, expect_last_pk)),
-            }))
-            << fmt::format("test index: {}, first: {}, last: {}", test_index, expect_first_pk, expect_last_pk);
+
+        Int64 cur_pk = expect_first_pk;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                EXPECT_EQ(c->getInt(i), cur_pk++)   //
+                    << "test index: " << test_index //
+                    << ", cur_pk: " << cur_pk << ", first pk: " << expect_first_pk;
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, expect_last_pk - expect_first_pk) //
+            << "test index: " << test_index << ", first: " << expect_first_pk << ", last: " << expect_last_pk;
     };
     for (size_t test_index = 0; test_index <= test_sets.size(); test_index++)
     {
@@ -749,7 +879,7 @@ CATCH
 
 /// Test reading different column types
 
-TEST_P(DMFileTest, NumberTypes)
+TEST_P(DMFile_Test, NumberTypes)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
@@ -765,14 +895,23 @@ try
     {
         // Prepare write
         Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
-        block.insert(DB::tests::createColumn<Int64>(
-            createNumbers<Int64>(0, num_rows_write),
-            i64_col.name,
-            i64_col.id));
-        block.insert(DB::tests::createColumn<Float64>(
-            std::vector<Float64>(num_rows_write, 0.125),
-            f64_col.name,
-            f64_col.id));
+
+        auto col = i64_col.type->createColumn();
+        for (size_t i = 0; i < num_rows_write; i++)
+        {
+            col->insert(toField(Int64(i)));
+        }
+        ColumnWithTypeAndName i64(std::move(col), i64_col.type, i64_col.name, i64_col.id);
+
+        col = f64_col.type->createColumn();
+        for (size_t i = 0; i < num_rows_write; i++)
+        {
+            col->insert(toField(Float64(0.125)));
+        }
+        ColumnWithTypeAndName f64(std::move(col), f64_col.type, f64_col.name, f64_col.id);
+
+        block.insert(i64);
+        block.insert(f64);
 
         auto stream = std::make_unique<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
@@ -784,28 +923,48 @@ try
 
     {
         // Test Read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name, i64_col.name, f64_col.name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-                createColumn<Float64>(std::vector<Float64>(num_rows_write, 0.125)),
-            }));
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(i64_col.name));
+            ASSERT_TRUE(in.has(f64_col.name));
+            auto i64_c = in.getByName(i64_col.name).column;
+            auto f64_c = in.getByName(f64_col.name).column;
+            ASSERT_EQ(i64_c->size(), f64_c->size());
+            for (size_t i = 0; i < i64_c->size(); i++)
+            {
+                EXPECT_EQ(i64_c->getInt(i), cur_pk++);
+                Field f = (*f64_c)[i];
+                EXPECT_FLOAT_EQ(f.get<Float64>(), 0.125);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileTest, StringType)
+TEST_P(DMFile_Test, StringType)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns();
     // Prepare columns
-    ColumnDefine fixed_str_col(2, "str", typeFromString("String"));
+    ColumnDefine fixed_str_col(2, "str", typeFromString("FixedString(5)"));
     cols->push_back(fixed_str_col);
 
     reload(cols);
@@ -814,11 +973,15 @@ try
     {
         // Prepare write
         Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
-        block.insert(ColumnWithTypeAndName{
-            DB::tests::makeColumn<String>(fixed_str_col.type, Strings(num_rows_write, "hello")),
-            fixed_str_col.type,
-            fixed_str_col.name,
-            fixed_str_col.id});
+
+        auto col = fixed_str_col.type->createColumn();
+        for (size_t i = 0; i < num_rows_write; i++)
+        {
+            col->insert(toField(String("hello")));
+        }
+        ColumnWithTypeAndName str(std::move(col), fixed_str_col.type, fixed_str_col.name, fixed_str_col.id);
+
+        block.insert(str);
 
         auto stream = std::make_unique<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
@@ -830,25 +993,42 @@ try
 
     {
         // Test Read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name, fixed_str_col.name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-                createColumn<String>(std::vector<String>(num_rows_write, "hello")),
-            }));
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(fixed_str_col.name));
+            auto   col = in.getByName(fixed_str_col.name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                Field value = (*c)[i];
+                EXPECT_EQ(value.get<String>(), "hello");
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileTest, NullableType)
+TEST_P(DMFile_Test, NullableType)
 try
 {
-    auto cols = DMTestEnv::getDefaultColumns();
+    auto         cols = DMTestEnv::getDefaultColumns();
     ColumnDefine nullable_col(2, "i32_null", typeFromString("Nullable(Int32)"));
     // Prepare columns
     cols->emplace_back(nullable_col);
@@ -859,18 +1039,20 @@ try
     {
         // Prepare write
         Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
-        // Half of the column are filled by NULL
-        auto col = nullable_col.type->createColumn();
-        for (size_t i = 0; i < num_rows_write / 2; i++)
-            col->insert(toField(static_cast<Int64>(i)));
-        for (size_t i = 64; i < num_rows_write; i++)
-            col->insertDefault();
-        block.insert(ColumnWithTypeAndName{
-            std::move(col),
-            nullable_col.type,
-            nullable_col.name,
-            nullable_col.id});
 
+        ColumnWithTypeAndName nullable_col({}, typeFromString("Nullable(Int32)"), "i32_null", 2);
+        auto                  col = nullable_col.type->createColumn();
+        for (size_t i = 0; i < 64; i++)
+        {
+            col->insert(toField(Int64(i)));
+        }
+        for (size_t i = 64; i < num_rows_write; i++)
+        {
+            col->insertDefault();
+        }
+        nullable_col.column = std::move(col);
+
+        block.insert(nullable_col);
         auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
         DMFileBlockOutputStream::BlockProperty block_property;
@@ -881,74 +1063,114 @@ try
 
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        std::vector<Int64> nullable_coldata = createNumbers<Int64>(0, num_rows_write / 2);
-        nullable_coldata.resize(num_rows_write);
-        std::vector<Int32> null_map(num_rows_write, 0);
-        std::fill(null_map.begin() + num_rows_write / 2, null_map.end(), 1);
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name, nullable_col.name}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-                createNullableColumn<Int32>(nullable_coldata, null_map),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            ASSERT_TRUE(in.has(nullable_col.name));
+            auto   col  = in.getByName(DMTestEnv::pk_name);
+            auto & c    = col.column;
+            auto   ncol = in.getByName(nullable_col.name);
+            auto & nc   = ncol.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                // check nullable column
+                {
+                    const auto nested_col = typeid_cast<const ColumnNullable *>(nc.get());
+                    auto       nested     = nested_col->getNestedColumnPtr();
+                    if (cur_pk < 64)
+                    {
+                        EXPECT_FALSE(nested_col->isNullAt(i));
+                        EXPECT_EQ(nested->getInt(i), cur_pk);
+                    }
+                    else
+                    {
+                        EXPECT_TRUE(nested_col->isNullAt(i));
+                    }
+                }
+                // check pk
+                EXPECT_EQ(c->getInt(i), cur_pk++);
+            }
+            num_rows_read += in.rows();
+        }
+        ASSERT_EQ(num_rows_read, num_rows_write);
+        stream->readSuffix();
     }
 }
 CATCH
 
 
 INSTANTIATE_TEST_CASE_P(DTFileMode, //
-                        DMFileTest,
-                        testing::Values(DMFileMode::SingleFile, DMFileMode::DirectoryLegacy, DMFileMode::DirectoryChecksum),
+                        DMFile_Test,
+                        testing::Values(DMFile::Mode::FOLDER, DMFile::Mode::SINGLE_FILE),
                         paramToString);
 
 
 /// DMFile test for clustered index
-class DMFileClusteredIndexTest
-    : public DB::base::TiFlashStorageTestBasic
-    , public testing::WithParamInterface<DMFileMode>
+class DMFile_Clustered_Index_Test : public ::testing::Test, //
+                                    public testing::WithParamInterface<DMFile::Mode>
 {
 public:
-    DMFileClusteredIndexTest()
-        : dm_file(nullptr)
-    {}
+    DMFile_Clustered_Index_Test() : path(DB::tests::TiFlashTestEnv::getTemporaryPath() + "/dm_file_clustered_index_tests"), dm_file(nullptr)
+    {
+    }
 
     void SetUp() override
     {
-        TiFlashStorageTestBasic::SetUp();
-        path = TiFlashStorageTestBasic::getTemporaryPath();
+        dropFiles();
 
-        auto mode = GetParam();
-        bool single_file_mode = mode == DMFileMode::SingleFile;
-        auto configuration = mode == DMFileMode::DirectoryChecksum ? std::make_optional<DMChecksumConfig>() : std::nullopt;
+        auto mode             = GetParam();
+        bool single_file_mode = mode == DMFile::Mode::SINGLE_FILE;
 
-        path_pool = std::make_unique<StoragePathPool>(db_context->getPathPool().withTable("test", "t", false));
-        storage_pool = std::make_unique<StoragePool>(*db_context, table_id, *path_pool, "test.t1");
-        dm_file = DMFile::create(0, path, single_file_mode, std::move(configuration));
-        table_columns = std::make_shared<ColumnDefines>();
-        column_cache = std::make_shared<ColumnCache>();
+        auto settings  = DB::Settings();
+        auto ctx       = DMTestEnv::getContext();
+        path_pool      = std::make_unique<StoragePathPool>(ctx.getPathPool().withTable("test", "t", false));
+        storage_pool   = std::make_unique<StoragePool>("test.t1", *path_pool, ctx, settings);
+        dm_file        = DMFile::create(0, path, single_file_mode);
+        db_context     = std::make_unique<Context>(DMTestEnv::getContext(settings));
+        table_columns_ = std::make_shared<ColumnDefines>();
+        column_cache_  = std::make_shared<ColumnCache>();
 
         reload();
+    }
+
+    void dropFiles()
+    {
+        Poco::File file(path);
+        if (file.exists())
+        {
+            file.remove(true);
+        }
     }
 
     // Update dm_context.
     void reload(ColumnDefinesPtr cols = {})
     {
-        TiFlashStorageTestBasic::reload();
         if (!cols)
             cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
 
-        *table_columns = *cols;
+        *table_columns_ = *cols;
 
         dm_context = std::make_unique<DMContext>( //
             *db_context,
             *path_pool,
             *storage_pool,
-            /*min_version_*/ 0,
+            /*hash_salt*/ 0,
+            0,
             settings.not_compress_columns,
             is_common_handle,
             rowkey_column_size,
@@ -961,23 +1183,24 @@ public:
     Context & dbContext() { return *db_context; }
 
 private:
-    String path;
-    std::unique_ptr<DMContext> dm_context{};
+    String                     path;
+    std::unique_ptr<Context>   db_context;
+    std::unique_ptr<DMContext> dm_context;
     /// all these var live as ref in dm_context
-    std::unique_ptr<StoragePathPool> path_pool{};
-    std::unique_ptr<StoragePool> storage_pool{};
-    ColumnDefinesPtr table_columns;
-    DeltaMergeStore::Settings settings;
+    std::unique_ptr<StoragePathPool> path_pool;
+    std::unique_ptr<StoragePool>     storage_pool;
+    ColumnDefinesPtr                 table_columns_;
+    DeltaMergeStore::Settings        settings;
 
 protected:
-    DMFilePtr dm_file;
-    ColumnCachePtr column_cache;
-    TableID table_id = 1;
-    bool is_common_handle = true;
-    size_t rowkey_column_size = 2;
+    DMFilePtr      dm_file;
+    ColumnCachePtr column_cache_;
+    TableID        table_id           = 1;
+    bool           is_common_handle   = true;
+    size_t         rowkey_column_size = 2;
 };
 
-TEST_P(DMFileClusteredIndexTest, WriteRead)
+TEST_P(DMFile_Clustered_Index_Test, WriteRead)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
@@ -1004,7 +1227,7 @@ try
                                                           EXTRA_HANDLE_COLUMN_STRING_TYPE,
                                                           is_common_handle,
                                                           rowkey_column_size);
-        auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
+        auto  stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dm_file, *cols);
 
         DMFileBlockOutputStream::BlockProperty block_property;
         stream->writePrefix();
@@ -1016,36 +1239,46 @@ try
 
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{RowKeyRange::newAll(is_common_handle, rowkey_column_size)}, std::make_shared<ScanContext>());
-        // mock common handle
-        auto common_handle_coldata = [this]() {
-            std::vector<Int64> int_coldata = createNumbers<Int64>(0, num_rows_write);
-            Strings res;
-            std::transform(int_coldata.begin(), int_coldata.end(), std::back_inserter(res), [this](Int64 v) { return genMockCommonHandle(v, rowkey_column_size); });
-            return res;
-        }();
-        ASSERT_EQ(common_handle_coldata.size(), num_rows_write);
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<String>(common_handle_coldata),
-            }));
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            RowKeyRange::newAll(is_common_handle, rowkey_column_size),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 cur_pk = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                DMTestEnv::verifyClusteredIndexValue((*c)[i].get<String>(), cur_pk++, rowkey_column_size);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileClusteredIndexTest, ReadFilteredByHandle)
+TEST_P(DMFile_Clustered_Index_Test, ReadFilteredByHandle)
 try
 {
     auto cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
 
     const Int64 num_rows_write = 1024;
-    const Int64 nparts = 5;
-    const Int64 span_per_part = num_rows_write / nparts;
+    const Int64 nparts         = 5;
+    const Int64 span_per_part  = num_rows_write / nparts;
 
     {
         // Prepare some packs in DMFile
@@ -1056,8 +1289,8 @@ try
         size_t pk_beg = 0;
         for (size_t i = 0; i < nparts; ++i)
         {
-            auto pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
-            Block block = DMTestEnv::prepareSimpleWriteBlock(pk_beg,
+            auto  pk_end = (i == nparts - 1) ? num_rows_write : (pk_beg + num_rows_write / nparts);
+            Block block  = DMTestEnv::prepareSimpleWriteBlock(pk_beg,
                                                              pk_end,
                                                              false,
                                                              2,
@@ -1074,75 +1307,78 @@ try
 
     struct QueryRangeInfo
     {
-        QueryRangeInfo(const RowKeyRange & range_, Int64 start_, Int64 end_)
-            : range(range_)
-            , start(start_)
-            , end(end_)
-        {}
+        QueryRangeInfo(const RowKeyRange & range_, Int64 start_, Int64 end_) : range(range_), start(start_), end(end_) {}
         RowKeyRange range;
-        Int64 start, end;
+        Int64       start, end;
     };
     std::vector<QueryRangeInfo> ranges;
     ranges.emplace_back(
-        DMTestEnv::getRowKeyRangeForClusteredIndex(0, span_per_part, rowkey_column_size),
-        0,
-        span_per_part); // only first part
+        DMTestEnv::getRowKeyRangeForClusteredIndex(0, span_per_part, rowkey_column_size), 0, span_per_part); // only first part
     ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(800, num_rows_write, rowkey_column_size), 800, num_rows_write);
-    ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(256, 700, rowkey_column_size), 256, 700); //
-    ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(0, 0, rowkey_column_size), 0, 0); // none
+    ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(256, 700, rowkey_column_size), 256, 700);                   //
+    ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(0, 0, rowkey_column_size), 0, 0);                           // none
     ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(0, num_rows_write, rowkey_column_size), 0, num_rows_write); // full range
     ranges.emplace_back(DMTestEnv::getRowKeyRangeForClusteredIndex(
-                            std::numeric_limits<Int64>::min(),
-                            std::numeric_limits<Int64>::max(),
-                            rowkey_column_size),
+                            std::numeric_limits<Int64>::min(), std::numeric_limits<Int64>::max(), rowkey_column_size),
                         std::numeric_limits<Int64>::min(),
                         std::numeric_limits<Int64>::max()); // full range
     for (const auto & range : ranges)
     {
         // Test read
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols, RowKeyRanges{range.range}, std::make_shared<ScanContext>()); // Filtered by read_range
-        Int64 expect_first_pk = static_cast<int>(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
-        Int64 expect_last_pk = std::min(num_rows_write, //
-                                        static_cast<int>(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
+        auto stream = std::make_shared<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols,
+            range.range, // Filtered by read_range
+            EMPTY_FILTER,
+            column_cache_,
+            IdSetPtr{});
+
+        Int64 num_rows_read = 0;
+        stream->readPrefix();
+        Int64 expect_first_pk = int(std::floor(std::max(0, range.start) / span_per_part)) * span_per_part;
+        Int64 expect_last_pk  = std::min(num_rows_write, //
+                                        int(std::ceil(std::min(num_rows_write, range.end) / span_per_part)) * span_per_part
                                             + (range.end % span_per_part ? span_per_part : 0));
-        // mock common handle
-        auto common_handle_coldata = [this, expect_first_pk, expect_last_pk]() {
-            std::vector<Int64> int_coldata = createNumbers<Int64>(expect_first_pk, expect_last_pk);
-            Strings res;
-            std::transform(int_coldata.begin(), int_coldata.end(), std::back_inserter(res), [this](Int64 v) { return genMockCommonHandle(v, rowkey_column_size); });
-            return res;
-        }();
-        ASSERT_EQ(common_handle_coldata.size(), expect_last_pk - expect_first_pk);
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name}),
-            createColumns({
-                createColumn<String>(common_handle_coldata),
-            }))
-            << fmt::format("range: {}, first: {}, last: {}", range.range.toDebugString(), expect_first_pk, expect_last_pk);
+        Int64 cur_pk          = expect_first_pk;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(DMTestEnv::pk_name));
+            auto   col = in.getByName(DMTestEnv::pk_name);
+            auto & c   = col.column;
+            for (size_t i = 0; i < c->size(); i++)
+            {
+                DMTestEnv::verifyClusteredIndexValue((*c)[i].get<String>(), cur_pk++, rowkey_column_size);
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, expect_last_pk - expect_first_pk) //
+            << "range: " << range.range.toDebugString()            //
+            << ", first: " << expect_first_pk << ", last: " << expect_last_pk;
     }
 }
 CATCH
 
 INSTANTIATE_TEST_CASE_P(DTFileMode, //
-                        DMFileClusteredIndexTest,
+                        DMFile_Clustered_Index_Test,
                         testing::Values(DMFile::Mode::FOLDER, DMFile::Mode::SINGLE_FILE),
                         paramToString);
 
 
 /// DDL test cases
-class DMFileDDLTest : public DMFileTest
+class DMFile_DDL_Test : public DMFile_Test
 {
 public:
     /// Write some data into DMFile.
     /// return rows write, schema
     std::pair<size_t, ColumnDefines> prepareSomeDataToDMFile(bool i8_is_nullable = false)
     {
-        size_t num_rows_write = 128;
-        auto cols_before_ddl = DMTestEnv::getDefaultColumns();
+        size_t num_rows_write  = 128;
+        auto   cols_before_ddl = DMTestEnv::getDefaultColumns();
 
         ColumnDefine i8_col(2, "i8", i8_is_nullable ? typeFromString("Nullable(Int8)") : typeFromString("Int8"));
         ColumnDefine f64_col(3, "f64", typeFromString("Float64"));
@@ -1154,23 +1390,26 @@ public:
         {
             // Prepare write
             Block block = DMTestEnv::prepareSimpleWriteBlock(0, num_rows_write, false);
-            if (!i8_is_nullable)
-            {
-                auto i8_coldata = createSignedNumbers(0, num_rows_write);
-                block.insert(createColumn<Int8>(i8_coldata, i8_col.name, i8_col.id));
-            }
-            else
-            {
-                auto c = getExpectedI8Column(num_rows_write);
-                c.name = i8_col.name;
-                c.column_id = i8_col.id;
-                block.insert(c);
-            }
 
-            block.insert(DB::tests::createColumn<Float64>(
-                std::vector<Float64>(num_rows_write, 0.125),
-                f64_col.name,
-                f64_col.id));
+            auto col = i8_col.type->createColumn();
+            for (size_t i = 0; i < num_rows_write; i++)
+            {
+                Field field; // Null by default
+                if (!i8_is_nullable || (i8_is_nullable && i < num_rows_write / 2))
+                    field = toField(Int64(i) * (-1 * (i % 2)));
+                col->insert(field);
+            }
+            ColumnWithTypeAndName i64(std::move(col), i8_col.type, i8_col.name, i8_col.id);
+
+            col = f64_col.type->createColumn();
+            for (size_t i = 0; i < num_rows_write; i++)
+            {
+                col->insert(toField(Float64(0.125)));
+            }
+            ColumnWithTypeAndName f64(std::move(col), f64_col.type, f64_col.name, f64_col.id);
+
+            block.insert(i64);
+            block.insert(f64);
 
             auto stream = std::make_unique<DMFileBlockOutputStream>(dbContext(), dm_file, *cols_before_ddl);
             DMFileBlockOutputStream::BlockProperty block_property;
@@ -1181,21 +1420,9 @@ public:
             return {num_rows_write, *cols_before_ddl};
         }
     }
-
-    static ColumnWithTypeAndName getExpectedI8Column(size_t num_rows_write)
-    {
-        auto i8_coldata = createSignedNumbers(0, num_rows_write);
-        std::vector<Int32> nullmap(num_rows_write, 0);
-        for (size_t i = 0; i < num_rows_write / 2; ++i)
-        {
-            i8_coldata[i] = 0;
-            nullmap[i] = 1;
-        }
-        return createNullableColumn<Int8>(i8_coldata, nullmap);
-    }
 };
 
-TEST_P(DMFileDDLTest, AddColumn)
+TEST_P(DMFile_DDL_Test, AddColumn)
 try
 {
     // Prepare some data before ddl
@@ -1203,143 +1430,314 @@ try
 
     // Mock that we add new column after ddl
     auto cols_after_ddl = std::make_shared<ColumnDefines>();
-    *cols_after_ddl = cols_before_ddl;
+    *cols_after_ddl     = cols_before_ddl;
     // A new string column
     ColumnDefine new_s_col(100, "s", typeFromString("String"));
     cols_after_ddl->emplace_back(new_s_col);
     // A new int64 column with default value 5
     ColumnDefine new_i_col_with_default(101, "i", typeFromString("Int64"));
-    new_i_col_with_default.default_value = Field(static_cast<Int64>(5));
+    new_i_col_with_default.default_value = Field(Int64(5));
     cols_after_ddl->emplace_back(new_i_col_with_default);
 
     {
         // Test read with new columns after ddl
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols_after_ddl, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({"i8", "f64", new_s_col.name, new_i_col_with_default.name}),
-            createColumns({
-                // old cols
-                createColumn<Int8>(createSignedNumbers(0, num_rows_write)),
-                createColumn<Float64>(std::vector<Float64>(num_rows_write, 0.125)),
-                // new cols
-                createColumn<String>(Strings(num_rows_write, "")), // filled with empty
-                createColumn<Int64>(std::vector<Int64>(num_rows_write, 5)), // filled with default value
-            }));
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols_after_ddl,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 row_number = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has("i8"));
+            ASSERT_TRUE(in.has("f64"));
+            ASSERT_TRUE(in.has(new_s_col.name));
+            ASSERT_TRUE(in.has(new_i_col_with_default.name));
+            {
+                auto col = in.getByName(new_s_col.name);
+                EXPECT_EQ(col.column_id, new_s_col.id);
+                EXPECT_TRUE(col.type->equals(*new_s_col.type));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    Field value = (*c)[i];
+                    ASSERT_EQ(value.getType(), Field::Types::String);
+                    // Empty default value
+                    ASSERT_EQ(value, new_s_col.type->getDefault());
+                }
+            }
+            {
+                auto col = in.getByName(new_i_col_with_default.name);
+                EXPECT_EQ(col.column_id, new_i_col_with_default.id);
+                EXPECT_TRUE(col.type->equals(*new_i_col_with_default.type));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    ASSERT_EQ(c->getInt(i), 5); // Should fill with default value
+                }
+            }
+            {
+                // Check old columns before ddl
+                auto col = in.getByName("i8");
+                EXPECT_EQ(col.column_id, 2L);
+                EXPECT_TRUE(col.type->equals(*typeFromString("Int8")));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    EXPECT_EQ(c->getInt(i), Int64(row_number * (-1 * (row_number % 2))));
+                    row_number++;
+                }
+            }
+            {
+                auto col = in.getByName("f64");
+                EXPECT_EQ(col.column_id, 3L);
+                EXPECT_TRUE(col.type->equals(*typeFromString("Float64")));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    Field value = (*c)[i];
+                    EXPECT_FLOAT_EQ(value.get<Float64>(), 0.125);
+                }
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileDDLTest, UpcastColumnType)
+TEST_P(DMFile_DDL_Test, UpcastColumnType)
 try
 {
     // Prepare some data before ddl
     const auto [num_rows_write, cols_before_ddl] = prepareSomeDataToDMFile();
 
     // Mock that we achange a column type from int8 -> int32, and its name to "i8_new" after ddl
-    auto cols_after_ddl = std::make_shared<ColumnDefines>();
-    *cols_after_ddl = cols_before_ddl;
+    auto cols_after_ddl        = std::make_shared<ColumnDefines>();
+    *cols_after_ddl            = cols_before_ddl;
     const ColumnDefine old_col = cols_before_ddl[3];
     ASSERT_TRUE(old_col.type->equals(*typeFromString("Int8")));
     ColumnDefine new_col = old_col;
-    new_col.type = typeFromString("Int32");
-    new_col.name = "i32_new";
+    new_col.type         = typeFromString("Int32");
+    new_col.name         = "i32_new";
     (*cols_after_ddl)[3] = new_col;
 
     {
         // Test read with new columns after ddl
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols_after_ddl, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({new_col.name, "f64"}),
-            createColumns({
-                createColumn<Int32>(createSignedNumbers(0, num_rows_write)),
-                // old cols
-                createColumn<Float64>(std::vector<Float64>(num_rows_write, 0.125)),
-            }));
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols_after_ddl,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 row_number = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(new_col.name));
+            ASSERT_TRUE(!in.has("i8"));
+            ASSERT_TRUE(in.has("f64"));
+            {
+                auto col = in.getByName(new_col.name);
+                EXPECT_EQ(col.column_id, new_col.id);
+                EXPECT_TRUE(col.type->equals(*new_col.type));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    auto value = c->getInt(Int64(i));
+                    ASSERT_EQ(value, (Int64)(row_number * (-1 * (row_number % 2))));
+                    row_number++;
+                }
+            }
+            {
+                // Check old columns before ddl
+                auto col = in.getByName("f64");
+                EXPECT_EQ(col.column_id, 3L);
+                EXPECT_TRUE(col.type->equals(*typeFromString("Float64")));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    Field value = (*c)[i];
+                    EXPECT_DOUBLE_EQ(value.get<Float64>(), 0.125);
+                }
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileDDLTest, NotNullToNull)
+TEST_P(DMFile_DDL_Test, NotNullToNull)
 try
 {
     // Prepare some data before ddl
     const auto [num_rows_write, cols_before_ddl] = prepareSomeDataToDMFile();
 
     // Mock that we achange a column type from int8 -> Nullable(int32), and its name to "i8_new" after ddl
-    auto cols_after_ddl = std::make_shared<ColumnDefines>(cols_before_ddl);
+    auto cols_after_ddl        = std::make_shared<ColumnDefines>();
+    *cols_after_ddl            = cols_before_ddl;
     const ColumnDefine old_col = cols_before_ddl[3];
     ASSERT_TRUE(old_col.type->equals(*typeFromString("Int8")));
     ColumnDefine new_col = old_col;
-    new_col.type = typeFromString("Nullable(Int32)");
-    new_col.name = "i32_nullable";
+    new_col.type         = typeFromString("Nullable(Int32)");
+    new_col.name         = "i32_nullable";
     (*cols_after_ddl)[3] = new_col;
 
     {
         // Test read with new columns after ddl
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols_after_ddl, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({new_col.name, "f64"}),
-            createColumns({
-                createNullableColumn<Int32>(createSignedNumbers(0, num_rows_write), /*null_map=*/std::vector<Int32>(num_rows_write, 0)),
-                createColumn<Float64>(std::vector<Float64>(num_rows_write, 0.125)),
-            }));
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols_after_ddl,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
+
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 row_number = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(new_col.name));
+            ASSERT_TRUE(!in.has("i8"));
+            ASSERT_TRUE(in.has("f64"));
+            {
+                auto col = in.getByName(new_col.name);
+                EXPECT_EQ(col.column_id, new_col.id);
+                EXPECT_TRUE(col.type->equals(*new_col.type));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    auto value = (*c)[i];
+                    ASSERT_FALSE(value.isNull());
+                    ASSERT_EQ(value, (Int64)(row_number * (-1 * (row_number % 2))));
+                    row_number++;
+                }
+            }
+            {
+                auto col = in.getByName("f64");
+                EXPECT_EQ(col.column_id, 3L);
+                EXPECT_TRUE(col.type->equals(*typeFromString("Float64")));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    Field value = (*c)[i];
+                    EXPECT_DOUBLE_EQ(value.get<Float64>(), 0.125);
+                }
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
-TEST_P(DMFileDDLTest, NullToNotNull)
+TEST_P(DMFile_DDL_Test, NullToNotNull)
 try
 {
     // Prepare some data before ddl
     const auto [num_rows_write, cols_before_ddl] = prepareSomeDataToDMFile(true);
 
     // Mock that we achange a column type from Nullable(int8) -> int32, and its name to "i32" after ddl
-    auto cols_after_ddl = std::make_shared<ColumnDefines>();
-    *cols_after_ddl = cols_before_ddl;
+    auto cols_after_ddl        = std::make_shared<ColumnDefines>();
+    *cols_after_ddl            = cols_before_ddl;
     const ColumnDefine old_col = cols_before_ddl[3];
     ASSERT_TRUE(old_col.type->equals(*typeFromString("Nullable(Int8)")));
     ColumnDefine new_col = old_col;
-    new_col.type = typeFromString("Int32");
-    new_col.name = "i32";
+    new_col.type         = typeFromString("Int32");
+    new_col.name         = "i32";
     (*cols_after_ddl)[3] = new_col;
 
     {
         // Test read with new columns after ddl
-        DMFileBlockInputStreamBuilder builder(dbContext());
-        auto stream = builder
-                          .setColumnCache(column_cache)
-                          .build(dm_file, *cols_after_ddl, RowKeyRanges{RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
+        auto stream = std::make_unique<DMFileBlockInputStream>( //
+            dbContext(),
+            std::numeric_limits<UInt64>::max(),
+            false,
+            dmContext().hash_salt,
+            dm_file,
+            *cols_after_ddl,
+            RowKeyRange::newAll(false, 1),
+            RSOperatorPtr{},
+            column_cache_,
+            IdSetPtr{});
 
-        auto i32_coldata = createSignedNumbers(0, num_rows_write);
-        for (size_t i = 0; i < num_rows_write / 2; ++i)
-            i32_coldata[i] = 0;
-        ASSERT_INPUTSTREAM_COLS_UR(
-            stream,
-            Strings({DMTestEnv::pk_name, new_col.name, "f64"}),
-            createColumns({
-                createColumn<Int64>(createNumbers<Int64>(0, num_rows_write)),
-                createColumn<Int32>(i32_coldata),
-                createColumn<Float64>(std::vector<Float64>(num_rows_write, 0.125)),
-            }));
+        size_t num_rows_read = 0;
+        stream->readPrefix();
+        Int64 row_number = 0;
+        while (Block in = stream->read())
+        {
+            ASSERT_TRUE(in.has(new_col.name));
+            ASSERT_TRUE(!in.has("i8"));
+            ASSERT_TRUE(in.has("f64"));
+            {
+                auto col = in.getByName(new_col.name);
+                EXPECT_EQ(col.column_id, new_col.id);
+                EXPECT_TRUE(col.type->equals(*new_col.type));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    auto value = (*c)[i];
+                    if (i < num_rows_write / 2)
+                    {
+                        ASSERT_FALSE(value.isNull()) << " at row: " << i;
+                        ASSERT_EQ(value, (Int64)(row_number * (-1 * (row_number % 2)))) << " at row: " << i;
+                    }
+                    else
+                    {
+                        ASSERT_FALSE(value.isNull()) << " at row: " << i;
+                        ASSERT_EQ(value, (Int64)0) << " at row: " << i;
+                    }
+                    row_number++;
+                }
+            }
+            {
+                // Check old columns before ddl
+                auto col = in.getByName("f64");
+                EXPECT_EQ(col.column_id, 3L);
+                EXPECT_TRUE(col.type->equals(*typeFromString("Float64")));
+                auto c = col.column;
+                for (size_t i = 0; i < c->size(); i++)
+                {
+                    Field value = (*c)[i];
+                    EXPECT_DOUBLE_EQ(value.get<Float64>(), 0.125);
+                }
+            }
+            num_rows_read += in.rows();
+        }
+        stream->readSuffix();
+        ASSERT_EQ(num_rows_read, num_rows_write);
     }
 }
 CATCH
 
 INSTANTIATE_TEST_CASE_P(DTFileMode, //
-                        DMFileDDLTest,
-                        testing::Values(DMFileMode::SingleFile, DMFileMode::DirectoryLegacy, DMFileMode::DirectoryChecksum),
+                        DMFile_DDL_Test,
+                        testing::Values(DMFile::Mode::FOLDER, DMFile::Mode::SINGLE_FILE),
                         paramToString);
 
 } // namespace tests

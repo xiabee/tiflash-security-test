@@ -1,26 +1,13 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <Storages/Transaction/RegionMeta.h>
 
 namespace DB
 {
-class MockTiKV : public ext::Singleton<MockTiKV>
+
+class MockTiKV : public ext::singleton<MockTiKV>
 {
-    friend class ext::Singleton<MockTiKV>;
+    friend class ext::singleton<MockTiKV>;
 
 public:
     UInt64 getRaftIndex(RegionID region_id)
@@ -29,9 +16,9 @@ public:
         auto it = raft_index.find(region_id);
         if (it == raft_index.end())
         {
-            // Usually index 6 is empty and we ignore it.
+            // Usually index 6 is empty and we ignore it. 
             // https://github.com/tikv/tikv/issues/7047
-            auto init_index = RAFT_INIT_LOG_INDEX + 1;
+            auto init_index = RAFT_INIT_LOG_INDEX +  1;
             it = raft_index.emplace_hint(it, region_id, init_index);
         }
         ++(it->second);

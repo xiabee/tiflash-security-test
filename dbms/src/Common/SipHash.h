@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 /** SipHash is a fast cryptographic hash function for short strings.
@@ -27,34 +13,21 @@
   * (~ 700 MB/sec, 15 million strings per second)
   */
 
-#include <Common/Decimal.h>
-#include <Core/Defines.h>
-#include <common/types.h>
-#include <common/unaligned.h>
-
-#include <string>
+#include <common/Types.h>
 #include <type_traits>
+#include <Common/Decimal.h>
+#include <Common/Exception.h>
 
 #define ROTL(x, b) static_cast<UInt64>(((x) << (b)) | ((x) >> (64 - (b))))
 
-#define SIPROUND           \
-    do                     \
-    {                      \
-        v0 += v1;          \
-        v1 = ROTL(v1, 13); \
-        v1 ^= v0;          \
-        v0 = ROTL(v0, 32); \
-        v2 += v3;          \
-        v3 = ROTL(v3, 16); \
-        v3 ^= v2;          \
-        v0 += v3;          \
-        v3 = ROTL(v3, 21); \
-        v3 ^= v0;          \
-        v2 += v1;          \
-        v1 = ROTL(v1, 17); \
-        v1 ^= v2;          \
-        v2 = ROTL(v2, 32); \
-    } while (0)
+#define SIPROUND                                                  \
+    do                                                            \
+    {                                                             \
+        v0 += v1; v1 = ROTL(v1, 13); v1 ^= v0; v0 = ROTL(v0, 32); \
+        v2 += v3; v3 = ROTL(v3, 16); v3 ^= v2;                    \
+        v0 += v3; v3 = ROTL(v3, 21); v3 ^= v0;                    \
+        v2 += v1; v1 = ROTL(v1, 17); v1 ^= v2; v2 = ROTL(v2, 32); \
+    } while(0)
 
 
 class SipHash
@@ -76,7 +49,7 @@ private:
         UInt8 current_bytes[8];
     };
 
-    ALWAYS_INLINE void finalize()
+    void finalize()
     {
         /// In the last free byte, we write the remainder of the division by 256.
         current_bytes[7] = cnt;
@@ -95,7 +68,7 @@ private:
 
 public:
     /// Arguments - seed.
-    explicit SipHash(UInt64 k0 = 0, UInt64 k1 = 0)
+    SipHash(UInt64 k0 = 0, UInt64 k1 = 0)
     {
         /// Initialize the state with some random bytes and seed.
         v0 = 0x736f6d6570736575ULL ^ k0;
@@ -135,7 +108,7 @@ public:
 
         while (data + 8 <= end)
         {
-            current_word = unalignedLoad<UInt64>(data);
+            current_word = *reinterpret_cast<const UInt64 *>(data);
 
             v3 ^= current_word;
             SIPROUND;
@@ -149,59 +122,47 @@ public:
         current_word = 0;
         switch (end - data)
         {
-        case 7:
-            current_bytes[6] = data[6];
-            [[fallthrough]];
-        case 6:
-            current_bytes[5] = data[5];
-            [[fallthrough]];
-        case 5:
-            current_bytes[4] = data[4];
-            [[fallthrough]];
-        case 4:
-            current_bytes[3] = data[3];
-            [[fallthrough]];
-        case 3:
-            current_bytes[2] = data[2];
-            [[fallthrough]];
-        case 2:
-            current_bytes[1] = data[1];
-            [[fallthrough]];
-        case 1:
-            current_bytes[0] = data[0];
-            [[fallthrough]];
-        case 0:
-            break;
+            case 7: current_bytes[6] = data[6]; [[fallthrough]];
+            case 6: current_bytes[5] = data[5]; [[fallthrough]];
+            case 5: current_bytes[4] = data[4]; [[fallthrough]];
+            case 4: current_bytes[3] = data[3]; [[fallthrough]];
+            case 3: current_bytes[2] = data[2]; [[fallthrough]];
+            case 2: current_bytes[1] = data[1]; [[fallthrough]];
+            case 1: current_bytes[0] = data[0]; [[fallthrough]];
+            case 0: break;
         }
     }
 
     template <typename T>
-    void update(const T & x)
+    std::enable_if_t<DB::IsBoostNumber<T>, void> update(const T & x)
     {
-        if constexpr (DB::IsDecimal<T>)
-        {
-            update(x.value);
-        }
-        else if constexpr (is_boost_number_v<T>)
+        if constexpr (DB::IsCppIntBackend<typename T::backend_type>)
         {
             auto backend_value = x.backend();
-            auto size = backend_value.size() * sizeof(backend_value.limbs()[0]);
-            update(reinterpret_cast<const char *>(backend_value.limbs()), size);
+            for (unsigned i = 0; i < backend_value.size(); ++i)
+            {
+                update(backend_value.limbs()[i]);
+            }
             update(backend_value.sign());
-        }
-        else if constexpr (std::is_standard_layout_v<T>)
-        {
-            update(reinterpret_cast<const char *>(&x), sizeof(x));
+            return;
         }
         else
         {
-            __builtin_unreachable();
+            throw DB::Exception("hash value of boost number not based on cpp_int_backend is not supported");
         }
     }
-
-    void update(const std::string & x)
+    /// NOTE: std::has_unique_object_representations is only available since clang 6. As of Mar 2017 we still use clang 5 sometimes.
+    template <typename T>
+    std::enable_if_t<!DB::IsBoostNumber<T> && std::/*has_unique_object_representations_v*/is_standard_layout_v<T>, void> update(const T & x)
     {
-        update(x.data(), x.length());
+        if constexpr (DB::IsDecimal<T>)
+        {
+            return update(x.value);
+        }
+        else
+        {
+            update(reinterpret_cast<const char *>(&x), sizeof(x));
+        }
     }
 
     /// Get the result in some form. This can only be done once!
@@ -209,24 +170,15 @@ public:
     void get128(char * out)
     {
         finalize();
-        unalignedStore<UInt64>(out, v0 ^ v1);
-        unalignedStore<UInt64>(out + 8, v2 ^ v3);
+        reinterpret_cast<UInt64 *>(out)[0] = v0 ^ v1;
+        reinterpret_cast<UInt64 *>(out)[1] = v2 ^ v3;
     }
 
-    template <typename T>
-    ALWAYS_INLINE void get128(T & lo, T & hi)
+    void get128(UInt64 & lo, UInt64 & hi)
     {
-        static_assert(std::is_standard_layout_v<T> && sizeof(T) == 8);
         finalize();
         lo = v0 ^ v1;
         hi = v2 ^ v3;
-    }
-
-    template <typename T>
-    ALWAYS_INLINE void get128(T & dst)
-    {
-        static_assert(std::is_standard_layout_v<T> && sizeof(T) == 16);
-        get128(reinterpret_cast<char *>(&dst));
     }
 
     UInt64 get64()
@@ -257,12 +209,43 @@ inline UInt64 sipHash64(const char * data, const size_t size)
 }
 
 template <typename T>
-UInt64 sipHash64(const T & x)
+std::enable_if_t<DB::IsBoostNumber<T>, UInt64> sipHash64(const T & x)
 {
-    SipHash hash;
-    hash.update(x);
-    return hash.get64();
+    if constexpr (DB::IsCppIntBackend<typename T::backend_type>)
+    {
+        /// the steps of calculating hash is copied from
+        /// https://github.com/pingcap/boost-extra/blob/master/boost/multiprecision/cpp_int/misc.hpp#L639
+        SipHash hash;
+        auto backend_value = x.backend();
+        for(unsigned i = 0; i < backend_value.size(); ++i)
+        {
+            hash.update(backend_value.limbs()[i]);
+        }
+        hash.update(backend_value.sign());
+        return hash.get64();
+    }
+    else
+    {
+        throw DB::Exception("hash value of boost number not based on cpp_int_backend is not supported");
+    }
 }
+
+template <typename T>
+std::enable_if_t<!DB::IsBoostNumber<T> && std::/*has_unique_object_representations_v*/is_standard_layout_v<T>, UInt64> sipHash64(const T & x)
+{
+    if constexpr (DB::IsDecimal<T>)
+    {
+        return sipHash64(x.value);
+    }
+    else
+    {
+        SipHash hash;
+        hash.update(x);
+        return hash.get64();
+    }
+}
+
+#include <string>
 
 inline UInt64 sipHash64(const std::string & s)
 {

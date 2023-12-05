@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 /// Bug in GCC: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=59124
 #if !__clang__
 #pragma GCC diagnostic push
@@ -19,16 +5,15 @@
 #endif
 
 #include <Common/CompactArray.h>
-#include <IO/ReadBufferFromFile.h>
 #include <IO/WriteBufferFromFile.h>
-#include <port/unistd.h>
-
+#include <IO/ReadBufferFromFile.h>
 #include <boost/filesystem.hpp>
-#include <cstdlib>
-#include <fstream>
-#include <iostream>
-#include <stdexcept>
 #include <string>
+#include <iostream>
+#include <fstream>
+#include <stdexcept>
+#include <cstdlib>
+#include <port/unistd.h>
 
 namespace fs = boost::filesystem;
 
@@ -81,13 +66,13 @@ struct Test
         catch (const Poco::Exception & ex)
         {
             std::cout << "Test width=" << width << " bucket_count=" << bucket_count << " failed "
-                      << "(Error: " << ex.what() << ": " << ex.displayText() << ")\n";
+                << "(Error: " << ex.what() << ": " << ex.displayText() << ")\n";
             ok = false;
         }
         catch (const std::runtime_error & ex)
         {
             std::cout << "Test width=" << width << " bucket_count=" << bucket_count << " failed "
-                      << "(Error: " << ex.what() << ")\n";
+                << "(Error: " << ex.what() << ")\n";
             ok = false;
         }
         catch (...)

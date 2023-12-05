@@ -1,41 +1,33 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Client/TimeoutSetter.h>
+#include <Poco/Net/TCPServerConnection.h>
+
+#include <Common/getFQDNOrHostName.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Stopwatch.h>
-#include <Common/getFQDNOrHostName.h>
+#include <IO/Progress.h>
 #include <Core/Protocol.h>
 #include <Core/QueryProcessingStage.h>
 #include <DataStreams/BlockIO.h>
-#include <IO/Progress.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
-#include <Poco/Net/TCPServerConnection.h>
+#include <Client/TimeoutSetter.h>
+
 #include <Storages/Transaction/RegionLockInfo.h>
 
 #include "IServer.h"
 
-namespace Poco
+namespace CurrentMetrics
 {
-class Logger;
+    extern const Metric TCPConnection;
 }
+
+namespace Poco { class Logger; }
 
 namespace DB
 {
+
+
 /// State of query processing.
 struct QueryState
 {
@@ -96,7 +88,7 @@ public:
         , connection_context(server.context())
         , query_context(server.context())
     {
-        server_display_name = server.config().getString("display_name", "TiFlash");
+        server_display_name =  server.config().getString("display_name", getFQDNOrHostName());
     }
 
     void run();
@@ -126,6 +118,8 @@ private:
     /// At the moment, only one ongoing query in the connection is supported at a time.
     QueryState state;
 
+    CurrentMetrics::Increment metric_increment{CurrentMetrics::TCPConnection};
+
     /// It is the name of the server that will be sent to the client.
     String server_display_name;
 
@@ -146,7 +140,7 @@ private:
     void processTablesStatusRequest();
 
     void sendHello();
-    void sendData(const Block & block); /// Write a block to the network.
+    void sendData(const Block & block);    /// Write a block to the network.
     void sendException(const Exception & e);
     void sendRegionException(const std::vector<UInt64> & region_ids);
     void sendLockInfos(const LockInfoPtr & lock_info);
@@ -166,4 +160,4 @@ private:
     void updateProgress(const Progress & value);
 };
 
-} // namespace DB
+}

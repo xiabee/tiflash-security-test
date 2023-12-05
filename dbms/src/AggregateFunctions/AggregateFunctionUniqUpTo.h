@@ -1,31 +1,19 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
+#include <Common/FieldVisitors.h>
 #include <AggregateFunctions/IAggregateFunction.h>
 #include <AggregateFunctions/UniqVariadicHash.h>
-#include <Columns/ColumnsNumber.h>
-#include <Common/FieldVisitors.h>
-#include <Common/typeid_cast.h>
+#include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypeUUID.h>
-#include <DataTypes/DataTypesNumber.h>
+#include <Columns/ColumnsNumber.h>
 #include <IO/ReadHelpers.h>
+#include <Common/typeid_cast.h>
 
 namespace DB
 {
+
+
 /** Counts the number of unique values up to no more than specified in the parameter.
   *
   * Example: uniqUpTo(3)(UserID)
@@ -35,16 +23,16 @@ namespace DB
   */
 
 template <typename T>
-struct __attribute__((__packed__)) AggregateFunctionUniqUpToData : AggregationCollatorsWrapper<false>
+struct __attribute__((__packed__)) AggregateFunctionUniqUpToData
 {
-    /** If count == threshold + 1 - this means that it is "overflowed" (values greater than threshold).
+/** If count == threshold + 1 - this means that it is "overflowed" (values greater than threshold).
   * In this case (for example, after calling the merge function), the `data` array does not necessarily contain the initialized values
   * - example: combine a state in which there are few values, with another state that has overflowed;
   *   then set count to `threshold + 1`, and values from another state are not copied.
   */
     UInt8 count = 0;
 
-    T * data;
+    T *data;
 
 
     size_t size() const
@@ -79,7 +67,7 @@ struct __attribute__((__packed__)) AggregateFunctionUniqUpToData : AggregationCo
 
         if (rhs.count > threshold)
         {
-            /// If `rhs` is overflowed, then set `count` too also overflowed for the current state.
+        /// If `rhs` is overflowed, then set `count` too also overflowed for the current state.
             count = rhs.count;
             return;
         }
@@ -95,7 +83,6 @@ struct __attribute__((__packed__)) AggregateFunctionUniqUpToData : AggregationCo
         /// Write values only if the state is not overflowed. Otherwise, they are not needed, and only the fact that the state is overflowed is important.
         if (count <= threshold)
             wb.write(reinterpret_cast<const char *>(&data[0]), count * sizeof(data[0]));
-        writeCollators(wb);
     }
 
     void read(ReadBuffer & rb, UInt8 threshold)
@@ -104,7 +91,6 @@ struct __attribute__((__packed__)) AggregateFunctionUniqUpToData : AggregationCo
 
         if (count <= threshold)
             rb.read(reinterpret_cast<char *>(&data[0]), count * sizeof(data[0]));
-        readCollators(rb);
     }
 
     void add(const IColumn & column, size_t row_num, UInt8 threshold)
@@ -122,7 +108,6 @@ struct AggregateFunctionUniqUpToData<String> : AggregateFunctionUniqUpToData<UIn
     {
         /// Keep in mind that calculations are approximate.
         StringRef value = column.getDataAt(row_num);
-        value = getUpdatedValueForCollator(value, 0);
         insert(CityHash_v1_0_2::CityHash64(value.data, value.size), threshold);
     }
 };
@@ -145,7 +130,7 @@ private:
     UInt8 threshold;
 
 public:
-    explicit AggregateFunctionUniqUpTo(UInt8 threshold)
+    AggregateFunctionUniqUpTo(UInt8 threshold)
         : threshold(threshold)
     {
     }
@@ -162,27 +147,27 @@ public:
         return std::make_shared<DataTypeUInt64>();
     }
 
-    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena *) const override
+    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena *) const override
     {
         this->data(place).add(*columns[0], row_num, threshold);
     }
 
-    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena *) const override
+    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena *) const override
     {
         this->data(place).merge(this->data(rhs), threshold);
     }
 
-    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
     {
         this->data(place).write(buf, threshold);
     }
 
-    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena *) const override
+    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena *) const override
     {
         this->data(place).read(buf, threshold);
     }
 
-    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena *) const override
+    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
     {
         static_cast<ColumnUInt64 &>(to).getData().push_back(this->data(place).size());
     }
@@ -225,27 +210,27 @@ public:
         return std::make_shared<DataTypeUInt64>();
     }
 
-    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena *) const override
+    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena *) const override
     {
-        this->data(place).insert(UniqVariadicHash<AggregateFunctionUniqUpToData<UInt64>, false, argument_is_tuple>::apply(this->data(place), num_args, columns, row_num), threshold);
+        this->data(place).insert(UniqVariadicHash<false, argument_is_tuple>::apply(num_args, columns, row_num), threshold);
     }
 
-    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena *) const override
+    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena *) const override
     {
         this->data(place).merge(this->data(rhs), threshold);
     }
 
-    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
     {
         this->data(place).write(buf, threshold);
     }
 
-    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena *) const override
+    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena *) const override
     {
         this->data(place).read(buf, threshold);
     }
 
-    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena *) const override
+    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
     {
         static_cast<ColumnUInt64 &>(to).getData().push_back(this->data(place).size());
     }
@@ -254,4 +239,4 @@ public:
 };
 
 
-} // namespace DB
+}

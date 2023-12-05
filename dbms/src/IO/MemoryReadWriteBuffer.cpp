@@ -1,40 +1,24 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <IO/MemoryReadWriteBuffer.h>
 #include <common/likely.h>
-
 #include <boost/noncopyable.hpp>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int CURRENT_WRITE_BUFFER_IS_EXHAUSTED;
+    extern const int CURRENT_WRITE_BUFFER_IS_EXHAUSTED;
 }
 
 
-class ReadBufferFromMemoryWriteBuffer : public ReadBuffer
-    , boost::noncopyable
-    , private Allocator<false>
+class ReadBufferFromMemoryWriteBuffer : public ReadBuffer, boost::noncopyable, private Allocator<false>
 {
 public:
     explicit ReadBufferFromMemoryWriteBuffer(MemoryWriteBuffer && origin)
-        : ReadBuffer(nullptr, 0)
-        , chunk_list(std::move(origin.chunk_list))
-        , end_pos(origin.position())
+    : ReadBuffer(nullptr, 0),
+        chunk_list(std::move(origin.chunk_list)),
+        end_pos(origin.position())
     {
         chunk_head = chunk_list.begin();
         setChunk();
@@ -49,13 +33,14 @@ public:
         return setChunk();
     }
 
-    ~ReadBufferFromMemoryWriteBuffer() override
+    ~ReadBufferFromMemoryWriteBuffer()
     {
         for (const auto & range : chunk_list)
             free(range.begin(), range.size());
     }
 
 private:
+
     /// update buffers and position according to chunk_head pointer
     bool setChunk()
     {
@@ -89,11 +74,11 @@ private:
 
 
 MemoryWriteBuffer::MemoryWriteBuffer(size_t max_total_size_, size_t initial_chunk_size_, double growth_rate_, size_t max_chunk_size_)
-    : WriteBuffer(nullptr, 0)
-    , max_total_size(max_total_size_)
-    , initial_chunk_size(initial_chunk_size_)
-    , max_chunk_size(max_chunk_size_)
-    , growth_rate(growth_rate_)
+    : WriteBuffer(nullptr, 0),
+    max_total_size(max_total_size_),
+    initial_chunk_size(initial_chunk_size_),
+    max_chunk_size(max_chunk_size_),
+    growth_rate(growth_rate_)
 {
     addChunk();
 }
@@ -138,7 +123,7 @@ void MemoryWriteBuffer::addChunk()
         }
     }
 
-    auto * begin = reinterpret_cast<Position>(alloc(next_chunk_size));
+    Position begin = reinterpret_cast<Position>(alloc(next_chunk_size));
     chunk_tail = chunk_list.emplace_after(chunk_tail, begin, begin + next_chunk_size);
     total_chunks_size += next_chunk_size;
 
@@ -164,4 +149,4 @@ MemoryWriteBuffer::~MemoryWriteBuffer()
         free(range.begin(), range.size());
 }
 
-} // namespace DB
+}

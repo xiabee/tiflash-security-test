@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Common/FieldVisitors.h>
 #include <Common/RedactHelpers.h>
 #include <Common/SipHash.h>
@@ -25,6 +11,8 @@
 
 namespace DB
 {
+
+
 template <typename T>
 static inline String formatQuoted(T x)
 {
@@ -51,38 +39,14 @@ static inline String formatQuotedWithPrefix(T x, const char * prefix)
 }
 
 
-String FieldVisitorDump::operator()(const Null &) const
-{
-    return "NULL";
-}
-String FieldVisitorDump::operator()(const UInt64 & x) const
-{
-    return formatQuotedWithPrefix(x, "UInt64_");
-}
-String FieldVisitorDump::operator()(const Int64 & x) const
-{
-    return formatQuotedWithPrefix(x, "Int64_");
-}
-String FieldVisitorDump::operator()(const Float64 & x) const
-{
-    return formatQuotedWithPrefix(x, "Float64_");
-}
-String FieldVisitorDump::operator()(const DecimalField<Decimal32> & x) const
-{
-    return "Decimal32_" + x.toString();
-}
-String FieldVisitorDump::operator()(const DecimalField<Decimal64> & x) const
-{
-    return "Decimal64_" + x.toString();
-}
-String FieldVisitorDump::operator()(const DecimalField<Decimal128> & x) const
-{
-    return "Decimal128_" + x.toString();
-}
-String FieldVisitorDump::operator()(const DecimalField<Decimal256> & x) const
-{
-    return "Decimal256_" + x.toString();
-}
+String FieldVisitorDump::operator()(const Null &) const { return "NULL"; }
+String FieldVisitorDump::operator()(const UInt64 & x) const { return formatQuotedWithPrefix(x, "UInt64_"); }
+String FieldVisitorDump::operator()(const Int64 & x) const { return formatQuotedWithPrefix(x, "Int64_"); }
+String FieldVisitorDump::operator()(const Float64 & x) const { return formatQuotedWithPrefix(x, "Float64_"); }
+String FieldVisitorDump::operator()(const DecimalField<Decimal32> & x) const { return "Decimal32_" + x.toString(); }
+String FieldVisitorDump::operator()(const DecimalField<Decimal64> & x) const { return "Decimal64_" + x.toString(); }
+String FieldVisitorDump::operator()(const DecimalField<Decimal128> & x) const { return "Decimal128_" + x.toString(); }
+String FieldVisitorDump::operator()(const DecimalField<Decimal256> & x) const { return "Decimal256_" + x.toString(); }
 
 
 String FieldVisitorDump::operator()(const String & x) const
@@ -110,7 +74,7 @@ String FieldVisitorDump::operator()(const Array & x) const
 
 String FieldVisitorDump::operator()(const Tuple & x_def) const
 {
-    const auto & x = x_def.toUnderType();
+    auto & x = x_def.t;
     WriteBufferFromOwnString wb;
 
     wb.write("Tuple_(", 7);
@@ -148,42 +112,15 @@ static String formatFloat(const Float64 x)
 }
 
 
-String FieldVisitorToString::operator()(const Null &) const
-{
-    return "NULL";
-}
-String FieldVisitorToString::operator()(const UInt64 & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const Int64 & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const Float64 & x) const
-{
-    return formatFloat(x);
-}
-String FieldVisitorToString::operator()(const String & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const DecimalField<Decimal32> & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const DecimalField<Decimal64> & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const DecimalField<Decimal128> & x) const
-{
-    return formatQuoted(x);
-}
-String FieldVisitorToString::operator()(const DecimalField<Decimal256> & x) const
-{
-    return formatQuoted(x);
-}
+String FieldVisitorToString::operator()(const Null &) const { return "NULL"; }
+String FieldVisitorToString::operator()(const UInt64 & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const Int64 & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const Float64 & x) const { return formatFloat(x); }
+String FieldVisitorToString::operator()(const String & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const DecimalField<Decimal32> & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const DecimalField<Decimal64> & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const DecimalField<Decimal128> & x) const { return formatQuoted(x); }
+String FieldVisitorToString::operator()(const DecimalField<Decimal256> & x) const { return formatQuoted(x); }
 
 String FieldVisitorToString::operator()(const Array & x) const
 {
@@ -203,7 +140,7 @@ String FieldVisitorToString::operator()(const Array & x) const
 
 String FieldVisitorToString::operator()(const Tuple & x_def) const
 {
-    const auto & x = x_def.toUnderType();
+    auto & x = x_def.t;
     WriteBufferFromOwnString wb;
 
     writeChar('(', wb);
@@ -292,7 +229,7 @@ String FieldVisitorToDebugString::operator()(const Array & x) const
 
 String FieldVisitorToDebugString::operator()(const Tuple & x_def) const
 {
-    const auto & x = x_def.toUnderType();
+    auto & x = x_def.t;
     WriteBufferFromOwnString wb;
 
     writeChar('(', wb);
@@ -308,9 +245,7 @@ String FieldVisitorToDebugString::operator()(const Tuple & x_def) const
 }
 
 
-FieldVisitorHash::FieldVisitorHash(SipHash & hash)
-    : hash(hash)
-{}
+FieldVisitorHash::FieldVisitorHash(SipHash & hash) : hash(hash) {}
 
 void FieldVisitorHash::operator()(const Null &) const
 {

@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <DataStreams/DistinctBlockInputStream.h>
 
 namespace DB
@@ -99,17 +85,24 @@ void DistinctBlockInputStream::buildFilter(
     size_t rows,
     SetVariants & variants) const
 {
-    typename Method::State state(columns, key_sizes, {});
-    std::vector<std::string> sort_key_containers;
-    sort_key_containers.resize(columns.size(), "");
+    typename Method::State state;
+    state.init(columns);
 
     for (size_t i = 0; i < rows; ++i)
     {
-        auto emplace_result = state.emplaceKey(method.data, i, variants.string_pool, sort_key_containers);
+        /// Make a key.
+        typename Method::Key key = state.getKey(columns, columns.size(), i, key_sizes);
+
+        typename Method::Data::iterator it;
+        bool inserted;
+        method.data.emplace(key, it, inserted);
+
+        if (inserted)
+            method.onNewKey(*it, columns.size(), variants.string_pool);
 
         /// Emit the record if there is no such key in the current set yet.
         /// Skip it otherwise.
-        filter[i] = emplace_result.isInserted();
+        filter[i] = inserted;
     }
 }
 

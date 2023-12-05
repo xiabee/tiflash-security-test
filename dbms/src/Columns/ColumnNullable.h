@@ -1,24 +1,11 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Columns/ColumnsNumber.h>
 #include <Columns/IColumn.h>
+#include <Columns/ColumnsNumber.h>
 
 namespace DB
 {
+
 using NullMap = ColumnUInt8::Container;
 using ConstNullMapPtr = const NullMap *;
 
@@ -49,27 +36,22 @@ public:
         return ColumnNullable::create(nested_column_->assumeMutable(), null_map_->assumeMutable());
     }
 
-    template <typename... Args, typename = typename std::enable_if<IsMutableColumns<Args...>::value>::type>
-    static MutablePtr create(Args &&... args)
-    {
-        return Base::create(std::forward<Args>(args)...);
-    }
+    template <typename ... Args, typename = typename std::enable_if<IsMutableColumns<Args ...>::value>::type>
+    static MutablePtr create(Args &&... args) { return Base::create(std::forward<Args>(args)...); }
 
     const char * getFamilyName() const override { return "Nullable"; }
     std::string getName() const override { return "Nullable(" + nested_column->getName() + ")"; }
     MutableColumnPtr cloneResized(size_t size) const override;
     size_t size() const override { return nested_column->size(); }
-    bool isNullAt(size_t n) const override { return static_cast<const ColumnUInt8 &>(*null_map).getData()[n] != 0; }
+    bool isNullAt(size_t n) const override { return static_cast<const ColumnUInt8 &>(*null_map).getData()[n] != 0;}
     Field operator[](size_t n) const override;
     void get(size_t n, Field & res) const override;
     UInt64 get64(size_t n) const override { return nested_column->get64(n); }
     StringRef getDataAt(size_t n) const override;
     void insertData(const char * pos, size_t length) override;
-    bool decodeTiDBRowV2Datum(size_t cursor, const String & raw_value, size_t length, bool force_decode) override;
-    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
-    const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override;
-    void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;
-
+    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
+    const char * deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator>) override;
+    void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;;
     void insert(const Field & x) override;
     void insertFrom(const IColumn & src, size_t n) override;
 
@@ -84,28 +66,22 @@ public:
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
     std::tuple<bool, int> compareAtCheckNull(size_t n, size_t m, const ColumnNullable & rhs, int null_direction_hint) const;
     int compareAt(size_t n, size_t m, const IColumn & rhs_, int null_direction_hint) const override;
-    int compareAt(size_t n, size_t m, const IColumn & rhs_, int null_direction_hint, const ICollator & collator) const override;
+    int compareAtWithCollation(size_t n, size_t m, const IColumn & rhs_, int null_direction_hint, const ICollator & collator) const override;
     void getPermutation(bool reverse, size_t limit, int null_direction_hint, Permutation & res) const override;
-    void getPermutation(const ICollator & collator, bool reverse, size_t limit, int null_direction_hint, Permutation & res) const override;
+    void getPermutationWithCollation(const ICollator & collator, bool reverse, size_t limit, int null_direction_hint, Permutation & res) const override;
     void adjustPermutationWithNullDirection(bool reverse, size_t limit, int null_direction_hint, Permutation & res) const;
     void reserve(size_t n) override;
     size_t byteSize() const override;
     size_t byteSize(size_t offset, size_t limit) const override;
     size_t allocatedBytes() const override;
     ColumnPtr replicate(const Offsets & replicate_offsets) const override;
-    void updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateHashWithValue(size_t n, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
+    void updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const override;
     void getExtremes(Field & min, Field & max) const override;
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override
     {
         return scatterImpl<ColumnNullable>(num_columns, selector);
-    }
-
-    void scatterTo(ScatterColumns & columns, const Selector & selector) const override
-    {
-        scatterToImpl<ColumnNullable>(columns, selector);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;
@@ -161,6 +137,5 @@ private:
 
 
 ColumnPtr makeNullable(const ColumnPtr & column);
-std::tuple<const IColumn *, const NullMap *> removeNullable(const IColumn * column);
 
-} // namespace DB
+}

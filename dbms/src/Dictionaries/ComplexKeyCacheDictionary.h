@@ -1,19 +1,11 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <tuple>
+#include <vector>
+#include <shared_mutex>
 #include <Columns/ColumnString.h>
 #include <Common/ArenaWithFreeLists.h>
 #include <Common/HashTable/HashMap.h>
@@ -23,17 +15,24 @@
 #include <Dictionaries/IDictionary.h>
 #include <Dictionaries/IDictionarySource.h>
 #include <common/StringRef.h>
-
-#include <atomic>
-#include <chrono>
 #include <ext/bit_cast.h>
 #include <ext/map.h>
 #include <ext/scope_guard.h>
-#include <map>
 #include <pcg_random.hpp>
-#include <shared_mutex>
-#include <tuple>
-#include <vector>
+
+
+namespace ProfileEvents
+{
+extern const Event DictCacheKeysRequested;
+extern const Event DictCacheKeysRequestedMiss;
+extern const Event DictCacheKeysRequestedFound;
+extern const Event DictCacheKeysExpired;
+extern const Event DictCacheKeysNotFound;
+extern const Event DictCacheKeysHit;
+extern const Event DictCacheRequestTimeNs;
+extern const Event DictCacheLockWriteNs;
+extern const Event DictCacheLockReadNs;
+}
 
 namespace DB
 {
@@ -41,10 +40,10 @@ class ComplexKeyCacheDictionary final : public IDictionaryBase
 {
 public:
     ComplexKeyCacheDictionary(const std::string & name,
-                              const DictionaryStructure & dict_struct,
-                              DictionarySourcePtr source_ptr,
-                              const DictionaryLifetime dict_lifetime,
-                              const size_t size);
+        const DictionaryStructure & dict_struct,
+        DictionarySourcePtr source_ptr,
+        const DictionaryLifetime dict_lifetime,
+        const size_t size);
 
     ComplexKeyCacheDictionary(const ComplexKeyCacheDictionary & other);
 
@@ -131,12 +130,9 @@ public:
 
 /// In all functions below, key_columns must be full (non-constant) columns.
 /// See the requirement in IDataType.h for text-serialization functions.
-#define DECLARE(TYPE)                       \
-    void get##TYPE(                         \
-        const std::string & attribute_name, \
-        const Columns & key_columns,        \
-        const DataTypes & key_types,        \
-        PaddedPODArray<TYPE> & out) const;
+#define DECLARE(TYPE) \
+    void get##TYPE(   \
+        const std::string & attribute_name, const Columns & key_columns, const DataTypes & key_types, PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
     DECLARE(UInt32)
@@ -154,10 +150,10 @@ public:
 
 #define DECLARE(TYPE)                                  \
     void get##TYPE(const std::string & attribute_name, \
-                   const Columns & key_columns,        \
-                   const DataTypes & key_types,        \
-                   const PaddedPODArray<TYPE> & def,   \
-                   PaddedPODArray<TYPE> & out) const;
+        const Columns & key_columns,                   \
+        const DataTypes & key_types,                   \
+        const PaddedPODArray<TYPE> & def,              \
+        PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
     DECLARE(UInt32)
@@ -172,17 +168,17 @@ public:
 #undef DECLARE
 
     void getString(const std::string & attribute_name,
-                   const Columns & key_columns,
-                   const DataTypes & key_types,
-                   const ColumnString * const def,
-                   ColumnString * const out) const;
+        const Columns & key_columns,
+        const DataTypes & key_types,
+        const ColumnString * const def,
+        ColumnString * const out) const;
 
 #define DECLARE(TYPE)                                  \
     void get##TYPE(const std::string & attribute_name, \
-                   const Columns & key_columns,        \
-                   const DataTypes & key_types,        \
-                   const TYPE def,                     \
-                   PaddedPODArray<TYPE> & out) const;
+        const Columns & key_columns,                   \
+        const DataTypes & key_types,                   \
+        const TYPE def,                                \
+        PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
     DECLARE(UInt32)
@@ -197,10 +193,10 @@ public:
 #undef DECLARE
 
     void getString(const std::string & attribute_name,
-                   const Columns & key_columns,
-                   const DataTypes & key_types,
-                   const String & def,
-                   ColumnString * const out) const;
+        const Columns & key_columns,
+        const DataTypes & key_types,
+        const String & def,
+        ColumnString * const out) const;
 
     void has(const Columns & key_columns, const DataTypes & key_types, PaddedPODArray<UInt8> & out) const;
 
@@ -253,17 +249,17 @@ private:
         AttributeUnderlyingType type;
         std::tuple<UInt8, UInt16, UInt32, UInt64, UInt128, Int8, Int16, Int32, Int64, Float32, Float64, String> null_values;
         std::tuple<ContainerPtrType<UInt8>,
-                   ContainerPtrType<UInt16>,
-                   ContainerPtrType<UInt32>,
-                   ContainerPtrType<UInt64>,
-                   ContainerPtrType<UInt128>,
-                   ContainerPtrType<Int8>,
-                   ContainerPtrType<Int16>,
-                   ContainerPtrType<Int32>,
-                   ContainerPtrType<Int64>,
-                   ContainerPtrType<Float32>,
-                   ContainerPtrType<Float64>,
-                   ContainerPtrType<StringRef>>
+            ContainerPtrType<UInt16>,
+            ContainerPtrType<UInt32>,
+            ContainerPtrType<UInt64>,
+            ContainerPtrType<UInt128>,
+            ContainerPtrType<Int8>,
+            ContainerPtrType<Int16>,
+            ContainerPtrType<Int32>,
+            ContainerPtrType<Int64>,
+            ContainerPtrType<Float32>,
+            ContainerPtrType<Float64>,
+            ContainerPtrType<StringRef>>
             arrays;
     };
 
@@ -273,10 +269,7 @@ private:
 
     template <typename OutputType, typename DefaultGetter>
     void getItemsNumber(
-        Attribute & attribute,
-        const Columns & key_columns,
-        PaddedPODArray<OutputType> & out,
-        DefaultGetter && get_default) const
+        Attribute & attribute, const Columns & key_columns, PaddedPODArray<OutputType> & out, DefaultGetter && get_default) const
     {
         if (false)
         {
@@ -301,10 +294,7 @@ private:
 
     template <typename AttributeType, typename OutputType, typename DefaultGetter>
     void getItemsNumberImpl(
-        Attribute & attribute,
-        const Columns & key_columns,
-        PaddedPODArray<OutputType> & out,
-        DefaultGetter && get_default) const
+        Attribute & attribute, const Columns & key_columns, PaddedPODArray<OutputType> & out, DefaultGetter && get_default) const
     {
         /// Mapping: <key> -> { all indices `i` of `key_columns` such that `key_columns[i]` = <key> }
         MapType<std::vector<size_t>> outdated_keys;
@@ -316,7 +306,10 @@ private:
         Arena temporary_keys_pool;
         PODArray<StringRef> keys_array(rows_num);
 
+        size_t cache_expired = 0, cache_not_found = 0, cache_hit = 0;
         {
+            const ProfilingScopedReadRWLock read_lock{rw_lock, ProfileEvents::DictCacheLockReadNs};
+
             const auto now = std::chrono::system_clock::now();
             /// fetch up-to-date values, decide which ones require update
             for (const auto row : ext::range(0, rows_num))
@@ -333,15 +326,23 @@ private:
                 if (!find_result.valid)
                 {
                     outdated_keys[key].push_back(row);
+                    if (find_result.outdated)
+                        ++cache_expired;
+                    else
+                        ++cache_not_found;
                 }
                 else
                 {
+                    ++cache_hit;
                     const auto & cell_idx = find_result.cell_idx;
                     const auto & cell = cells[cell_idx];
                     out[row] = cell.isDefault() ? get_default(row) : static_cast<OutputType>(attribute_array[cell_idx]);
                 }
             }
         }
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysExpired, cache_expired);
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysNotFound, cache_not_found);
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysHit, cache_hit);
         query_count.fetch_add(rows_num, std::memory_order_relaxed);
         hit_count.fetch_add(rows_num - outdated_keys.size(), std::memory_order_release);
 
@@ -350,21 +351,19 @@ private:
 
         std::vector<size_t> required_rows(outdated_keys.size());
         std::transform(
-            std::begin(outdated_keys),
-            std::end(outdated_keys),
-            std::begin(required_rows),
-            [](auto & pair) { return pair.getMapped().front(); });
+            std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair) { return pair.second.front(); });
 
         /// request new values
-        update(
-            key_columns,
+        update(key_columns,
             keys_array,
             required_rows,
-            [&](const StringRef key, const size_t cell_idx) {
+            [&](const StringRef key, const size_t cell_idx)
+            {
                 for (const auto row : outdated_keys[key])
                     out[row] = static_cast<OutputType>(attribute_array[cell_idx]);
             },
-            [&](const StringRef key, const size_t) {
+            [&](const StringRef key, const size_t)
+            {
                 for (const auto row : outdated_keys[key])
                     out[row] = get_default(row);
             });
@@ -387,6 +386,8 @@ private:
 
         /// perform optimistic version, fallback to pessimistic if failed
         {
+            const ProfilingScopedReadRWLock read_lock{rw_lock, ProfileEvents::DictCacheLockReadNs};
+
             const auto now = std::chrono::system_clock::now();
             /// fetch up-to-date values, discard on fail
             for (const auto row : ext::range(0, rows_num))
@@ -429,7 +430,10 @@ private:
         PODArray<StringRef> keys_array(rows_num);
 
         size_t total_length = 0;
+        size_t cache_expired = 0, cache_not_found = 0, cache_hit = 0;
         {
+            const ProfilingScopedReadRWLock read_lock{rw_lock, ProfileEvents::DictCacheLockReadNs};
+
             const auto now = std::chrono::system_clock::now();
             for (const auto row : ext::range(0, rows_num))
             {
@@ -440,9 +444,14 @@ private:
                 if (!find_result.valid)
                 {
                     outdated_keys[key].push_back(row);
+                    if (find_result.outdated)
+                        ++cache_expired;
+                    else
+                        ++cache_not_found;
                 }
                 else
                 {
+                    ++cache_hit;
                     const auto & cell_idx = find_result.cell_idx;
                     const auto & cell = cells[cell_idx];
                     const auto string_ref = cell.isDefault() ? get_default(row) : attribute_array[cell_idx];
@@ -454,6 +463,9 @@ private:
                 }
             }
         }
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysExpired, cache_expired);
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysNotFound, cache_not_found);
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysHit, cache_hit);
 
         query_count.fetch_add(rows_num, std::memory_order_relaxed);
         hit_count.fetch_add(rows_num - outdated_keys.size(), std::memory_order_release);
@@ -462,15 +474,16 @@ private:
         if (!outdated_keys.empty())
         {
             std::vector<size_t> required_rows(outdated_keys.size());
-            std::transform(std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair) {
-                return pair.getMapped().front();
+            std::transform(std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair)
+            {
+                return pair.second.front();
             });
 
-            update(
-                key_columns,
+            update(key_columns,
                 keys_array,
                 required_rows,
-                [&](const StringRef key, const size_t cell_idx) {
+                [&](const StringRef key, const size_t cell_idx)
+                {
                     const StringRef attribute_value = attribute_array[cell_idx];
 
                     /// We must copy key and value to own memory, because it may be replaced with another
@@ -481,7 +494,8 @@ private:
                     map[copied_key] = copied_value;
                     total_length += (attribute_value.size + 1) * outdated_keys[key].size();
                 },
-                [&](const StringRef key, const size_t) {
+                [&](const StringRef key, const size_t)
+                {
                     for (const auto row : outdated_keys[key])
                         total_length += get_default(row).size + 1;
                 });
@@ -492,18 +506,18 @@ private:
         for (const auto row : ext::range(0, ext::size(keys_array)))
         {
             const StringRef key = keys_array[row];
-            auto * const it = map.find(key);
-            const auto string_ref = it != std::end(map) ? it->getMapped() : get_default(row);
+            const auto it = map.find(key);
+            const auto string_ref = it != std::end(map) ? it->second : get_default(row);
             out->insertData(string_ref.data, string_ref.size);
         }
     };
 
     template <typename PresentKeyHandler, typename AbsentKeyHandler>
     void update(const Columns & in_key_columns,
-                const PODArray<StringRef> & in_keys,
-                const std::vector<size_t> & in_requested_rows,
-                PresentKeyHandler && on_cell_updated,
-                AbsentKeyHandler && on_key_not_found) const
+        const PODArray<StringRef> & in_keys,
+        const std::vector<size_t> & in_requested_rows,
+        PresentKeyHandler && on_cell_updated,
+        AbsentKeyHandler && on_key_not_found) const
     {
         MapType<bool> remaining_keys{in_requested_rows.size()};
         for (const auto row : in_requested_rows)
@@ -511,6 +525,7 @@ private:
 
         std::uniform_int_distribution<UInt64> distribution(dict_lifetime.min_sec, dict_lifetime.max_sec);
 
+        const ProfilingScopedWriteRWLock write_lock{rw_lock, ProfileEvents::DictCacheLockWriteNs};
         {
             Stopwatch watch;
             auto stream = source_ptr->loadKeys(in_key_columns, in_requested_rows);
@@ -526,11 +541,10 @@ private:
             {
                 /// cache column pointers
                 const auto key_columns = ext::map<Columns>(
-                    ext::range(0, keys_size),
-                    [&](const size_t attribute_idx) { return block.safeGetByPosition(attribute_idx).column; });
+                    ext::range(0, keys_size), [&](const size_t attribute_idx) { return block.safeGetByPosition(attribute_idx).column; });
 
                 const auto attribute_columns = ext::map<Columns>(ext::range(0, attributes_size),
-                                                                 [&](const size_t attribute_idx) { return block.safeGetByPosition(keys_size + attribute_idx).column; });
+                    [&](const size_t attribute_idx) { return block.safeGetByPosition(keys_size + attribute_idx).column; });
 
                 const auto rows_num = block.rows();
 
@@ -584,19 +598,28 @@ private:
             }
 
             stream->readSuffix();
+
+            ProfileEvents::increment(ProfileEvents::DictCacheKeysRequested, in_requested_rows.size());
+            ProfileEvents::increment(ProfileEvents::DictCacheRequestTimeNs, watch.elapsed());
         }
+
+        size_t found_num = 0;
+        size_t not_found_num = 0;
 
         const auto now = std::chrono::system_clock::now();
 
         /// Check which ids have not been found and require setting null_value
         for (const auto & key_found_pair : remaining_keys)
         {
-            if (key_found_pair.getMapped())
+            if (key_found_pair.second)
             {
+                ++found_num;
                 continue;
             }
 
-            auto key = key_found_pair.getKey();
+            ++not_found_num;
+
+            auto key = key_found_pair.first;
             const auto hash = StringRefHash{}(key);
             const auto find_result = findCellIdx(key, now, hash);
             const auto & cell_idx = find_result.cell_idx;
@@ -634,6 +657,9 @@ private:
             /// inform caller that the cell has not been found
             on_key_not_found(key, cell_idx);
         }
+
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysRequestedMiss, found_num);
+        ProfileEvents::increment(ProfileEvents::DictCacheKeysRequestedMiss, not_found_num);
     };
 
     UInt64 getCellIdx(const StringRef key) const;
@@ -650,10 +676,10 @@ private:
 
     template <typename Arena>
     static StringRef placeKeysInPool(const size_t row,
-                                     const Columns & key_columns,
-                                     StringRefs & keys,
-                                     const std::vector<DictionaryAttribute> & key_attributes,
-                                     Arena & pool);
+        const Columns & key_columns,
+        StringRefs & keys,
+        const std::vector<DictionaryAttribute> & key_attributes,
+        Arena & pool);
 
     StringRef placeKeysInFixedSizePool(const size_t row, const Columns & key_columns) const;
 
@@ -712,4 +738,4 @@ private:
 
     const std::chrono::time_point<std::chrono::system_clock> creation_time = std::chrono::system_clock::now();
 };
-} // namespace DB
+}

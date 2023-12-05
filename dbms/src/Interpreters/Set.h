@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #pragma GCC diagnostic push
@@ -19,20 +5,22 @@
 #include <tipb/expression.pb.h>
 #pragma GCC diagnostic pop
 
+#include <shared_mutex>
 #include <Core/Block.h>
 #include <DataStreams/SizeLimits.h>
 #include <DataTypes/IDataType.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/SetVariants.h>
+#include <Interpreters/Context.h>
 #include <Parsers/IAST.h>
+#include <Storages/MergeTree/BoolMask.h>
 #include <Storages/Transaction/Collator.h>
-#include <common/logger_useful.h>
 
-#include <shared_mutex>
+#include <common/logger_useful.h>
 
 
 namespace DB
 {
+
 struct Range;
 class FieldWithInfinity;
 
@@ -47,11 +35,10 @@ using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
 class Set
 {
 public:
-    explicit Set(const SizeLimits & limits, TiDB::TiDBCollators && collators_ = {})
-        : log(&Poco::Logger::get("Set"))
-        , limits(limits)
-        , set_elements(std::make_unique<SetElements>())
-        , collators(std::move(collators_))
+    Set(const SizeLimits & limits) :
+        log(&Logger::get("Set")),
+        limits(limits),
+        set_elements(std::make_unique<SetElements>())
     {
     }
 
@@ -75,7 +62,7 @@ public:
     /** Create a Set from stream.
       * Call setHeader, then call insertFromBlock for each block.
       */
-    void setHeader(const Block &);
+    void setHeader(const Block & header);
 
     /// Returns false, if some limit was exceeded and no need to insert more data.
     bool insertFromBlock(const Block & block, bool fill_set_elements);
@@ -95,8 +82,10 @@ public:
     void setContainsNullValue(bool contains_null_value_) { contains_null_value = contains_null_value_; }
     bool containsNullValue() const { return contains_null_value; }
 
+    void setCollators(TiDB::TiDBCollators & collators_) { collators = collators_; }
+
 private:
-    size_t keys_size{};
+    size_t keys_size;
     Sizes key_sizes;
 
     SetVariants data;
@@ -121,7 +110,7 @@ private:
       */
     DataTypes data_types;
 
-    Poco::Logger * log;
+    Logger * log;
 
     /// Limitations on the maximum size of the set
     SizeLimits limits;
@@ -190,4 +179,32 @@ using Sets = std::vector<SetPtr>;
 class IFunction;
 using FunctionPtr = std::shared_ptr<IFunction>;
 
-} // namespace DB
+/// Class for mayBeTrueInRange function.
+class MergeTreeSetIndex
+{
+public:
+    /** Mapping for tuple positions from Set::set_elements to
+      * position of pk index and data type of this pk column
+      * and functions chain applied to this column.
+      */
+    struct KeyTuplePositionMapping
+    {
+        size_t tuple_index;
+        size_t key_index;
+        std::vector<FunctionBasePtr> functions;
+    };
+
+    MergeTreeSetIndex(const SetElements & set_elements, std::vector<KeyTuplePositionMapping> && indexes_mapping_);
+
+    size_t size() const { return ordered_set.size(); }
+
+    BoolMask mayBeTrueInRange(const std::vector<Range> & key_ranges, const DataTypes & data_types);
+
+private:
+    using OrderedTuples = std::vector<std::vector<FieldWithInfinity>>;
+    OrderedTuples ordered_set;
+
+    std::vector<KeyTuplePositionMapping> indexes_mapping;
+};
+
+ }

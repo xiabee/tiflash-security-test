@@ -1,41 +1,27 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Client/Connection.h>
-#include <Common/HTMLForm.h>
+#include <boost/program_options.hpp>
+#include <boost/algorithm/string.hpp>
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <DataTypes/DataTypeFactory.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/ReadBufferFromIStream.h>
-#include <IO/copyData.h>
 #include <Interpreters/Context.h>
-#include <Poco/Net/HTMLForm.h>
-#include <Poco/Net/MessageHeader.h>
-#include <Poco/Net/PartHandler.h>
+#include <IO/copyData.h>
+#include <IO/ReadBufferFromIStream.h>
+#include <IO/ReadBufferFromFile.h>
 #include <Storages/StorageMemory.h>
-#include <boost_wrapper/string.h>
-
-#include <boost/program_options.hpp>
+#include <Client/Connection.h>
+#include <Poco/Net/HTMLForm.h>
+#include <Poco/Net/PartHandler.h>
+#include <Poco/Net/MessageHeader.h>
+#include <Common/HTMLForm.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int BAD_ARGUMENTS;
+    extern const int BAD_ARGUMENTS;
 }
 
 
@@ -44,9 +30,9 @@ extern const int BAD_ARGUMENTS;
 class BaseExternalTable
 {
 public:
-    std::string file; /// File with data or '-' if stdin
-    std::string name; /// The name of the table
-    std::string format; /// Name of the data storage format
+    std::string file;       /// File with data or '-' if stdin
+    std::string name;       /// The name of the table
+    std::string format;     /// Name of the data storage format
 
     /// Description of the table structure: (column name, data type name)
     std::vector<std::pair<std::string, std::string>> structure;
@@ -54,10 +40,10 @@ public:
     std::unique_ptr<ReadBuffer> read_buffer;
     Block sample_block;
 
-    virtual ~BaseExternalTable() = default;
+    virtual ~BaseExternalTable() {};
 
     /// Initialize read_buffer, depending on the data source. By default, does nothing.
-    virtual void initReadBuffer(){};
+    virtual void initReadBuffer() {};
 
     /// Get the table data - a pair (a thread with the contents of the table, the name of the table)
     ExternalTableData getData(const Context & context)
@@ -65,11 +51,7 @@ public:
         initReadBuffer();
         initSampleBlock();
         ExternalTableData res = std::make_pair(std::make_shared<AsynchronousBlockInputStream>(context.getInputFormat(
-                                                   format,
-                                                   *read_buffer,
-                                                   sample_block,
-                                                   DEFAULT_BLOCK_SIZE)),
-                                               name);
+            format, *read_buffer, sample_block, DEFAULT_BLOCK_SIZE)), name);
         return res;
     }
 
@@ -92,8 +74,8 @@ protected:
         std::cerr << "name " << name << std::endl;
         std::cerr << "format " << format << std::endl;
         std::cerr << "structure: \n";
-        for (const auto & col_dt : structure)
-            std::cerr << "\t" << col_dt.first << " " << col_dt.second << std::endl;
+        for (size_t i = 0; i < structure.size(); ++i)
+            std::cerr << "\t" << structure[i].first << " " << structure[i].second << std::endl;
     }
 
     static std::vector<std::string> split(const std::string & s, const std::string & d)
@@ -130,11 +112,11 @@ private:
     {
         const DataTypeFactory & data_type_factory = DataTypeFactory::instance();
 
-        for (const auto & col_dt : structure)
+        for (size_t i = 0; i < structure.size(); ++i)
         {
             ColumnWithTypeAndName column;
-            column.name = col_dt.first;
-            column.type = data_type_factory.get(col_dt.second);
+            column.name = structure[i].first;
+            column.type = data_type_factory.get(structure[i].second);
             column.column = column.type->createColumn();
             sample_block.insert(std::move(column));
         }
@@ -155,7 +137,7 @@ public:
     }
 
     /// Extract parameters from variables_map, which is built on the client command line
-    explicit ExternalTable(const boost::program_options::variables_map & external_options)
+    ExternalTable(const boost::program_options::variables_map & external_options)
     {
         if (external_options.count("file"))
             file = external_options["file"].as<std::string>();
@@ -183,17 +165,13 @@ public:
 
 /// Parsing of external table used when sending tables via http
 /// The `handlePart` function will be called for each table passed,
-/// so it's also necessary to call `clean` at the end of the `handlePart`.
-class ExternalTablesHandler : public Poco::Net::PartHandler
-    , BaseExternalTable
+ /// so it's also necessary to call `clean` at the end of the `handlePart`.
+class ExternalTablesHandler : public Poco::Net::PartHandler, BaseExternalTable
 {
 public:
     std::vector<std::string> names;
 
-    ExternalTablesHandler(Context & context_, Poco::Net::NameValueCollection params_)
-        : context(context_)
-        , params(params_)
-    {}
+    ExternalTablesHandler(Context & context_, Poco::Net::NameValueCollection params_) : context(context_), params(params_) { }
 
     void handlePart(const Poco::Net::MessageHeader & header, std::istream & stream)
     {
@@ -228,7 +206,7 @@ public:
         /// Write data
         data.first->readPrefix();
         output->writePrefix();
-        while (Block block = data.first->read())
+        while(Block block = data.first->read())
             output->write(block);
         data.first->readSuffix();
         output->writeSuffix();
@@ -244,4 +222,4 @@ private:
 };
 
 
-} // namespace DB
+}

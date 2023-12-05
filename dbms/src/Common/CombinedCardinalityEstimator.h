@@ -1,21 +1,7 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
-#include <Common/HashTable/HashSet.h>
 #include <Common/HashTable/SmallTable.h>
+#include <Common/HashTable/HashSet.h>
 #include <Common/HyperLogLogCounter.h>
 #include <Common/MemoryTracker.h>
 #include <Core/Defines.h>
@@ -23,14 +9,11 @@
 
 namespace DB
 {
+
 namespace details
 {
-enum class ContainerType : UInt8
-{
-    SMALL = 1,
-    MEDIUM = 2,
-    LARGE = 3
-};
+
+enum class ContainerType : UInt8 { SMALL = 1, MEDIUM = 2, LARGE = 3 };
 
 static inline ContainerType max(const ContainerType & lhs, const ContainerType & rhs)
 {
@@ -38,13 +21,14 @@ static inline ContainerType max(const ContainerType & lhs, const ContainerType &
     return static_cast<ContainerType>(res);
 }
 
-} // namespace details
+}
 
 /** For a small number of keys - an array of fixed size "on the stack".
   * For the average, HashSet is allocated.
   * For large, HyperLogLog is allocated.
   */
-template <
+template
+<
     typename Key,
     typename HashContainer,
     UInt8 small_set_size_max,
@@ -54,21 +38,24 @@ template <
     typename HashValueType = UInt32,
     typename BiasEstimator = TrivialBiasEstimator,
     HyperLogLogMode mode = HyperLogLogMode::FullFeatured,
-    typename DenominatorType = double>
+    typename DenominatorType = double
+>
 class CombinedCardinalityEstimator
 {
 public:
-    using Self = CombinedCardinalityEstimator<
-        Key,
-        HashContainer,
-        small_set_size_max,
-        medium_set_power2_max,
-        K,
-        Hash,
-        HashValueType,
-        BiasEstimator,
-        mode,
-        DenominatorType>;
+    using Self = CombinedCardinalityEstimator
+        <
+            Key,
+            HashContainer,
+            small_set_size_max,
+            medium_set_power2_max,
+            K,
+            Hash,
+            HashValueType,
+            BiasEstimator,
+            mode,
+            DenominatorType
+        >;
 
 private:
     using Small = SmallSet<Key, small_set_size_max>;
@@ -148,12 +135,12 @@ public:
         if (rhs.getContainerType() == details::ContainerType::SMALL)
         {
             for (const auto & x : rhs.small)
-                insert(x.getKey());
+                insert(x);
         }
         else if (rhs.getContainerType() == details::ContainerType::MEDIUM)
         {
             for (const auto & x : rhs.getContainer<Medium>())
-                insert(x.getKey());
+                insert(x);
         }
         else if (rhs.getContainerType() == details::ContainerType::LARGE)
             getContainer<Large>().merge(rhs.getContainer<Large>());
@@ -245,7 +232,7 @@ private:
         auto tmp_medium = std::make_unique<Medium>();
 
         for (const auto & x : small)
-            tmp_medium->insert(x.getKey());
+            tmp_medium->insert(x);
 
         medium = tmp_medium.release();
         setContainerType(details::ContainerType::MEDIUM);
@@ -264,12 +251,12 @@ private:
         if (container_type == details::ContainerType::SMALL)
         {
             for (const auto & x : small)
-                tmp_large->insert(x.getKey());
+                tmp_large->insert(x);
         }
         else if (container_type == details::ContainerType::MEDIUM)
         {
             for (const auto & x : getContainer<Medium>())
-                tmp_large->insert(x.getKey());
+                tmp_large->insert(x);
 
             destroy();
         }
@@ -340,4 +327,4 @@ private:
     static const UInt32 medium_set_size_max = 1UL << medium_set_power2_max;
 };
 
-} // namespace DB
+}

@@ -1,23 +1,6 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include <Core/Block.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Storages/DeltaMerge/DMVersionFilterBlockInputStream.h>
-#include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <TestUtils/FunctionTestUtils.h>
-#include <TestUtils/InputStreamTestUtils.h>
+#include <Storages/DeltaMerge/tests/dm_basic_include.h>
 
 namespace DB
 {
@@ -25,22 +8,21 @@ namespace DM
 {
 namespace tests
 {
+
 namespace
 {
+
 constexpr const char * str_col_name = "a";
 
 class DebugBlockInputStream : public IProfilingBlockInputStream
 {
 public:
     DebugBlockInputStream(const BlocksList & blocks, bool is_common_handle_)
-        : begin(blocks.begin())
-        , end(blocks.end())
-        , it(blocks.begin())
-        , is_common_handle(is_common_handle_)
+        : begin(blocks.begin()), end(blocks.end()), it(blocks.begin()), is_common_handle(is_common_handle_)
     {
     }
     String getName() const override { return "Debug"; }
-    Block getHeader() const override
+    Block  getHeader() const override
     {
         auto cds = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
         cds->push_back(ColumnDefine(100, str_col_name, DataTypeFactory::instance().get("String")));
@@ -60,26 +42,21 @@ private:
     BlocksList::const_iterator begin;
     BlocksList::const_iterator end;
     BlocksList::const_iterator it;
-    bool is_common_handle;
+    bool                       is_common_handle;
 };
 
 template <int MODE>
 BlockInputStreamPtr genInputStream(const BlocksList & blocks, const ColumnDefines & columns, UInt64 max_version, bool is_common_handle)
 {
     ColumnDefine handle_define(
-        TiDBPkColumnID,
-        DMTestEnv::pk_name,
-        is_common_handle ? EXTRA_HANDLE_COLUMN_STRING_TYPE : EXTRA_HANDLE_COLUMN_INT_TYPE);
+        TiDBPkColumnID, DMTestEnv::pk_name, is_common_handle ? EXTRA_HANDLE_COLUMN_STRING_TYPE : EXTRA_HANDLE_COLUMN_INT_TYPE);
     return std::make_shared<DMVersionFilterBlockInputStream<MODE>>(
-        std::make_shared<DebugBlockInputStream>(blocks, is_common_handle),
-        columns,
-        max_version,
-        is_common_handle);
+        std::make_shared<DebugBlockInputStream>(blocks, is_common_handle), columns, max_version, is_common_handle);
 }
 
 } // namespace
 
-TEST(VersionFilterTest, MVCC)
+TEST(VersionFilter_test, MVCC)
 {
     BlocksList blocks;
 
@@ -95,27 +72,48 @@ TEST(VersionFilterTest, MVCC)
 
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 40, false);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"Flash"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "Flash");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 30, false);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({})}));
+        in->readPrefix();
+        Block block = in->read();
+        ASSERT_EQ(block.rows(), 0UL);
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 20, false);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"world"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "world");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 10, false);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"hello"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "hello");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 9, false);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({})}));
+        in->readPrefix();
+        Block block = in->read();
+        ASSERT_EQ(block.rows(), 0UL);
+        in->readSuffix();
     }
 }
 
-TEST(VersionFilterTest, MVCCCommonHandle)
+TEST(VersionFilter_test, MVCCCommonHandle)
 {
     BlocksList blocks;
 
@@ -131,27 +129,48 @@ TEST(VersionFilterTest, MVCCCommonHandle)
 
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 40, true);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"Flash"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "Flash");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 30, true);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({})}));
+        in->readPrefix();
+        Block block = in->read();
+        ASSERT_EQ(block.rows(), 0UL);
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 20, true);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"world"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "world");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 10, true);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({"hello"})}));
+        in->readPrefix();
+        Block block = in->read();
+        auto  col   = block.getByName(str_col_name);
+        auto  val   = col.column->getDataAt(0);
+        ASSERT_EQ(val, "hello");
+        in->readSuffix();
     }
     {
         auto in = genInputStream<DM_VERSION_FILTER_MODE_MVCC>(blocks, columns, 9, true);
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({str_col_name}), createColumns({createColumn<String>({})}));
+        in->readPrefix();
+        Block block = in->read();
+        ASSERT_EQ(block.rows(), 0UL);
+        in->readSuffix();
     }
 }
 
-TEST(VersionFilterTest, Compact)
+TEST(VersionFilter_test, Compact)
 {
     // TODO: currently it just test data statistics, add test for data correctness
     BlocksList blocks;
@@ -173,10 +192,10 @@ TEST(VersionFilterTest, Compact)
     ColumnDefines columns = getColumnDefinesFromBlock(blocks.back());
 
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 40, false);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 40, false);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -189,14 +208,14 @@ TEST(VersionFilterTest, Compact)
         }
         ASSERT_EQ(mvcc_stream->getEffectiveNumRows(), (size_t)1);
         ASSERT_EQ(mvcc_stream->getNotCleanRows(), (size_t)0);
-        ASSERT_EQ(gc_hint_version, (size_t)std::numeric_limits<UInt64>::max());
+        ASSERT_EQ(gc_hint_version, (size_t)UINT64_MAX);
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 30, false);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 30, false);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -213,10 +232,10 @@ TEST(VersionFilterTest, Compact)
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 20, false);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 20, false);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -233,10 +252,10 @@ TEST(VersionFilterTest, Compact)
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 10, false);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 10, false);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -254,7 +273,7 @@ TEST(VersionFilterTest, Compact)
     }
 }
 
-TEST(VersionFilterTest, CompactCommonHandle)
+TEST(VersionFilter_test, CompactCommonHandle)
 {
     // TODO: currently it just test data statistics, add test for data correctness
     BlocksList blocks;
@@ -276,10 +295,10 @@ TEST(VersionFilterTest, CompactCommonHandle)
     ColumnDefines columns = getColumnDefinesFromBlock(blocks.back());
 
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 40, true);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 40, true);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -292,14 +311,14 @@ TEST(VersionFilterTest, CompactCommonHandle)
         }
         ASSERT_EQ(mvcc_stream->getEffectiveNumRows(), (size_t)1);
         ASSERT_EQ(mvcc_stream->getNotCleanRows(), (size_t)0);
-        ASSERT_EQ(gc_hint_version, (size_t)std::numeric_limits<UInt64>::max());
+        ASSERT_EQ(gc_hint_version, (size_t)UINT64_MAX);
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 30, true);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 30, true);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -316,10 +335,10 @@ TEST(VersionFilterTest, CompactCommonHandle)
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 20, true);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 20, true);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {
@@ -336,10 +355,10 @@ TEST(VersionFilterTest, CompactCommonHandle)
         in->readSuffix();
     }
     {
-        auto in = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 10, true);
+        auto   in          = genInputStream<DM_VERSION_FILTER_MODE_COMPACT>(blocks, columns, 10, true);
         auto * mvcc_stream = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(in.get());
         ASSERT_NE(mvcc_stream, nullptr);
-        UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
+        UInt64 gc_hint_version = UINT64_MAX;
         in->readPrefix();
         while (true)
         {

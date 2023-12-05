@@ -1,17 +1,3 @@
-// Copyright 2023 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #include <Columns/ColumnString.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/DataTypeString.h>
@@ -23,13 +9,12 @@
 #include <Storages/MutableSupport.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/System/StorageSystemDTTables.h>
-#include <TiDB/Schema/SchemaNameMapper.h>
+#include <Storages/Transaction/SchemaNameMapper.h>
 
 namespace DB
 {
 
-StorageSystemDTTables::StorageSystemDTTables(const std::string & name_)
-    : name(name_)
+StorageSystemDTTables::StorageSystemDTTables(const std::string & name_) : name(name_)
 {
     setColumns(ColumnsDescription({
         {"database", std::make_shared<DataTypeString>()},
@@ -74,7 +59,6 @@ StorageSystemDTTables::StorageSystemDTTables(const std::string & name_)
         {"avg_stable_size", std::make_shared<DataTypeFloat64>()},
 
         {"total_pack_count_in_delta", std::make_shared<DataTypeUInt64>()},
-        {"max_pack_count_in_delta", std::make_shared<DataTypeUInt64>()},
         {"avg_pack_count_in_delta", std::make_shared<DataTypeFloat64>()},
         {"avg_pack_rows_in_delta", std::make_shared<DataTypeFloat64>()},
         {"avg_pack_size_in_delta", std::make_shared<DataTypeFloat64>()},
@@ -87,25 +71,30 @@ StorageSystemDTTables::StorageSystemDTTables(const std::string & name_)
         {"storage_stable_num_snapshots", std::make_shared<DataTypeUInt64>()},
         {"storage_stable_oldest_snapshot_lifetime", std::make_shared<DataTypeFloat64>()},
         {"storage_stable_oldest_snapshot_thread_id", std::make_shared<DataTypeUInt64>()},
-        {"storage_stable_oldest_snapshot_tracing_id", std::make_shared<DataTypeString>()},
+        {"storage_stable_num_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_stable_num_normal_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_stable_max_page_id", std::make_shared<DataTypeUInt64>()},
 
         {"storage_delta_num_snapshots", std::make_shared<DataTypeUInt64>()},
         {"storage_delta_oldest_snapshot_lifetime", std::make_shared<DataTypeFloat64>()},
         {"storage_delta_oldest_snapshot_thread_id", std::make_shared<DataTypeUInt64>()},
-        {"storage_delta_oldest_snapshot_tracing_id", std::make_shared<DataTypeString>()},
+        {"storage_delta_num_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_delta_num_normal_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_delta_max_page_id", std::make_shared<DataTypeUInt64>()},
 
         {"storage_meta_num_snapshots", std::make_shared<DataTypeUInt64>()},
         {"storage_meta_oldest_snapshot_lifetime", std::make_shared<DataTypeFloat64>()},
         {"storage_meta_oldest_snapshot_thread_id", std::make_shared<DataTypeUInt64>()},
-        {"storage_meta_oldest_snapshot_tracing_id", std::make_shared<DataTypeString>()},
+        {"storage_meta_num_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_meta_num_normal_pages", std::make_shared<DataTypeUInt64>()},
+        {"storage_meta_max_page_id", std::make_shared<DataTypeUInt64>()},
 
         {"background_tasks_length", std::make_shared<DataTypeUInt64>()},
     }));
 }
 
 
-BlockInputStreams StorageSystemDTTables::read(
-    const Names & column_names,
+BlockInputStreams StorageSystemDTTables::read(const Names & column_names,
     const SelectQueryInfo &,
     const Context & context,
     QueryProcessingStage::Enum & processed_stage,
@@ -123,24 +112,22 @@ BlockInputStreams StorageSystemDTTables::read(
     for (const auto & d : databases)
     {
         String database_name = d.first;
-        const auto & database = d.second;
+        auto & database = d.second;
         const DatabaseTiFlash * db_tiflash = typeid_cast<DatabaseTiFlash *>(database.get());
 
         auto it = database->getIterator(context);
         for (; it->isValid(); it->next())
         {
-            const auto & table_name = it->name();
+            auto & table_name = it->name();
             auto & storage = it->table();
             if (storage->getName() != MutableSupport::delta_tree_storage_name)
                 continue;
 
             auto dm_storage = std::dynamic_pointer_cast<StorageDeltaMerge>(storage);
-            const auto & table_info = dm_storage->getTableInfo();
+            auto & table_info = dm_storage->getTableInfo();
             auto table_id = table_info.id;
-            auto store = dm_storage->getStoreIfInited();
-            if (!store)
-                continue;
-            auto stat = store->getStoreStats();
+            auto stat = dm_storage->getStore()->getStat();
+
             size_t j = 0;
             res_columns[j++]->insert(database_name);
             res_columns[j++]->insert(table_name);
@@ -188,7 +175,6 @@ BlockInputStreams StorageSystemDTTables::read(
             res_columns[j++]->insert(stat.avg_stable_size);
 
             res_columns[j++]->insert(stat.total_pack_count_in_delta);
-            res_columns[j++]->insert(stat.max_pack_count_in_delta);
             res_columns[j++]->insert(stat.avg_pack_count_in_delta);
             res_columns[j++]->insert(stat.avg_pack_rows_in_delta);
             res_columns[j++]->insert(stat.avg_pack_size_in_delta);
@@ -201,17 +187,23 @@ BlockInputStreams StorageSystemDTTables::read(
             res_columns[j++]->insert(stat.storage_stable_num_snapshots);
             res_columns[j++]->insert(stat.storage_stable_oldest_snapshot_lifetime);
             res_columns[j++]->insert(stat.storage_stable_oldest_snapshot_thread_id);
-            res_columns[j++]->insert(stat.storage_stable_oldest_snapshot_tracing_id);
+            res_columns[j++]->insert(stat.storage_stable_num_pages);
+            res_columns[j++]->insert(stat.storage_stable_num_normal_pages);
+            res_columns[j++]->insert(stat.storage_stable_max_page_id);
 
             res_columns[j++]->insert(stat.storage_delta_num_snapshots);
             res_columns[j++]->insert(stat.storage_delta_oldest_snapshot_lifetime);
             res_columns[j++]->insert(stat.storage_delta_oldest_snapshot_thread_id);
-            res_columns[j++]->insert(stat.storage_delta_oldest_snapshot_tracing_id);
+            res_columns[j++]->insert(stat.storage_delta_num_pages);
+            res_columns[j++]->insert(stat.storage_delta_num_normal_pages);
+            res_columns[j++]->insert(stat.storage_delta_max_page_id);
 
             res_columns[j++]->insert(stat.storage_meta_num_snapshots);
             res_columns[j++]->insert(stat.storage_meta_oldest_snapshot_lifetime);
             res_columns[j++]->insert(stat.storage_meta_oldest_snapshot_thread_id);
-            res_columns[j++]->insert(stat.storage_meta_oldest_snapshot_tracing_id);
+            res_columns[j++]->insert(stat.storage_meta_num_pages);
+            res_columns[j++]->insert(stat.storage_meta_num_normal_pages);
+            res_columns[j++]->insert(stat.storage_meta_max_page_id);
 
             res_columns[j++]->insert(stat.background_tasks_length);
         }
