@@ -1,15 +1,29 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Common/typeid_cast.h>
-#include <Core/SortDescription.h>
-#include <Core/Block.h>
-#include <Columns/IColumn.h>
+#include <Columns/ColumnNullable.h>
 #include <Columns/ColumnString.h>
+#include <Columns/IColumn.h>
+#include <Common/typeid_cast.h>
+#include <Core/Block.h>
+#include <Core/SortDescription.h>
 
 
 namespace DB
 {
-
 /** Cursor allows to compare rows in different blocks (and parts).
   * Cursor moves inside single block.
   * It is used in priority queue.
@@ -39,10 +53,15 @@ struct SortCursorImpl
     /** Is there at least one column with Collator. */
     bool has_collation = false;
 
-    SortCursorImpl() : order(0) {}
+    SortCursorImpl()
+        : order(0)
+    {}
 
     SortCursorImpl(const Block & block, const SortDescription & desc_, size_t order_ = 0)
-        : desc(desc_), sort_columns_size(desc.size()), order(order_), need_collation(desc.size())
+        : desc(desc_)
+        , sort_columns_size(desc.size())
+        , order(order_)
+        , need_collation(desc.size())
     {
         reset(block);
     }
@@ -68,7 +87,7 @@ struct SortCursorImpl
 
             sort_columns.push_back(block.safeGetByPosition(column_number).column.get());
 
-            need_collation[j] = desc[j].collator != nullptr && typeid_cast<const ColumnString *>(sort_columns.back());    /// TODO Nullable(String)
+            need_collation[j] = desc[j].collator != nullptr && typeid_cast<const ColumnString *>(std::get<0>(removeNullable(sort_columns.back())));
             has_collation |= need_collation[j];
         }
 
@@ -87,12 +106,14 @@ struct SortCursor
 {
     SortCursorImpl * impl = nullptr;
 
-    SortCursor() {}
-    SortCursor(SortCursorImpl * impl_) : impl(impl_) {}
-    SortCursorImpl * operator-> () { return impl; }
-    const SortCursorImpl * operator-> () const { return impl; }
+    SortCursor() = default;
+    explicit SortCursor(SortCursorImpl * impl_)
+        : impl(impl_)
+    {}
+    SortCursorImpl * operator->() { return impl; } // NOLINT(readability-make-member-function-const)
+    const SortCursorImpl * operator->() const { return impl; }
 
-    bool none() { return !impl; }
+    bool none() const { return !impl; }
     bool operator==(const SortCursor & other) const { return impl == other.impl; }
     bool operator!=(const SortCursor & other) const { return impl != other.impl; }
 
@@ -168,7 +189,7 @@ struct SortCursor
     }
 
     /// Inverted so that the priority queue elements are removed in ascending order.
-    bool operator< (const SortCursor & rhs) const
+    bool operator<(const SortCursor & rhs) const
     {
         return greater(rhs);
     }
@@ -180,12 +201,14 @@ struct SortCursorWithCollation
 {
     SortCursorImpl * impl = nullptr;
 
-    SortCursorWithCollation() {}
-    SortCursorWithCollation(SortCursorImpl * impl_) : impl(impl_) {}
-    SortCursorImpl * operator-> () { return impl; }
-    const SortCursorImpl * operator-> () const { return impl; }
+    SortCursorWithCollation() = default;
+    explicit SortCursorWithCollation(SortCursorImpl * impl_)
+        : impl(impl_)
+    {}
+    SortCursorImpl * operator->() { return impl; } // NOLINT(readability-make-member-function-const)
+    const SortCursorImpl * operator->() const { return impl; }
 
-    bool none() { return !impl; }
+    bool none() const { return !impl; }
     bool operator==(const SortCursor & other) const { return impl == other.impl; }
     bool operator!=(const SortCursor & other) const { return impl != other.impl; }
 
@@ -250,10 +273,10 @@ struct SortCursorWithCollation
         return equalAtIgnOrder(rhs, impl->pos, rhs.impl->pos);
     }
 
-    bool operator< (const SortCursorWithCollation & rhs) const
+    bool operator<(const SortCursorWithCollation & rhs) const
     {
         return greater(rhs);
     }
 };
 
-}
+} // namespace DB

@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <atomic>
@@ -351,7 +365,7 @@ private:
 
         std::vector<size_t> required_rows(outdated_keys.size());
         std::transform(
-            std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair) { return pair.second.front(); });
+            std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair) { return pair.getMapped().front(); });
 
         /// request new values
         update(key_columns,
@@ -476,7 +490,7 @@ private:
             std::vector<size_t> required_rows(outdated_keys.size());
             std::transform(std::begin(outdated_keys), std::end(outdated_keys), std::begin(required_rows), [](auto & pair)
             {
-                return pair.second.front();
+                return pair.getMapped().front();
             });
 
             update(key_columns,
@@ -507,7 +521,7 @@ private:
         {
             const StringRef key = keys_array[row];
             const auto it = map.find(key);
-            const auto string_ref = it != std::end(map) ? it->second : get_default(row);
+            const auto string_ref = it != std::end(map) ? it->getMapped(): get_default(row);
             out->insertData(string_ref.data, string_ref.size);
         }
     };
@@ -611,7 +625,7 @@ private:
         /// Check which ids have not been found and require setting null_value
         for (const auto & key_found_pair : remaining_keys)
         {
-            if (key_found_pair.second)
+            if (key_found_pair.getMapped())
             {
                 ++found_num;
                 continue;
@@ -619,7 +633,7 @@ private:
 
             ++not_found_num;
 
-            auto key = key_found_pair.first;
+            auto key = key_found_pair.getKey();
             const auto hash = StringRefHash{}(key);
             const auto find_result = findCellIdx(key, now, hash);
             const auto & cell_idx = find_result.cell_idx;

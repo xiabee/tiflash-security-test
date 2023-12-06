@@ -1,8 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include "IServer.h"
-
 #include <daemon/BaseDaemon.h>
+#include <Server/IServer.h>
+#include <Server/ServerInfo.h>
+
 
 /** Server provides three interfaces:
   * 1. HTTP - simple interface for any applications.
@@ -11,14 +26,13 @@
   *     - data is transferred by columns;
   *     - data is transferred compressed;
   *    Allows to get more information in response.
-  * 3. Interserver HTTP - for replication.
   */
 
 
 namespace DB
 {
-
-class Server : public BaseDaemon, public IServer
+class Server : public BaseDaemon
+    , public IServer
 {
 public:
     Poco::Util::LayeredConfiguration & config() const override
@@ -56,6 +70,11 @@ private:
     std::unique_ptr<Context> global_context;
 
     TiFlashSecurityConfig security_config;
+
+    ServerInfo server_info;
+
+    class FlashGrpcServerHolder;
+    class TcpHttpServersHolder;
 };
 
-}
+} // namespace DB

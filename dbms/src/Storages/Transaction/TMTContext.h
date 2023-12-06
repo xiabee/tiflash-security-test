@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Poco/Util/AbstractConfiguration.h>
@@ -9,7 +23,6 @@
 
 namespace DB
 {
-
 class Context;
 
 class KVStore;
@@ -21,8 +34,14 @@ using SchemaSyncerPtr = std::shared_ptr<SchemaSyncer>;
 class BackgroundService;
 using BackGroundServicePtr = std::unique_ptr<BackgroundService>;
 
+class MinTSOScheduler;
+using MPPTaskSchedulerPtr = std::unique_ptr<MinTSOScheduler>;
+
 class MPPTaskManager;
 using MPPTaskManagerPtr = std::shared_ptr<MPPTaskManager>;
+
+struct MPPQueryTaskSet;
+using MPPQueryTaskSetPtr = std::shared_ptr<MPPQueryTaskSet>;
 
 class GCManager;
 using GCManagerPtr = std::shared_ptr<GCManager>;
@@ -60,7 +79,7 @@ public:
 
     Context & getContext();
 
-    bool isBgFlushDisabled() const { return disable_bg_flush; }
+    const Context & getContext() const;
 
     explicit TMTContext(Context & context_, const TiFlashRaftConfig & raft_config, const pingcap::ClusterConfig & cluster_config_);
 
@@ -94,7 +113,10 @@ public:
 
     UInt64 replicaReadMaxThread() const;
     UInt64 batchReadIndexTimeout() const;
+    // timeout for wait index (ms). "0" means wait infinitely
+    UInt64 waitIndexTimeout() const;
     Int64 waitRegionReadyTimeout() const;
+    uint64_t readIndexWorkerTick() const;
 
 private:
     Context & context;
@@ -116,10 +138,10 @@ private:
 
     ::TiDB::StorageEngine engine;
 
-    bool disable_bg_flush;
-
     std::atomic_uint64_t replica_read_max_thread;
     std::atomic_uint64_t batch_read_index_timeout_ms;
+    std::atomic_uint64_t wait_index_timeout_ms;
+    std::atomic_uint64_t read_index_worker_tick_ms;
     std::atomic_int64_t wait_region_ready_timeout_sec;
 };
 

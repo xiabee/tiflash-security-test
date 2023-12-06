@@ -1,21 +1,34 @@
-#pragma once
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#include <cstring>
-#include <algorithm>
-#include <memory>
+#pragma once
 
 #include <Common/Exception.h>
 #include <IO/BufferBase.h>
 
+#include <algorithm>
+#include <cstring>
+#include <memory>
+
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int ATTEMPT_TO_READ_AFTER_EOF;
-    extern const int CANNOT_READ_ALL_DATA;
-}
+extern const int ATTEMPT_TO_READ_AFTER_EOF;
+extern const int CANNOT_READ_ALL_DATA;
+} // namespace ErrorCodes
 
 /** A simple abstract class for buffered data reading (char sequences) from somewhere.
   * Unlike std::istream, it provides access to the internal buffer,
@@ -34,14 +47,24 @@ public:
     /** Creates a buffer and sets a piece of available data to read to zero size,
       *  so that the next() function is called to load the new data portion into the buffer at the first try.
       */
-    ReadBuffer(Position ptr, size_t size) : BufferBase(ptr, size, 0) { working_buffer.resize(0); }
+    ReadBuffer(Position ptr, size_t size)
+        : BufferBase(ptr, size, 0)
+    {
+        working_buffer.resize(0);
+    }
 
     /** Used when the buffer is already full of data that can be read.
       *  (in this case, pass 0 as an offset)
       */
-    ReadBuffer(Position ptr, size_t size, size_t offset) : BufferBase(ptr, size, offset) {}
+    ReadBuffer(Position ptr, size_t size, size_t offset)
+        : BufferBase(ptr, size, offset)
+    {}
 
-    void set(Position ptr, size_t size) { BufferBase::set(ptr, size, 0); working_buffer.resize(0); }
+    void set(Position ptr, size_t size)
+    {
+        BufferBase::set(ptr, size, 0);
+        working_buffer.resize(0);
+    }
 
     /** read next data and fill a buffer with it; set position to the beginning;
       * return `false` in case of end, `true` otherwise; throw an exception, if something is wrong
@@ -65,8 +88,7 @@ public:
             next();
     }
 
-    virtual ~ReadBuffer() {}
-
+    virtual ~ReadBuffer() = default;
 
     /** Unlike std::istream, it returns true if all data was read
       *  (and not in case there was an attempt to read after the end).
@@ -166,4 +188,4 @@ private:
 using ReadBufferPtr = std::shared_ptr<ReadBuffer>;
 
 
-}
+} // namespace DB

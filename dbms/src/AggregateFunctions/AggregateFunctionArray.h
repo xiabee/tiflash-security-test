@@ -1,20 +1,33 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
+#include <AggregateFunctions/IAggregateFunction.h>
 #include <Columns/ColumnArray.h>
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeArray.h>
-#include <AggregateFunctions/IAggregateFunction.h>
 #include <IO/WriteHelpers.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int SIZES_OF_ARRAYS_DOESNT_MATCH;
-    extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-}
+extern const int SIZES_OF_ARRAYS_DOESNT_MATCH;
+extern const int ILLEGAL_TYPE_OF_ARGUMENT;
+} // namespace ErrorCodes
 
 
 /** Not an aggregate function, but an adapter of aggregate functions,
@@ -29,7 +42,8 @@ private:
 
 public:
     AggregateFunctionArray(AggregateFunctionPtr nested_, const DataTypes & arguments)
-        : nested_func(nested_), num_arguments(arguments.size())
+        : nested_func(nested_)
+        , num_arguments(arguments.size())
     {
         for (const auto & type : arguments)
             if (!typeid_cast<const DataTypeArray *>(type.get()))
@@ -46,12 +60,12 @@ public:
         return nested_func->getReturnType();
     }
 
-    void create(AggregateDataPtr place) const override
+    void create(AggregateDataPtr __restrict place) const override
     {
         nested_func->create(place);
     }
 
-    void destroy(AggregateDataPtr place) const noexcept override
+    void destroy(AggregateDataPtr __restrict place) const noexcept override
     {
         nested_func->destroy(place);
     }
@@ -71,7 +85,7 @@ public:
         return nested_func->alignOfData();
     }
 
-    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena * arena) const override
+    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena * arena) const override
     {
         const IColumn * nested[num_arguments];
 
@@ -98,24 +112,24 @@ public:
             nested_func->add(place, nested, i, arena);
     }
 
-    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena * arena) const override
+    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena * arena) const override
     {
         nested_func->merge(place, rhs, arena);
     }
 
-    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
     {
         nested_func->serialize(place, buf);
     }
 
-    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena * arena) const override
+    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena * arena) const override
     {
         nested_func->deserialize(place, buf, arena);
     }
 
-    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
+    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena * arena) const override
     {
-        nested_func->insertResultInto(place, to);
+        nested_func->insertResultInto(place, to, arena);
     }
 
     bool allocatesMemoryInArena() const override
@@ -126,4 +140,4 @@ public:
     const char * getHeaderFilePath() const override { return __FILE__; }
 };
 
-}
+} // namespace DB

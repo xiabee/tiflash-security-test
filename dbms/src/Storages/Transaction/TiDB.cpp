@@ -1,5 +1,21 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/Decimal.h>
+#include <Common/Exception.h>
 #include <Common/MyTime.h>
+#include <DataTypes/DataTypeDecimal.h>
 #include <IO/ReadBufferFromString.h>
 #include <Poco/Base64Decoder.h>
 #include <Poco/MemoryStream.h>
@@ -14,9 +30,54 @@
 
 namespace DB
 {
+namespace ErrorCodes
+{
+extern const int LOGICAL_ERROR;
+}
 extern const UInt8 TYPE_CODE_LITERAL;
 extern const UInt8 LITERAL_NIL;
-Field GenDefaultField(const TiDB::ColumnInfo & col_info);
+
+Field GenDefaultField(const TiDB::ColumnInfo & col_info)
+{
+    switch (col_info.getCodecFlag())
+    {
+    case TiDB::CodecFlagNil:
+        return Field();
+    case TiDB::CodecFlagBytes:
+        return Field(String());
+    case TiDB::CodecFlagDecimal:
+    {
+        auto type = createDecimal(col_info.flen, col_info.decimal);
+        if (checkDecimal<Decimal32>(*type))
+            return Field(DecimalField<Decimal32>(Decimal32(), col_info.decimal));
+        else if (checkDecimal<Decimal64>(*type))
+            return Field(DecimalField<Decimal64>(Decimal64(), col_info.decimal));
+        else if (checkDecimal<Decimal128>(*type))
+            return Field(DecimalField<Decimal128>(Decimal128(), col_info.decimal));
+        else
+            return Field(DecimalField<Decimal256>(Decimal256(), col_info.decimal));
+    }
+    break;
+    case TiDB::CodecFlagCompactBytes:
+        return Field(String());
+    case TiDB::CodecFlagFloat:
+        return Field(Float64(0));
+    case TiDB::CodecFlagUInt:
+        return Field(UInt64(0));
+    case TiDB::CodecFlagInt:
+        return Field(Int64(0));
+    case TiDB::CodecFlagVarInt:
+        return Field(Int64(0));
+    case TiDB::CodecFlagVarUInt:
+        return Field(UInt64(0));
+    case TiDB::CodecFlagJson:
+        return TiDB::genJsonNull();
+    case TiDB::CodecFlagDuration:
+        return Field(Int64(0));
+    default:
+        throw Exception("Not implemented codec flag: " + std::to_string(col_info.getCodecFlag()), ErrorCodes::LOGICAL_ERROR);
+    }
+}
 } // namespace DB
 
 namespace TiDB
@@ -26,6 +87,7 @@ using DB::Decimal256;
 using DB::Decimal32;
 using DB::Decimal64;
 using DB::DecimalField;
+using DB::Exception;
 using DB::Field;
 using DB::SchemaNameMapper;
 
@@ -33,12 +95,15 @@ using DB::SchemaNameMapper;
 ////// ColumnInfo //////
 ////////////////////////
 
-ColumnInfo::ColumnInfo(Poco::JSON::Object::Ptr json) { deserialize(json); }
+ColumnInfo::ColumnInfo(Poco::JSON::Object::Ptr json)
+{
+    deserialize(json);
+}
 
 
 Field ColumnInfo::defaultValueToField() const
 {
-    auto & value = origin_default_value;
+    const auto & value = origin_default_value;
     if (value.isEmpty())
     {
         if (hasNotNullFlag())
@@ -47,94 +112,93 @@ Field ColumnInfo::defaultValueToField() const
     }
     switch (tp)
     {
-        // TODO: Consider unsigned?
-        // Integer Type.
-        case TypeTiny:
-        case TypeShort:
-        case TypeLong:
-        case TypeLongLong:
-        case TypeInt24:
+    // Integer Type.
+    case TypeTiny:
+    case TypeShort:
+    case TypeLong:
+    case TypeLongLong:
+    case TypeInt24:
+    {
+        // In c++, cast a unsigned integer to signed integer will not change the value.
+        // like 9223372036854775808 which is larger than the maximum value of Int64,
+        // static_cast<UInt64>(static_cast<Int64>(9223372036854775808)) == 9223372036854775808
+        // so we don't need consider unsigned here.
+        try
         {
-            // In c++, cast a unsigned integer to signed integer will not change the value.
-            // like 9223372036854775808 which is larger than the maximum value of Int64,
-            // static_cast<UInt64>(static_cast<Int64>(9223372036854775808)) == 9223372036854775808
-            // so we don't need consider unsigned here.
-            try
-            {
-                return value.convert<Int64>();
-            }
-            catch (...)
-            {
-                // due to https://github.com/pingcap/tidb/issues/34881
-                // we do this to avoid exception in older version of TiDB.
-                return static_cast<Int64>(std::llround(value.convert<double>()));
-            }
+            return value.convert<Int64>();
         }
-        case TypeBit:
+        catch (...)
         {
-            // TODO: We shall use something like `orig_default_bit`, which will never change once created,
-            //  rather than `default_bit`, which could be altered.
-            //  See https://github.com/pingcap/tidb/issues/17641 and https://github.com/pingcap/tidb/issues/17642
-            auto & bit_value = default_bit_value;
-            // TODO: There might be cases that `orig_default` is not null but `default_bit` is null,
-            //  i.e. bit column added with an default value but later modified to another.
-            //  For these cases, neither `orig_default` (may get corrupted) nor `default_bit` (modified) is correct.
-            //  This is a bug anyway, we choose to make it simple, i.e. use `default_bit`.
-            if (bit_value.isEmpty())
-            {
-                if (hasNotNullFlag())
-                    return DB::GenDefaultField(*this);
-                return Field();
-            }
-            return getBitValue(bit_value.convert<String>());
+            // due to https://github.com/pingcap/tidb/issues/34881
+            // we do this to avoid exception in older version of TiDB.
+            return static_cast<Int64>(std::llround(value.convert<double>()));
         }
-        // Floating type.
-        case TypeFloat:
-        case TypeDouble:
-            return value.convert<double>();
-        case TypeDate:
-        case TypeDatetime:
-        case TypeTimestamp:
-            return DB::parseMyDateTime(value.convert<String>());
-        case TypeVarchar:
-        case TypeTinyBlob:
-        case TypeMediumBlob:
-        case TypeLongBlob:
-        case TypeBlob:
-        case TypeVarString:
-        case TypeString:
+    }
+    case TypeBit:
+    {
+        // TODO: We shall use something like `orig_default_bit`, which will never change once created,
+        //  rather than `default_bit`, which could be altered.
+        //  See https://github.com/pingcap/tidb/issues/17641 and https://github.com/pingcap/tidb/issues/17642
+        const auto & bit_value = default_bit_value;
+        // TODO: There might be cases that `orig_default` is not null but `default_bit` is null,
+        //  i.e. bit column added with an default value but later modified to another.
+        //  For these cases, neither `orig_default` (may get corrupted) nor `default_bit` (modified) is correct.
+        //  This is a bug anyway, we choose to make it simple, i.e. use `default_bit`.
+        if (bit_value.isEmpty())
         {
-            auto v = value.convert<String>();
-            if (hasBinaryFlag())
-            {
-                // For some binary column(like varchar(20)), we have to pad trailing zeros according to the specified type length.
-                // User may define default value `0x1234` for a `BINARY(4)` column, TiDB stores it in a string "\u12\u34" (sized 2).
-                // But it actually means `0x12340000`.
-                // And for some binary column(like longblob), we do not need to pad trailing zeros.
-                // And the `Flen` is set to -1, therefore we need to check `Flen >= 0` here.
-                if (Int32 vlen = v.length(); flen >= 0 && vlen < flen)
-                    v.append(flen - vlen, '\0');
-            }
-            return v;
-        }
-        case TypeJSON:
-            // JSON can't have a default value
-            return genJsonNull();
-        case TypeEnum:
-            return getEnumIndex(value.convert<String>());
-        case TypeNull:
+            if (hasNotNullFlag())
+                return DB::GenDefaultField(*this);
             return Field();
-        case TypeDecimal:
-        case TypeNewDecimal:
-            return getDecimalValue(value.convert<String>());
-        case TypeTime:
-            return getTimeValue(value.convert<String>());
-        case TypeYear:
-            return getYearValue(value.convert<String>());
-        case TypeSet:
-            return getSetValue(value.convert<String>());
-        default:
-            throw Exception("Have not processed type: " + std::to_string(tp));
+        }
+        return getBitValue(bit_value.convert<String>());
+    }
+    // Floating type.
+    case TypeFloat:
+    case TypeDouble:
+        return value.convert<double>();
+    case TypeDate:
+    case TypeDatetime:
+    case TypeTimestamp:
+        return DB::parseMyDateTime(value.convert<String>());
+    case TypeVarchar:
+    case TypeTinyBlob:
+    case TypeMediumBlob:
+    case TypeLongBlob:
+    case TypeBlob:
+    case TypeVarString:
+    case TypeString:
+    {
+        auto v = value.convert<String>();
+        if (hasBinaryFlag())
+        {
+            // For some binary column(like varchar(20)), we have to pad trailing zeros according to the specified type length.
+            // User may define default value `0x1234` for a `BINARY(4)` column, TiDB stores it in a string "\u12\u34" (sized 2).
+            // But it actually means `0x12340000`.
+            // And for some binary column(like longblob), we do not need to pad trailing zeros.
+            // And the `Flen` is set to -1, therefore we need to check `Flen >= 0` here.
+            if (Int32 vlen = v.length(); flen >= 0 && vlen < flen)
+                v.append(flen - vlen, '\0');
+        }
+        return v;
+    }
+    case TypeJSON:
+        // JSON can't have a default value
+        return genJsonNull();
+    case TypeEnum:
+        return getEnumIndex(value.convert<String>());
+    case TypeNull:
+        return Field();
+    case TypeDecimal:
+    case TypeNewDecimal:
+        return getDecimalValue(value.convert<String>());
+    case TypeTime:
+        return getTimeValue(value.convert<String>());
+    case TypeYear:
+        return getYearValue(value.convert<String>());
+    case TypeSet:
+        return getSetValue(value.convert<String>());
+    default:
+        throw Exception("Have not processed type: " + std::to_string(tp));
     }
     return Field();
 }
@@ -175,7 +239,7 @@ DB::Field ColumnInfo::getDecimalValue(const String & decimal_text) const
 // FIXME it still has bug: https://github.com/pingcap/tidb/issues/11435
 Int64 ColumnInfo::getEnumIndex(const String & enum_id_or_text) const
 {
-    auto collator = ITiDBCollator::getCollator(collate.isEmpty() ? "binary" : collate.convert<String>());
+    const auto * collator = ITiDBCollator::getCollator(collate.isEmpty() ? "binary" : collate.convert<String>());
     if (!collator)
         // todo if new collation is enabled, should use "utf8mb4_bin"
         collator = ITiDBCollator::getCollator("binary");
@@ -192,7 +256,7 @@ Int64 ColumnInfo::getEnumIndex(const String & enum_id_or_text) const
 
 UInt64 ColumnInfo::getSetValue(const String & set_str) const
 {
-    auto collator = ITiDBCollator::getCollator(collate.isEmpty() ? "binary" : collate.convert<String>());
+    const auto * collator = ITiDBCollator::getCollator(collate.isEmpty() ? "binary" : collate.convert<String>());
     if (!collator)
         // todo if new collation is enabled, should use "utf8mb4_bin"
         collator = ITiDBCollator::getCollator("binary");
@@ -220,9 +284,9 @@ UInt64 ColumnInfo::getSetValue(const String & set_str) const
     throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": can't parse set type value.");
 }
 
-Int64 ColumnInfo::getTimeValue(const String & time_str) const
+Int64 ColumnInfo::getTimeValue(const String & time_str)
 {
-    const static long fractional_seconds_multiplier[] = {1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1};
+    const static int64_t fractional_seconds_multiplier[] = {1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1};
     bool negative = time_str[0] == '-';
     Poco::StringTokenizer second_and_fsp(time_str, ".");
     Poco::StringTokenizer string_tokens(second_and_fsp[0], ":");
@@ -240,7 +304,7 @@ Int64 ColumnInfo::getTimeValue(const String & time_str) const
     return negative ? -ret : ret;
 }
 
-Int64 ColumnInfo::getYearValue(const String & val) const
+Int64 ColumnInfo::getYearValue(const String & val)
 {
     // do not check validation of the val because TiDB will do it
     Int64 year = std::stol(val);
@@ -253,7 +317,7 @@ Int64 ColumnInfo::getYearValue(const String & val) const
     return year;
 }
 
-UInt64 ColumnInfo::getBitValue(const String & val) const
+UInt64 ColumnInfo::getBitValue(const String & val)
 {
     // The `default_bit` is a base64 encoded, big endian byte array.
     Poco::MemoryInputStream istr(val.data(), val.size());
@@ -292,7 +356,7 @@ try
     if (!elems.empty())
     {
         Poco::JSON::Array::Ptr elem_arr = new Poco::JSON::Array();
-        for (auto & elem : elems)
+        for (const auto & elem : elems)
             elem_arr->add(elem.first);
         tp_json->set("Elems", elem_arr);
     }
@@ -315,7 +379,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (ColumnInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (ColumnInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void ColumnInfo::deserialize(Poco::JSON::Object::Ptr json)
@@ -356,14 +421,18 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (ColumnInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (ColumnInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 ///////////////////////////
 ////// PartitionInfo //////
 ///////////////////////////
 
-PartitionDefinition::PartitionDefinition(Poco::JSON::Object::Ptr json) { deserialize(json); }
+PartitionDefinition::PartitionDefinition(Poco::JSON::Object::Ptr json)
+{
+    deserialize(json);
+}
 
 Poco::JSON::Object::Ptr PartitionDefinition::getJSONObject() const
 try
@@ -387,7 +456,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (PartitionDef): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (PartitionDef): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void PartitionDefinition::deserialize(Poco::JSON::Object::Ptr json)
@@ -401,10 +471,14 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (PartitionDefinition): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (PartitionDefinition): " + e.displayText(),
+        DB::Exception(e));
 }
 
-PartitionInfo::PartitionInfo(Poco::JSON::Object::Ptr json) { deserialize(json); }
+PartitionInfo::PartitionInfo(Poco::JSON::Object::Ptr json)
+{
+    deserialize(json);
+}
 
 Poco::JSON::Object::Ptr PartitionInfo::getJSONObject() const
 try
@@ -418,7 +492,7 @@ try
 
     Poco::JSON::Array::Ptr def_arr = new Poco::JSON::Array();
 
-    for (auto & part_def : definitions)
+    for (const auto & part_def : definitions)
     {
         def_arr->add(part_def.getJSONObject());
     }
@@ -436,7 +510,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (PartitionInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (PartitionInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void PartitionInfo::deserialize(Poco::JSON::Object::Ptr json)
@@ -459,7 +534,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (PartitionInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (PartitionInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 ////////////////////////////////
@@ -482,7 +558,8 @@ try
 }
 catch (const Poco::Exception & e)
 {
-    throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (TiFlashReplicaInfo): " + e.displayText(),
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (TiFlashReplicaInfo): " + e.displayText(),
         DB::Exception(e));
 }
 
@@ -494,7 +571,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        String(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (TiFlashReplicaInfo): " + e.displayText(), DB::Exception(e));
+        String(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (TiFlashReplicaInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 ////////////////////
@@ -525,7 +603,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (DBInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (DBInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void DBInfo::deserialize(const String & json_str)
@@ -551,7 +630,12 @@ catch (const Poco::Exception & e)
 /// IndexColumnInfo ///
 ///////////////////////
 
-IndexColumnInfo::IndexColumnInfo(Poco::JSON::Object::Ptr json) { deserialize(json); }
+IndexColumnInfo::IndexColumnInfo(Poco::JSON::Object::Ptr json)
+    : length(0)
+    , offset(0)
+{
+    deserialize(json);
+}
 
 Poco::JSON::Object::Ptr IndexColumnInfo::getJSONObject() const
 try
@@ -575,7 +659,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (IndexColumnInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (IndexColumnInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void IndexColumnInfo::deserialize(Poco::JSON::Object::Ptr json)
@@ -588,14 +673,25 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (IndexColumnInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (IndexColumnInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 ///////////////////////
 ////// IndexInfo //////
 ///////////////////////
 
-IndexInfo::IndexInfo(Poco::JSON::Object::Ptr json) { deserialize(json); }
+IndexInfo::IndexInfo(Poco::JSON::Object::Ptr json)
+    : id()
+    , state()
+    , index_type()
+    , is_unique()
+    , is_primary()
+    , is_invisible()
+    , is_global()
+{
+    deserialize(json);
+}
 Poco::JSON::Object::Ptr IndexInfo::getJSONObject() const
 try
 {
@@ -614,7 +710,7 @@ try
     json->set("tbl_name", tbl_name_json);
 
     Poco::JSON::Array::Ptr cols_array = new Poco::JSON::Array();
-    for (auto & col : idx_cols)
+    for (const auto & col : idx_cols)
     {
         auto col_obj = col.getJSONObject();
         cols_array->add(col_obj);
@@ -637,7 +733,8 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (IndexInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (IndexInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 void IndexInfo::deserialize(Poco::JSON::Object::Ptr json)
@@ -671,14 +768,22 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Deserialize TiDB schema JSON failed (IndexInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Deserialize TiDB schema JSON failed (IndexInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
 ///////////////////////
 ////// TableInfo //////
 ///////////////////////
+TableInfo::TableInfo(Poco::JSON::Object::Ptr json)
+{
+    deserialize(json);
+}
 
-TableInfo::TableInfo(const String & table_info_json) { deserialize(table_info_json); }
+TableInfo::TableInfo(const String & table_info_json)
+{
+    deserialize(table_info_json);
+}
 
 String TableInfo::serialize() const
 try
@@ -693,7 +798,7 @@ try
     json->set("name", name_json);
 
     Poco::JSON::Array::Ptr cols_arr = new Poco::JSON::Array();
-    for (auto & col_info : columns)
+    for (const auto & col_info : columns)
     {
         auto col_obj = col_info.getJSONObject();
         cols_arr->add(col_obj);
@@ -701,7 +806,7 @@ try
 
     json->set("cols", cols_arr);
     Poco::JSON::Array::Ptr index_arr = new Poco::JSON::Array();
-    for (auto & index_info : index_infos)
+    for (const auto & index_info : index_infos)
     {
         auto index_info_obj = index_info.getJSONObject();
         index_arr->add(index_info_obj);
@@ -742,22 +847,20 @@ try
 catch (const Poco::Exception & e)
 {
     throw DB::Exception(
-        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (TableInfo): " + e.displayText(), DB::Exception(e));
+        std::string(__PRETTY_FUNCTION__) + ": Serialize TiDB schema JSON failed (TableInfo): " + e.displayText(),
+        DB::Exception(e));
 }
 
-void TableInfo::deserialize(const String & json_str)
+String JSONToString(Poco::JSON::Object::Ptr json)
+{
+    std::stringstream buf;
+    json->stringify(buf);
+    return buf.str();
+}
+
+void TableInfo::deserialize(Poco::JSON::Object::Ptr obj)
 try
 {
-    if (json_str.empty())
-    {
-        id = DB::InvalidTableID;
-        return;
-    }
-
-    Poco::JSON::Parser parser;
-    Poco::Dynamic::Var result = parser.parse(json_str);
-
-    auto obj = result.extract<Poco::JSON::Object::Ptr>();
     id = obj->getValue<TableID>("id");
     name = obj->getObject("name")->getValue<String>("L");
 
@@ -825,9 +928,32 @@ try
     }
     if (is_common_handle && index_infos.size() != 1)
     {
-        throw DB::Exception(std::string(__PRETTY_FUNCTION__)
-            + ": Parse TiDB schema JSON failed (TableInfo): clustered index without primary key info, json: " + json_str);
+        throw DB::Exception(
+            std::string(__PRETTY_FUNCTION__)
+            + ": Parse TiDB schema JSON failed (TableInfo): clustered index without primary key info, json: " + JSONToString(obj));
     }
+}
+catch (const Poco::Exception & e)
+{
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Parse TiDB schema JSON failed (TableInfo): " + e.displayText() + ", json: " + JSONToString(obj),
+        DB::Exception(e));
+}
+
+void TableInfo::deserialize(const String & json_str)
+try
+{
+    if (json_str.empty())
+    {
+        id = DB::InvalidTableID;
+        return;
+    }
+
+    Poco::JSON::Parser parser;
+    Poco::Dynamic::Var result = parser.parse(json_str);
+
+    const auto & obj = result.extract<Poco::JSON::Object::Ptr>();
+    deserialize(obj);
 }
 catch (const Poco::Exception & e)
 {
@@ -888,12 +1014,14 @@ ColumnID TableInfo::getColumnID(const String & name) const
     else if (name == DB::MutableSupport::delmark_column_name)
         return DB::DelMarkColumnID;
 
-    throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": Unknown column name " + name, DB::ErrorCodes::LOGICAL_ERROR);
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Unknown column name " + name,
+        DB::ErrorCodes::LOGICAL_ERROR);
 }
 
 String TableInfo::getColumnName(const ColumnID id) const
 {
-    for (auto & col : columns)
+    for (const auto & col : columns)
     {
         if (id == col.id)
         {
@@ -901,7 +1029,8 @@ String TableInfo::getColumnName(const ColumnID id) const
         }
     }
 
-    throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": Invalidate column id " + std::to_string(id) + " for table " + name,
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Invalidate column id " + std::to_string(id) + " for table " + name,
         DB::ErrorCodes::LOGICAL_ERROR);
 }
 
@@ -915,7 +1044,8 @@ const ColumnInfo & TableInfo::getColumnInfo(const ColumnID id) const
         }
     }
 
-    throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": Invalidate column id " + std::to_string(id) + " for table " + name,
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Invalidate column id " + std::to_string(id) + " for table " + name,
         DB::ErrorCodes::LOGICAL_ERROR);
 }
 
@@ -924,27 +1054,32 @@ std::optional<std::reference_wrapper<const ColumnInfo>> TableInfo::getPKHandleCo
     if (!pk_is_handle)
         return std::nullopt;
 
-    for (auto & col : columns)
+    for (const auto & col : columns)
     {
         if (col.hasPriKeyFlag())
             return std::optional<std::reference_wrapper<const ColumnInfo>>(col);
     }
 
-    throw DB::Exception(std::string(__PRETTY_FUNCTION__) + ": Cannot get handle column for table " + name, DB::ErrorCodes::LOGICAL_ERROR);
+    throw DB::Exception(
+        std::string(__PRETTY_FUNCTION__) + ": Cannot get handle column for table " + name,
+        DB::ErrorCodes::LOGICAL_ERROR);
 }
 
 TableInfoPtr TableInfo::producePartitionTableInfo(TableID table_or_partition_id, const SchemaNameMapper & name_mapper) const
 {
     // Some sanity checks for partition table.
     if (unlikely(!(is_partition_table && partition.enable)))
-        throw Exception("Table ID " + std::to_string(id) + " seeing partition ID " + std::to_string(table_or_partition_id)
+        throw Exception(
+            "Table ID " + std::to_string(id) + " seeing partition ID " + std::to_string(table_or_partition_id)
                 + " but it's not a partition table",
             DB::ErrorCodes::LOGICAL_ERROR);
 
     if (unlikely(std::find_if(partition.definitions.begin(), partition.definitions.end(), [table_or_partition_id](const auto & d) {
-            return d.id == table_or_partition_id;
-        }) == partition.definitions.end()))
-        throw Exception("Couldn't find partition with ID " + std::to_string(table_or_partition_id) + " in table ID " + std::to_string(id),
+                     return d.id == table_or_partition_id;
+                 })
+                 == partition.definitions.end()))
+        throw Exception(
+            "Couldn't find partition with ID " + std::to_string(table_or_partition_id) + " in table ID " + std::to_string(id),
             DB::ErrorCodes::LOGICAL_ERROR);
 
     // This is a TiDB partition table, adjust the table ID by making it to physical table ID (partition ID).
@@ -991,6 +1126,19 @@ ColumnInfo fieldTypeToColumnInfo(const tipb::FieldType & field_type)
         ret.elems.emplace_back(field_type.elems(i), i + 1);
     }
     return ret;
+}
+
+ColumnInfo toTiDBColumnInfo(const tipb::ColumnInfo & tipb_column_info)
+{
+    ColumnInfo tidb_column_info;
+    tidb_column_info.tp = static_cast<TiDB::TP>(tipb_column_info.tp());
+    tidb_column_info.id = tipb_column_info.column_id();
+    tidb_column_info.flag = tipb_column_info.flag();
+    tidb_column_info.flen = tipb_column_info.columnlen();
+    tidb_column_info.decimal = tipb_column_info.decimal();
+    for (int i = 0; i < tipb_column_info.elems_size(); ++i)
+        tidb_column_info.elems.emplace_back(tipb_column_info.elems(i), i + 1);
+    return tidb_column_info;
 }
 
 } // namespace TiDB

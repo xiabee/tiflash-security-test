@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
 #include <Storages/Transaction/Datum.h>
 #include <Storages/Transaction/DatumCodec.h>
@@ -13,11 +27,13 @@ namespace DB
 class DefaultChunkCodecStream : public ChunkCodecStream
 {
 public:
-    explicit DefaultChunkCodecStream(const std::vector<tipb::FieldType> & field_types) : ChunkCodecStream(field_types) {}
-    std::stringstream ss;
-    String getString() override { return ss.str(); }
+    explicit DefaultChunkCodecStream(const std::vector<tipb::FieldType> & field_types)
+        : ChunkCodecStream(field_types)
+    {}
+    WriteBufferFromOwnString ss;
+    String getString() override { return ss.releaseStr(); }
     void encode(const Block & block, size_t start, size_t end) override;
-    void clear() override { ss.str(""); }
+    void clear() override { ss.restart(); }
 };
 
 void DefaultChunkCodecStream::encode(const Block & block, size_t start, size_t end)
@@ -35,11 +51,10 @@ void DefaultChunkCodecStream::encode(const Block & block, size_t start, size_t e
     }
 }
 
-Block DefaultChunkCodec::decode(const tipb::Chunk & chunk, const DAGSchema & schema)
+Block DefaultChunkCodec::decode(const String & data, const DAGSchema & schema)
 {
     std::vector<std::vector<Field>> rows;
     std::vector<Field> curr_row;
-    const std::string & data = chunk.rows_data();
     size_t cursor = 0;
     while (cursor < data.size())
     {
@@ -55,7 +70,7 @@ Block DefaultChunkCodec::decode(const tipb::Chunk & chunk, const DAGSchema & sch
     for (auto & field : schema)
     {
         const auto & name = field.first;
-        auto data_type = getDataTypeByColumnInfo(field.second);
+        auto data_type = getDataTypeByColumnInfoForComputingLayer(field.second);
         ColumnWithTypeAndName col(data_type, name);
         col.column->assumeMutable()->reserve(rows.size());
         columns.emplace_back(std::move(col));

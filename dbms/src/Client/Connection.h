@@ -1,33 +1,40 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <common/logger_useful.h>
-
-#include <Poco/Net/StreamSocket.h>
-
 #include <Common/Throttler.h>
-
 #include <Core/Block.h>
 #include <Core/Defines.h>
-#include <IO/Progress.h>
 #include <Core/Protocol.h>
 #include <Core/QueryProcessingStage.h>
-
+#include <DataStreams/BlockStreamProfileInfo.h>
 #include <DataStreams/IBlockInputStream.h>
 #include <DataStreams/IBlockOutputStream.h>
-#include <DataStreams/BlockStreamProfileInfo.h>
-
 #include <IO/CompressionSettings.h>
 #include <IO/ConnectionTimeouts.h>
-
+#include <IO/Progress.h>
 #include <Interpreters/Settings.h>
 #include <Interpreters/TablesStatus.h>
+#include <Poco/Net/StreamSocket.h>
+#include <common/logger_useful.h>
 
 #include <atomic>
 
 
 namespace DB
 {
-
 class ClientInfo;
 
 /// The stream of blocks reading from the table and its name
@@ -53,50 +60,29 @@ class Connection : private boost::noncopyable
     friend class MultiplexedConnections;
 
 public:
-    Connection(const String & host_, UInt16 port_, const String & default_database_,
-        const String & user_, const String & password_,
-        const ConnectionTimeouts & timeouts_,
-        const String & client_name_ = "client",
-        Protocol::Compression compression_ = Protocol::Compression::Enable,
-        Protocol::Secure secure_ = Protocol::Secure::Disable,
-        Poco::Timespan sync_request_timeout_ = Poco::Timespan(DBMS_DEFAULT_SYNC_REQUEST_TIMEOUT_SEC, 0))
-        :
-        host(host_), port(port_), default_database(default_database_),
-        user(user_), password(password_), resolved_address(host, port),
-        client_name(client_name_),
-        compression(compression_),
-        secure(secure_),
-        timeouts(timeouts_),
-        sync_request_timeout(sync_request_timeout_),
-        log_wrapper(*this)
-    {
-        /// Don't connect immediately, only on first need.
-
-        if (user.empty())
-            user = "default";
-
-        setDescription();
-    }
-
-    Connection(const String & host_, UInt16 port_, const Poco::Net::SocketAddress & resolved_address_,
+    Connection(
+        const String & host_,
+        UInt16 port_,
         const String & default_database_,
-        const String & user_, const String & password_,
+        const String & user_,
+        const String & password_,
         const ConnectionTimeouts & timeouts_,
         const String & client_name_ = "client",
         Protocol::Compression compression_ = Protocol::Compression::Enable,
         Protocol::Secure secure_ = Protocol::Secure::Disable,
         Poco::Timespan sync_request_timeout_ = Poco::Timespan(DBMS_DEFAULT_SYNC_REQUEST_TIMEOUT_SEC, 0))
-        :
-        host(host_), port(port_),
-        default_database(default_database_),
-        user(user_), password(password_),
-        resolved_address(resolved_address_),
-        client_name(client_name_),
-        compression(compression_),
-        secure(secure_),
-        timeouts(timeouts_),
-        sync_request_timeout(sync_request_timeout_),
-        log_wrapper(*this)
+        : host(host_)
+        , port(port_)
+        , default_database(default_database_)
+        , user(user_)
+        , password(password_)
+        , resolved_address(host, port)
+        , client_name(client_name_)
+        , compression(compression_)
+        , secure(secure_)
+        , timeouts(timeouts_)
+        , sync_request_timeout(sync_request_timeout_)
+        , log_wrapper(*this)
     {
         /// Don't connect immediately, only on first need.
 
@@ -106,7 +92,40 @@ public:
         setDescription();
     }
 
-    virtual ~Connection() {};
+    Connection(
+        const String & host_,
+        UInt16 port_,
+        const Poco::Net::SocketAddress & resolved_address_,
+        const String & default_database_,
+        const String & user_,
+        const String & password_,
+        const ConnectionTimeouts & timeouts_,
+        const String & client_name_ = "client",
+        Protocol::Compression compression_ = Protocol::Compression::Enable,
+        Protocol::Secure secure_ = Protocol::Secure::Disable,
+        Poco::Timespan sync_request_timeout_ = Poco::Timespan(DBMS_DEFAULT_SYNC_REQUEST_TIMEOUT_SEC, 0))
+        : host(host_)
+        , port(port_)
+        , default_database(default_database_)
+        , user(user_)
+        , password(password_)
+        , resolved_address(resolved_address_)
+        , client_name(client_name_)
+        , compression(compression_)
+        , secure(secure_)
+        , timeouts(timeouts_)
+        , sync_request_timeout(sync_request_timeout_)
+        , log_wrapper(*this)
+    {
+        /// Don't connect immediately, only on first need.
+
+        if (user.empty())
+            user = "default";
+
+        setDescription();
+    }
+
+    virtual ~Connection(){};
 
     /// Set throttler of network traffic. One throttler could be used for multiple connections to limit total traffic.
     void setThrottler(const ThrottlerPtr & throttler_)
@@ -125,7 +144,9 @@ public:
         Progress progress;
         BlockStreamProfileInfo profile_info;
 
-        Packet() : type(Protocol::Server::Hello) {}
+        Packet()
+            : type(Protocol::Server::Hello)
+        {}
     };
 
     /// Change default database. Changes will take effect on next reconnect.
@@ -221,8 +242,8 @@ private:
     std::shared_ptr<WriteBuffer> out;
 
     String query_id;
-    Protocol::Compression compression;        /// Enable data compression for communication.
-    Protocol::Secure secure;             /// Enable data encryption for communication.
+    Protocol::Compression compression; /// Enable data compression for communication.
+    Protocol::Secure secure; /// Enable data encryption for communication.
 
     /// What compression settings to use while sending data for INSERT queries and external tables.
     CompressionSettings compression_settings;
@@ -243,25 +264,26 @@ private:
     std::shared_ptr<WriteBuffer> maybe_compressed_out;
     BlockOutputStreamPtr block_out;
 
-    /// Logger is created lazily, for avoid to run DNS request in constructor.
+    /// Poco::Logger is created lazily, for avoid to run DNS request in constructor.
     class LoggerWrapper
     {
     public:
         LoggerWrapper(Connection & parent_)
-            : log(nullptr), parent(parent_)
+            : log(nullptr)
+            , parent(parent_)
         {
         }
 
-        Logger * get()
+        Poco::Logger * get()
         {
             if (!log)
-                log = &Logger::get("Connection (" + parent.getDescription() + ")");
+                log = &Poco::Logger::get("Connection (" + parent.getDescription() + ")");
 
             return log;
         }
 
     private:
-        std::atomic<Logger *> log;
+        std::atomic<Poco::Logger *> log;
         Connection & parent;
     };
 
@@ -282,4 +304,4 @@ private:
     void throwUnexpectedPacket(UInt64 packet_type, const char * expected) const;
 };
 
-}
+} // namespace DB

@@ -1,9 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
 #include <Common/ProfileEvents.h>
 #include <Common/RWLock.h>
 #include <Common/Stopwatch.h>
-
+#include <Common/nocopyable.h>
 
 namespace ProfileEvents
 {
@@ -25,7 +39,6 @@ extern const Metric RWLockActiveWriters;
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
@@ -46,13 +59,12 @@ class RWLock::LockHolderImpl
     GroupsContainer::iterator it_group;
 
 public:
-    LockHolderImpl(const LockHolderImpl & other) = delete;
-    LockHolderImpl & operator=(const LockHolderImpl & other) = delete;
+    DISALLOW_COPY(LockHolderImpl);
 
     /// Implicit memory allocation for query_id is done here
     LockHolderImpl(const String & query_id_, Type type)
-        : query_id{query_id_},
-          active_client_increment{type == Type::Read ? CurrentMetrics::RWLockActiveReaders : CurrentMetrics::RWLockActiveWriters}
+        : query_id{query_id_}
+        , active_client_increment{type == Type::Read ? CurrentMetrics::RWLockActiveReaders : CurrentMetrics::RWLockActiveWriters}
     {}
 
     ~LockHolderImpl()
@@ -95,7 +107,9 @@ private:
   * Note: "SM" in the commentaries below stands for STATE MODIFICATION
   */
 RWLock::LockHolder RWLock::getLock(
-    RWLock::Type type, const String & query_id, const std::chrono::milliseconds & lock_timeout_ms)
+    RWLock::Type type,
+    const String & query_id,
+    const std::chrono::milliseconds & lock_timeout_ms)
 {
     const auto lock_deadline_tp = (lock_timeout_ms == std::chrono::milliseconds(0))
         ? std::chrono::time_point<std::chrono::steady_clock>::max()
@@ -130,10 +144,11 @@ RWLock::LockHolder RWLock::getLock(
             /// Lock upgrading is not supported
             if (type == Write)
                 throw Exception(
-                    "RWLock::getLock(): Cannot acquire exclusive lock while RWLock is already locked", ErrorCodes::LOGICAL_ERROR);
+                    "RWLock::getLock(): Cannot acquire exclusive lock while RWLock is already locked",
+                    ErrorCodes::LOGICAL_ERROR);
 
             /// N.B. Type is Read here, query_id is not empty and owner_query_it is a valid iterator
-            ++owner_query_it->second;                                /// SM1: nothrow
+            ++owner_query_it->second; /// SM1: nothrow
             lock_holder->bindWith(shared_from_this(), rdlock_owner); /// SM2: nothrow
 
             finalize_metrics();
@@ -162,7 +177,9 @@ RWLock::LockHolder RWLock::getLock(
     else
     {
         /// Wait until our group becomes the lock owner
-        const auto predicate = [&]() { return it_group == (type == Read ? rdlock_owner : wrlock_owner); };
+        const auto predicate = [&]() {
+            return it_group == (type == Read ? rdlock_owner : wrlock_owner);
+        };
 
         if (lock_deadline_tp == std::chrono::time_point<std::chrono::steady_clock>::max())
         {
@@ -244,7 +261,7 @@ void RWLock::unlock(GroupsContainer::iterator group_it, const String & query_id)
         const auto owner_query_it = owner_queries.find(query_id);
         if (owner_query_it != owner_queries.end())
         {
-            if (--owner_query_it->second == 0)       /// SM: nothrow
+            if (--owner_query_it->second == 0) /// SM: nothrow
                 owner_queries.erase(owner_query_it); /// SM: nothrow
         }
     }

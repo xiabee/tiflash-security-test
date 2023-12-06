@@ -1,34 +1,41 @@
-#include <Databases/IDatabase.h>
-#include <Storages/System/attachSystemTables.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+#include <Databases/IDatabase.h>
 #include <Storages/System/StorageSystemAsynchronousMetrics.h>
 #include <Storages/System/StorageSystemBuildOptions.h>
-#include <Storages/System/StorageSystemClusters.h>
 #include <Storages/System/StorageSystemColumns.h>
-#include <Storages/System/StorageSystemDatabases.h>
-#include <Storages/System/StorageSystemDictionaries.h>
 #include <Storages/System/StorageSystemDTSegments.h>
 #include <Storages/System/StorageSystemDTTables.h>
+#include <Storages/System/StorageSystemDatabases.h>
+#include <Storages/System/StorageSystemDictionaries.h>
 #include <Storages/System/StorageSystemEvents.h>
 #include <Storages/System/StorageSystemFunctions.h>
 #include <Storages/System/StorageSystemGraphite.h>
 #include <Storages/System/StorageSystemMacros.h>
-#include <Storages/System/StorageSystemMerges.h>
 #include <Storages/System/StorageSystemMetrics.h>
 #include <Storages/System/StorageSystemModels.h>
 #include <Storages/System/StorageSystemNumbers.h>
 #include <Storages/System/StorageSystemOne.h>
-#include <Storages/System/StorageSystemParts.h>
-#include <Storages/System/StorageSystemPartsColumns.h>
 #include <Storages/System/StorageSystemProcesses.h>
 #include <Storages/System/StorageSystemSettings.h>
 #include <Storages/System/StorageSystemTables.h>
-#include <Storages/System/StorageSystemZooKeeper.h>
+#include <Storages/System/attachSystemTables.h>
 
 
 namespace DB
 {
-
 void attachSystemTablesLocal(IDatabase & system_database)
 {
     system_database.attachTable("one", StorageSystemOne::create("one"));
@@ -45,22 +52,15 @@ void attachSystemTablesLocal(IDatabase & system_database)
     system_database.attachTable("build_options", StorageSystemBuildOptions::create("build_options"));
 }
 
-void attachSystemTablesServer(IDatabase & system_database, bool has_zookeeper)
+void attachSystemTablesServer(IDatabase & system_database)
 {
     attachSystemTablesLocal(system_database);
-    system_database.attachTable("parts", StorageSystemParts::create("parts"));
-    system_database.attachTable("parts_columns", StorageSystemPartsColumns::create("parts_columns"));
     system_database.attachTable("processes", StorageSystemProcesses::create("processes"));
     system_database.attachTable("metrics", StorageSystemMetrics::create("metrics"));
-    system_database.attachTable("merges", StorageSystemMerges::create("merges"));
     system_database.attachTable("dictionaries", StorageSystemDictionaries::create("dictionaries"));
     system_database.attachTable("models", StorageSystemModels::create("models"));
-    system_database.attachTable("clusters", StorageSystemClusters::create("clusters"));
     system_database.attachTable("graphite_retentions", StorageSystemGraphite::create("graphite_retentions"));
     system_database.attachTable("macros", StorageSystemMacros::create("macros"));
-
-    if (has_zookeeper)
-        system_database.attachTable("zookeeper", StorageSystemZooKeeper::create("zookeeper"));
 }
 
 void attachSystemTablesAsync(IDatabase & system_database, AsynchronousMetrics & async_metrics)
@@ -68,4 +68,4 @@ void attachSystemTablesAsync(IDatabase & system_database, AsynchronousMetrics & 
     system_database.attachTable("asynchronous_metrics", StorageSystemAsynchronousMetrics::create("asynchronous_metrics", async_metrics));
 }
 
-}
+} // namespace DB

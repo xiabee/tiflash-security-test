@@ -1,18 +1,31 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Columns/IColumn.h>
 #include <Columns/ColumnVector.h>
+#include <Columns/IColumn.h>
 #include <Core/Defines.h>
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int ILLEGAL_COLUMN;
-    extern const int NOT_IMPLEMENTED;
-    extern const int BAD_ARGUMENTS;
-}
+extern const int ILLEGAL_COLUMN;
+extern const int NOT_IMPLEMENTED;
+extern const int BAD_ARGUMENTS;
+} // namespace ErrorCodes
 
 /** A column of array values.
   * In memory, it is represented as one column of a nested type, whose size is equal to the sum of the sizes of all arrays,
@@ -47,8 +60,11 @@ public:
         return ColumnArray::create(nested_column->assumeMutable());
     }
 
-    template <typename ... Args, typename = typename std::enable_if<IsMutableColumns<Args ...>::value>::type>
-    static MutablePtr create(Args &&... args) { return Base::create(std::forward<Args>(args)...); }
+    template <typename... Args, typename = typename std::enable_if<IsMutableColumns<Args...>::value>::type>
+    static MutablePtr create(Args &&... args)
+    {
+        return Base::create(std::forward<Args>(args)...);
+    }
 
     /** On the index i there is an offset to the beginning of the i + 1 -th element. */
     using ColumnOffsets = ColumnVector<Offset>;
@@ -61,15 +77,17 @@ public:
     void get(size_t n, Field & res) const override;
     StringRef getDataAt(size_t n) const override;
     void insertData(const char * pos, size_t length) override;
-    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
-    const char * deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator>) override;
-    void updateHashWithValue(size_t n, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override;
-    void updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const override;
+    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
+    const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override;
+    void updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
     void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;
     void insert(const Field & x) override;
     void insertFrom(const IColumn & src_, size_t n) override;
     void insertDefault() override;
     void popBack(size_t n) override;
+    /// TODO: If result_size_hint < 0, makes reserve() using size of filtered column, not source column to avoid some OOM issues.
     ColumnPtr filter(const Filter & filt, ssize_t result_size_hint) const override;
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
     int compareAt(size_t n, size_t m, const IColumn & rhs_, int nan_direction_hint) const override;
@@ -160,4 +178,4 @@ private:
 };
 
 
-}
+} // namespace DB

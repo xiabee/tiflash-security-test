@@ -1,22 +1,37 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsConversion.h>
 
 namespace DB
 {
-
 void throwExceptionForIncompletelyParsedValue(
-    ReadBuffer & read_buffer, Block & block, size_t result)
+    ReadBuffer & read_buffer,
+    Block & block,
+    size_t result)
 {
     const IDataType & to_type = *block.getByPosition(result).type;
 
     WriteBufferFromOwnString message_buf;
     message_buf << "Cannot parse string " << quote << String(read_buffer.buffer().begin(), read_buffer.buffer().size())
-        << " as " << to_type.getName()
-        << ": syntax error";
+                << " as " << to_type.getName()
+                << ": syntax error";
 
     if (read_buffer.offset())
         message_buf << " at position " << read_buffer.offset()
-            << " (parsed just " << quote << String(read_buffer.buffer().begin(), read_buffer.offset()) << ")";
+                    << " (parsed just " << quote << String(read_buffer.buffer().begin(), read_buffer.offset()) << ")";
     else
         message_buf << " at begin of string";
 
@@ -27,8 +42,14 @@ void throwExceptionForIncompletelyParsedValue(
 }
 
 
-struct NameTiDBUnixTimeStampInt { static constexpr auto name = "tidbUnixTimeStampInt"; };
-struct NameTiDBUnixTimeStampDec { static constexpr auto name = "tidbUnixTimeStampDec"; };
+struct NameTiDBUnixTimeStampInt
+{
+    static constexpr auto name = "tidbUnixTimeStampInt";
+};
+struct NameTiDBUnixTimeStampDec
+{
+    static constexpr auto name = "tidbUnixTimeStampDec";
+};
 
 template <typename Name>
 class FunctionTiDBUnixTimeStamp : public IFunction
@@ -36,7 +57,8 @@ class FunctionTiDBUnixTimeStamp : public IFunction
 public:
     static constexpr auto name = Name::name;
     static FunctionPtr create(const Context & context) { return std::make_shared<FunctionTiDBUnixTimeStamp>(context); };
-    explicit FunctionTiDBUnixTimeStamp(const Context & context) : timezone_(context.getTimezoneInfo()){};
+    explicit FunctionTiDBUnixTimeStamp(const Context & context)
+        : timezone_info(context.getTimezoneInfo()){};
 
     String getName() const override
     {
@@ -58,13 +80,13 @@ public:
         int fsp = 0;
         if (checkDataType<DataTypeMyDateTime>(arguments[0].type.get()))
         {
-            auto & datetimeType = dynamic_cast<const DataTypeMyDateTime &>(*arguments[0].type);
-            fsp = datetimeType.getFraction();
+            const auto & datetime_type = dynamic_cast<const DataTypeMyDateTime &>(*arguments[0].type);
+            fsp = datetime_type.getFraction();
         }
-        return std::make_shared<DataTypeDecimal64>(12+fsp, fsp);
+        return std::make_shared<DataTypeDecimal64>(12 + fsp, fsp);
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) const override
     {
         const auto & col_with_type_and_name = block.getByPosition(arguments[0]);
 
@@ -95,8 +117,8 @@ public:
             int fsp = 0, multiplier = 1, divider = 1'000'000;
             if (checkDataType<DataTypeMyDateTime>(col_with_type_and_name.type.get()))
             {
-                auto & datetimeType = dynamic_cast<const DataTypeMyDateTime &>(*col_with_type_and_name.type);
-                fsp = datetimeType.getFraction();
+                const auto & datetime_type = dynamic_cast<const DataTypeMyDateTime &>(*col_with_type_and_name.type);
+                fsp = datetime_type.getFraction();
             }
             multiplier = getScaleMultiplier<Decimal64>(fsp);
             divider = 1'000'000 / multiplier;
@@ -122,26 +144,35 @@ public:
     }
 
 private:
-    const TimezoneInfo & timezone_;
+    const TimezoneInfo & timezone_info;
 
-    bool getUnixTimeStampHelper(UInt64 packed, UInt64 & ret)
+    bool getUnixTimeStampHelper(UInt64 packed, UInt64 & ret) const
     {
-        static const auto lut_utc = DateLUT::instance("UTC");
-
-        if (timezone_.is_name_based)
-            convertTimeZone(packed, ret, *timezone_.timezone, lut_utc);
-        else
-            convertTimeZoneByOffset(packed, ret, -timezone_.timezone_offset, lut_utc);
-
         try
         {
-            ret = getEpochSecond(ret, lut_utc);
+            time_t epoch_second = getEpochSecond(MyDateTime(packed), *timezone_info.timezone);
+            if (!timezone_info.is_name_based)
+                epoch_second -= timezone_info.timezone_offset;
+            if (epoch_second <= 0)
+            {
+                ret = 0;
+                return false;
+            }
+            else if unlikely (epoch_second > std::numeric_limits<Int32>::max())
+            {
+                ret = 0;
+                return false;
+            }
+            else
+            {
+                ret = epoch_second;
+                return true;
+            }
         }
         catch (...)
         {
             return false;
         }
-        return true;
     }
 };
 
@@ -215,4 +246,4 @@ void registerFunctionsConversion(FunctionFactory & factory)
     factory.registerFunction<FunctionStrToDate<NameStrToDateDatetime>>();
 }
 
-}
+} // namespace DB

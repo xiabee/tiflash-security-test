@@ -1,25 +1,30 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
+
+#include <Columns/ColumnFixedString.h>
+#include <Columns/ColumnsNumber.h>
+#include <Columns/IColumn.h>
+#include <Common/Arena.h>
+#include <Common/HashTable/Hash.h>
+#include <Common/SipHash.h>
 
 #include <array>
 
-#include <Common/SipHash.h>
-#include <Common/Arena.h>
-#include <Common/UInt128.h>
-#include <Common/HashTable/Hash.h>
-#include <Core/Defines.h>
-#include <common/StringRef.h>
-#include <Columns/IColumn.h>
-#include <Columns/ColumnsNumber.h>
-#include <Columns/ColumnFixedString.h>
-
-
-template <>
-struct DefaultHash<StringRef> : public StringRefHash {};
-
-
 namespace DB
 {
-
 using Sizes = std::vector<size_t>;
 
 /// When packing the values of nullable columns at a given row, we have to
@@ -39,25 +44,14 @@ using Sizes = std::vector<size_t>;
 
 namespace
 {
-
 template <typename T>
 constexpr auto getBitmapSize()
 {
-    return
-        (sizeof(T) == 32) ?
-            4 :
-        (sizeof(T) == 16) ?
-            2 :
-        ((sizeof(T) == 8) ?
-            1 :
-        ((sizeof(T) == 4) ?
-            1 :
-        ((sizeof(T) == 2) ?
-            1 :
-        0)));
+    return (sizeof(T) == 32) ? 4 : (sizeof(T) == 16) ? 2
+                                                     : ((sizeof(T) == 8) ? 1 : ((sizeof(T) == 4) ? 1 : ((sizeof(T) == 2) ? 1 : 0)));
 }
 
-}
+} // namespace
 
 template <typename T>
 using KeysNullMap = std::array<UInt8, getBitmapSize<T>()>;
@@ -66,7 +60,10 @@ using KeysNullMap = std::array<UInt8, getBitmapSize<T>()>;
 /// binary blob, they are disposed in it consecutively.
 template <typename T>
 static inline T ALWAYS_INLINE packFixed(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, const Sizes & key_sizes)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    const Sizes & key_sizes)
 {
     union
     {
@@ -80,25 +77,25 @@ static inline T ALWAYS_INLINE packFixed(
     {
         switch (key_sizes[j])
         {
-            case 1:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt8 *>(key_columns[j])->getData()[i], 1);
-                offset += 1;
-                break;
-            case 2:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt16 *>(key_columns[j])->getData()[i], 2);
-                offset += 2;
-                break;
-            case 4:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt32 *>(key_columns[j])->getData()[i], 4);
-                offset += 4;
-                break;
-            case 8:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt64 *>(key_columns[j])->getData()[i], 8);
-                offset += 8;
-                break;
-            default:
-                memcpy(bytes + offset, &static_cast<const ColumnFixedString *>(key_columns[j])->getChars()[i * key_sizes[j]], key_sizes[j]);
-                offset += key_sizes[j];
+        case 1:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt8 *>(key_columns[j])->getData()[i], 1);
+            offset += 1;
+            break;
+        case 2:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt16 *>(key_columns[j])->getData()[i], 2);
+            offset += 2;
+            break;
+        case 4:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt32 *>(key_columns[j])->getData()[i], 4);
+            offset += 4;
+            break;
+        case 8:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt64 *>(key_columns[j])->getData()[i], 8);
+            offset += 8;
+            break;
+        default:
+            memcpy(bytes + offset, &static_cast<const ColumnFixedString *>(key_columns[j])->getChars()[i * key_sizes[j]], key_sizes[j]);
+            offset += key_sizes[j];
         }
     }
 
@@ -108,7 +105,10 @@ static inline T ALWAYS_INLINE packFixed(
 /// Similar as above but supports nullable values.
 template <typename T>
 static inline T ALWAYS_INLINE packFixed(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, const Sizes & key_sizes,
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    const Sizes & key_sizes,
     const KeysNullMap<T> & bitmap)
 {
     union
@@ -146,25 +146,25 @@ static inline T ALWAYS_INLINE packFixed(
 
         switch (key_sizes[j])
         {
-            case 1:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt8 *>(key_columns[j])->getData()[i], 1);
-                offset += 1;
-                break;
-            case 2:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt16 *>(key_columns[j])->getData()[i], 2);
-                offset += 2;
-                break;
-            case 4:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt32 *>(key_columns[j])->getData()[i], 4);
-                offset += 4;
-                break;
-            case 8:
-                memcpy(bytes + offset, &static_cast<const ColumnUInt64 *>(key_columns[j])->getData()[i], 8);
-                offset += 8;
-                break;
-            default:
-                memcpy(bytes + offset, &static_cast<const ColumnFixedString *>(key_columns[j])->getChars()[i * key_sizes[j]], key_sizes[j]);
-                offset += key_sizes[j];
+        case 1:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt8 *>(key_columns[j])->getData()[i], 1);
+            offset += 1;
+            break;
+        case 2:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt16 *>(key_columns[j])->getData()[i], 2);
+            offset += 2;
+            break;
+        case 4:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt32 *>(key_columns[j])->getData()[i], 4);
+            offset += 4;
+            break;
+        case 8:
+            memcpy(bytes + offset, &static_cast<const ColumnUInt64 *>(key_columns[j])->getData()[i], 8);
+            offset += 8;
+            break;
+        default:
+            memcpy(bytes + offset, &static_cast<const ColumnFixedString *>(key_columns[j])->getChars()[i * key_sizes[j]], key_sizes[j]);
+            offset += key_sizes[j];
         }
     }
 
@@ -174,7 +174,12 @@ static inline T ALWAYS_INLINE packFixed(
 
 /// Hash a set of keys into a UInt128 value.
 static inline UInt128 ALWAYS_INLINE hash128(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, StringRefs & keys, const TiDB::TiDBCollators & collators, std::vector<String> & sort_key_containers)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    StringRefs & keys,
+    const TiDB::TiDBCollators & collators,
+    std::vector<String> & sort_key_containers)
 {
     UInt128 key;
     SipHash hash;
@@ -193,7 +198,7 @@ static inline UInt128 ALWAYS_INLINE hash128(
         hash.update(keys[j].data, keys[j].size);
     }
 
-    hash.get128(key.low, key.high);
+    hash.get128(key);
 
     return key;
 }
@@ -201,7 +206,11 @@ static inline UInt128 ALWAYS_INLINE hash128(
 
 /// Almost the same as above but it doesn't return any reference to key data.
 static inline UInt128 ALWAYS_INLINE hash128(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, const TiDB::TiDBCollators & collators, std::vector<std::string> & sort_key_containers)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    const TiDB::TiDBCollators & collators,
+    std::vector<std::string> & sort_key_containers)
 {
     UInt128 key;
     SipHash hash;
@@ -217,7 +226,7 @@ static inline UInt128 ALWAYS_INLINE hash128(
             key_columns[j]->updateHashWithValue(i, hash, collators[j], sort_key_containers[j]);
     }
 
-    hash.get128(key.low, key.high);
+    hash.get128(key);
 
     return key;
 }
@@ -225,12 +234,14 @@ static inline UInt128 ALWAYS_INLINE hash128(
 
 /// Copy keys to the pool. Then put into pool StringRefs to them and return the pointer to the first.
 static inline StringRef * ALWAYS_INLINE placeKeysInPool(
-    size_t keys_size, StringRefs & keys, Arena & pool)
+    size_t keys_size,
+    StringRefs & keys,
+    Arena & pool)
 {
     for (size_t j = 0; j < keys_size; ++j)
     {
         char * place = pool.alloc(keys[j].size);
-        memcpy(place, keys[j].data, keys[j].size);        /// TODO padding in Arena and memcpySmall
+        memcpy(place, keys[j].data, keys[j].size); /// TODO padding in Arena and memcpySmall
         keys[j].data = place;
     }
 
@@ -244,7 +255,11 @@ static inline StringRef * ALWAYS_INLINE placeKeysInPool(
 
 /// Copy keys to the pool. Then put into pool StringRefs to them and return the pointer to the first.
 static inline StringRef * ALWAYS_INLINE extractKeysAndPlaceInPool(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, StringRefs & keys, Arena & pool)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    StringRefs & keys,
+    Arena & pool)
 {
     for (size_t j = 0; j < keys_size; ++j)
     {
@@ -276,7 +291,13 @@ static inline StringRef * ALWAYS_INLINE extractKeysAndPlaceInPool(
 /// Return a StringRef object, referring to the area (1) of the memory
 /// chunk that contains the keys. In other words, we ignore their StringRefs.
 inline StringRef ALWAYS_INLINE extractKeysAndPlaceInPoolContiguous(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, StringRefs & keys, const TiDB::TiDBCollators & collators, std::vector<std::string> & sort_key_containers, Arena & pool)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    StringRefs & keys,
+    const TiDB::TiDBCollators & collators,
+    std::vector<std::string> & sort_key_containers,
+    Arena & pool)
 {
     size_t sum_keys_size = 0;
     for (size_t j = 0; j < keys_size; ++j)
@@ -310,7 +331,12 @@ inline StringRef ALWAYS_INLINE extractKeysAndPlaceInPoolContiguous(
 /** Serialize keys into a continuous chunk of memory.
   */
 static inline StringRef ALWAYS_INLINE serializeKeysToPoolContiguous(
-    size_t i, size_t keys_size, const ColumnRawPtrs & key_columns, const TiDB::TiDBCollators & collators, std::vector<String> & sort_key_containers, Arena & pool)
+    size_t i,
+    size_t keys_size,
+    const ColumnRawPtrs & key_columns,
+    const TiDB::TiDBCollators & collators,
+    std::vector<String> & sort_key_containers,
+    Arena & pool)
 {
     const char * begin = nullptr;
 
@@ -318,18 +344,99 @@ static inline StringRef ALWAYS_INLINE serializeKeysToPoolContiguous(
     if (!collators.empty())
     {
         for (size_t j = 0; j < keys_size; ++j)
-            sum_size += key_columns[j]->serializeValueIntoArena(i, pool, begin, collators[j],
-                                                                sort_key_containers[j]).size;
+            sum_size += key_columns[j]->serializeValueIntoArena(i, pool, begin, collators[j], sort_key_containers[j]).size;
     }
     else
     {
         for (size_t j = 0; j < keys_size; ++j)
-            sum_size += key_columns[j]->serializeValueIntoArena(i, pool, begin, nullptr,
-                                                                TiDB::dummy_sort_key_contaner).size;
+            sum_size += key_columns[j]->serializeValueIntoArena(i, pool, begin, nullptr, TiDB::dummy_sort_key_contaner).size;
     }
 
     return {begin, sum_size};
 }
 
+/** Pack elements with shuffle instruction.
+  * See the explanation in ColumnsHashing.h
+  */
+#if defined(__SSSE3__) && !defined(MEMORY_SANITIZER)
+template <typename T>
+static T inline packFixedShuffle(
+    const char * __restrict * __restrict srcs,
+    size_t num_srcs,
+    const size_t * __restrict elem_sizes,
+    size_t idx,
+    const uint8_t * __restrict masks)
+{
+    assert(num_srcs > 0);
 
+    __m128i res = _mm_shuffle_epi8(
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(srcs[0] + elem_sizes[0] * idx)),
+        _mm_loadu_si128(reinterpret_cast<const __m128i *>(masks)));
+
+    for (size_t i = 1; i < num_srcs; ++i)
+    {
+        res = _mm_xor_si128(res,
+                            _mm_shuffle_epi8(
+                                _mm_loadu_si128(reinterpret_cast<const __m128i *>(srcs[i] + elem_sizes[i] * idx)),
+                                _mm_loadu_si128(reinterpret_cast<const __m128i *>(&masks[i * sizeof(T)]))));
+    }
+
+    T out;
+    __builtin_memcpy(&out, &res, sizeof(T));
+    return out;
 }
+#endif
+
+
+template <typename T, size_t step>
+void fillFixedBatch(size_t num_rows, const T * source, T * dest)
+{
+    for (size_t i = 0; i < num_rows; ++i)
+    {
+        *dest = *source;
+        ++source;
+        dest += step;
+    }
+}
+
+/// Move keys of size T into binary blob, starting from offset.
+/// It is assumed that offset is aligned to sizeof(T).
+/// Example: sizeof(key) = 16, sizeof(T) = 4, offset = 8
+/// out[0] : [--------****----]
+/// out[1] : [--------****----]
+/// ...
+template <typename T, typename Key>
+void fillFixedBatch(size_t keys_size, const ColumnRawPtrs & key_columns, const Sizes & key_sizes, PaddedPODArray<Key> & out, size_t & offset)
+{
+    for (size_t i = 0; i < keys_size; ++i)
+    {
+        if (key_sizes[i] == sizeof(T))
+        {
+            const auto * column = key_columns[i];
+            size_t num_rows = column->size();
+            out.resize_fill(num_rows);
+
+            /// Note: here we violate strict aliasing.
+            /// It should be ok as log as we do not reffer to any value from `out` before filling.
+            const char * source = static_cast<const ColumnVectorHelper *>(column)->getRawDataBegin<sizeof(T)>();
+            T * dest = reinterpret_cast<T *>(reinterpret_cast<char *>(out.data()) + offset);
+            fillFixedBatch<T, sizeof(Key) / sizeof(T)>(num_rows, reinterpret_cast<const T *>(source), dest);
+            offset += sizeof(T);
+        }
+    }
+}
+
+/// Pack into a binary blob of type T a set of fixed-size keys. Granted that all the keys fit into the
+/// binary blob. Keys are placed starting from the longest one.
+template <typename T>
+void packFixedBatch(size_t keys_size, const ColumnRawPtrs & key_columns, const Sizes & key_sizes, PaddedPODArray<T> & out)
+{
+    size_t offset = 0;
+    fillFixedBatch<UInt128>(keys_size, key_columns, key_sizes, out, offset);
+    fillFixedBatch<UInt64>(keys_size, key_columns, key_sizes, out, offset);
+    fillFixedBatch<UInt32>(keys_size, key_columns, key_sizes, out, offset);
+    fillFixedBatch<UInt16>(keys_size, key_columns, key_sizes, out, offset);
+    fillFixedBatch<UInt8>(keys_size, key_columns, key_sizes, out, offset);
+}
+
+} // namespace DB

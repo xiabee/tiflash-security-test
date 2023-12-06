@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/Stopwatch.h>
 #include <Databases/DatabasesCommon.h>
 #include <Encryption/ReadBufferFromFileProvider.h>
@@ -11,13 +25,14 @@
 #include <Storages/PrimaryKeyNotMatchException.h>
 #include <Storages/StorageFactory.h>
 #include <common/ThreadPool.h>
+#include <common/logger_useful.h>
+#include <fmt/core.h>
 
 #include <sstream>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
 extern const int EMPTY_LIST_OF_COLUMNS_PASSED;
@@ -83,12 +98,12 @@ String getDatabaseDefinitionFromCreateQuery(const ASTPtr & query)
 
 
 std::pair<String, StoragePtr> createTableFromDefinition(const String & definition,
-    const String & database_name,
-    const String & database_data_path,
-    const String & database_engine,
-    Context & context,
-    bool has_force_restore_data_flag,
-    const String & description_for_error_message)
+                                                        const String & database_name,
+                                                        const String & database_data_path,
+                                                        const String & database_engine,
+                                                        Context & context,
+                                                        bool has_force_restore_data_flag,
+                                                        const String & description_for_error_message)
 {
     ParserCreateQuery parser;
     ASTPtr ast = parseQuery(parser, definition.data(), definition.data() + definition.size(), description_for_error_message, 0);
@@ -106,20 +121,19 @@ std::pair<String, StoragePtr> createTableFromDefinition(const String & definitio
     ColumnsDescription columns = InterpreterCreateQuery::getColumnsDescription(*ast_create_query.columns, context);
 
     return {ast_create_query.table,
-        StorageFactory::instance().get(ast_create_query, database_data_path, ast_create_query.table, database_name, database_engine,
-            context, context.getGlobalContext(), columns, true, has_force_restore_data_flag)};
+            StorageFactory::instance().get(ast_create_query, database_data_path, ast_create_query.table, database_name, database_engine, context, context.getGlobalContext(), columns, true, has_force_restore_data_flag)};
 }
 
 
 bool DatabaseWithOwnTablesBase::isTableExist(const Context & /*context*/, const String & table_name) const
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     return tables.find(table_name) != tables.end();
 }
 
 StoragePtr DatabaseWithOwnTablesBase::tryGetTable(const Context & /*context*/, const String & table_name) const
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     auto it = tables.find(table_name);
     if (it == tables.end())
         return {};
@@ -128,13 +142,13 @@ StoragePtr DatabaseWithOwnTablesBase::tryGetTable(const Context & /*context*/, c
 
 DatabaseIteratorPtr DatabaseWithOwnTablesBase::getIterator(const Context & /*context*/)
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     return std::make_unique<DatabaseSnapshotIterator>(tables);
 }
 
 bool DatabaseWithOwnTablesBase::empty(const Context & /*context*/) const
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     return tables.empty();
 }
 
@@ -142,10 +156,10 @@ StoragePtr DatabaseWithOwnTablesBase::detachTable(const String & table_name)
 {
     StoragePtr res;
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         auto it = tables.find(table_name);
         if (it == tables.end())
-            throw Exception("Table " + name + "." + table_name + " doesn't exist.", ErrorCodes::UNKNOWN_TABLE);
+            throw Exception(fmt::format("Table {}.{} dosen't exist.", name, table_name), ErrorCodes::UNKNOWN_TABLE);
         res = it->second;
         tables.erase(it);
     }
@@ -155,9 +169,9 @@ StoragePtr DatabaseWithOwnTablesBase::detachTable(const String & table_name)
 
 void DatabaseWithOwnTablesBase::attachTable(const String & table_name, const StoragePtr & table)
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     if (!tables.emplace(table_name, table).second)
-        throw Exception("Table " + name + "." + table_name + " already exists.", ErrorCodes::TABLE_ALREADY_EXISTS);
+        throw Exception(fmt::format("Table {}.{} already exists.", name, table_name), ErrorCodes::TABLE_ALREADY_EXISTS);
 }
 
 void DatabaseWithOwnTablesBase::shutdown()
@@ -167,7 +181,7 @@ void DatabaseWithOwnTablesBase::shutdown()
 
     Tables tables_snapshot;
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard lock(mutex);
         tables_snapshot = tables;
     }
 
@@ -176,7 +190,7 @@ void DatabaseWithOwnTablesBase::shutdown()
         kv.second->shutdown();
     }
 
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard lock(mutex);
     tables.clear();
 }
 
@@ -184,7 +198,7 @@ DatabaseWithOwnTablesBase::~DatabaseWithOwnTablesBase()
 {
     try
     {
-        shutdown();
+        DatabaseWithOwnTablesBase::shutdown();
     }
     catch (...)
     {
@@ -194,7 +208,6 @@ DatabaseWithOwnTablesBase::~DatabaseWithOwnTablesBase()
 
 namespace DatabaseLoading
 {
-
 ASTPtr getQueryFromMetadata(const Context & context, const String & metadata_path, bool throw_on_error)
 {
     if (!Poco::File(metadata_path).exists())
@@ -210,7 +223,8 @@ ASTPtr getQueryFromMetadata(const Context & context, const String & metadata_pat
     const char * pos = query.data();
     std::string error_message;
     auto ast = tryParseQuery(parser, pos, pos + query.size(), error_message, /* hilite = */ false, "in file " + metadata_path,
-        /* allow_multi_statements = */ false, 0);
+                             /* allow_multi_statements = */ false,
+                             0);
 
     if (!ast && throw_on_error)
         throw Exception(error_message, ErrorCodes::SYNTAX_ERROR);
@@ -252,7 +266,7 @@ std::vector<String> listSQLFilenames(const String & meta_dir, Poco::Logger * log
         /// There are files .sql.tmp - delete.
         if (endsWith(dir_it.name(), ".sql.tmp"))
         {
-            LOG_INFO(log, "Removing file " << dir_it->path());
+            LOG_FMT_INFO(log, "Removing file {}", dir_it->path());
             Poco::File(dir_it->path()).remove();
             continue;
         }
@@ -262,21 +276,22 @@ std::vector<String> listSQLFilenames(const String & meta_dir, Poco::Logger * log
             filenames.push_back(dir_it.name());
         else
             throw Exception(
-                "Incorrect file extension: " + dir_it.name() + " in metadata directory " + meta_dir, ErrorCodes::INCORRECT_FILE_NAME);
+                fmt::format("Incorrect file extension: {} in metadata directory {}", dir_it.name(), meta_dir),
+                ErrorCodes::INCORRECT_FILE_NAME);
     }
     return filenames;
 }
 
 void loadTable(Context & context,
-    IDatabase & database,
-    const String & database_metadata_path,
-    const String & database_name,
-    const String & database_data_path,
-    const String & database_engine,
-    const String & file_name,
-    bool has_force_restore_data_flag)
+               IDatabase & database,
+               const String & database_metadata_path,
+               const String & database_name,
+               const String & database_data_path,
+               const String & database_engine,
+               const String & file_name,
+               bool has_force_restore_data_flag)
 {
-    Logger * log = &Logger::get("loadTable");
+    Poco::Logger * log = &Poco::Logger::get("loadTable");
     const String table_metadata_path = database_metadata_path + (endsWith(database_metadata_path, "/") ? "" : "/") + file_name;
 
     String s;
@@ -290,7 +305,7 @@ void loadTable(Context & context,
       */
     if (s.empty())
     {
-        LOG_ERROR(log, "File " << table_metadata_path << " is empty. Removing.");
+        LOG_FMT_ERROR(log, "File {} is empty. Removing.", table_metadata_path);
         Poco::File(table_metadata_path).remove();
         return;
     }
@@ -301,23 +316,24 @@ void loadTable(Context & context,
         StoragePtr table;
         try
         {
-            std::tie(table_name, table) = createTableFromDefinition(s, database_name, database_data_path, database_engine, context,
-                has_force_restore_data_flag, "in file " + table_metadata_path);
+            std::tie(table_name, table) = createTableFromDefinition(s, database_name, database_data_path, database_engine, context, has_force_restore_data_flag, "in file " + table_metadata_path);
         }
         catch (const PrimaryKeyNotMatchException & pri_key_ex)
         {
             // Replace the primary key and update statement in `table_metadata_path`. The correct statement will be return.
             const String statement = fixCreateStatementWithPriKeyNotMatchException(context, s, table_metadata_path, pri_key_ex, log);
             // Then try to load with correct statement.
-            std::tie(table_name, table) = createTableFromDefinition(statement, database_name, database_data_path, database_engine, context,
-                has_force_restore_data_flag, "in file " + table_metadata_path);
+            std::tie(table_name, table) = createTableFromDefinition(statement, database_name, database_data_path, database_engine, context, has_force_restore_data_flag, "in file " + table_metadata_path);
         }
         database.attachTable(table_name, table);
     }
     catch (const Exception & e)
     {
-        throw Exception("Cannot create table from metadata file " + table_metadata_path + ", error: " + e.displayText() + ", stack trace:\n"
-                + e.getStackTrace().toString(),
+        throw Exception(
+            fmt::format("Cannot create table from metadata file {}, error: {}, stack trace:\n{}",
+                        table_metadata_path,
+                        e.displayText(),
+                        e.getStackTrace().toString()),
             ErrorCodes::CANNOT_CREATE_TABLE_FROM_METADATA);
     }
 }
@@ -332,10 +348,10 @@ void cleanupTables(IDatabase & database, const String & db_name, const Tables & 
     if (tables.empty())
         return;
 
-    for (auto it = tables.begin(); it != tables.end(); ++it)
+    for (const auto & table : tables)
     {
-        const String & table_name = it->first;
-        LOG_WARNING(log, "Detected startup failed table " + db_name + "." + table_name + ", removing it from TiFlash");
+        const String & table_name = table.first;
+        LOG_FMT_WARNING(log, "Detected startup failed table {}.{}, removing it from TiFlash", db_name, table_name);
         const String table_meta_path = database.getTableMetadataPath(table_name);
         if (!table_meta_path.empty())
         {
@@ -348,7 +364,7 @@ void cleanupTables(IDatabase & database, const String & db_name, const Tables & 
 
 void startupTables(IDatabase & database, const String & db_name, Tables & tables, ThreadPool * thread_pool, Poco::Logger * log)
 {
-    LOG_INFO(log, "Starting up " << tables.size() << " tables.");
+    LOG_FMT_INFO(log, "Starting up {} tables.", tables.size());
 
     AtomicStopwatch watch;
     std::atomic<size_t> tables_processed{0};
@@ -362,7 +378,7 @@ void startupTables(IDatabase & database, const String & db_name, Tables & tables
         {
             if ((++tables_processed) % PRINT_MESSAGE_EACH_N_TABLES == 0 || watch.compareAndRestart(PRINT_MESSAGE_EACH_N_SECONDS))
             {
-                LOG_INFO(log, DB::toString(tables_processed * 100.0 / total_tables, 2) << "%");
+                LOG_FMT_INFO(log, "{:.2f}%", tables_processed * 100.0 / total_tables);
                 watch.restart();
             }
 
@@ -402,7 +418,9 @@ void startupTables(IDatabase & database, const String & db_name, Tables & tables
         else
             std::advance(end, bunch_size);
 
-        auto task = std::bind(task_function, begin, end);
+        auto task = [&task_function, begin, end] {
+            task_function(begin, end);
+        };
 
         if (thread_pool)
             thread_pool->schedule(task);

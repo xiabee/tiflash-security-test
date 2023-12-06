@@ -1,13 +1,28 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <DataTypes/DataTypeString.h>
 #include <Columns/ColumnString.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/StringView.h>
 #include <Common/typeid_cast.h>
+#include <DataTypes/DataTypeString.h>
 #include <Functions/FunctionHelpers.h>
 #include <Functions/FunctionsString.h>
 #include <Functions/FunctionsStringArray.h>
+#include <fmt/core.h>
 
 #ifdef __APPLE__
 #include <common/apple_memrchr.h>
@@ -16,7 +31,6 @@
 
 namespace DB
 {
-
 /** URL processing functions.
   * All functions are not strictly follow RFC, instead they are maximally simplified for performance reasons.
   *
@@ -107,7 +121,7 @@ inline StringView getURLHost(const StringView & url)
     if (end - pos < 2 || *(pos) != '/' || *(pos + 1) != '/')
         return StringView();
 
-    const char *start_of_host = (pos += 2);
+    const char * start_of_host = (pos += 2);
     for (; pos < end; ++pos)
     {
         if (*pos == '@')
@@ -178,10 +192,10 @@ struct ExtractFirstSignificantSubdomain
         res_data = tmp;
         res_size = domain_length;
 
-        auto begin = tmp;
-        auto end = begin + domain_length;
+        const auto * begin = tmp;
+        const auto * end = begin + domain_length;
         const char * last_3_periods[3]{};
-        auto pos = static_cast<const char *>(memchr(begin, '.', domain_length));
+        const auto * pos = static_cast<const char *>(memchr(begin, '.', domain_length));
 
         while (pos)
         {
@@ -203,7 +217,7 @@ struct ExtractFirstSignificantSubdomain
         if (!last_3_periods[2])
             last_3_periods[2] = begin - 1;
 
-        if (!strncmp(last_3_periods[1] + 1, "com.", 4)        /// Note that in ColumnString every value has zero byte after it.
+        if (!strncmp(last_3_periods[1] + 1, "com.", 4) /// Note that in ColumnString every value has zero byte after it.
             || !strncmp(last_3_periods[1] + 1, "net.", 4)
             || !strncmp(last_3_periods[1] + 1, "org.", 4)
             || !strncmp(last_3_periods[1] + 1, "co.", 3))
@@ -408,7 +422,7 @@ struct ExtractWWW
             if (end - pos < 2 || *(pos) != '/' || *(pos + 1) != '/')
                 return;
 
-            const char *start_of_host = (pos += 2);
+            const char * start_of_host = (pos += 2);
             for (; pos < end; ++pos)
             {
                 if (*pos == '@')
@@ -430,11 +444,12 @@ struct ExtractWWW
 struct ExtractURLParameterImpl
 {
     static void vector(const ColumnString::Chars_t & data,
-                        const ColumnString::Offsets & offsets,
-                        std::string pattern,
-                        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+                       const ColumnString::Offsets & offsets,
+                       std::string pattern,
+                       ColumnString::Chars_t & res_data,
+                       ColumnString::Offsets & res_offsets)
     {
-        res_data.reserve(data.size()  / 5);
+        res_data.reserve(data.size() / 5);
         res_offsets.resize(offsets.size());
 
         pattern += '=';
@@ -503,9 +518,10 @@ struct ExtractURLParameterImpl
 struct CutURLParameterImpl
 {
     static void vector(const ColumnString::Chars_t & data,
-                        const ColumnString::Offsets & offsets,
-                        std::string pattern,
-                        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+                       const ColumnString::Offsets & offsets,
+                       std::string pattern,
+                       ColumnString::Chars_t & res_data,
+                       ColumnString::Offsets & res_offsets)
     {
         res_data.reserve(data.size());
         res_offsets.resize(offsets.size());
@@ -586,14 +602,15 @@ public:
     static void checkArguments(const DataTypes & arguments)
     {
         if (!arguments[0]->isString())
-            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception(
+                fmt::format("Illegal type {} of first argument of function {}. Must be String.", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
     void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
 
     /// Returns the position of the argument that is the column of rows
-    size_t getStringsArgumentPosition()
+    static size_t getStringsArgumentPosition()
     {
         return 0;
     }
@@ -671,12 +688,13 @@ public:
     static void checkArguments(const DataTypes & arguments)
     {
         if (!arguments[0]->isString())
-            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception(
+                fmt::format("Illegal type {} of first argument of function {}. Must be String.", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
     /// Returns the position of the argument that is the column of rows
-    size_t getStringsArgumentPosition()
+    static size_t getStringsArgumentPosition()
     {
         return 0;
     }
@@ -748,14 +766,15 @@ public:
     static void checkArguments(const DataTypes & arguments)
     {
         if (!arguments[0]->isString())
-            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception(
+                fmt::format("Illegal type {} of first argument of function {}. Must be String.", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
     void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
 
     /// Returns the position of the argument that is the column of rows
-    size_t getStringsArgumentPosition()
+    static size_t getStringsArgumentPosition()
     {
         return 0;
     }
@@ -843,14 +862,15 @@ public:
     static void checkArguments(const DataTypes & arguments)
     {
         if (!arguments[0]->isString())
-            throw Exception("Illegal type " + arguments[0]->getName() + " of first argument of function " + getName() + ". Must be String.",
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception(
+                fmt::format("Illegal type {} of first argument of function {}. Must be String.", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
     void init(Block & /*block*/, const ColumnNumbers & /*arguments*/) {}
 
     /// Returns the position of the argument that is the column of rows
-    size_t getStringsArgumentPosition()
+    static size_t getStringsArgumentPosition()
     {
         return 0;
     }
@@ -923,8 +943,7 @@ public:
 template <typename Extractor>
 struct ExtractSubstringImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         size_t size = offsets.size();
         res_offsets.resize(size);
@@ -952,7 +971,7 @@ struct ExtractSubstringImpl
     }
 
     static void constant(const std::string & data,
-        std::string & res_data)
+                         std::string & res_data)
     {
         Pos start;
         size_t length;
@@ -960,7 +979,7 @@ struct ExtractSubstringImpl
         res_data.assign(start, length);
     }
 
-    static void vector_fixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
+    static void vectorFixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
     {
         throw Exception("Column of type FixedString is not supported by URL functions", ErrorCodes::ILLEGAL_COLUMN);
     }
@@ -972,8 +991,7 @@ struct ExtractSubstringImpl
 template <typename Extractor>
 struct CutSubstringImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         res_data.reserve(data.size());
         size_t size = offsets.size();
@@ -994,9 +1012,13 @@ struct CutSubstringImpl
 
             res_data.resize(res_data.size() + offsets[i] - prev_offset - length);
             memcpySmallAllowReadWriteOverflow15(
-                &res_data[res_offset], current, start - current);
+                &res_data[res_offset],
+                current,
+                start - current);
             memcpySmallAllowReadWriteOverflow15(
-                &res_data[res_offset + start - current], start + length, offsets[i] - start_index - length);
+                &res_data[res_offset + start - current],
+                start + length,
+                offsets[i] - start_index - length);
             res_offset += offsets[i] - prev_offset - length;
 
             res_offsets[i] = res_offset;
@@ -1005,7 +1027,7 @@ struct CutSubstringImpl
     }
 
     static void constant(const std::string & data,
-        std::string & res_data)
+                         std::string & res_data)
     {
         Pos start;
         size_t length;
@@ -1015,7 +1037,7 @@ struct CutSubstringImpl
         res_data.append(start + length, data.data() + data.size());
     }
 
-    static void vector_fixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
+    static void vectorFixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
     {
         throw Exception("Column of type FixedString is not supported by URL functions", ErrorCodes::ILLEGAL_COLUMN);
     }
@@ -1025,14 +1047,12 @@ struct CutSubstringImpl
 /// Percent decode of url data.
 struct DecodeURLComponentImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-        ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets);
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets);
 
     static void constant(const std::string & data,
-        std::string & res_data);
+                         std::string & res_data);
 
-    static void vector_fixed(const ColumnString::Chars_t & data, size_t n,
-        ColumnString::Chars_t & res_data);
+    static void vectorFixed(const ColumnString::Chars_t & data, size_t n, ColumnString::Chars_t & res_data);
 };
 
-}
+} // namespace DB

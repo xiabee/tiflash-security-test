@@ -1,73 +1,18 @@
+# Copyright 2023 PingCAP, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 include(${TiFlash_SOURCE_DIR}/cmake/dbms_glob_sources.cmake)
-include(${TiFlash_SOURCE_DIR}/cmake/dbms_generate_function.cmake)
-
-generate_function_register(Arithmetic
-    FunctionPlus
-    FunctionMinus
-    FunctionMultiply
-    FunctionDivideFloating
-    FunctionTiDBDivideFloating
-    FunctionDivideIntegral
-    FunctionDivideIntegralOrZero
-    FunctionModulo
-    FunctionNegate
-    FunctionAbs
-    FunctionBitAnd
-    FunctionBitOr
-    FunctionBitXor
-    FunctionBitNot
-    FunctionBitShiftLeft
-    FunctionBitShiftRight
-    FunctionBitRotateLeft
-    FunctionBitRotateRight
-    FunctionLeast
-    FunctionGreatest
-    FunctionBitTest
-    FunctionBitTestAny
-    FunctionBitTestAll
-    FunctionGCD
-    FunctionLCM
-    FunctionIntExp2
-    FunctionIntExp10
-)
-
-generate_function_register(Array
-    FunctionArray
-    FunctionArrayElement
-    FunctionHas
-    FunctionIndexOf
-    FunctionCountEqual
-    FunctionArrayEnumerate
-    FunctionArrayEnumerateUniq
-    FunctionArrayUniq
-    FunctionEmptyArrayUInt8
-    FunctionEmptyArrayUInt16
-    FunctionEmptyArrayUInt32
-    FunctionEmptyArrayUInt64
-    FunctionEmptyArrayInt8
-    FunctionEmptyArrayInt16
-    FunctionEmptyArrayInt32
-    FunctionEmptyArrayInt64
-    FunctionEmptyArrayFloat32
-    FunctionEmptyArrayFloat64
-    FunctionEmptyArrayDate
-    FunctionEmptyArrayDateTime
-    FunctionEmptyArrayString
-    FunctionEmptyArrayToSingle
-    FunctionRange
-    FunctionArrayReduce
-    FunctionArrayReverse
-    FunctionArrayConcat
-    FunctionArraySlice
-    FunctionArrayPushBack
-    FunctionArrayPushFront
-    FunctionArrayPopBack
-    FunctionArrayPopFront
-    FunctionArrayHasAll
-    FunctionArrayHasAny
-    FunctionArrayIntersect
-    FunctionArrayResize
-)
 
 add_headers_and_sources(clickhouse_functions .)
 add_headers_and_sources(clickhouse_functions ./GatherUtils)

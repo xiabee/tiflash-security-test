@@ -1,9 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 /// Suppress gcc warning: ‘*((void*)&<anonymous> +4)’ may be used uninitialized in this function
 #if !__clang__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #endif
-#include <Common/Config/cpptoml.h>
+#include <cpptoml.h>
 #if !__clang__
 #pragma GCC diagnostic pop
 #endif
@@ -16,10 +30,13 @@
 
 namespace DB
 {
-
 using TOMLBasePtr = std::shared_ptr<cpptoml::base>;
 
-TOMLConfiguration::TOMLConfiguration(TOMLTablePtr toml_doc) : root(toml_doc) { poco_check_ptr(toml_doc); }
+TOMLConfiguration::TOMLConfiguration(TOMLTablePtr toml_doc)
+    : root(toml_doc)
+{
+    poco_check_ptr(toml_doc);
+}
 
 bool TOMLConfiguration::getRaw(const std::string & key, std::string & value) const
 {
@@ -41,13 +58,13 @@ bool TOMLConfiguration::getRaw(const std::string & key, std::string & value) con
         }
         return true;
     }
-    catch (std::out_of_range)
+    catch (const std::out_of_range &)
     {
         return false;
     }
 }
 
-bool TOMLConfiguration::find_parent(const std::string & key, TOMLTablePtr & parent, std::string & child_key)
+bool TOMLConfiguration::findParent(const std::string & key, TOMLTablePtr & parent, std::string & child_key)
 {
     auto pos = key.find_last_of('.');
 
@@ -82,7 +99,7 @@ void TOMLConfiguration::setRaw(const std::string & key, const std::string & valu
 {
     TOMLTablePtr parent;
     std::string child_key;
-    if (!find_parent(key, parent, child_key))
+    if (!findParent(key, parent, child_key))
         throw Poco::NotFoundException("Key not found in TOML configuration", key);
 
     parent->erase(child_key);
@@ -97,8 +114,8 @@ void TOMLConfiguration::enumerate(const std::string & key, Keys & range) const
     if (!table)
         return;
 
-    for (auto it = table->begin(); it != table->end(); it++)
-        range.push_back(it->first);
+    for (const auto & it : *table)
+        range.push_back(it.first);
 }
 
 void TOMLConfiguration::removeRaw(const std::string & key)
@@ -106,7 +123,7 @@ void TOMLConfiguration::removeRaw(const std::string & key)
     TOMLTablePtr parent;
     std::string child_key;
 
-    if (find_parent(key, parent, child_key))
+    if (findParent(key, parent, child_key))
         parent->erase(child_key);
 }
 

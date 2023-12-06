@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <DataStreams/DistinctSortedBlockInputStream.h>
 
 namespace DB
@@ -85,8 +99,9 @@ bool DistinctSortedBlockInputStream::buildFilter(
     size_t rows,
     ClearableSetVariants & variants) const
 {
-    typename Method::State state;
-    state.init(columns);
+    typename Method::State state(columns, key_sizes, {});
+    std::vector<std::string> sort_key_containers;
+    sort_key_containers.resize(columns.size(), "");
 
     /// Compare last row of previous block and first row of current block,
     /// If rows not equal, we can clear HashSet,
@@ -106,21 +121,14 @@ bool DistinctSortedBlockInputStream::buildFilter(
         if (i > 0 && !clearing_hint_columns.empty() && !rowsEqual(clearing_hint_columns, i, clearing_hint_columns, i - 1))
             method.data.clear();
 
-        /// Make a key.
-        typename Method::Key key = state.getKey(columns, columns.size(), i, key_sizes);
-        typename Method::Data::iterator it = method.data.find(key);
-        bool inserted;
-        method.data.emplace(key, it, inserted);
+        auto emplace_result = state.emplaceKey(method.data, i, variants.string_pool, sort_key_containers);
 
-        if (inserted)
-        {
-            method.onNewKey(*it, columns.size(), variants.string_pool);
+        if (emplace_result.isInserted())
             has_new_data = true;
-        }
 
         /// Emit the record if there is no such key in the current set yet.
         /// Skip it otherwise.
-        filter[i] = inserted;
+        filter[i] = emplace_result.isInserted();
     }
     return has_new_data;
 }

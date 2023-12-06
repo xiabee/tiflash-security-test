@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Storages/DeltaMerge/Range.h>
@@ -12,7 +26,9 @@ class SkipHeadBlockInputStream : public SkippableBlockInputStream
 {
 public:
     SkipHeadBlockInputStream(const SkippableBlockInputStreamPtr & input_, RowKeyRange rowkey_range_, size_t handle_col_pos_)
-        : input(input_), rowkey_range(rowkey_range_), handle_col_pos(handle_col_pos_)
+        : input(input_)
+        , rowkey_range(rowkey_range_)
+        , handle_col_pos(handle_col_pos_)
     {
         if (rowkey_range.isEndInfinite())
             throw Exception("The end of rowkey range should be +Inf for SkipHeadBlockInputStream");
@@ -22,7 +38,7 @@ public:
 
 
     String getName() const override { return "SkipHead"; }
-    Block  getHeader() const override { return children.back()->getHeader(); }
+    Block getHeader() const override { return children.back()->getHeader(); }
 
     bool getSkippedRows(size_t & skip_rows) override
     {
@@ -35,7 +51,7 @@ public:
         Block block;
         while ((block = children.back()->read()))
         {
-            auto rows            = block.rows();
+            auto rows = block.rows();
             auto [offset, limit] = RowKeyFilter::getPosRangeOfSorted(rowkey_range, block.getByPosition(handle_col_pos).column, 0, rows);
             if (unlikely(offset + limit != rows))
                 throw Exception("Logical error!");
@@ -68,10 +84,10 @@ private:
     SkippableBlockInputStreamPtr input;
 
     RowKeyRange rowkey_range;
-    size_t      handle_col_pos;
+    size_t handle_col_pos;
 
     size_t sk_call_status = 0; // 0: initial, 1: called once by getSkippedRows
-    Block  sk_first_block;
+    Block sk_first_block;
 };
 
 } // namespace DM

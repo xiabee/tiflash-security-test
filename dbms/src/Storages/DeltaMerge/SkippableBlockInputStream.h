@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Core/Block.h>
@@ -7,7 +21,6 @@ namespace DB
 {
 namespace DM
 {
-
 class SkippableBlockInputStream : public IBlockInputStream
 {
 public:
@@ -18,12 +31,14 @@ public:
 };
 
 using SkippableBlockInputStreamPtr = std::shared_ptr<SkippableBlockInputStream>;
-using SkippableBlockInputStreams   = std::vector<SkippableBlockInputStreamPtr>;
+using SkippableBlockInputStreams = std::vector<SkippableBlockInputStreamPtr>;
 
 class EmptySkippableBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    EmptySkippableBlockInputStream(const ColumnDefines & read_columns_) : read_columns(read_columns_) {}
+    EmptySkippableBlockInputStream(const ColumnDefines & read_columns_)
+        : read_columns(read_columns_)
+    {}
 
     String getName() const override { return "EmptySkippable"; }
 
@@ -58,7 +73,7 @@ public:
             auto skippable_stream = dynamic_cast<SkippableBlockInputStream *>((*current_stream).get());
 
             size_t skip;
-            bool   has_next_block = skippable_stream->getSkippedRows(skip);
+            bool has_next_block = skippable_stream->getSkippedRows(skip);
             skip_rows += skip;
 
             if (has_next_block)

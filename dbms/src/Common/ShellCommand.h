@@ -1,14 +1,27 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <memory>
 #include <IO/ReadBufferFromFile.h>
 #include <IO/WriteBufferFromFile.h>
+
+#include <memory>
 
 
 namespace DB
 {
-
-
 /** Lets you run the command,
   *  read it stdout and stderr; write to stdin;
   *  wait for completion.
@@ -30,12 +43,15 @@ private:
     bool wait_called = false;
 
     ShellCommand(pid_t pid, int in_fd, int out_fd, int err_fd)
-        : pid(pid), in(in_fd), out(out_fd), err(err_fd) {};
+        : pid(pid)
+        , in(in_fd)
+        , out(out_fd)
+        , err(err_fd){};
 
     static std::unique_ptr<ShellCommand> executeImpl(const char * filename, char * const argv[], bool pipe_stdin_only);
 
 public:
-    WriteBufferFromFile in;        /// If the command reads from stdin, do not forget to call in.close() after writing all the data there.
+    WriteBufferFromFile in; /// If the command reads from stdin, do not forget to call in.close() after writing all the data there.
     ReadBufferFromFile out;
     ReadBufferFromFile err;
 
@@ -55,4 +71,4 @@ public:
 };
 
 
-}
+} // namespace DB

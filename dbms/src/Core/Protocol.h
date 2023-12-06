@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Core/Types.h>
@@ -5,8 +19,6 @@
 
 namespace DB
 {
-
-
 /// Client-server protocol.
 ///
 /// Client opens a connection and sends Hello packet.
@@ -54,78 +66,78 @@ namespace DB
 
 namespace Protocol
 {
-    /// Packet types that server transmits.
-    namespace Server
-    {
-        enum Enum
-        {
-            Hello = 0,                /// Name, version, revision.
-            Data = 1,                 /// A block of data (compressed or not).
-            Exception = 2,            /// The exception during query execution.
-            Progress = 3,             /// Query execution progress: rows read, bytes read.
-            Pong = 4,                 /// Ping response
-            EndOfStream = 5,          /// All packets were transmitted
-            ProfileInfo = 6,          /// Packet with profiling info.
-            Totals = 7,               /// A block with totals (compressed or not).
-            Extremes = 8,             /// A block with minimums and maximums (compressed or not).
-            TablesStatusResponse = 9, /// A response to TablesStatus request.
-            LockInfos = 100,          /// Lock infos of some pending transactions.
-            RegionException = 101,          /// Lock infos of some pending transactions.
-        };
+/// Packet types that server transmits.
+namespace Server
+{
+enum Enum
+{
+    Hello = 0, /// Name, version, revision.
+    Data = 1, /// A block of data (compressed or not).
+    Exception = 2, /// The exception during query execution.
+    Progress = 3, /// Query execution progress: rows read, bytes read.
+    Pong = 4, /// Ping response
+    EndOfStream = 5, /// All packets were transmitted
+    ProfileInfo = 6, /// Packet with profiling info.
+    Totals = 7, /// A block with totals (compressed or not).
+    Extremes = 8, /// A block with minimums and maximums (compressed or not).
+    TablesStatusResponse = 9, /// A response to TablesStatus request.
+    LockInfos = 100, /// Lock infos of some pending transactions.
+    RegionException = 101, /// Lock infos of some pending transactions.
+};
 
-        /// NOTE: If the type of packet argument would be Enum, the comparison packet >= 0 && packet < 10
-        /// would always be true because of compiler optimisation. That would lead to out-of-bounds error
-        /// if the packet is invalid.
-        /// See https://www.securecoding.cert.org/confluence/display/cplusplus/INT36-CPP.+Do+not+use+out-of-range+enumeration+values
-        inline const char * toString(UInt64 packet)
-        {
-            static const char * data[] = { "Hello", "Data", "Exception", "Progress", "Pong", "EndOfStream", "ProfileInfo", "Totals", "Extremes", "TablesStatusResponse" };
-            return packet < 10
-                ? data[packet]
-                : packet == LockInfos
-                ? "LockInfos"
-                : "Unknown packet";
-        }
-    }
-
-    /// Packet types that client transmits.
-    namespace Client
-    {
-        enum Enum
-        {
-            Hello = 0,               /// Name, version, revision, default DB
-            Query = 1,               /// Query id, query settings, stage up to which the query must be executed,
-                                     /// whether the compression must be used,
-                                     /// query text (without data for INSERTs).
-            Data = 2,                /// A block of data (compressed or not).
-            Cancel = 3,              /// Cancel the query execution.
-            Ping = 4,                /// Check that connection to the server is alive.
-            TablesStatusRequest = 5, /// Check status of tables on the server.
-        };
-
-        inline const char * toString(UInt64 packet)
-        {
-            static const char * data[] = { "Hello", "Query", "Data", "Cancel", "Ping", "TablesStatusRequest" };
-            return packet < 6
-                ? data[packet]
-                : "Unknown packet";
-        }
-    }
-
-    /// Whether the compression must be used.
-    enum class Compression
-    {
-        Disable = 0,
-        Enable = 1,
-    };
-
-    /// Whether the ssl must be used.
-    enum class Secure
-    {
-        Disable = 0,
-        Enable = 1,
-    };
-
+/// NOTE: If the type of packet argument would be Enum, the comparison packet >= 0 && packet < 10
+/// would always be true because of compiler optimisation. That would lead to out-of-bounds error
+/// if the packet is invalid.
+/// See https://www.securecoding.cert.org/confluence/display/cplusplus/INT36-CPP.+Do+not+use+out-of-range+enumeration+values
+inline const char * toString(UInt64 packet)
+{
+    static const char * data[] = {"Hello", "Data", "Exception", "Progress", "Pong", "EndOfStream", "ProfileInfo", "Totals", "Extremes", "TablesStatusResponse"};
+    return packet < 10
+        ? data[packet]
+        : packet == LockInfos
+        ? "LockInfos"
+        : "Unknown packet";
 }
+} // namespace Server
 
+/// Packet types that client transmits.
+namespace Client
+{
+enum Enum
+{
+    Hello = 0, /// Name, version, revision, default DB
+    Query = 1, /// Query id, query settings, stage up to which the query must be executed,
+        /// whether the compression must be used,
+        /// query text (without data for INSERTs).
+    Data = 2, /// A block of data (compressed or not).
+    Cancel = 3, /// Cancel the query execution.
+    Ping = 4, /// Check that connection to the server is alive.
+    TablesStatusRequest = 5, /// Check status of tables on the server.
+};
+
+inline const char * toString(UInt64 packet)
+{
+    static const char * data[] = {"Hello", "Query", "Data", "Cancel", "Ping", "TablesStatusRequest"};
+    return packet < 6
+        ? data[packet]
+        : "Unknown packet";
 }
+} // namespace Client
+
+/// Whether the compression must be used.
+enum class Compression
+{
+    Disable = 0,
+    Enable = 1,
+};
+
+/// Whether the ssl must be used.
+enum class Secure
+{
+    Disable = 0,
+    Enable = 1,
+};
+
+} // namespace Protocol
+
+} // namespace DB

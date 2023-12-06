@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #if defined(__APPLE__)
 #include <pthread.h>
 #elif defined(__FreeBSD__)
@@ -23,8 +37,9 @@ extern const int PTHREAD_ERROR;
 
 void setThreadName(const char * tname)
 {
-    constexpr auto MAX_LEN = 15; // thread name will be tname[:MAX_LEN]
-    if (std::strlen(tname) > MAX_LEN)
+    constexpr auto max_len = 15; // thread name will be tname[:MAX_LEN]
+    // TODO: Replace strlen for safety
+    if (std::strlen(tname) > max_len)
         std::cerr << "set thread name " << tname << " is too long and will be truncated by system\n";
 
 #if defined(__FreeBSD__)
@@ -41,8 +56,8 @@ void setThreadName(const char * tname)
 
 std::string getThreadName()
 {
-    constexpr auto MAX_LEN = 15;
-    std::string name(MAX_LEN + 1, '\0'); // '\0' terminated
+    constexpr auto max_len = 15;
+    std::string name(max_len + 1, '\0'); // '\0' terminated
 
 #if defined(__APPLE__)
     if (pthread_getname_np(pthread_self(), name.data(), name.size()))

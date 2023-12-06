@@ -1,5 +1,20 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
+#include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/Transaction/Types.h>
 
@@ -10,8 +25,17 @@
 /// === Some Private struct / method for SchemaBuilder
 /// Notice that this file should only included by SchemaBuilder.cpp and unittest for this file.
 
+namespace Poco
+{
+class Logger;
+}
+namespace TiDB
+{
+struct TableInfo;
+}
 namespace DB
 {
+std::tuple<NamesAndTypes, Strings> parseColumnsFromTableInfo(const TiDB::TableInfo & table_info, Poco::Logger * log);
 
 constexpr char tmpNamePrefix[] = "_tiflash_tmp_";
 
@@ -32,7 +56,10 @@ struct ColumnNameWithID
     String name;
     ColumnID id;
 
-    explicit ColumnNameWithID(String name_ = "", ColumnID id_ = 0) : name(std::move(name_)), id(id_) {}
+    explicit ColumnNameWithID(String name_ = "", ColumnID id_ = 0)
+        : name(std::move(name_))
+        , id(id_)
+    {}
 
     bool equals(const ColumnNameWithID & rhs) const { return name == rhs.name && id == rhs.id; }
 

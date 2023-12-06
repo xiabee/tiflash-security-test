@@ -1,29 +1,40 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <AggregateFunctions/AggregateFunctionFactory.h>
 #include <AggregateFunctions/AggregateFunctionUniq.h>
-#include <AggregateFunctions/Helpers.h>
 #include <AggregateFunctions/FactoryHelpers.h>
-
+#include <AggregateFunctions/Helpers.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDateTime.h>
-#include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypeFixedString.h>
+#include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypeUUID.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-}
+extern const int ILLEGAL_TYPE_OF_ARGUMENT;
+extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+} // namespace ErrorCodes
 
 
 namespace
 {
-
 /** `DataForVariadic` is a data structure that will be used for `uniq` aggregate function of multiple arguments.
   * It differs, for example, in that it uses a trivial hash function, since `uniq` of many arguments first hashes them out itself.
   */
@@ -34,7 +45,8 @@ AggregateFunctionPtr createAggregateFunctionUniq(const std::string & name, const
     assertNoParameters(name, params);
 
     if (argument_types.empty())
-        throw Exception("Incorrect number of arguments for aggregate function " + name,
+        throw Exception(
+            "Incorrect number of arguments for aggregate function " + name,
             ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
     if (argument_types.size() == 1)
@@ -61,7 +73,8 @@ AggregateFunctionPtr createAggregateFunctionUniq(const std::string & name, const
         /// If there are several arguments, then no tuples allowed among them.
         for (const auto & type : argument_types)
             if (typeid_cast<const DataTypeTuple *>(type.get()))
-                throw Exception("Tuple argument of function " + name + " must be the only argument",
+                throw Exception(
+                    "Tuple argument of function " + name + " must be the only argument",
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
@@ -75,7 +88,8 @@ AggregateFunctionPtr createAggregateFunctionUniq(const std::string & name, const
     assertNoParameters(name, params);
 
     if (argument_types.empty())
-        throw Exception("Incorrect number of arguments for aggregate function " + name,
+        throw Exception(
+            "Incorrect number of arguments for aggregate function " + name,
             ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
     if (argument_types.size() == 1)
@@ -102,7 +116,8 @@ AggregateFunctionPtr createAggregateFunctionUniq(const std::string & name, const
         /// If there are several arguments, then no tuples allowed among them.
         for (const auto & type : argument_types)
             if (typeid_cast<const DataTypeTuple *>(type.get()))
-                throw Exception("Tuple argument of function " + name + " must be the only argument",
+                throw Exception(
+                    "Tuple argument of function " + name + " must be the only argument",
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
@@ -127,23 +142,27 @@ AggregateFunctionPtr createAggregateFunctionUniqRawRes(const std::string & name,
         argument_types);
 }
 
-}
+} // namespace
 
 void registerAggregateFunctionsUniq(AggregateFunctionFactory & factory)
 {
-    factory.registerFunction("uniq",
+    factory.registerFunction(
+        "uniq",
         createAggregateFunctionUniq<AggregateFunctionUniqUniquesHashSetData, AggregateFunctionUniqUniquesHashSetDataForVariadic>);
 
-    factory.registerFunction("uniqHLL12",
+    factory.registerFunction(
+        "uniqHLL12",
         createAggregateFunctionUniq<AggregateFunctionUniqHLL12Data, AggregateFunctionUniqHLL12DataForVariadic>);
 
-    factory.registerFunction("uniqExact",
+    factory.registerFunction(
+        "uniqExact",
         createAggregateFunctionUniq<AggregateFunctionUniqExactData, AggregateFunctionUniqExactData<String>>);
 
-    factory.registerFunction("uniqCombined",
+    factory.registerFunction(
+        "uniqCombined",
         createAggregateFunctionUniq<AggregateFunctionUniqCombinedData, AggregateFunctionUniqCombinedData<UInt64>>);
 
-    factory.registerFunction(UniqRawResName, createAggregateFunctionUniqRawRes);
+    factory.registerFunction(uniq_raw_res_name, createAggregateFunctionUniqRawRes);
 }
 
-}
+} // namespace DB

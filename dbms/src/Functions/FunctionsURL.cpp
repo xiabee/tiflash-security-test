@@ -1,12 +1,25 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/hex.h>
 #include <Functions/FunctionFactory.h>
-#include <Functions/FunctionsURL.h>
 #include <Functions/FunctionsStringSearch.h>
-#include <common/find_first_symbols.h>
+#include <Functions/FunctionsURL.h>
+#include <common/find_symbols.h>
 
 namespace DB
 {
-
 /// We assume that size of the dst buf isn't less than src_size.
 static size_t decodeURL(const char * src, size_t src_size, char * dst)
 {
@@ -84,8 +97,7 @@ void ExtractProtocol::execute(Pos data, size_t size, Pos & res_data, size_t & re
 }
 
 
-void DecodeURLComponentImpl::vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-    ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+void DecodeURLComponentImpl::vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
 {
     res_data.resize(data.size());
     size_t size = offsets.size();
@@ -109,32 +121,86 @@ void DecodeURLComponentImpl::vector(const ColumnString::Chars_t & data, const Co
 }
 
 
-void DecodeURLComponentImpl::vector_fixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
+void DecodeURLComponentImpl::vectorFixed(const ColumnString::Chars_t &, size_t, ColumnString::Chars_t &)
 {
     throw Exception("Column of type FixedString is not supported by URL functions", ErrorCodes::ILLEGAL_COLUMN);
 }
 
-struct NameProtocol                       { static constexpr auto name = "protocol"; };
-struct NameDomain                         { static constexpr auto name = "domain"; };
-struct NameDomainWithoutWWW               { static constexpr auto name = "domainWithoutWWW"; };
-struct NameFirstSignificantSubdomain      { static constexpr auto name = "firstSignificantSubdomain"; };
-struct NameTopLevelDomain                 { static constexpr auto name = "topLevelDomain"; };
-struct NamePath                           { static constexpr auto name = "path"; };
-struct NamePathFull                       { static constexpr auto name = "pathFull"; };
-struct NameQueryString                    { static constexpr auto name = "queryString"; };
-struct NameFragment                       { static constexpr auto name = "fragment"; };
-struct NameQueryStringAndFragment         { static constexpr auto name = "queryStringAndFragment"; };
-struct NameDecodeURLComponent             { static constexpr auto name = "decodeURLComponent"; };
+struct NameProtocol
+{
+    static constexpr auto name = "protocol";
+};
+struct NameDomain
+{
+    static constexpr auto name = "domain";
+};
+struct NameDomainWithoutWWW
+{
+    static constexpr auto name = "domainWithoutWWW";
+};
+struct NameFirstSignificantSubdomain
+{
+    static constexpr auto name = "firstSignificantSubdomain";
+};
+struct NameTopLevelDomain
+{
+    static constexpr auto name = "topLevelDomain";
+};
+struct NamePath
+{
+    static constexpr auto name = "path";
+};
+struct NamePathFull
+{
+    static constexpr auto name = "pathFull";
+};
+struct NameQueryString
+{
+    static constexpr auto name = "queryString";
+};
+struct NameFragment
+{
+    static constexpr auto name = "fragment";
+};
+struct NameQueryStringAndFragment
+{
+    static constexpr auto name = "queryStringAndFragment";
+};
+struct NameDecodeURLComponent
+{
+    static constexpr auto name = "decodeURLComponent";
+};
 
-struct NameCutToFirstSignificantSubdomain { static constexpr auto name = "cutToFirstSignificantSubdomain"; };
+struct NameCutToFirstSignificantSubdomain
+{
+    static constexpr auto name = "cutToFirstSignificantSubdomain";
+};
 
-struct NameCutWWW                         { static constexpr auto name = "cutWWW"; };
-struct NameCutQueryString                 { static constexpr auto name = "cutQueryString"; };
-struct NameCutFragment                    { static constexpr auto name = "cutFragment"; };
-struct NameCutQueryStringAndFragment      { static constexpr auto name = "cutQueryStringAndFragment"; };
+struct NameCutWWW
+{
+    static constexpr auto name = "cutWWW";
+};
+struct NameCutQueryString
+{
+    static constexpr auto name = "cutQueryString";
+};
+struct NameCutFragment
+{
+    static constexpr auto name = "cutFragment";
+};
+struct NameCutQueryStringAndFragment
+{
+    static constexpr auto name = "cutQueryStringAndFragment";
+};
 
-struct NameExtractURLParameter            { static constexpr auto name = "extractURLParameter"; };
-struct NameCutURLParameter                { static constexpr auto name = "cutURLParameter"; };
+struct NameExtractURLParameter
+{
+    static constexpr auto name = "extractURLParameter";
+};
+struct NameCutURLParameter
+{
+    static constexpr auto name = "cutURLParameter";
+};
 
 using FunctionProtocol = FunctionStringToString<ExtractSubstringImpl<ExtractProtocol>, NameProtocol>;
 using FunctionDomain = FunctionStringToString<ExtractSubstringImpl<ExtractDomain<false>>, NameDomain>;
@@ -189,4 +255,4 @@ void registerFunctionsURL(FunctionFactory & factory)
     factory.registerFunction<FunctionDecodeURLComponent>();
 }
 
-}
+} // namespace DB

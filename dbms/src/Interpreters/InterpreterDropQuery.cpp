@@ -1,22 +1,35 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/FailPoint.h>
 #include <Common/escapeForFileName.h>
 #include <Common/typeid_cast.h>
 #include <Databases/IDatabase.h>
 #include <Encryption/FileProvider.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/DDLWorker.h>
 #include <Interpreters/InterpreterDropQuery.h>
 #include <Parsers/ASTDropQuery.h>
 #include <Poco/File.h>
+#include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
-#include <Storages/StorageMergeTree.h>
+#include <common/logger_useful.h>
 
 #include <ext/scope_guard.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
 extern const int TABLE_WAS_NOT_DROPPED;
@@ -31,7 +44,10 @@ namespace FailPoints
 extern const char exception_between_drop_meta_and_data[];
 }
 
-InterpreterDropQuery::InterpreterDropQuery(const ASTPtr & query_ptr_, Context & context_) : query_ptr(query_ptr_), context(context_) {}
+InterpreterDropQuery::InterpreterDropQuery(const ASTPtr & query_ptr_, Context & context_)
+    : query_ptr(query_ptr_)
+    , context(context_)
+{}
 
 
 BlockIO InterpreterDropQuery::execute()
@@ -39,9 +55,6 @@ BlockIO InterpreterDropQuery::execute()
     ASTDropQuery & drop = typeid_cast<ASTDropQuery &>(*query_ptr);
 
     checkAccess(drop);
-
-    if (!drop.cluster.empty())
-        return executeDDLQueryOnCluster(query_ptr, context, {drop.database});
 
     String path = context.getPath();
     String current_database = context.getCurrentDatabase();
@@ -64,7 +77,8 @@ BlockIO InterpreterDropQuery::execute()
             if (drop.database.empty() && !drop.temporary)
             {
                 LOG_WARNING(
-                    (&Logger::get("InterpreterDropQuery")), "It is recommended to use `DROP TEMPORARY TABLE` to delete temporary tables");
+                    (&Poco::Logger::get("InterpreterDropQuery")),
+                    "It is recommended to use `DROP TEMPORARY TABLE` to delete temporary tables");
             }
             table->shutdown();
             /// If table was already dropped by anyone, an exception will be thrown
@@ -96,8 +110,10 @@ BlockIO InterpreterDropQuery::execute()
 
         if (table)
             tables_to_drop.emplace_back(table,
-                context.getDDLGuard(
-                    database_name, drop.table, "Table " + database_name + "." + drop.table + " is dropping or detaching right now"));
+                                        context.getDDLGuard(
+                                            database_name,
+                                            drop.table,
+                                            "Table " + database_name + "." + drop.table + " is dropping or detaching right now"));
         else
             return {};
     }
@@ -112,9 +128,9 @@ BlockIO InterpreterDropQuery::execute()
 
         for (auto iterator = database->getIterator(context); iterator->isValid(); iterator->next())
             tables_to_drop.emplace_back(iterator->table(),
-                context.getDDLGuard(database_name,
-                    iterator->name(),
-                    "Table " + database_name + "." + iterator->name() + " is dropping or detaching right now"));
+                                        context.getDDLGuard(database_name,
+                                                            iterator->name(),
+                                                            "Table " + database_name + "." + iterator->name() + " is dropping or detaching right now"));
     }
 
     for (auto & table : tables_to_drop)
@@ -143,6 +159,10 @@ BlockIO InterpreterDropQuery::execute()
         }
         else
         {
+            /// Clear storage data first, and if tiflash crash in the middle of `clearData`,
+            /// this table can still be restored, and can call `clearData` again.
+            table.first->clearData();
+
             /// Delete table metdata and table itself from memory
             database->removeTable(context, current_table_name);
 

@@ -1,15 +1,28 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/Exception.h>
 #include <IO/ReadBuffer.h>
 #include <IO/WriteBuffer.h>
 #include <IO/copyData.h>
 
+#include <limits>
 
 namespace DB
 {
-
 namespace
 {
-
 void copyDataImpl(ReadBuffer & from, WriteBuffer & to, bool check_bytes, size_t bytes, std::atomic<int> * is_cancelled)
 {
     /// If read to the end of the buffer, eof() either fills the buffer with new data and moves the cursor to the beginning, or returns false.
@@ -48,7 +61,7 @@ void copyDataImpl(ReadBuffer & from, WriteBuffer & to, bool check_bytes, size_t 
         throw Exception("Attempt to read after EOF.", ErrorCodes::ATTEMPT_TO_READ_AFTER_EOF);
 }
 
-}
+} // namespace
 
 void copyData(ReadBuffer & from, WriteBuffer & to)
 {
@@ -80,4 +93,4 @@ void copyData(ReadBuffer & from, WriteBuffer & to, size_t bytes, std::function<v
     copyDataImpl(from, to, true, bytes, cancellation_hook);
 }
 
-}
+} // namespace DB

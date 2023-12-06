@@ -1,21 +1,48 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <array>
 #include <AggregateFunctions/IAggregateFunction.h>
+#include <Columns/ColumnArray.h>
 #include <Columns/ColumnNullable.h>
+#include <Columns/ColumnString.h>
+#include <Columns/ColumnTuple.h>
+#include <Columns/ColumnsCommon.h>
+#include <Common/typeid_cast.h>
+#include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeNullable.h>
+#include <DataTypes/DataTypeString.h>
+#include <DataTypes/DataTypeTuple.h>
+#include <Functions/FunctionHelpers.h>
+#include <Functions/FunctionsHigherOrder.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
+#include <Interpreters/SetVariants.h>
+#include <Interpreters/sortBlock.h>
+#include <common/mem_utils.h>
 
+#include <array>
+#include <map>
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int LOGICAL_ERROR;
-    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-}
+extern const int LOGICAL_ERROR;
+extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+} // namespace ErrorCodes
 
 
 /// This class implements a wrapper around an aggregate function. Despite its name,
@@ -40,29 +67,29 @@ protected:
       * We use prefix_size bytes for flag to satisfy the alignment requirement of nested state.
       */
 
-    AggregateDataPtr nestedPlace(AggregateDataPtr place) const noexcept
+    AggregateDataPtr nestedPlace(AggregateDataPtr __restrict place) const noexcept
     {
         return place + prefix_size;
     }
 
-    ConstAggregateDataPtr nestedPlace(ConstAggregateDataPtr place) const noexcept
+    ConstAggregateDataPtr nestedPlace(ConstAggregateDataPtr __restrict place) const noexcept
     {
         return place + prefix_size;
     }
 
-    static void initFlag(AggregateDataPtr place) noexcept
+    static void initFlag(AggregateDataPtr __restrict place) noexcept
     {
         if (result_is_nullable)
             place[0] = 0;
     }
 
-    static void setFlag(AggregateDataPtr place) noexcept
+    static void setFlag(AggregateDataPtr __restrict place) noexcept
     {
         if (result_is_nullable)
             place[0] = 1;
     }
 
-    static bool getFlag(ConstAggregateDataPtr place) noexcept
+    static bool getFlag(ConstAggregateDataPtr __restrict place) noexcept
     {
         return result_is_nullable ? place[0] : 1;
     }
@@ -83,9 +110,9 @@ public:
         return nested_function->getName();
     }
 
-    void setCollator(std::shared_ptr<TiDB::ITiDBCollator> collator) override
+    void setCollators(TiDB::TiDBCollators & collators) override
     {
-        nested_function->setCollator(collator);
+        nested_function->setCollators(collators);
     }
 
     DataTypePtr getReturnType() const override
@@ -95,13 +122,13 @@ public:
             : nested_function->getReturnType();
     }
 
-    void create(AggregateDataPtr place) const override
+    void create(AggregateDataPtr __restrict place) const override
     {
         initFlag(place);
         nested_function->create(nestedPlace(place));
     }
 
-    void destroy(AggregateDataPtr place) const noexcept override
+    void destroy(AggregateDataPtr __restrict place) const noexcept override
     {
         nested_function->destroy(nestedPlace(place));
     }
@@ -121,7 +148,7 @@ public:
         return nested_function->alignOfData();
     }
 
-    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena * arena) const override
+    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena * arena) const override
     {
         if (result_is_nullable && getFlag(rhs))
             setFlag(place);
@@ -129,7 +156,7 @@ public:
         nested_function->merge(nestedPlace(place), nestedPlace(rhs), arena);
     }
 
-    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
     {
         bool flag = getFlag(place);
         if (result_is_nullable)
@@ -138,7 +165,7 @@ public:
             nested_function->serialize(nestedPlace(place), buf);
     }
 
-    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena * arena) const override
+    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena * arena) const override
     {
         bool flag = 1;
         if (result_is_nullable)
@@ -150,14 +177,14 @@ public:
         }
     }
 
-    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
+    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena * arena) const override
     {
-        if (result_is_nullable)
+        if constexpr (result_is_nullable)
         {
             ColumnNullable & to_concrete = static_cast<ColumnNullable &>(to);
             if (getFlag(place))
             {
-                nested_function->insertResultInto(nestedPlace(place), to_concrete.getNestedColumn());
+                nested_function->insertResultInto(nestedPlace(place), to_concrete.getNestedColumn(), arena);
                 to_concrete.getNullMapData().push_back(0);
             }
             else
@@ -167,7 +194,7 @@ public:
         }
         else
         {
-            nested_function->insertResultInto(nestedPlace(place), to);
+            nested_function->insertResultInto(nestedPlace(place), to, arena);
         }
     }
 
@@ -198,23 +225,23 @@ protected:
       * We use prefix_size bytes for flag to satisfy the alignment requirement of nested state.
       */
 
-    AggregateDataPtr nestedPlace(AggregateDataPtr place) const noexcept
+    AggregateDataPtr nestedPlace(AggregateDataPtr __restrict place) const noexcept
     {
         return place + prefix_size;
     }
 
-    ConstAggregateDataPtr nestedPlace(ConstAggregateDataPtr place) const noexcept
+    ConstAggregateDataPtr nestedPlace(ConstAggregateDataPtr __restrict place) const noexcept
     {
         return place + prefix_size;
     }
 
-    static void initFlag(AggregateDataPtr place) noexcept
+    static void initFlag(AggregateDataPtr __restrict place) noexcept
     {
         if (result_is_nullable)
             place[0] = 0;
     }
 
-    static void setFlag(AggregateDataPtr place, UInt8 status) noexcept
+    static void setFlag(AggregateDataPtr __restrict place, UInt8 status) noexcept
     {
         if (result_is_nullable)
             place[0] = status;
@@ -223,7 +250,7 @@ protected:
     /// 0 means there is no input yet
     /// 1 meas there is a not-null input
     /// 2 means there is a null input
-    static UInt8 getFlag(ConstAggregateDataPtr place) noexcept
+    static UInt8 getFlag(ConstAggregateDataPtr __restrict place) noexcept
     {
         return result_is_nullable ? place[0] : 1;
     }
@@ -244,25 +271,25 @@ public:
         return nested_function->getName();
     }
 
-    void setCollator(std::shared_ptr<TiDB::ITiDBCollator> collator) override
+    void setCollators(TiDB::TiDBCollators & collators) override
     {
-        nested_function->setCollator(collator);
+        nested_function->setCollators(collators);
     }
 
     DataTypePtr getReturnType() const override
     {
         return result_is_nullable
-               ? makeNullable(nested_function->getReturnType())
-               : nested_function->getReturnType();
+            ? makeNullable(nested_function->getReturnType())
+            : nested_function->getReturnType();
     }
 
-    void create(AggregateDataPtr place) const override
+    void create(AggregateDataPtr __restrict place) const override
     {
         initFlag(place);
         nested_function->create(nestedPlace(place));
     }
 
-    void destroy(AggregateDataPtr place) const noexcept override
+    void destroy(AggregateDataPtr __restrict place) const noexcept override
     {
         nested_function->destroy(nestedPlace(place));
     }
@@ -282,7 +309,7 @@ public:
         return nested_function->alignOfData();
     }
 
-    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena * arena) const override
+    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena * arena) const override
     {
         if constexpr (input_is_nullable)
         {
@@ -305,7 +332,7 @@ public:
         }
     }
 
-    void merge(AggregateDataPtr place, ConstAggregateDataPtr rhs, Arena * arena) const override
+    void merge(AggregateDataPtr __restrict place, ConstAggregateDataPtr rhs, Arena * arena) const override
     {
         if constexpr (result_is_nullable)
         {
@@ -325,7 +352,7 @@ public:
         }
     }
 
-    void serialize(ConstAggregateDataPtr place, WriteBuffer & buf) const override
+    void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
     {
         UInt8 flag = getFlag(place);
         if (result_is_nullable)
@@ -334,7 +361,7 @@ public:
             nested_function->serialize(nestedPlace(place), buf);
     }
 
-    void deserialize(AggregateDataPtr place, ReadBuffer & buf, Arena * arena) const override
+    void deserialize(AggregateDataPtr __restrict place, ReadBuffer & buf, Arena * arena) const override
     {
         UInt8 flag = 1;
         if (result_is_nullable)
@@ -350,15 +377,15 @@ public:
         }
     }
 
-    void insertResultInto(ConstAggregateDataPtr place, IColumn & to) const override
+    void insertResultInto(ConstAggregateDataPtr __restrict place, IColumn & to, Arena * arena) const override
     {
-        if (result_is_nullable)
+        if constexpr (result_is_nullable)
         {
             ColumnNullable & to_concrete = static_cast<ColumnNullable &>(to);
             UInt8 flag = getFlag(place);
             if (flag == 1)
             {
-                nested_function->insertResultInto(nestedPlace(place), to_concrete.getNestedColumn());
+                nested_function->insertResultInto(nestedPlace(place), to_concrete.getNestedColumn(), arena);
                 to_concrete.getNullMapData().push_back(0);
             }
             else
@@ -368,7 +395,7 @@ public:
         }
         else
         {
-            nested_function->insertResultInto(nestedPlace(place), to);
+            nested_function->insertResultInto(nestedPlace(place), to, arena);
         }
     }
 
@@ -397,7 +424,7 @@ public:
     {
     }
 
-    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena * arena) const override
+    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena * arena) const override
     {
         if constexpr (input_is_nullable)
         {
@@ -415,6 +442,46 @@ public:
             this->nested_function->add(this->nestedPlace(place), columns, row_num, arena);
         }
     }
+
+    void addBatchSinglePlace(
+        size_t batch_size,
+        AggregateDataPtr place,
+        const IColumn ** columns,
+        Arena * arena,
+        ssize_t if_argument_pos = -1) const override
+    {
+        if (batch_size == 0)
+            return;
+
+        if constexpr (input_is_nullable)
+        {
+            const ColumnNullable * column = assert_cast<const ColumnNullable *>(columns[0]);
+            const IColumn * nested_column = &column->getNestedColumn();
+            const UInt8 * null_map = column->getNullMapData().data();
+
+            this->nested_function->addBatchSinglePlaceNotNull(
+                batch_size,
+                this->nestedPlace(place),
+                &nested_column,
+                null_map,
+                arena,
+                if_argument_pos);
+
+            if constexpr (result_is_nullable)
+                if (!mem_utils::memoryIsByte(null_map, batch_size, std::byte{1}))
+                    this->setFlag(place);
+        }
+        else
+        {
+            this->nested_function->addBatchSinglePlace(
+                batch_size,
+                this->nestedPlace(place),
+                columns,
+                arena,
+                if_argument_pos);
+            this->setFlag(place);
+        }
+    }
 };
 
 
@@ -423,21 +490,21 @@ class AggregateFunctionNullVariadic final : public AggregateFunctionNullBase<res
 {
 public:
     AggregateFunctionNullVariadic(AggregateFunctionPtr nested_function, const DataTypes & arguments)
-        : AggregateFunctionNullBase<result_is_nullable, AggregateFunctionNullVariadic<result_is_nullable>>(nested_function),
-        number_of_arguments(arguments.size())
+        : AggregateFunctionNullBase<result_is_nullable, AggregateFunctionNullVariadic<result_is_nullable>>(nested_function)
+        , number_of_arguments(arguments.size())
     {
         if (number_of_arguments == 1)
             throw Exception("Logical error: single argument is passed to AggregateFunctionNullVariadic", ErrorCodes::LOGICAL_ERROR);
 
         if (number_of_arguments > MAX_ARGS)
             throw Exception("Maximum number of arguments for aggregate function with Nullable types is " + toString(size_t(MAX_ARGS)),
-                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+                            ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
         for (size_t i = 0; i < number_of_arguments; ++i)
             is_nullable[i] = arguments[i]->isNullable();
     }
 
-    void add(AggregateDataPtr place, const IColumn ** columns, size_t row_num, Arena * arena) const override
+    void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena * arena) const override
     {
         /// This container stores the columns we really pass to the nested function.
         const IColumn * nested_columns[number_of_arguments];
@@ -469,9 +536,12 @@ public:
     }
 
 private:
-    enum { MAX_ARGS = 8 };
+    enum
+    {
+        MAX_ARGS = 8
+    };
     size_t number_of_arguments = 0;
-    std::array<char, MAX_ARGS> is_nullable;    /// Plain array is better than std::vector due to one indirection less.
+    std::array<char, MAX_ARGS> is_nullable; /// Plain array is better than std::vector due to one indirection less.
 };
 
-}
+} // namespace DB

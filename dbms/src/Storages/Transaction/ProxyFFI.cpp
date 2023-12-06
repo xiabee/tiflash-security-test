@@ -1,13 +1,28 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/CurrentMetrics.h>
+#include <Common/nocopyable.h>
 #include <Interpreters/Context.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/Transaction/FileEncryption.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/ProxyFFI.h>
+#include <Storages/Transaction/ReadIndexWorker.h>
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/TMTContext.h>
-
-#include <ext/scope_guard.h>
+#include <kvproto/diagnosticspb.pb.h>
 
 #define CHECK_PARSE_PB_BUFF_IMPL(n, a, b, c)                                              \
     do                                                                                    \
@@ -25,7 +40,6 @@ extern const Metric RaftNumSnapshotsPendingApply;
 
 namespace DB
 {
-
 const std::string ColumnFamilyName::Lock = "lock";
 const std::string ColumnFamilyName::Default = "default";
 const std::string ColumnFamilyName::Write = "write";
@@ -47,14 +61,14 @@ const std::string & CFToName(const ColumnFamilyType type)
 {
     switch (type)
     {
-        case ColumnFamilyType::Default:
-            return ColumnFamilyName::Default;
-        case ColumnFamilyType::Write:
-            return ColumnFamilyName::Write;
-        case ColumnFamilyType::Lock:
-            return ColumnFamilyName::Lock;
-        default:
-            throw Exception("Can not tell cf type " + std::to_string(static_cast<uint8_t>(type)), ErrorCodes::LOGICAL_ERROR);
+    case ColumnFamilyType::Default:
+        return ColumnFamilyName::Default;
+    case ColumnFamilyType::Write:
+        return ColumnFamilyName::Write;
+    case ColumnFamilyType::Lock:
+        return ColumnFamilyName::Lock;
+    default:
+        throw Exception("Can not tell cf type " + std::to_string(static_cast<uint8_t>(type)), ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -68,7 +82,10 @@ static_assert(alignof(EngineStoreServerHelper) == alignof(RawVoidPtr));
 static_assert(sizeof(RaftStoreProxyPtr) == sizeof(ConstRawVoidPtr));
 static_assert(alignof(RaftStoreProxyPtr) == alignof(ConstRawVoidPtr));
 
-EngineStoreApplyRes HandleWriteRaftCmd(const EngineStoreServerWrap * server, WriteCmdsView cmds, RaftCmdHeader header)
+EngineStoreApplyRes HandleWriteRaftCmd(
+    const EngineStoreServerWrap * server,
+    WriteCmdsView cmds,
+    RaftCmdHeader header)
 {
     try
     {
@@ -82,7 +99,10 @@ EngineStoreApplyRes HandleWriteRaftCmd(const EngineStoreServerWrap * server, Wri
 }
 
 EngineStoreApplyRes HandleAdminRaftCmd(
-    const EngineStoreServerWrap * server, BaseBuffView req_buff, BaseBuffView resp_buff, RaftCmdHeader header)
+    const EngineStoreServerWrap * server,
+    BaseBuffView req_buff,
+    BaseBuffView resp_buff,
+    RaftCmdHeader header)
 {
     try
     {
@@ -92,7 +112,12 @@ EngineStoreApplyRes HandleAdminRaftCmd(
         CHECK_PARSE_PB_BUFF(response, resp_buff.data, resp_buff.len);
         auto & kvstore = server->tmt->getKVStore();
         return kvstore->handleAdminRaftCmd(
-            std::move(request), std::move(response), header.region_id, header.index, header.term, *server->tmt);
+            std::move(request),
+            std::move(response),
+            header.region_id,
+            header.index,
+            header.term,
+            *server->tmt);
     }
     catch (...)
     {
@@ -104,9 +129,33 @@ EngineStoreApplyRes HandleAdminRaftCmd(
 static_assert(sizeof(RaftStoreProxyFFIHelper) == sizeof(TiFlashRaftProxyHelper));
 static_assert(alignof(RaftStoreProxyFFIHelper) == alignof(TiFlashRaftProxyHelper));
 
+struct RustGcHelper : public ext::Singleton<RustGcHelper>
+{
+    void gcRustPtr(RawVoidPtr ptr, RawRustPtrType type) const
+    {
+        fn_gc_rust_ptr(ptr, type);
+    }
+
+    RustGcHelper() = default;
+
+    void setRustPtrGcFn(void (*fn_gc_rust_ptr)(RawVoidPtr, RawRustPtrType))
+    {
+        this->fn_gc_rust_ptr = fn_gc_rust_ptr;
+    }
+
+private:
+    void (*fn_gc_rust_ptr)(RawVoidPtr, RawRustPtrType);
+};
+
 void AtomicUpdateProxy(DB::EngineStoreServerWrap * server, RaftStoreProxyFFIHelper * proxy)
 {
+    // any usage towards proxy helper must happen after this function.
+    {
+        // init global rust gc function pointer here.
+        RustGcHelper::instance().setRustPtrGcFn(proxy->fn_gc_rust_ptr);
+    }
     server->proxy_helper = static_cast<TiFlashRaftProxyHelper *>(proxy);
+    std::atomic_thread_fence(std::memory_order::memory_order_seq_cst);
 }
 
 void HandleDestroy(EngineStoreServerWrap * server, uint64_t region_id)
@@ -137,7 +186,6 @@ EngineStoreApplyRes HandleIngestSST(EngineStoreServerWrap * server, SSTViewVec s
     }
 }
 
-uint8_t HandleCheckTerminated(EngineStoreServerWrap * server) { return server->tmt->checkTerminated(std::memory_order_relaxed) ? 1 : 0; }
 
 StoreStats HandleComputeStoreStats(EngineStoreServerWrap * server)
 {
@@ -155,37 +203,58 @@ StoreStats HandleComputeStoreStats(EngineStoreServerWrap * server)
     return res;
 }
 
-EngineStoreServerStatus HandleGetTiFlashStatus(EngineStoreServerWrap * server) { return server->status.load(); }
+EngineStoreServerStatus HandleGetTiFlashStatus(EngineStoreServerWrap * server)
+{
+    return server->status.load();
+}
 
-RaftProxyStatus TiFlashRaftProxyHelper::getProxyStatus() const { return fn_handle_get_proxy_status(proxy_ptr); }
+RaftProxyStatus TiFlashRaftProxyHelper::getProxyStatus() const
+{
+    return fn_handle_get_proxy_status(proxy_ptr);
+}
 
-BaseBuffView strIntoView(const std::string & view) { return BaseBuffView{view.data(), view.size()}; }
+/// Use const pointer instead of const ref to avoid lifetime of `str` is shorter than view.
+BaseBuffView strIntoView(const std::string * str_ptr)
+{
+    assert(str_ptr);
+    return BaseBuffView{str_ptr->data(), str_ptr->size()};
+}
 
-bool TiFlashRaftProxyHelper::checkEncryptionEnabled() const { return fn_is_encryption_enabled(proxy_ptr); }
-EncryptionMethod TiFlashRaftProxyHelper::getEncryptionMethod() const { return fn_encryption_method(proxy_ptr); }
+bool TiFlashRaftProxyHelper::checkEncryptionEnabled() const
+{
+    return fn_is_encryption_enabled(proxy_ptr);
+}
+EncryptionMethod TiFlashRaftProxyHelper::getEncryptionMethod() const
+{
+    return fn_encryption_method(proxy_ptr);
+}
 FileEncryptionInfo TiFlashRaftProxyHelper::getFile(const std::string & view) const
 {
-    return fn_handle_get_file(proxy_ptr, strIntoView(view));
+    return fn_handle_get_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::newFile(const std::string & view) const
 {
-    return fn_handle_new_file(proxy_ptr, strIntoView(view));
+    return fn_handle_new_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::deleteFile(const std::string & view) const
 {
-    return fn_handle_delete_file(proxy_ptr, strIntoView(view));
+    return fn_handle_delete_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::linkFile(const std::string & src, const std::string & dst) const
 {
-    return fn_handle_link_file(proxy_ptr, strIntoView(src), strIntoView(dst));
+    return fn_handle_link_file(proxy_ptr, strIntoView(&src), strIntoView(&dst));
 }
 
 struct CppStrVec
 {
     std::vector<std::string> data;
     std::vector<BaseBuffView> view;
-    CppStrVec(std::vector<std::string> && data_) : data(std::move(data_)) { updateView(); }
-    CppStrVec(const CppStrVec &) = delete;
+    explicit CppStrVec(std::vector<std::string> && data_)
+        : data(std::move(data_))
+    {
+        updateView();
+    }
+    DISALLOW_COPY(CppStrVec);
     void updateView();
     CppStrVecView intoOuterView() const { return {view.data(), view.size()}; }
 };
@@ -196,14 +265,8 @@ void CppStrVec::updateView()
     view.reserve(data.size());
     for (const auto & e : data)
     {
-        view.emplace_back(strIntoView(e));
+        view.emplace_back(strIntoView(&e));
     }
-}
-
-kvrpcpb::ReadIndexResponse TiFlashRaftProxyHelper::readIndex(const kvrpcpb::ReadIndexRequest & req) const
-{
-    auto res = batchReadIndex({req}, DEFAULT_BATCH_READ_INDEX_TIMEOUT_MS);
-    return std::move(res.at(0).first);
 }
 
 void InsertBatchReadIndexResp(RawVoidPtr resp, BaseBuffView view, uint64_t region_id)
@@ -213,16 +276,15 @@ void InsertBatchReadIndexResp(RawVoidPtr resp, BaseBuffView view, uint64_t regio
     reinterpret_cast<BatchReadIndexRes *>(resp)->emplace_back(std::move(res), region_id);
 }
 
-BatchReadIndexRes TiFlashRaftProxyHelper::batchReadIndex(const std::vector<kvrpcpb::ReadIndexRequest> & req, uint64_t timeout_ms) const
+BatchReadIndexRes TiFlashRaftProxyHelper::batchReadIndex_v1(const std::vector<kvrpcpb::ReadIndexRequest> & req, uint64_t timeout_ms) const
 {
     std::vector<std::string> req_strs;
     req_strs.reserve(req.size());
-    for (auto & r : req)
+    for (const auto & r : req)
     {
         req_strs.emplace_back(r.SerializeAsString());
     }
     CppStrVec data(std::move(req_strs));
-    assert(req_strs.empty());
     auto outer_view = data.intoOuterView();
     BatchReadIndexRes res;
     res.reserve(req.size());
@@ -230,11 +292,30 @@ BatchReadIndexRes TiFlashRaftProxyHelper::batchReadIndex(const std::vector<kvrpc
     return res;
 }
 
+RawRustPtrWrap::RawRustPtrWrap(RawRustPtr inner)
+    : RawRustPtr(inner)
+{
+}
+
+RawRustPtrWrap::~RawRustPtrWrap()
+{
+    if (ptr == nullptr)
+        return;
+    RustGcHelper::instance().gcRustPtr(ptr, type);
+}
+RawRustPtrWrap::RawRustPtrWrap(RawRustPtrWrap && src)
+{
+    RawRustPtr & tar = (*this);
+    tar = src;
+    src.ptr = nullptr;
+}
+
 struct PreHandledSnapshotWithBlock
 {
     ~PreHandledSnapshotWithBlock() { CurrentMetrics::sub(CurrentMetrics::RaftNumSnapshotsPendingApply); }
     PreHandledSnapshotWithBlock(const RegionPtr & region_, RegionPtrWithBlock::CachePtr && cache_)
-        : region(region_), cache(std::move(cache_))
+        : region(region_)
+        , cache(std::move(cache_))
     {
         CurrentMetrics::add(CurrentMetrics::RaftNumSnapshotsPendingApply);
     }
@@ -245,7 +326,9 @@ struct PreHandledSnapshotWithBlock
 struct PreHandledSnapshotWithFiles
 {
     ~PreHandledSnapshotWithFiles() { CurrentMetrics::sub(CurrentMetrics::RaftNumSnapshotsPendingApply); }
-    PreHandledSnapshotWithFiles(const RegionPtr & region_, std::vector<UInt64> && ids_) : region(region_), ingest_ids(std::move(ids_))
+    PreHandledSnapshotWithFiles(const RegionPtr & region_, std::vector<UInt64> && ids_)
+        : region(region_)
+        , ingest_ids(std::move(ids_))
     {
         CurrentMetrics::add(CurrentMetrics::RaftNumSnapshotsPendingApply);
     }
@@ -254,7 +337,12 @@ struct PreHandledSnapshotWithFiles
 };
 
 RawCppPtr PreHandleSnapshot(
-    EngineStoreServerWrap * server, BaseBuffView region_buff, uint64_t peer_id, SSTViewVec snaps, uint64_t index, uint64_t term)
+    EngineStoreServerWrap * server,
+    BaseBuffView region_buff,
+    uint64_t peer_id,
+    SSTViewVec snaps,
+    uint64_t index,
+    uint64_t term)
 {
     try
     {
@@ -274,23 +362,23 @@ RawCppPtr PreHandleSnapshot(
 
         switch (kvstore->applyMethod())
         {
-            case TiDB::SnapshotApplyMethod::Block:
-            {
-                // Pre-decode as a block
-                auto new_region_block_cache = kvstore->preHandleSnapshotToBlock(new_region, snaps, index, term, tmt);
-                auto res = new PreHandledSnapshotWithBlock{new_region, std::move(new_region_block_cache)};
-                return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithBlock);
-            }
-            case TiDB::SnapshotApplyMethod::DTFile_Directory:
-            case TiDB::SnapshotApplyMethod::DTFile_Single:
-            {
-                // Pre-decode and save as DTFiles
-                auto ingest_ids = kvstore->preHandleSnapshotToFiles(new_region, snaps, index, term, tmt);
-                auto res = new PreHandledSnapshotWithFiles{new_region, std::move(ingest_ids)};
-                return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithFiles);
-            }
-            default:
-                throw Exception("Unknow Region apply method: " + applyMethodToString(kvstore->applyMethod()));
+        case TiDB::SnapshotApplyMethod::Block:
+        {
+            // Pre-decode as a block
+            auto new_region_block_cache = kvstore->preHandleSnapshotToBlock(new_region, snaps, index, term, tmt);
+            auto * res = new PreHandledSnapshotWithBlock{new_region, std::move(new_region_block_cache)};
+            return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithBlock);
+        }
+        case TiDB::SnapshotApplyMethod::DTFile_Directory:
+        case TiDB::SnapshotApplyMethod::DTFile_Single:
+        {
+            // Pre-decode and save as DTFiles
+            auto ingest_ids = kvstore->preHandleSnapshotToFiles(new_region, snaps, index, term, tmt);
+            auto * res = new PreHandledSnapshotWithFiles{new_region, std::move(ingest_ids)};
+            return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithFiles);
+        }
+        default:
+            throw Exception("Unknow Region apply method: " + applyMethodToString(kvstore->applyMethod()));
         }
     }
     catch (...)
@@ -330,21 +418,21 @@ void ApplyPreHandledSnapshot(EngineStoreServerWrap * server, RawVoidPtr res, Raw
 {
     switch (static_cast<RawCppPtrTypeImpl>(type))
     {
-        case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
-        {
-            auto * snap = reinterpret_cast<PreHandledSnapshotWithBlock *>(res);
-            ApplyPreHandledSnapshot(server, snap);
-            break;
-        }
-        case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
-        {
-            auto * snap = reinterpret_cast<PreHandledSnapshotWithFiles *>(res);
-            ApplyPreHandledSnapshot(server, snap);
-            break;
-        }
-        default:
-            LOG_ERROR(&Logger::get(__PRETTY_FUNCTION__), "unknown type " + std::to_string(uint32_t(type)));
-            exit(-1);
+    case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
+    {
+        auto * snap = reinterpret_cast<PreHandledSnapshotWithBlock *>(res);
+        ApplyPreHandledSnapshot(server, snap);
+        break;
+    }
+    case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
+    {
+        auto * snap = reinterpret_cast<PreHandledSnapshotWithFiles *>(res);
+        ApplyPreHandledSnapshot(server, snap);
+        break;
+    }
+    default:
+        LOG_FMT_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
+        exit(-1);
     }
 }
 
@@ -354,49 +442,97 @@ void GcRawCppPtr(RawVoidPtr ptr, RawCppPtrType type)
     {
         switch (static_cast<RawCppPtrTypeImpl>(type))
         {
-            case RawCppPtrTypeImpl::String:
-                delete reinterpret_cast<RawCppStringPtr>(ptr);
-                break;
-            case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
-                delete reinterpret_cast<PreHandledSnapshotWithBlock *>(ptr);
-                break;
-            case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
-                delete reinterpret_cast<PreHandledSnapshotWithFiles *>(ptr);
-                break;
-            default:
-                LOG_ERROR(&Logger::get(__PRETTY_FUNCTION__), "unknown type " + std::to_string(uint32_t(type)));
-                exit(-1);
+        case RawCppPtrTypeImpl::String:
+            delete reinterpret_cast<RawCppStringPtr>(ptr);
+            break;
+        case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
+            delete reinterpret_cast<PreHandledSnapshotWithBlock *>(ptr);
+            break;
+        case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
+            delete reinterpret_cast<PreHandledSnapshotWithFiles *>(ptr);
+            break;
+        case RawCppPtrTypeImpl::WakerNotifier:
+            delete reinterpret_cast<AsyncNotifier *>(ptr);
+            break;
+        default:
+            LOG_FMT_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
+            exit(-1);
         }
     }
 }
 
 const char * IntoEncryptionMethodName(EncryptionMethod method)
 {
-    static const char * EncryptionMethodName[] = {
+    static const char * encryption_method_name[] = {
         "Unknown",
         "Plaintext",
         "Aes128Ctr",
         "Aes192Ctr",
         "Aes256Ctr",
     };
-    return EncryptionMethodName[static_cast<uint8_t>(method)];
+    return encryption_method_name[static_cast<uint8_t>(method)];
 }
 
-RawCppPtr GenRawCppPtr(RawVoidPtr ptr_, RawCppPtrTypeImpl type_) { return RawCppPtr{ptr_, static_cast<RawCppPtrType>(type_)}; }
+RawCppPtr GenRawCppPtr(RawVoidPtr ptr_, RawCppPtrTypeImpl type_)
+{
+    return RawCppPtr{ptr_, static_cast<RawCppPtrType>(type_)};
+}
+
+CppStrWithView GetConfig(EngineStoreServerWrap * server, [[maybe_unused]] uint8_t full)
+{
+    std::string config_file_path;
+    try
+    {
+        config_file_path = server->tmt->getContext().getConfigRef().getString("config-file");
+        std::ifstream stream(config_file_path);
+        if (!stream)
+            return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}};
+        auto * s = RawCppString::New((std::istreambuf_iterator<char>(stream)),
+                                     std::istreambuf_iterator<char>());
+        stream.close();
+        /** the returned str must be formated as TOML, proxy will parse and show in form of JASON.
+         *  curl `http://{status-addr}/config`, got:
+         *  {"raftstore-proxy":xxxx,"engine-store":xxx}
+         *
+         *  if proxy can NOT parse it, return 500 Internal Server Error.
+         * */
+        return CppStrWithView{.inner = GenRawCppPtr(s, RawCppPtrTypeImpl::String), .view = BaseBuffView{s->data(), s->size()}};
+    }
+    catch (...)
+    {
+        return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}};
+    }
+}
+
+void SetStore(EngineStoreServerWrap * server, BaseBuffView buff)
+{
+    metapb::Store store{};
+    CHECK_PARSE_PB_BUFF(store, buff.data, buff.len);
+    assert(server);
+    assert(server->tmt);
+    assert(store.id() != 0);
+    server->tmt->getKVStore()->setStore(std::move(store));
+}
+
+void MockSetFFI::MockSetRustGcHelper(void (*fn_gc_rust_ptr)(RawVoidPtr, RawRustPtrType))
+{
+    LOG_FMT_WARNING(&Poco::Logger::get(__FUNCTION__), "Set mock rust ptr gc function");
+    RustGcHelper::instance().setRustPtrGcFn(fn_gc_rust_ptr);
+}
 
 void SetPBMsByBytes(MsgPBType type, RawVoidPtr ptr, BaseBuffView view)
 {
     switch (type)
     {
-        case MsgPBType::ReadIndexResponse:
-            CHECK_PARSE_PB_BUFF(*reinterpret_cast<kvrpcpb::ReadIndexResponse *>(ptr), view.data, view.len);
-            break;
-        case MsgPBType::RegionLocalState:
-            CHECK_PARSE_PB_BUFF(*reinterpret_cast<raft_serverpb::RegionLocalState *>(ptr), view.data, view.len);
-            break;
-        default:
-            throw Exception(
-                std::string(__FUNCTION__) + ": meet unknown type " + std::to_string(static_cast<int>(type)), ErrorCodes::LOGICAL_ERROR);
+    case MsgPBType::ReadIndexResponse:
+        CHECK_PARSE_PB_BUFF(*reinterpret_cast<kvrpcpb::ReadIndexResponse *>(ptr), view.data, view.len);
+        break;
+    case MsgPBType::RegionLocalState:
+        CHECK_PARSE_PB_BUFF(*reinterpret_cast<raft_serverpb::RegionLocalState *>(ptr), view.data, view.len);
+        break;
+    case MsgPBType::ServerInfoResponse:
+        CHECK_PARSE_PB_BUFF(*reinterpret_cast<diagnosticspb::ServerInfoResponse *>(ptr), view.data, view.len);
+        break;
     }
 }
 
@@ -406,21 +542,24 @@ raft_serverpb::RegionLocalState TiFlashRaftProxyHelper::getRegionLocalState(uint
 
     raft_serverpb::RegionLocalState state;
     RawCppStringPtr error_msg_ptr{};
-    SCOPE_EXIT({ delete error_msg_ptr; });
+    SCOPE_EXIT({
+        delete error_msg_ptr;
+    });
     auto res = this->fn_get_region_local_state(this->proxy_ptr, region_id, &state, &error_msg_ptr);
     switch (res)
     {
-        case KVGetStatus::Ok:
-            break;
-        case KVGetStatus::Error:
-        {
-            throw Exception(std::string(__FUNCTION__) + ": meet internal error: " + *error_msg_ptr, ErrorCodes::LOGICAL_ERROR);
-        }
-        case KVGetStatus::NotFound:
-            // make not found as `Tombstone`
-            state.set_state(raft_serverpb::PeerState::Tombstone);
-            break;
+    case KVGetStatus::Ok:
+        break;
+    case KVGetStatus::Error:
+    {
+        throw Exception(fmt::format("{} meet internal error: {}", __FUNCTION__, *error_msg_ptr), ErrorCodes::LOGICAL_ERROR);
+    }
+    case KVGetStatus::NotFound:
+        // make not found as `Tombstone`
+        state.set_state(raft_serverpb::PeerState::Tombstone);
+        break;
     }
     return state;
 }
+
 } // namespace DB

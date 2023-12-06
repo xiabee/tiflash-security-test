@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/Allocator.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
@@ -7,9 +21,12 @@
 #include <IO/UncompressedCache.h>
 #include <Interpreters/AsynchronousMetrics.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/MarkCache.h>
+#include <Storages/Page/FileUsage.h>
 #include <Storages/StorageDeltaMerge.h>
-#include <Storages/StorageMergeTree.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <common/config_common.h>
 
 #include <chrono>
@@ -34,13 +51,12 @@ struct MallocExtensionInitializer
 
 namespace DB
 {
-
 AsynchronousMetrics::~AsynchronousMetrics()
 {
     try
     {
         {
-            std::lock_guard<std::mutex> lock{wait_mutex};
+            std::lock_guard lock{wait_mutex};
             quit = true;
         }
 
@@ -56,14 +72,14 @@ AsynchronousMetrics::~AsynchronousMetrics()
 
 AsynchronousMetrics::Container AsynchronousMetrics::getValues() const
 {
-    std::lock_guard<std::mutex> lock{container_mutex};
+    std::lock_guard lock{container_mutex};
     return container;
 }
 
 
 void AsynchronousMetrics::set(const std::string & name, Value value)
 {
-    std::lock_guard<std::mutex> lock{container_mutex};
+    std::lock_guard lock{container_mutex};
     container[name] = value;
 }
 
@@ -72,7 +88,7 @@ void AsynchronousMetrics::run()
 {
     setThreadName("AsyncMetrics");
 
-    std::unique_lock<std::mutex> lock{wait_mutex};
+    std::unique_lock lock{wait_mutex};
 
     /// Next minute + 30 seconds. To be distant with moment of transmission of metrics, see MetricsTransmitter.
     const auto get_next_minute = [] {
@@ -113,6 +129,26 @@ static void calculateMaxAndSum(Max & max, Sum & sum, T x)
         max = x;
 }
 
+FileUsageStatistics AsynchronousMetrics::getPageStorageFileUsage()
+{
+    // Get from RegionPersister
+    auto & tmt = context.getTMTContext();
+    auto & kvstore = tmt.getKVStore();
+    FileUsageStatistics usage = kvstore->getFileUsageStatistics();
+
+    // Get the blob file status from all PS V3 instances
+    if (auto global_storage_pool = context.getGlobalStoragePool(); global_storage_pool != nullptr)
+    {
+        const auto log_usage = global_storage_pool->log_storage->getFileUsageStatistics();
+        const auto meta_usage = global_storage_pool->meta_storage->getFileUsageStatistics();
+        const auto data_usage = global_storage_pool->data_storage->getFileUsageStatistics();
+
+        usage.total_file_num += log_usage.total_file_num + meta_usage.total_file_num + data_usage.total_file_num;
+        usage.total_disk_size += log_usage.total_disk_size + meta_usage.total_disk_size + data_usage.total_disk_size;
+        usage.total_valid_size += log_usage.total_valid_size + meta_usage.total_valid_size + data_usage.total_valid_size;
+    }
+    return usage;
+}
 
 void AsynchronousMetrics::update()
 {
@@ -135,14 +171,13 @@ void AsynchronousMetrics::update()
     set("Uptime", context.getUptimeSeconds());
 
     {
+        // Get the snapshot status from all delta tree tables
         auto databases = context.getDatabases();
 
         double max_dt_stable_oldest_snapshot_lifetime = 0.0;
         double max_dt_delta_oldest_snapshot_lifetime = 0.0;
         double max_dt_meta_oldest_snapshot_lifetime = 0.0;
         size_t max_dt_background_tasks_length = 0;
-
-        size_t max_part_count_for_partition = 0;
 
         for (const auto & db : databases)
         {
@@ -152,15 +187,14 @@ void AsynchronousMetrics::update()
 
                 if (auto dt_storage = std::dynamic_pointer_cast<StorageDeltaMerge>(table); dt_storage)
                 {
-                    auto stat = dt_storage->getStore()->getStat();
-                    calculateMax(max_dt_stable_oldest_snapshot_lifetime, stat.storage_stable_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_delta_oldest_snapshot_lifetime, stat.storage_delta_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_meta_oldest_snapshot_lifetime, stat.storage_meta_oldest_snapshot_lifetime);
-                    calculateMax(max_dt_background_tasks_length, stat.background_tasks_length);
-                }
-                else if (StorageMergeTree * table_merge_tree = dynamic_cast<StorageMergeTree *>(table.get()); table_merge_tree)
-                {
-                    calculateMax(max_part_count_for_partition, table_merge_tree->getData().getMaxPartsCountForPartition());
+                    if (auto store = dt_storage->getStoreIfInited(); store)
+                    {
+                        auto stat = store->getStat();
+                        calculateMax(max_dt_stable_oldest_snapshot_lifetime, stat.storage_stable_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_delta_oldest_snapshot_lifetime, stat.storage_delta_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_meta_oldest_snapshot_lifetime, stat.storage_meta_oldest_snapshot_lifetime);
+                        calculateMax(max_dt_background_tasks_length, stat.background_tasks_length);
+                    }
                 }
             }
         }
@@ -169,7 +203,13 @@ void AsynchronousMetrics::update()
         set("MaxDTDeltaOldestSnapshotLifetime", max_dt_delta_oldest_snapshot_lifetime);
         set("MaxDTMetaOldestSnapshotLifetime", max_dt_meta_oldest_snapshot_lifetime);
         set("MaxDTBackgroundTasksLength", max_dt_background_tasks_length);
-        set("MaxPartCountForPartition", max_part_count_for_partition);
+    }
+
+    {
+        const FileUsageStatistics usage = getPageStorageFileUsage();
+        set("BlobFileNums", usage.total_file_num);
+        set("BlobDiskBytes", usage.total_disk_size);
+        set("BlobValidBytes", usage.total_valid_size);
     }
 
 #if USE_TCMALLOC

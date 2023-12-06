@@ -1,11 +1,26 @@
-#include <Common/Config/cpptoml.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
+#include <cpptoml.h>
 
 #include <sstream>
 
 namespace DB::tests
 {
+
 TEST(CPPTomlTest, ContainsQualifiedArray)
 {
     auto * log = &Poco::Logger::get("CPPTomlTest");
@@ -31,8 +46,8 @@ c = 123.45
     for (size_t i = 0; i < failure_tests.size(); ++i)
     {
         const auto & test_case = failure_tests[i];
-        SCOPED_TRACE("[index=" + std::to_string(i) + "] [content=" + test_case + "]");
-        LOG_INFO(log, "parsing [index=" << i << "] [content=" << test_case << "]");
+        SCOPED_TRACE(fmt::format("[index={}] [content={}]", i, test_case));
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         std::istringstream ss(test_case);
         cpptoml::parser p(ss);
@@ -70,8 +85,8 @@ c = [123, 456]
     for (size_t i = 0; i < failure_tests.size(); ++i)
     {
         const auto & test_case = failure_tests[i];
-        SCOPED_TRACE("[index=" + std::to_string(i) + "] [content=" + test_case + "]");
-        LOG_INFO(log, "parsing [index=" << i << "] [content=" << test_case << "]");
+        SCOPED_TRACE(fmt::format("[index={}] [content={}]", i, test_case));
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         std::istringstream ss(test_case);
         cpptoml::parser p(ss);
@@ -113,8 +128,8 @@ c = []
     for (size_t i = 0; i < failure_tests.size(); ++i)
     {
         const auto & test_case = failure_tests[i];
-        SCOPED_TRACE("[index=" + std::to_string(i) + "] [content=" + test_case + "]");
-        LOG_INFO(log, "parsing [index=" << i << "] [content=" << test_case << "]");
+        SCOPED_TRACE(fmt::format("[index={}] [content={}]", i, test_case));
+        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         std::istringstream ss(test_case);
         cpptoml::parser p(ss);

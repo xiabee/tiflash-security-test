@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/ProfileEvents.h>
 #include <Common/TiFlashMetrics.h>
 #include <Interpreters/Context.h>
@@ -22,7 +36,6 @@ extern const Event DMWriteBytes;
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
 extern const int ILLFORMAT_RAFT_ROW;
@@ -30,21 +43,21 @@ extern const int ILLFORMAT_RAFT_ROW;
 
 namespace DM
 {
-
 SSTFilesToDTFilesOutputStream::SSTFilesToDTFilesOutputStream( //
-    BoundedSSTFilesToBlockInputStreamPtr  child_,
-    StorageDeltaMergePtr                  storage_,
-    const DecodingStorageSchemaSnapshot & schema_snap_,
-    TiDB::SnapshotApplyMethod             method_,
-    FileConvertJobType                    job_type_,
-    TMTContext &                          tmt_)
-    : child(std::move(child_)), //
-      storage(std::move(storage_)),
-      schema_snap(schema_snap_),
-      method(method_),
-      job_type(job_type_),
-      tmt(tmt_),
-      log(&Poco::Logger::get("SSTFilesToDTFilesOutputStream"))
+    BoundedSSTFilesToBlockInputStreamPtr child_,
+    StorageDeltaMergePtr storage_,
+    DecodingStorageSchemaSnapshotConstPtr schema_snap_,
+    TiDB::SnapshotApplyMethod method_,
+    FileConvertJobType job_type_,
+    TMTContext & tmt_)
+    : child(std::move(child_))
+    , //
+    storage(std::move(storage_))
+    , schema_snap(std::move(schema_snap_))
+    , method(method_)
+    , job_type(job_type_)
+    , tmt(tmt_)
+    , log(&Poco::Logger::get("SSTFilesToDTFilesOutputStream"))
 {
 }
 
@@ -77,25 +90,28 @@ void SSTFilesToDTFilesOutputStream::writeSuffix()
         dt_stream.reset();
     }
 
-    auto &     ctx          = tmt.getContext();
-    auto       metrics      = ctx.getTiFlashMetrics();
     const auto process_keys = child->getProcessKeys();
     if (job_type == FileConvertJobType::ApplySnapshot)
     {
-        GET_METRIC(metrics, tiflash_raft_command_duration_seconds, type_apply_snapshot_predecode).Observe(watch.elapsedSeconds());
+        GET_METRIC(tiflash_raft_command_duration_seconds, type_apply_snapshot_predecode_sst2dt).Observe(watch.elapsedSeconds());
         // Note that number of keys in different cf will be aggregated into one metrics
-        GET_METRIC(metrics, tiflash_raft_process_keys, type_apply_snapshot).Increment(process_keys.total());
+        GET_METRIC(tiflash_raft_process_keys, type_apply_snapshot).Increment(process_keys.total());
     }
     else
     {
         // Note that number of keys in different cf will be aggregated into one metrics
-        GET_METRIC(metrics, tiflash_raft_process_keys, type_ingest_sst).Increment(process_keys.total());
+        GET_METRIC(tiflash_raft_process_keys, type_ingest_sst).Increment(process_keys.total());
     }
-    LOG_INFO(log,
-             "Pre-handle snapshot " << child->getRegion()->toString(true) << " to " << ingest_files.size() << " DTFiles, cost "
-                                    << watch.elapsedMilliseconds() << "ms [rows=" << commit_rows
-                                    << "] [write_cf_keys=" << process_keys.write_cf << "] [default_cf_keys=" << process_keys.default_cf
-                                    << "] [lock_cf_keys=" << process_keys.lock_cf << "]");
+    LOG_FMT_INFO(
+        log,
+        "Pre-handle snapshot {} to {} DTFiles, cost {}ms [rows={}] [write_cf_keys={}] [default_cf_keys={}] [lock_cf_keys={}]",
+        child->getRegion()->toString(true),
+        ingest_files.size(),
+        watch.elapsedMilliseconds(),
+        commit_rows,
+        process_keys.write_cf,
+        process_keys.default_cf,
+        process_keys.lock_cf);
 }
 
 bool SSTFilesToDTFilesOutputStream::newDTFileStream()
@@ -121,11 +137,15 @@ bool SSTFilesToDTFilesOutputStream::newDTFileStream()
         // Can no allocate path and id for storing DTFiles (the storage may be dropped / shutdown)
         return false;
     }
-    auto dt_file = DMFile::create(file_id, parent_path, flags.isSingleFile());
-    LOG_INFO(log,
-             "Create file for snapshot data " << child->getRegion()->toString(true) << " [file=" << dt_file->path()
-                                              << "] [single_file_mode=" << flags.isSingleFile() << "]");
-    dt_stream = std::make_unique<DMFileBlockOutputStream>(tmt.getContext(), dt_file, *(schema_snap.column_defines), flags);
+
+    auto dt_file = DMFile::create(file_id, parent_path, flags.isSingleFile(), storage->createChecksumConfig(flags.isSingleFile()));
+    LOG_FMT_INFO(
+        log,
+        "Create file for snapshot data {} [file={}] [single_file_mode={}]",
+        child->getRegion()->toString(true),
+        dt_file->path(),
+        flags.isSingleFile());
+    dt_stream = std::make_unique<DMFileBlockOutputStream>(tmt.getContext(), dt_file, *(schema_snap->column_defines), flags);
     dt_stream->writePrefix();
     ingest_files.emplace_back(dt_file);
     return true;
@@ -134,12 +154,11 @@ bool SSTFilesToDTFilesOutputStream::newDTFileStream()
 void SSTFilesToDTFilesOutputStream::write()
 {
     size_t last_effective_num_rows = 0;
-    size_t last_not_clean_rows     = 0;
-    size_t cur_effective_num_rows  = 0;
-    size_t cur_not_clean_rows      = 0;
+    size_t last_not_clean_rows = 0;
+    size_t cur_effective_num_rows = 0;
+    size_t cur_not_clean_rows = 0;
     while (true)
     {
-
         Block block = child->read();
         if (!block)
             break;
@@ -164,17 +183,21 @@ void SSTFilesToDTFilesOutputStream::write()
             if (unlikely(block.rows() > 1 && !isAlreadySorted(block, sort)))
             {
                 const String error_msg
-                    = "The block decoded from SSTFile is not sorted by primary key and version " + child->getRegion()->toString(true);
+                    = fmt::format("The block decoded from SSTFile is not sorted by primary key and version {}", child->getRegion()->toString(true));
                 LOG_ERROR(log, error_msg);
                 FieldVisitorToString visitor;
-                const size_t         nrows = block.rows();
+                const size_t nrows = block.rows();
                 for (size_t i = 0; i < nrows; ++i)
                 {
-                    const auto & pk_col  = block.getByName(MutableSupport::tidb_pk_column_name);
+                    const auto & pk_col = block.getByName(MutableSupport::tidb_pk_column_name);
                     const auto & ver_col = block.getByName(MutableSupport::version_column_name);
-                    LOG_ERROR(log,
-                              "[Row=" << i << "/" << nrows << "] [pk=" << applyVisitor(visitor, (*pk_col.column)[i])
-                                      << "] [ver=" << applyVisitor(visitor, (*ver_col.column)[i]) << "]");
+                    LOG_FMT_ERROR(
+                        log,
+                        "[Row={}/{}] [pk={}] [ver={}]",
+                        i,
+                        nrows,
+                        applyVisitor(visitor, (*pk_col.column)[i]),
+                        applyVisitor(visitor, (*ver_col.column)[i]));
                 }
                 throw Exception(error_msg);
             }
@@ -185,12 +208,12 @@ void SSTFilesToDTFilesOutputStream::write()
         std::tie(cur_effective_num_rows, cur_not_clean_rows, property.gc_hint_version) //
             = child->getMvccStatistics();
         property.effective_num_rows = cur_effective_num_rows - last_effective_num_rows;
-        property.not_clean_rows     = cur_not_clean_rows - last_not_clean_rows;
+        property.not_clean_rows = cur_not_clean_rows - last_not_clean_rows;
         dt_stream->write(block, property);
 
         commit_rows += block.rows();
         last_effective_num_rows = cur_effective_num_rows;
-        last_not_clean_rows     = cur_not_clean_rows;
+        last_not_clean_rows = cur_not_clean_rows;
     }
 }
 
@@ -215,7 +238,7 @@ void SSTFilesToDTFilesOutputStream::cancel()
         }
         catch (...)
         {
-            tryLogCurrentException(log, "ignore exception while canceling SST files to DeltaTree files stream [file=" + file->path() + "]");
+            tryLogCurrentException(log, fmt::format("ignore exception while canceling SST files to DeltaTree files stream [file={}]", file->path()));
         }
     }
 }

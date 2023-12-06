@@ -1,21 +1,34 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Core/Field.h>
-#include <Common/Exception.h>
 #include <Columns/IColumn.h>
+#include <Common/Exception.h>
+#include <Core/Field.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int NOT_IMPLEMENTED;
+extern const int NOT_IMPLEMENTED;
 }
 
 
 /** ColumnConst contains another column with single element,
-  *  but looks like a column with arbitary amount of same elements.
+  *  but looks like a column with arbitrary amount of same elements.
   */
 class ColumnConst final : public COWPtrHelper<IColumn, ColumnConst>
 {
@@ -106,12 +119,14 @@ public:
         ++s;
     }
 
-    void insertData(const char *, size_t) override
+    void insertData(const char *, size_t)
+        override
     {
         ++s;
     }
 
-    void insertFrom(const IColumn &, size_t) override
+    void insertFrom(const IColumn &, size_t)
+        override
     {
         ++s;
     }
@@ -126,32 +141,34 @@ public:
         s -= n;
     }
 
-    StringRef serializeValueIntoArena(size_t, Arena & arena, char const *& begin, std::shared_ptr<TiDB::ITiDBCollator> collator, String & sort_key_container) const override
+    StringRef serializeValueIntoArena(size_t, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const override
     {
         return data->serializeValueIntoArena(0, arena, begin, collator, sort_key_container);
     }
 
-    const char * deserializeAndInsertFromArena(const char * pos, std::shared_ptr<TiDB::ITiDBCollator> collator) override
+    const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr & collator) override
     {
         auto & mutable_data = data->assumeMutableRef();
-        auto res = mutable_data.deserializeAndInsertFromArena(pos, collator);
+        const auto * res = mutable_data.deserializeAndInsertFromArena(pos, collator);
         mutable_data.popBack(1);
         ++s;
         return res;
     }
 
-    void updateHashWithValue(size_t, SipHash & hash, std::shared_ptr<TiDB::ITiDBCollator> collator, String & sort_key_container) const override
+    void updateHashWithValue(size_t, SipHash & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const override
     {
         data->updateHashWithValue(0, hash, collator, sort_key_container);
     }
 
-    void updateHashWithValues(IColumn::HashValues & hash_values, const std::shared_ptr<TiDB::ITiDBCollator> & collator, String & sort_key_container) const override
+    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const override
     {
         for (size_t i = 0; i < s; ++i)
         {
             data->updateHashWithValue(0, hash_values[i], collator, sort_key_container);
         }
     }
+
+    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
 
     ColumnPtr filter(const Filter & filt, ssize_t result_size_hint) const override;
     ColumnPtr replicate(const Offsets & offsets) const override;
@@ -201,6 +218,7 @@ public:
     bool isFixedAndContiguous() const override { return data->isFixedAndContiguous(); }
     bool valuesHaveFixedSize() const override { return data->valuesHaveFixedSize(); }
     size_t sizeOfValueIfFixed() const override { return data->sizeOfValueIfFixed(); }
+    StringRef getRawData() const override { return data->getRawData(); }
 
     /// Not part of the common interface.
 
@@ -213,7 +231,10 @@ public:
     Field getField() const { return getDataColumn()[0]; }
 
     template <typename T>
-    T getValue() const { return getField().safeGet<typename NearestFieldType<T>::Type>(); }
+    T getValue() const
+    {
+        return getField().safeGet<typename NearestFieldType<T>::Type>();
+    }
 };
 
-}
+} // namespace DB

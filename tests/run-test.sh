@@ -1,35 +1,22 @@
 #!/bin/bash
+# Copyright 2023 PingCAP, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 function wait_table()
 {
-	local db="${1}"
-	local table="${2}"
-	local mysql_client="${3}"
-
-	local timeout='600'
-
-	echo "=> wait for ${db}.${table} available in tiflash"
-
-	local failed='true'
-	local query="select available from information_schema.tiflash_replica where table_schema='${db}' and table_name='${table}'"
-	for (( i = 0; i < "${timeout}"; i++ )); do
-		local available_status=`${mysql_client} "${query}" | { grep "1" || test $? = 1; } | wc -l`
-		if [ ${?} == 0 ] && [ "${available_status}" -eq 1 ]; then
-			local failed='false'
-			break
-		fi
-		if [ $((${i} % 10)) = 0 ] && [ ${i} -ge 10 ]; then
-			echo "   #${i} waiting for ${db}.${table} learner storage available"
-		fi
-		sleep 1
-	done
-
-	if [ "${failed}" == 'true' ]; then
-		echo "   can not reach syncing status" >&2
-		return 1
-	else
-		echo "   available"
-	fi
+	python2 wait-table.py "$@"; return $?
 }
 export -f wait_table
 
@@ -49,7 +36,7 @@ function run_file()
 		python2 run-test.py "$dbc" "$path" "$fuzz" "$mysql_client" "$verbose"
 	else
 		if [ "$ext" == "visual" ]; then
-			python run-test-gen-from-visual.py "$path" "$skip_raw_test" "$verbose"
+			python2 run-test-gen-from-visual.py "$path" "$skip_raw_test" "$verbose"
 			if [ $? != 0 ]; then
 				echo "Generate test files failed: $file" >&2
 				exit 1
@@ -77,21 +64,6 @@ function run_dir()
 	local skip_raw_test="$5"
 	local mysql_client="$6"
 	local verbose="$7"
-
-	find "$path" -maxdepth 1 -name "*.visual" -type f | sort | while read file; do
-		if [ -f "$file" ]; then
-			python mutable-test-gen-from-visual.py "$file" "$skip_raw_test"
-		fi
-		if [ $? != 0 ]; then
-			echo "Generate test files failed: $file" >&2
-			exit 1
-		fi
-	done
-
-	if [ $? != 0 ]; then
-		echo "Generate test files failed" >&2
-		exit 1
-	fi
 
 	find "$path" -maxdepth 1 -name "*.test" -type f | sort | while read file; do
 		if [ -f "$file" ]; then
@@ -150,7 +122,7 @@ verbose="${verbose:-8}"
 source ./_env.sh
 
 if [ -z "$target" ]; then
-	target="mutable-test"
+	target="delta-merge-test"
 fi
 
 if [ -z "$debug" ]; then
@@ -199,7 +171,7 @@ if [ "$fullstack" = true ]; then
         echo "create database '"$tidb_db"' failed" >&2
         exit 1
     fi
-    python generate-fullstack-test.py "$tidb_db" "$tidb_table"
+    python2 generate-fullstack-test.py "$tidb_db" "$tidb_table"
 fi
 
 run_path "$dbc" "$target" "$continue_on_error" "$fuzz" "$skip_raw_test" "$mysql_client" "$verbose"

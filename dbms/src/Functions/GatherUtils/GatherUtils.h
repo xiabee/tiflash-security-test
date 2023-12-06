@@ -1,13 +1,26 @@
-#pragma once
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#include <type_traits>
+#pragma once
 
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnsNumber.h>
-
-#include <Functions/GatherUtils/IValueSource.h>
-#include <Functions/GatherUtils/IArraySource.h>
 #include <Functions/GatherUtils/IArraySink.h>
+#include <Functions/GatherUtils/IArraySource.h>
+#include <Functions/GatherUtils/IValueSource.h>
+
+#include <type_traits>
 
 /** These methods are intended for implementation of functions, that
   *  copy ranges from one or more columns to another column.
@@ -29,7 +42,6 @@
 
 namespace DB::GatherUtils
 {
-
 std::unique_ptr<IArraySource> createArraySource(const ColumnArray & col, bool is_const, size_t total_rows);
 std::unique_ptr<IValueSource> createValueSource(const IColumn & col, bool is_const, size_t total_rows);
 std::unique_ptr<IArraySink> createArraySink(ColumnArray & col, size_t column_size);
@@ -55,5 +67,4 @@ void push(IArraySource & array_source, IValueSource & value_source, IArraySink &
 void resizeDynamicSize(IArraySource & array_source, IValueSource & value_source, IArraySink & sink, const IColumn & size_column);
 
 void resizeConstantSize(IArraySource & array_source, IValueSource & value_source, IArraySink & sink, ssize_t size);
-}
-
+} // namespace DB::GatherUtils

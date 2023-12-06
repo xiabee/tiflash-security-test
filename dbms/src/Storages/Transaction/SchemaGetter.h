@@ -1,9 +1,26 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Storages/Transaction/TiDB.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#ifdef __clang__
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 #include <pingcap/kv/Snapshot.h>
 #pragma GCC diagnostic pop
 
@@ -11,7 +28,6 @@
 
 namespace DB
 {
-
 enum class SchemaActionType : Int8
 {
     None = 0,
@@ -57,6 +73,29 @@ enum class SchemaActionType : Int8
     RebaseAutoRandomBase = 40,
     AlterIndexVisibility = 41,
     ExchangeTablePartition = 42,
+    AddCheckConstraint = 43,
+    DropCheckConstraint = 44,
+    AlterCheckConstraint = 45,
+    AlterTableAlterPartition = 46,
+    RenameTables = 47,
+    DropIndexes = 48,
+    AlterTableAttributes = 49,
+    AlterTablePartitionAttributes = 50,
+    CreatePlacementPolicy = 51,
+    AlterPlacementPolicy = 52,
+    DropPlacementPolicy = 53,
+    AlterTablePartitionPlacement = 54,
+    ModifySchemaDefaultPlacement = 55,
+    AlterTablePlacement = 56,
+    AlterCacheTable = 57,
+    AlterTableStatsOptions = 58,
+    AlterNoCacheTable = 59,
+    CreateTables = 60,
+
+    // If we supporte new type from TiDB.
+    // MaxRecognizedType also needs to be changed.
+    // It should always be equal to the maximum supported type + 1
+    MaxRecognizedType = 61,
 };
 
 struct AffectedOption
@@ -89,9 +128,12 @@ struct SchemaGetter
 {
     pingcap::kv::Snapshot snap;
 
-    Logger * log;
+    Poco::Logger * log;
 
-    SchemaGetter(pingcap::kv::Cluster * cluster_, UInt64 tso_) : snap(cluster_, tso_), log(&Logger::get("SchemaGetter")) {}
+    SchemaGetter(pingcap::kv::Cluster * cluster_, UInt64 tso_)
+        : snap(cluster_, tso_)
+        , log(&Poco::Logger::get("SchemaGetter"))
+    {}
 
     Int64 getVersion();
 

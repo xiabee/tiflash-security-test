@@ -1,13 +1,26 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <vector>
-
 #include <IO/ReadBuffer.h>
+
+#include <vector>
 
 
 namespace DB
 {
-
 /** Reads from the concatenation of multiple ReadBuffers
   */
 class ConcatReadBufferWithPtr : public ReadBuffer
@@ -51,7 +64,11 @@ protected:
     }
 
 public:
-    ConcatReadBufferWithPtr(const ReadBuffers & buffers_) : ReadBuffer(nullptr, 0), buffers(buffers_), current(buffers.begin()) {}
+    ConcatReadBufferWithPtr(const ReadBuffers & buffers_)
+        : ReadBuffer(nullptr, 0)
+        , buffers(buffers_)
+        , current(buffers.begin())
+    {}
 };
 
 } // namespace DB

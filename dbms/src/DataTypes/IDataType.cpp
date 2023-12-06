@@ -1,25 +1,34 @@
-#include <Columns/IColumn.h>
-#include <Columns/ColumnConst.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+#include <Columns/ColumnConst.h>
+#include <Columns/IColumn.h>
 #include <Common/Exception.h>
 #include <Common/escapeForFileName.h>
-
 #include <Core/Defines.h>
-
-#include <IO/WriteHelpers.h>
-
 #include <DataTypes/IDataType.h>
 #include <DataTypes/NestedUtils.h>
+#include <IO/WriteHelpers.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int MULTIPLE_STREAMS_REQUIRED;
-    extern const int LOGICAL_ERROR;
-}
+extern const int MULTIPLE_STREAMS_REQUIRED;
+extern const int LOGICAL_ERROR;
+} // namespace ErrorCodes
 
 
 void IDataType::updateAvgValueSizeHint(const IColumn & column, double & avg_value_size_hint)
@@ -68,7 +77,8 @@ size_t IDataType::getSizeOfValueInMemory() const
 }
 
 
-bool IDataType::isNullMap(const IDataType::SubstreamPath & path) {
+bool IDataType::isNullMap(const IDataType::SubstreamPath & path)
+{
     for (const Substream & elem : path)
     {
         if (elem.type == Substream::NullMap)
@@ -111,4 +121,4 @@ void IDataType::insertDefaultInto(IColumn & column) const
     column.insertDefault();
 }
 
-}
+} // namespace DB

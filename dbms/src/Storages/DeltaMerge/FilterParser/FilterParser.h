@@ -1,12 +1,34 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <cassert>
-#include <sstream>
+#include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/Transaction/Types.h>
 #include <tipb/expression.pb.h>
+
+#include <functional>
+#include <memory>
+#include <unordered_map>
+
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB
 {
-
 class ASTSelectQuery;
 
 struct DAGQueryInfo;
@@ -19,17 +41,13 @@ using RSOperatorPtr = std::shared_ptr<RSOperator>;
 class FilterParser
 {
 public:
-    /// From ast.
-    using AttrCreatorByColumnName = std::function<Attr(const String &)>;
-    static RSOperatorPtr parseSelectQuery(const ASTSelectQuery & query, AttrCreatorByColumnName && creator, Poco::Logger * log);
-
-public:
     /// From dag.
     using AttrCreatorByColumnID = std::function<Attr(const ColumnID)>;
-    static RSOperatorPtr parseDAGQuery(const DAGQueryInfo &     dag_info,
-                                       const ColumnDefines &    columns_to_read,
-                                       AttrCreatorByColumnID && creator,
-                                       Poco::Logger *           log);
+    static RSOperatorPtr parseDAGQuery(
+        const DAGQueryInfo & dag_info,
+        const ColumnDefines & columns_to_read,
+        AttrCreatorByColumnID && creator,
+        const LoggerPtr & log);
 
     /// Some helper structure
 
@@ -47,7 +65,7 @@ public:
         Greater,
         GreaterEqual,
         Less,
-        LessEuqal,
+        LessEqual,
 
         In,
         NotIn,

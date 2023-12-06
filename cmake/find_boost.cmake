@@ -1,3 +1,17 @@
+# Copyright 2023 PingCAP, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 option (USE_INTERNAL_BOOST_LIBRARY "Set to FALSE to use system boost library instead of bundled" ${NOT_UNBUNDLED})
 
 # Test random file existing in all package variants
@@ -26,9 +40,9 @@ endif ()
 
 if (NOT Boost_SYSTEM_LIBRARY)
     set (USE_INTERNAL_BOOST_LIBRARY 1)
-    set (Boost_PROGRAM_OPTIONS_LIBRARY boost_program_options_internal)
-    set (Boost_SYSTEM_LIBRARY boost_system_internal)
-    set (Boost_FILESYSTEM_LIBRARY boost_filesystem_internal)
+    set (Boost_PROGRAM_OPTIONS_LIBRARY boost_internal)
+    set (Boost_SYSTEM_LIBRARY boost_internal)
+    set (Boost_FILESYSTEM_LIBRARY boost_internal)
 
     set (Boost_INCLUDE_DIRS)
 

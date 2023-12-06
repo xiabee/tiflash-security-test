@@ -1,7 +1,22 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <type_traits>
 #include <Common/HashTable/HashSet.h>
+
+#include <type_traits>
 
 
 /** A hash table that allows you to clear the table in O(1).
@@ -18,12 +33,12 @@ struct ClearableHashSetState
     UInt32 version = 1;
 
     /// Serialization, in binary and text form.
-    void write(DB::WriteBuffer & wb) const         { DB::writeBinary(version, wb); }
-    void writeText(DB::WriteBuffer & wb) const     { DB::writeText(version, wb); }
+    void write(DB::WriteBuffer & wb) const { DB::writeBinary(version, wb); }
+    void writeText(DB::WriteBuffer & wb) const { DB::writeText(version, wb); }
 
     /// Deserialization, in binary and text form.
-    void read(DB::ReadBuffer & rb)                 { DB::readBinary(version, rb); }
-    void readText(DB::ReadBuffer & rb)             { DB::readText(version, rb); }
+    void read(DB::ReadBuffer & rb) { DB::readBinary(version, rb); }
+    void readText(DB::ReadBuffer & rb) { DB::readText(version, rb); }
 };
 
 
@@ -44,23 +59,23 @@ struct ClearableHashTableCell : public BaseCell
     /// Do I need to store the zero key separately (that is, can a zero key be inserted into the hash table).
     static constexpr bool need_zero_value_storage = false;
 
-    ClearableHashTableCell() {}
-    ClearableHashTableCell(const Key & key_, const State & state) : BaseCell(key_, state), version(state.version) {}
+    ClearableHashTableCell() = default;
+    ClearableHashTableCell(const Key & key_, const State & state)
+        : BaseCell(key_, state)
+        , version(state.version)
+    {}
 };
 
-
-template
-<
+template <
     typename Key,
     typename Hash = DefaultHash<Key>,
     typename Grower = HashTableGrower<>,
-    typename Allocator = HashTableAllocator
->
+    typename Allocator = HashTableAllocator>
 class ClearableHashSet : public HashTable<Key, ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>
 {
 public:
-    using key_type = Key;
-    using value_type = typename ClearableHashSet::cell_type::value_type;
+    using Base = HashTable<Key, ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>;
+    using typename Base::LookupResult;
 
     void clear()
     {
@@ -69,19 +84,14 @@ public:
     }
 };
 
-template
-<
+template <
     typename Key,
     typename Hash = DefaultHash<Key>,
     typename Grower = HashTableGrower<>,
-    typename Allocator = HashTableAllocator
->
-class ClearableHashSetWithSavedHash: public HashTable<Key, ClearableHashTableCell<Key, HashSetCellWithSavedHash<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>
+    typename Allocator = HashTableAllocator>
+class ClearableHashSetWithSavedHash : public HashTable<Key, ClearableHashTableCell<Key, HashSetCellWithSavedHash<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>
 {
 public:
-    using key_type = Key;
-    using value_type = typename ClearableHashSetWithSavedHash::cell_type::value_type;
-
     void clear()
     {
         ++this->version;

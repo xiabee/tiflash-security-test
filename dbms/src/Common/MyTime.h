@@ -1,14 +1,32 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Core/Field.h>
+#include <Interpreters/TimezoneInfo.h>
 #include <common/DateLUTImpl.h>
 
 struct StringRef;
 namespace DB
 {
-
 struct MyTimeBase
 {
+    static constexpr Int64 SECOND_IN_ONE_DAY = 86400;
+    static constexpr Int64 SECOND_IN_ONE_HOUR = 3600;
+    static constexpr Int64 SECOND_IN_ONE_MINUTE = 60;
+
 
     // copied from https://github.com/pingcap/tidb/blob/master/types/time.go
     // Core time bit fields.
@@ -63,7 +81,7 @@ struct MyTimeBase
 
     UInt16 year; // year <= 9999
     UInt8 month; // month <= 12
-    UInt8 day;   // day <= 31
+    UInt8 day; // day <= 31
     // When it's type is Time, HH:MM:SS may be 839:59:59 to -839:59:59, so use int16 to avoid overflow
     Int16 hour;
     UInt8 minute;
@@ -71,7 +89,7 @@ struct MyTimeBase
     UInt32 micro_second; // ms second <= 999999
 
     MyTimeBase() = default;
-    MyTimeBase(UInt64 packed);
+    explicit MyTimeBase(UInt64 packed);
     MyTimeBase(UInt16 year_, UInt8 month_, UInt8 day_, UInt16 hour_, UInt8 minute_, UInt8 second_, UInt32 micro_second_);
 
     UInt64 toPackedUInt() const;
@@ -84,6 +102,9 @@ struct MyTimeBase
 
     // returns the week day of current date(0 as sunday)
     int weekDay() const;
+    // returns the week day name of current date, return empty string if invalid
+    const String & weekDayName() const;
+    const String & monthName() const;
     // the following methods are port from TiDB
     int yearDay() const;
 
@@ -92,26 +113,34 @@ struct MyTimeBase
     std::tuple<int, int> calcWeek(UInt32 mode) const;
 
     // Check validity of time under specified SQL_MODE.
-    // May throw exception.
-    void check(bool allow_zero_in_date, bool allow_invalid_date) const;
+    // return false if time is invalid
+    bool isValid(bool allow_zero_in_date, bool allow_invalid_date) const;
 };
 
 struct MyDateTime : public MyTimeBase
 {
-    MyDateTime(UInt64 packed) : MyTimeBase(packed) {}
+    explicit MyDateTime(UInt64 packed)
+        : MyTimeBase(packed)
+    {}
 
     MyDateTime(UInt16 year_, UInt8 month_, UInt8 day_, UInt16 hour_, UInt8 minute_, UInt8 second_, UInt32 micro_second_)
         : MyTimeBase(year_, month_, day_, hour_, minute_, second_, micro_second_)
     {}
 
     String toString(int fsp) const;
+
+    static MyDateTime getSystemDateTimeByTimezone(const TimezoneInfo &, UInt8 fsp);
 };
 
 struct MyDate : public MyTimeBase
 {
-    MyDate(UInt64 packed) : MyTimeBase(packed) {}
+    explicit MyDate(UInt64 packed)
+        : MyTimeBase(packed)
+    {}
 
-    MyDate(UInt16 year_, UInt8 month_, UInt8 day_) : MyTimeBase(year_, month_, day_, 0, 0, 0, 0) {}
+    MyDate(UInt16 year_, UInt8 month_, UInt8 day_)
+        : MyTimeBase(year_, month_, day_, 0, 0, 0, 0)
+    {}
 
     String toString() const
     {
@@ -152,35 +181,33 @@ private:
     std::vector<ParserCallback> parsers;
 };
 
-Field parseMyDateTime(const String & str, int8_t fsp = 6);
+static int8_t default_fsp = 6;
+static bool default_need_check_time_valid = false;
 
-void convertTimeZone(UInt64 from_time, UInt64 & to_time, const DateLUTImpl & time_zone_from, const DateLUTImpl & time_zone_to);
+Field parseMyDateTime(const String & str, int8_t fsp = default_fsp, bool need_check_time_valid = default_need_check_time_valid);
+std::pair<Field, bool> parseMyDateTimeAndJudgeIsDate(const String & str, int8_t fsp = default_fsp, bool need_check_time_valid = default_need_check_time_valid);
 
-void convertTimeZoneByOffset(UInt64 from_time, UInt64 & to_time, Int64 offset, const DateLUTImpl & time_zone);
+void convertTimeZone(UInt64 from_time, UInt64 & to_time, const DateLUTImpl & time_zone_from, const DateLUTImpl & time_zone_to, bool throw_exception = false);
+
+void convertTimeZoneByOffset(UInt64 from_time, UInt64 & to_time, bool from_utc, Int64 offset, bool throw_exception = false);
+
+MyDateTime convertUTC2TimeZone(time_t utc_ts, UInt32 micro_second, const DateLUTImpl & time_zone_to);
+
+MyDateTime convertUTC2TimeZoneByOffset(time_t utc_ts, UInt32 micro_second, Int64 offset);
+
+std::pair<time_t, UInt32> roundTimeByFsp(time_t second, UInt64 nano_second, UInt8 fsp);
 
 int calcDayNum(int year, int month, int day);
+void fromDayNum(MyDateTime & t, int day_num);
+
+// returns seconds since '0000-00-00'
+UInt64 calcSeconds(int year, int month, int day, int hour, int minute, int second);
 
 size_t maxFormattedDateTimeStringLength(const String & format);
 
-
-inline bool supportedByDateLUT(const MyDateTime & my_time) { return my_time.year >= 1970; }
-
-/// DateLUT only support time from year 1970, in some corner cases, the input date may be
-/// 1969-12-31, need extra logical to handle it
 inline time_t getEpochSecond(const MyDateTime & my_time, const DateLUTImpl & time_zone)
 {
-    if likely (supportedByDateLUT(my_time))
-        return time_zone.makeDateTime(my_time.year, my_time.month, my_time.day, my_time.hour, my_time.minute, my_time.second);
-    if likely (my_time.year == 1969 && my_time.month == 12 && my_time.day == 31)
-    {
-        /// - 3600 * 24 + my_time.hour * 3600 + my_time.minute * 60 + my_time.second is UTC based, need to adjust
-        /// the epoch according to the input time_zone
-        return -3600 * 24 + my_time.hour * 3600 + my_time.minute * 60 + my_time.second - time_zone.getOffsetAtStartEpoch();
-    }
-    else
-    {
-        throw Exception("Unsupported timestamp value , TiFlash only support timestamp after 1970-01-01 00:00:00 UTC)");
-    }
+    return time_zone.makeDateTime(my_time.year, my_time.month, my_time.day, my_time.hour, my_time.minute, my_time.second);
 }
 
 bool isPunctuation(char c);
@@ -189,7 +216,27 @@ bool isValidSeperator(char c, int previous_parts);
 
 // Build CoreTime value with checking overflow of internal bit fields, return true if input is invalid.
 // Note that this function will not check if the input is logically a valid datetime value.
-bool toCoreTimeChecked(const UInt64 & year, const UInt64 & month, const UInt64 & day, const UInt64 & hour, const UInt64 & minute,
-                     const UInt64 & second, const UInt64 & microsecond, MyDateTime & result);
+bool toCoreTimeChecked(const UInt64 & year, const UInt64 & month, const UInt64 & day, const UInt64 & hour, const UInt64 & minute, const UInt64 & second, const UInt64 & microsecond, MyDateTime & result);
+
+inline bool isLeapYear(UInt16 year)
+{
+    return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+}
+
+// Get last day of a month. Return 0 if month if invalid.
+inline UInt8 getLastDay(UInt16 year, UInt8 month)
+{
+    static constexpr UInt8 days_of_month_table[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    UInt8 last_day = 0;
+    if (month > 0 && month <= 12)
+        last_day = days_of_month_table[month];
+    if (month == 2 && isLeapYear(year))
+        last_day = 29;
+    return last_day;
+}
+
+UInt64 addSeconds(UInt64 t, Int64 delta);
+void addDays(MyDateTime & t, Int64 days);
+void addMonths(MyDateTime & t, Int64 months);
 
 } // namespace DB

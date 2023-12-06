@@ -1,24 +1,37 @@
-#include <Functions/IFunction.h>
-#include <Functions/FunctionFactory.h>
-#include <Functions/FunctionHelpers.h>
-#include <DataTypes/IDataType.h>
-#include <DataTypes/DataTypeTuple.h>
-#include <DataTypes/DataTypeArray.h>
-#include <Columns/ColumnTuple.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnString.h>
+#include <Columns/ColumnTuple.h>
 #include <Columns/ColumnsNumber.h>
+#include <DataTypes/DataTypeArray.h>
+#include <DataTypes/DataTypeTuple.h>
+#include <DataTypes/IDataType.h>
+#include <Functions/FunctionFactory.h>
+#include <Functions/FunctionHelpers.h>
+#include <Functions/IFunction.h>
 #include <Interpreters/ExpressionActions.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-    extern const int ILLEGAL_INDEX;
-}
+extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+extern const int ILLEGAL_INDEX;
+} // namespace ErrorCodes
 
 
 /** tuple(x, y, ...) is a function that allows you to group several columns
@@ -50,7 +63,7 @@ public:
         return 0;
     }
 
-    bool isInjective(const Block &) override
+    bool isInjective(const Block &) const override
     {
         return true;
     }
@@ -66,7 +79,7 @@ public:
         return std::make_shared<DataTypeTuple>(arguments);
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
         size_t tuple_size = arguments.size();
         Columns tuple_columns(tuple_size);
@@ -142,7 +155,7 @@ public:
         return out_return_type;
     }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
         Columns array_offsets;
 
@@ -205,4 +218,4 @@ void registerFunctionsTuple(FunctionFactory & factory)
     factory.registerFunction<FunctionTupleElement>();
 }
 
-}
+} // namespace DB

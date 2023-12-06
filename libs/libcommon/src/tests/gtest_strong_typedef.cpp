@@ -1,4 +1,16 @@
-#define BOOST_TEST_MODULE StrongTypedef
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <common/strong_typedef.h>
 #include <set>
@@ -35,18 +47,18 @@ TEST(StrongTypedefSuite, CopyAndMoveCtor)
     Int a(1);
     Int b(2);
     a = b;
-    EXPECT_EQ(a.t, 2);
+    EXPECT_EQ(a.toUnderType(), 2);
 
-    STRONG_TYPEDEF(std::unique_ptr<int>, IntPtr);
+    STRONG_TYPEDEF(std::unique_ptr<int>, IntPtr)
     {
         IntPtr ptr;
         ptr = IntPtr(std::make_unique<int>(3));
-        EXPECT_EQ(*ptr.t, 3);
+        EXPECT_EQ(*ptr.toUnderType(), 3);
     }
 
     {
         IntPtr ptr(std::make_unique<int>(3));
-        EXPECT_EQ(*ptr.t, 3);
+        EXPECT_EQ(*ptr.toUnderType(), 3);
     }
 }
 
@@ -54,7 +66,7 @@ TEST(StrongTypedefSuite, NoDefaultCtor)
 {
     struct NoDefaultCtor
     {
-        NoDefaultCtor(int i) {}
+        NoDefaultCtor(int) {} // NOLINT
     };
 
     STRONG_TYPEDEF(NoDefaultCtor, MyStruct);

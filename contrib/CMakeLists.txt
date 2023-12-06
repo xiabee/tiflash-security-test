@@ -40,7 +40,7 @@ if (USE_INTERNAL_BTRIE_LIBRARY)
 endif ()
 
 if (USE_INTERNAL_UNWIND_LIBRARY)
-    add_subdirectory (libunwind)
+    add_subdirectory (libunwind-cmake)
 endif ()
 
 if (USE_INTERNAL_ZLIB_LIBRARY)
@@ -97,15 +97,31 @@ if (USE_INTERNAL_GRPC_LIBRARY)
 endif ()
 
 add_subdirectory (kvproto/cpp)
+if(TIFLASH_LLVM_TOOLCHAIN)
+    target_compile_options(kvproto PRIVATE
+            -Wno-deprecated-declarations
+            -Wno-non-c-typedef-for-linkage
+            -Wno-implicit-const-int-float-conversion)
+endif()
 # -----
 set (_save ${ENABLE_TESTS})
 set (ENABLE_TESTS 0)
 # disable ENABLE_TESTS for client-c
 # GTest package conflicts with TiFlash's GTest, so we have to disable test compilation in client-c.
 add_subdirectory (client-c)
+if(TIFLASH_LLVM_TOOLCHAIN)
+    target_compile_options(kv_client PRIVATE
+            -Wno-deprecated-declarations
+            -Wno-non-c-typedef-for-linkage
+            -Wno-implicit-const-int-float-conversion)
+endif()
 set (ENABLE_TESTS ${_save})
 # -------
 add_subdirectory (tipb/cpp)
+
+if (USE_INTERNAL_TIFLASH_PROXY)
+    add_subdirectory (tiflash-proxy-cmake)
+endif ()
 
 # TODO: remove tcmalloc
 if (ENABLE_TCMALLOC AND USE_INTERNAL_GPERFTOOLS_LIBRARY)
@@ -135,3 +151,17 @@ endif ()
 set (CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 add_subdirectory (prometheus-cpp-cmake)
 unset (CMAKE_POLICY_DEFAULT_CMP0077)
+
+add_subdirectory (fmtlib-cmake)
+
+# Add a target that pop include directory to the linked object
+add_library(cpptoml INTERFACE)
+target_include_directories(cpptoml INTERFACE
+    ${PROJECT_SOURCE_DIR}/contrib/cpptoml)
+
+SET (BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable google-benchmark testing" FORCE)
+SET (BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "Disable google-benchmark testing" FORCE)
+add_subdirectory(benchmark)
+
+set (BUILD_TESTING OFF CACHE BOOL "Disable cpu-features testing" FORCE)
+add_subdirectory(cpu_features)

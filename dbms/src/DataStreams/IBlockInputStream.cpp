@@ -1,15 +1,27 @@
-#include <math.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <math.h>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int TOO_DEEP_PIPELINE;
+extern const int TOO_DEEP_PIPELINE;
 }
 
 /** It's safe to access children without mutex as long as these methods are called before first call to read, readPrefix.
@@ -18,22 +30,26 @@ namespace ErrorCodes
 
 String IBlockInputStream::getTreeID() const
 {
-    std::stringstream s;
-    s << getName();
-
-    if (!children.empty())
+    std::lock_guard lock(tree_id_mutex);
+    if (tree_id.empty())
     {
-        s << "(";
-        for (BlockInputStreams::const_iterator it = children.begin(); it != children.end(); ++it)
+        FmtBuffer buffer;
+        buffer.append(getName());
+
+        if (!children.empty())
         {
-            if (it != children.begin())
-                s << ", ";
-            s << (*it)->getTreeID();
+            buffer.append("(");
+            buffer.joinStr(
+                children.cbegin(),
+                children.cend(),
+                [](const auto & r, FmtBuffer & fb) { fb.append(r->getTreeID()); },
+                ", ");
+            buffer.append(")");
         }
-        s << ")";
+        tree_id = buffer.toString();
     }
 
-    return s.str();
+    return tree_id;
 }
 
 
@@ -48,12 +64,12 @@ size_t IBlockInputStream::checkDepthImpl(size_t max_depth, size_t level) const
         return 0;
 
     if (level > max_depth)
-        throw Exception("Query pipeline is too deep. Maximum: " + toString(max_depth), ErrorCodes::TOO_DEEP_PIPELINE);
+        throw Exception(fmt::format("Query pipeline is too deep. Maximum: {}", max_depth), ErrorCodes::TOO_DEEP_PIPELINE);
 
     size_t res = 0;
-    for (BlockInputStreams::const_iterator it = children.begin(); it != children.end(); ++it)
+    for (const auto & child : children)
     {
-        size_t child_depth = (*it)->checkDepth(level + 1);
+        size_t child_depth = child->checkDepth(level + 1);
         if (child_depth > res)
             res = child_depth;
     }
@@ -62,33 +78,33 @@ size_t IBlockInputStream::checkDepthImpl(size_t max_depth, size_t level) const
 }
 
 
-void IBlockInputStream::dumpTree(std::ostream & ostr, size_t indent, size_t multiplier)
+void IBlockInputStream::dumpTree(FmtBuffer & buffer, size_t indent, size_t multiplier)
 {
-    ostr << String(indent, ' ') << getName();
-    if (multiplier > 1)
-        ostr << " × " << multiplier;
-    //ostr << ": " << getHeader().dumpStructure();
-    ostr << std::endl;
+    // todo append getHeader().dumpStructure()
+    buffer.fmtAppend(
+        "{}{}{}\n",
+        String(indent, ' '),
+        getName(),
+        multiplier > 1 ? fmt::format(" x {}", multiplier) : "");
     ++indent;
 
     /// If the subtree is repeated several times, then we output it once with the multiplier.
     using Multipliers = std::map<String, size_t>;
     Multipliers multipliers;
 
-    for (BlockInputStreams::const_iterator it = children.begin(); it != children.end(); ++it)
-        ++multipliers[(*it)->getTreeID()];
+    for (const auto & child : children)
+        ++multipliers[child->getTreeID()];
 
-    for (BlockInputStreams::iterator it = children.begin(); it != children.end(); ++it)
+    for (auto & child : children)
     {
-        String id = (*it)->getTreeID();
+        String id = child->getTreeID();
         size_t & subtree_multiplier = multipliers[id];
-        if (subtree_multiplier != 0)    /// Already printed subtrees are marked with zero in the array of multipliers.
+        if (subtree_multiplier != 0) /// Already printed subtrees are marked with zero in the array of multipliers.
         {
-            (*it)->dumpTree(ostr, indent, subtree_multiplier);
+            child->dumpTree(buffer, indent, subtree_multiplier);
             subtree_multiplier = 0;
         }
     }
 }
 
-}
-
+} // namespace DB

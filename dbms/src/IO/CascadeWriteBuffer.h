@@ -1,14 +1,28 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
-#include <functional>
 #include <IO/WriteBuffer.h>
+
+#include <functional>
 
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int CURRENT_WRITE_BUFFER_IS_EXHAUSTED;
+extern const int CURRENT_WRITE_BUFFER_IS_EXHAUSTED;
 }
 
 /* The buffer is similar to ConcatReadBuffer, but writes data
@@ -27,9 +41,8 @@ namespace ErrorCodes
 class CascadeWriteBuffer : public WriteBuffer
 {
 public:
-
     using WriteBufferPtrs = std::vector<WriteBufferPtr>;
-    using WriteBufferConstructor = std::function<WriteBufferPtr (const WriteBufferPtr & prev_buf)>;
+    using WriteBufferConstructor = std::function<WriteBufferPtr(const WriteBufferPtr & prev_buf)>;
     using WriteBufferConstructors = std::vector<WriteBufferConstructor>;
 
     CascadeWriteBuffer(WriteBufferPtrs && prepared_sources_, WriteBufferConstructors && lazy_sources_ = {});
@@ -47,7 +60,6 @@ public:
     ~CascadeWriteBuffer();
 
 private:
-
     WriteBuffer * setNextBuffer();
 
     WriteBufferPtrs prepared_sources;
@@ -59,4 +71,4 @@ private:
     size_t curr_buffer_num;
 };
 
-}
+} // namespace DB

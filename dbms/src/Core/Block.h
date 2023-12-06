@@ -1,20 +1,32 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <vector>
-#include <list>
-#include <map>
-#include <initializer_list>
-
 #include <Core/BlockInfo.h>
-#include <Core/NamesAndTypes.h>
 #include <Core/ColumnWithTypeAndName.h>
 #include <Core/ColumnsWithTypeAndName.h>
+#include <Core/NamesAndTypes.h>
 
+#include <initializer_list>
+#include <list>
+#include <map>
+#include <vector>
 
 
 namespace DB
 {
-
 /** Container for set of columns for bunch of rows in memory.
   * This is unit of data processing.
   * Also contains metadata - data types of columns and their names
@@ -38,7 +50,7 @@ public:
 
     Block() = default;
     Block(std::initializer_list<ColumnWithTypeAndName> il);
-    Block(const ColumnsWithTypeAndName & data_);
+    explicit Block(const ColumnsWithTypeAndName & data_);
 
     /// insert the column at the specified position
     void insert(size_t position, const ColumnWithTypeAndName & elem);
@@ -97,13 +109,13 @@ public:
     /// Approximate number of allocated bytes in memory - for profiling and limits.
     size_t allocatedBytes() const;
 
-    operator bool() const { return !data.empty(); }
+    explicit operator bool() const { return !data.empty(); }
     bool operator!() const { return data.empty(); }
 
     /** Get a list of column names separated by commas. */
     std::string dumpNames() const;
 
-     /** List of names, types and lengths of columns. Designed for debugging. */
+    /** List of names, types and lengths of columns. Designed for debugging. */
     std::string dumpStructure() const;
 
     /** Get the same block, but empty. */
@@ -115,9 +127,12 @@ public:
     /** Get columns from block for mutation. Columns in block will be nullptr. */
     MutableColumns mutateColumns() const;
 
+    Columns getColumns() const;
+
     /** Replace columns in a block */
     void setColumns(MutableColumns && columns);
     Block cloneWithColumns(MutableColumns && columns) const;
+    Block cloneWithColumns(Columns && columns) const;
 
     /** Get a block with columns that have been rearranged in the order of their names. */
     Block sortColumns() const;
@@ -155,8 +170,8 @@ void getBlocksDifference(const Block & lhs, const Block & rhs, std::string & out
   */
 struct BlockExtraInfo
 {
-    BlockExtraInfo() {}
-    operator bool() const { return is_valid; }
+    BlockExtraInfo() = default;
+    explicit operator bool() const { return is_valid; }
     bool operator!() const { return !is_valid; }
 
     std::string host;
@@ -167,4 +182,4 @@ struct BlockExtraInfo
     bool is_valid = false;
 };
 
-}
+} // namespace DB

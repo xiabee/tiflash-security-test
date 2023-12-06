@@ -1,11 +1,25 @@
-#include <vector>
-#include <string>
-#include <iomanip>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <Common/SipHash.h>
+#include <Common/Stopwatch.h>
 #include <IO/ReadBufferFromFileDescriptor.h>
 #include <IO/ReadHelpers.h>
-#include <Common/Stopwatch.h>
+
+#include <iomanip>
+#include <string>
+#include <vector>
 
 
 /** Test this way:
@@ -39,11 +53,11 @@ int main(int, char **)
 
         double seconds = watch.elapsedSeconds();
         std::cerr << "Read "
-            << data.size() << " rows, "
-            << (in.count() / 1048576.0) << " MiB "
-            << " in " << seconds << " sec., "
-            << (data.size() / seconds) << " rows/sec., "
-            << (in.count() / 1048576.0 / seconds) << " MiB/sec.\n";
+                  << data.size() << " rows, "
+                  << (in.count() / 1048576.0) << " MiB "
+                  << " in " << seconds << " sec., "
+                  << (data.size() / seconds) << " rows/sec., "
+                  << (in.count() / 1048576.0 / seconds) << " MiB/sec.\n";
     }
 
     {
@@ -59,12 +73,12 @@ int main(int, char **)
 
         double seconds = watch.elapsedSeconds();
         std::cerr << "Processed "
-            << data.size() << " rows, "
-            << (in.count() / 1048576.0) << " MiB "
-            << " in " << seconds << " sec., "
-            << (data.size() / seconds) << " rows/sec., "
-            << (in.count() / 1048576.0 / seconds) << " MiB/sec. "
-            << "(res = " << res << ")\n";
+                  << data.size() << " rows, "
+                  << (in.count() / 1048576.0) << " MiB "
+                  << " in " << seconds << " sec., "
+                  << (data.size() / seconds) << " rows/sec., "
+                  << (in.count() / 1048576.0 / seconds) << " MiB/sec. "
+                  << "(res = " << res << ")\n";
     }
 
     return 0;

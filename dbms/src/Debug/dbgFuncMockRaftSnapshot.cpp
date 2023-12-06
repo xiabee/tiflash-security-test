@@ -1,5 +1,21 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/FailPoint.h>
+#include <Common/FmtUtils.h>
 #include <Common/typeid_cast.h>
+#include <Debug/MockSSTReader.h>
 #include <Debug/MockTiDB.h>
 #include <Debug/MockTiKV.h>
 #include <Debug/dbgFuncMockRaftCommand.h>
@@ -16,17 +32,16 @@
 #include <Poco/Path.h>
 #include <RaftStoreProxyFFI/ColumnFamily.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
-#include <Storages/StorageMergeTree.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/ProxyFFI.h>
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TiKVRange.h>
 #include <Storages/Transaction/tests/region_helper.h>
+#include <fmt/core.h>
 
 namespace DB
 {
-
 namespace FailPoints
 {
 extern const char force_set_sst_to_dtfile_block_size[];
@@ -45,7 +60,7 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
 {
     const String & database_name = typeid_cast<const ASTIdentifier &>(*args[0]).name;
     const String & table_name = typeid_cast<const ASTIdentifier &>(*args[1]).name;
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value));
     TableID table_id = RegionBench::getTableID(context, database_name, table_name, "");
     MockTiDB::TablePtr table = MockTiDB::instance().getTableByName(database_name, table_name);
     auto & table_info = table->table_info;
@@ -53,10 +68,16 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
     size_t handle_column_size = is_common_handle ? table_info.getPrimaryIndexInfo().idx_cols.size() : 1;
     RegionPtr region;
 
+    std::unordered_map<String, size_t> column_name_columns_index_map;
+    for (size_t i = 0; i < table_info.columns.size(); i++)
+    {
+        column_name_columns_index_map.emplace(table_info.columns[i].name, i);
+    }
+
     if (!is_common_handle)
     {
-        HandleID start = (HandleID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value);
-        HandleID end = (HandleID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value);
+        auto start = static_cast<HandleID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value));
+        auto end = static_cast<HandleID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value));
         region = RegionBench::createRegion(table_id, region_id, start, end);
     }
     else
@@ -66,7 +87,8 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
         std::vector<Field> end_keys;
         for (size_t i = 0; i < handle_column_size; i++)
         {
-            auto & column_info = table_info.columns[table_info.getPrimaryIndexInfo().idx_cols[i].offset];
+            auto idx = column_name_columns_index_map[table_info.getPrimaryIndexInfo().idx_cols[i].name];
+            auto & column_info = table_info.columns[idx];
             auto start_field = RegionBench::convertField(column_info, typeid_cast<const ASTLiteral &>(*args[3 + i]).value);
             TiDB::DatumBumpy start_datum = TiDB::DatumBumpy(start_field, column_info.tp);
             start_keys.emplace_back(start_datum.field());
@@ -89,9 +111,9 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
     // Parse row values
     for (auto it = args_begin; it != args_end; it += len)
     {
-        HandleID handle_id = is_common_handle ? 0 : (HandleID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[0]).value);
-        Timestamp tso = (Timestamp)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[1]).value);
-        UInt8 del = (UInt8)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[2]).value);
+        HandleID handle_id = is_common_handle ? 0 : static_cast<HandleID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[0]).value));
+        auto tso = static_cast<Timestamp>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[1]).value));
+        auto del = static_cast<UInt8>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*it[2]).value));
         {
             std::vector<Field> fields;
 
@@ -107,9 +129,9 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
                 std::vector<Field> keys; // handle key
                 for (size_t i = 0; i < table_info.getPrimaryIndexInfo().idx_cols.size(); i++)
                 {
-                    auto & idx_col = table_info.getPrimaryIndexInfo().idx_cols[i];
-                    auto & column_info = table_info.columns[idx_col.offset];
-                    auto start_field = RegionBench::convertField(column_info, fields[idx_col.offset]);
+                    auto idx = column_name_columns_index_map[table_info.getPrimaryIndexInfo().idx_cols[i].name];
+                    auto & column_info = table_info.columns[idx];
+                    auto start_field = RegionBench::convertField(column_info, fields[idx]);
                     TiDB::DatumBumpy start_datum = TiDB::DatumBumpy(start_field, column_info.tp);
                     keys.emplace_back(start_datum.field());
                 }
@@ -117,9 +139,9 @@ RegionPtr GenDbgRegionSnapshotWithData(Context & context, const ASTs & args)
             }
             else
                 key = RecordKVFormat::genKey(table_id, handle_id);
-            std::stringstream ss;
+            WriteBufferFromOwnString ss;
             RegionBench::encodeRow(table->table_info, fields, ss);
-            TiKVValue value(ss.str());
+            TiKVValue value(ss.releaseStr());
             UInt64 commit_ts = tso;
             UInt64 prewrite_ts = tso;
             TiKVValue commit_value = del ? RecordKVFormat::encodeWriteCfValue(Region::DelFlag, prewrite_ts)
@@ -146,16 +168,14 @@ void MockRaftCommand::dbgFuncRegionSnapshotWithData(Context & context, const AST
     // Mock to apply a snapshot with data in `region`
     auto & tmt = context.getTMTContext();
     context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithBlock>(region, tmt);
-    std::stringstream ss;
-    ss << "put region #" << region_id << ", range" << range_string << " to table #" << table_id << " with " << cnt << " records";
-    output(ss.str());
+    output(fmt::format("put region #{}, range{} to table #{} with {} records", region_id, range_string, table_id, cnt));
 }
 
 // Mock to apply an empty snapshot for region
 // DBGInvoke region_snapshot(region-id, start-key, end-key, database-name, table-name[, partition-id])
 void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args, DBGInvoker::Printer output)
 {
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[0]).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[0]).value));
     bool has_partition_id = false;
     size_t args_size = args.size();
     if (dynamic_cast<ASTLiteral *>(args[args_size - 1].get()) != nullptr)
@@ -171,7 +191,7 @@ void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args
     size_t handle_column_size = table_info.is_common_handle ? table_info.getPrimaryIndexInfo().idx_cols.size() : 1;
     if (args_size < 3 + 2 * handle_column_size || args_size > 3 + 2 * handle_column_size + 1)
         throw Exception("Args not matched, should be: region-id, start-key, end-key, database-name, table-name[, partition-name]",
-            ErrorCodes::BAD_ARGUMENTS);
+                        ErrorCodes::BAD_ARGUMENTS);
 
     TMTContext & tmt = context.getTMTContext();
 
@@ -185,9 +205,16 @@ void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args
         // Get start key and end key form multiple column if it is clustered_index.
         std::vector<Field> start_keys;
         std::vector<Field> end_keys;
+
+        std::unordered_map<String, size_t> column_name_columns_index_map;
+        for (size_t i = 0; i < table_info.columns.size(); i++)
+        {
+            column_name_columns_index_map.emplace(table_info.columns[i].name, i);
+        }
         for (size_t i = 0; i < handle_column_size; i++)
         {
-            auto & column_info = table_info.columns[table_info.getPrimaryIndexInfo().idx_cols[i].offset];
+            auto idx = column_name_columns_index_map[table_info.getPrimaryIndexInfo().idx_cols[i].name];
+            const auto & column_info = table_info.columns[idx];
             auto start_field = RegionBench::convertField(column_info, typeid_cast<const ASTLiteral &>(*args[1 + i]).value);
             TiDB::DatumBumpy start_datum = TiDB::DatumBumpy(start_field, column_info.tp);
             start_keys.emplace_back(start_datum.field());
@@ -201,62 +228,30 @@ void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args
     }
     else
     {
-        HandleID start = (HandleID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[1]).value);
-        HandleID end = (HandleID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value);
+        auto start = static_cast<HandleID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[1]).value));
+        auto end = static_cast<HandleID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value));
         start_key = RecordKVFormat::genKey(table_id, start);
         end_key = RecordKVFormat::genKey(table_id, end);
     }
     region_info.set_start_key(start_key.toString());
     region_info.set_end_key(end_key.toString());
-    *region_info.add_peers() = createPeer(1, true);
-    *region_info.add_peers() = createPeer(2, true);
+    *region_info.add_peers() = tests::createPeer(1, true);
+    *region_info.add_peers() = tests::createPeer(2, true);
     auto peer_id = 1;
     auto start_decoded_key = RecordKVFormat::decodeTiKVKey(start_key);
     auto end_decoded_key = RecordKVFormat::decodeTiKVKey(end_key);
 
     // Mock to apply an empty snapshot for region[region-id]
     tmt.getKVStore()->handleApplySnapshot(
-        std::move(region_info), peer_id, SSTViewVec{nullptr, 0}, MockTiKV::instance().getRaftIndex(region_id), RAFT_INIT_LOG_TERM, tmt);
+        std::move(region_info),
+        peer_id,
+        SSTViewVec{nullptr, 0},
+        MockTiKV::instance().getRaftIndex(region_id),
+        RAFT_INIT_LOG_TERM,
+        tmt);
 
-    std::stringstream ss;
-    ss << "put region #" << region_id << ", range[" << RecordKVFormat::DecodedTiKVKeyToDebugString<true>(start_decoded_key) << ", "
-       << RecordKVFormat::DecodedTiKVKeyToDebugString<false>(end_decoded_key) << ")"
-       << " to table #" << table_id << " with raft commands";
-    output(ss.str());
+    output(fmt::format("put region #{}, range[{}, {}) to table #{} with raft commands", region_id, RecordKVFormat::DecodedTiKVKeyToDebugString<true>(start_decoded_key), RecordKVFormat::DecodedTiKVKeyToDebugString<false>(end_decoded_key), table_id));
 }
-
-/// Some helper structure / functions for IngestSST
-
-struct MockSSTReader
-{
-    using Key = std::pair<std::string, ColumnFamilyType>;
-    struct Data : std::vector<std::pair<std::string, std::string>>
-    {
-        Data(const Data &) = delete;
-        Data() = default;
-    };
-
-    MockSSTReader(const Data & data_) : iter(data_.begin()), end(data_.end()), remained(iter != end) {}
-
-    static SSTReaderPtr ffi_get_cf_file_reader(const Data & data_) { return SSTReaderPtr{new MockSSTReader(data_)}; }
-
-    bool ffi_remained() const { return iter != end; }
-
-    BaseBuffView ffi_key() const { return {iter->first.data(), iter->first.length()}; }
-
-    BaseBuffView ffi_val() const { return {iter->second.data(), iter->second.length()}; }
-
-    void ffi_next() { ++iter; }
-
-    static std::map<Key, MockSSTReader::Data> & getMockSSTData() { return MockSSTData; }
-
-private:
-    Data::const_iterator iter;
-    Data::const_iterator end;
-    bool remained;
-
-    static std::map<Key, MockSSTReader::Data> MockSSTData;
-};
 
 std::map<MockSSTReader::Key, MockSSTReader::Data> MockSSTReader::MockSSTData;
 
@@ -271,66 +266,63 @@ SSTReaderPtr fn_get_sst_reader(SSTView v, RaftStoreProxyPtr)
 }
 uint8_t fn_remained(SSTReaderPtr ptr, ColumnFamilyType)
 {
-    auto reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
+    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     return reader->ffi_remained();
 }
 BaseBuffView fn_key(SSTReaderPtr ptr, ColumnFamilyType)
 {
-    auto reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
+    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     return reader->ffi_key();
 }
 BaseBuffView fn_value(SSTReaderPtr ptr, ColumnFamilyType)
 {
-    auto reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
+    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     return reader->ffi_val();
 }
 void fn_next(SSTReaderPtr ptr, ColumnFamilyType)
 {
-    auto reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
+    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     reader->ffi_next();
 }
 void fn_gc(SSTReaderPtr ptr, ColumnFamilyType)
 {
-    auto reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
+    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     delete reader;
 }
 
-class RegionMockTest
+RegionMockTest::RegionMockTest(KVStorePtr kvstore_, RegionPtr region_)
+    : kvstore(kvstore_)
+    , region(region_)
 {
-public:
-    RegionMockTest(KVStorePtr kvstore_, RegionPtr region_) : kvstore(kvstore_), region(region_)
+    if (kvstore->getProxyHelper())
     {
-        std::memset(&mock_proxy_helper, 0, sizeof(mock_proxy_helper));
-        mock_proxy_helper.sst_reader_interfaces = SSTReaderInterfaces{
-            .fn_get_sst_reader = fn_get_sst_reader,
-            .fn_remained = fn_remained,
-            .fn_key = fn_key,
-            .fn_value = fn_value,
-            .fn_next = fn_next,
-            .fn_gc = fn_gc,
-        };
-        kvstore->proxy_helper = &mock_proxy_helper;
-        region->proxy_helper = &mock_proxy_helper;
+        ori_proxy_helper = kvstore->getProxyHelper();
+        std::memcpy(&mock_proxy_helper, ori_proxy_helper, sizeof(mock_proxy_helper));
     }
-    ~RegionMockTest()
-    {
-        kvstore->proxy_helper = nullptr;
-        region->proxy_helper = nullptr;
-    }
-
-private:
-    TiFlashRaftProxyHelper mock_proxy_helper;
-    KVStorePtr kvstore;
-    RegionPtr region;
-};
+    mock_proxy_helper.sst_reader_interfaces = SSTReaderInterfaces{
+        .fn_get_sst_reader = fn_get_sst_reader,
+        .fn_remained = fn_remained,
+        .fn_key = fn_key,
+        .fn_value = fn_value,
+        .fn_next = fn_next,
+        .fn_gc = fn_gc,
+    };
+    kvstore->proxy_helper = &mock_proxy_helper;
+    region->proxy_helper = &mock_proxy_helper;
+}
+RegionMockTest::~RegionMockTest()
+{
+    kvstore->proxy_helper = ori_proxy_helper;
+    region->proxy_helper = ori_proxy_helper;
+}
 
 void GenMockSSTData(const TiDB::TableInfo & table_info,
-    TableID table_id,
-    const String & store_key,
-    UInt64 start_handle,
-    UInt64 end_handle,
-    UInt64 num_fields = 1,
-    const std::unordered_set<ColumnFamilyType> & cfs = {ColumnFamilyType::Write, ColumnFamilyType::Default})
+                    TableID table_id,
+                    const String & store_key,
+                    UInt64 start_handle,
+                    UInt64 end_handle,
+                    UInt64 num_fields = 1,
+                    const std::unordered_set<ColumnFamilyType> & cfs = {ColumnFamilyType::Write, ColumnFamilyType::Default})
 {
     MockSSTReader::Data write_kv_list, default_kv_list;
     size_t num_rows = end_handle - start_handle;
@@ -361,9 +353,9 @@ void GenMockSSTData(const TiDB::TableInfo & table_info,
         // https://en.pingcap.com/blog/2016-11-17-mvcc-in-tikv#mvcc
         {
             TiKVKey key = RecordKVFormat::genKey(table_id, handle_id);
-            std::stringstream ss;
+            WriteBufferFromOwnString ss;
             RegionBench::encodeRow(table_info, fields, ss);
-            TiKVValue prewrite_value(ss.str());
+            TiKVValue prewrite_value(ss.releaseStr());
 
             UInt64 prewrite_ts = handle_id;
             UInt64 commit_ts = prewrite_ts + 100; // Assume that commit_ts is larger that prewrite_ts
@@ -387,11 +379,11 @@ void GenMockSSTData(const TiDB::TableInfo & table_info,
 
 // TODO: make it a more generic testing function
 void GenMockSSTDataByHandles(const TiDB::TableInfo & table_info,
-    TableID table_id,
-    const String & store_key,
-    const std::vector<UInt64> & handles,
-    UInt64 num_fields = 1,
-    const std::unordered_set<ColumnFamilyType> & cfs = {ColumnFamilyType::Write, ColumnFamilyType::Default})
+                             TableID table_id,
+                             const String & store_key,
+                             const std::vector<UInt64> & handles,
+                             UInt64 num_fields = 1,
+                             const std::unordered_set<ColumnFamilyType> & cfs = {ColumnFamilyType::Write, ColumnFamilyType::Default})
 {
     MockSSTReader::Data write_kv_list, default_kv_list;
     size_t num_rows = handles.size();
@@ -424,12 +416,12 @@ void GenMockSSTDataByHandles(const TiDB::TableInfo & table_info,
         // https://github.com/pingcap/tics/issues/1864
         {
             TiKVKey key = RecordKVFormat::genKey(table_id, handle_id);
-            std::stringstream ss;
+            WriteBufferFromOwnString ss;
             RegionBench::encodeRow(table_info, fields, ss);
-            TiKVValue prewrite_value(ss.str());
+            TiKVValue prewrite_value(ss.releaseStr());
 
             UInt64 prewrite_ts = 100000 + num_rows - index; // make it to be timestamp desc in SSTFiles
-            UInt64 commit_ts = prewrite_ts + 100;           // Assume that commit_ts is larger that prewrite_ts
+            UInt64 commit_ts = prewrite_ts + 100; // Assume that commit_ts is larger that prewrite_ts
 
             TiKVKey prewrite_key = RecordKVFormat::appendTs(key, prewrite_ts);
             default_kv_list.emplace_back(std::make_pair(std::move(prewrite_key), std::move(prewrite_value)));
@@ -454,9 +446,9 @@ void MockRaftCommand::dbgFuncIngestSST(Context & context, const ASTs & args, DBG
 {
     const String & database_name = typeid_cast<const ASTIdentifier &>(*args[0]).name;
     const String & table_name = typeid_cast<const ASTIdentifier &>(*args[1]).name;
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value);
-    RegionID start_handle = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value);
-    RegionID end_handle = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value));
+    auto start_handle = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value));
+    auto end_handle = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value));
     MockTiDB::TablePtr table = MockTiDB::instance().getTableByName(database_name, table_name);
 
     const auto & table_info = RegionBench::getTableInfo(context, database_name, table_name);
@@ -483,10 +475,10 @@ void MockRaftCommand::dbgFuncIngestSST(Context & context, const ASTs & args, DBG
             BaseBuffView{region_id_str.data(), region_id_str.length()},
         });
         kvstore->handleIngestSST(region_id,
-            SSTViewVec{sst_views.data(), sst_views.size()},
-            MockTiKV::instance().getRaftIndex(region_id),
-            MockTiKV::instance().getRaftTerm(region_id),
-            tmt);
+                                 SSTViewVec{sst_views.data(), sst_views.size()},
+                                 MockTiKV::instance().getRaftIndex(region_id),
+                                 MockTiKV::instance().getRaftTerm(region_id),
+                                 tmt);
     }
 
     {
@@ -497,10 +489,10 @@ void MockRaftCommand::dbgFuncIngestSST(Context & context, const ASTs & args, DBG
             BaseBuffView{region_id_str.data(), region_id_str.length()},
         });
         kvstore->handleIngestSST(region_id,
-            SSTViewVec{sst_views.data(), sst_views.size()},
-            MockTiKV::instance().getRaftIndex(region_id),
-            MockTiKV::instance().getRaftTerm(region_id),
-            tmt);
+                                 SSTViewVec{sst_views.data(), sst_views.size()},
+                                 MockTiKV::instance().getRaftIndex(region_id),
+                                 MockTiKV::instance().getRaftTerm(region_id),
+                                 tmt);
     }
 }
 
@@ -558,23 +550,16 @@ static GlobalRegionMap GLOBAL_REGION_MAP;
 extern RegionPtrWithBlock::CachePtr GenRegionPreDecodeBlockData(const RegionPtr &, Context &);
 void MockRaftCommand::dbgFuncRegionSnapshotPreHandleBlock(Context & context, const ASTs & args, DBGInvoker::Printer output)
 {
-    std::stringstream ss;
+    FmtBuffer fmt_buf;
     auto region = GenDbgRegionSnapshotWithData(context, args);
     const auto region_name = "__snap_" + std::to_string(region->id());
-    ss << "pre-handle " << region->toString(false) << " snapshot with data " << region->dataInfo();
+    fmt_buf.fmtAppend("pre-handle {} snapshot with data {}", region->toString(false), region->dataInfo());
     auto & tmt = context.getTMTContext();
     auto block_cache = GenRegionPreDecodeBlockData(region, tmt.getContext());
-    ss << ", pre-decode block cache";
-    {
-        ss << " {";
-        ss << " schema_version: ?";
-        ss << ", data_list size: " << block_cache->data_list_read.size();
-        ss << ", block row: " << block_cache->block.rows() << " col: " << block_cache->block.columns()
-           << " bytes: " << block_cache->block.bytes();
-        ss << " }";
-    }
+    fmt_buf.append(", pre-decode block cache");
+    fmt_buf.fmtAppend(" {{ schema_version: ?, data_list size: {}, block row: {} col: {} bytes: {} }}", block_cache->data_list_read.size(), block_cache->block.rows(), block_cache->block.columns(), block_cache->block.bytes());
     GLOBAL_REGION_MAP.insertRegionCache(region_name, {region, std::move(block_cache)});
-    output(ss.str());
+    output(fmt_buf.toString());
 }
 
 void MockRaftCommand::dbgFuncRegionSnapshotApplyBlock(Context & context, const ASTs & args, DBGInvoker::Printer output)
@@ -584,14 +569,12 @@ void MockRaftCommand::dbgFuncRegionSnapshotApplyBlock(Context & context, const A
         throw Exception("Args not matched, should be: region-id", ErrorCodes::BAD_ARGUMENTS);
     }
 
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value));
     auto [region, block_cache] = GLOBAL_REGION_MAP.popRegionCache("__snap_" + std::to_string(region_id));
     auto & tmt = context.getTMTContext();
     context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithBlock>({region, std::move(block_cache)}, tmt);
 
-    std::stringstream ss;
-    ss << "success apply " << region->id() << " with block cache";
-    output(ss.str());
+    output(fmt::format("success apply {} with block cache", region->id()));
 }
 
 
@@ -604,20 +587,20 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFiles(Context & context, c
     if (args.size() < 7 || args.size() > 9)
         throw Exception("Args not matched, should be: database_name, table_name, region_id, start, end, schema_string, pk_name"
                         " [, test-fields, cfs=\"write,default\"]",
-            ErrorCodes::BAD_ARGUMENTS);
+                        ErrorCodes::BAD_ARGUMENTS);
 
     const String & database_name = typeid_cast<const ASTIdentifier &>(*args[0]).name;
     const String & table_name = typeid_cast<const ASTIdentifier &>(*args[1]).name;
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value);
-    RegionID start_handle = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value);
-    RegionID end_handle = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value));
+    auto start_handle = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[3]).value));
+    auto end_handle = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[4]).value));
 
-    const String schema_str = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[5]).value);
-    String handle_pk_name = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[6]).value);
+    const auto schema_str = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[5]).value);
+    auto handle_pk_name = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[6]).value);
 
     UInt64 test_fields = 1;
     if (args.size() > 7)
-        test_fields = (UInt64)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[7]).value);
+        test_fields = static_cast<UInt64>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[7]).value));
     std::unordered_set<ColumnFamilyType> cfs;
     {
         String cfs_str = "write,default";
@@ -684,14 +667,16 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFiles(Context & context, c
     FailPointHelper::enableFailPoint(FailPoints::force_set_safepoint_when_decode_block);
 
     auto ingest_ids = kvstore->preHandleSnapshotToFiles(
-        new_region, SSTViewVec{sst_views.data(), sst_views.size()}, index, MockTiKV::instance().getRaftTerm(region_id), tmt);
+        new_region,
+        SSTViewVec{sst_views.data(), sst_views.size()},
+        index,
+        MockTiKV::instance().getRaftTerm(region_id),
+        tmt);
     GLOBAL_REGION_MAP.insertRegionSnap(region_name, {new_region, ingest_ids});
 
     FailPointHelper::disableFailPoint(FailPoints::force_set_safepoint_when_decode_block);
     {
-        std::stringstream ss;
-        ss << "Generate " << ingest_ids.size() << " files for [region_id=" << region_id << "]";
-        output(ss.str());
+        output(fmt::format("Generate {} files for [region_id={}]", ingest_ids.size(), region_id));
     }
 }
 
@@ -706,10 +691,10 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles(Context &
 
     const String & database_name = typeid_cast<const ASTIdentifier &>(*args[0]).name;
     const String & table_name = typeid_cast<const ASTIdentifier &>(*args[1]).name;
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args[2]).value));
 
-    const String schema_str = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[3]).value);
-    String handle_pk_name = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[4]).value);
+    const auto schema_str = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[3]).value);
+    auto handle_pk_name = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[4]).value);
 
     std::vector<UInt64> handles;
     for (size_t i = 5; i < args.size(); ++i)
@@ -779,14 +764,16 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles(Context &
     FailPointHelper::enableFailPoint(FailPoints::force_set_safepoint_when_decode_block);
 
     auto ingest_ids = kvstore->preHandleSnapshotToFiles(
-        new_region, SSTViewVec{sst_views.data(), sst_views.size()}, index, MockTiKV::instance().getRaftTerm(region_id), tmt);
+        new_region,
+        SSTViewVec{sst_views.data(), sst_views.size()},
+        index,
+        MockTiKV::instance().getRaftTerm(region_id),
+        tmt);
     GLOBAL_REGION_MAP.insertRegionSnap(region_name, {new_region, ingest_ids});
 
     FailPointHelper::disableFailPoint(FailPoints::force_set_safepoint_when_decode_block);
     {
-        std::stringstream ss;
-        ss << "Generate " << ingest_ids.size() << " files for [region_id=" << region_id << "]";
-        output(ss.str());
+        output(fmt::format("Generate {} files for [region_id={}]", ingest_ids.size(), region_id));
     }
 }
 
@@ -797,16 +784,15 @@ void MockRaftCommand::dbgFuncRegionSnapshotApplyDTFiles(Context & context, const
     if (args.size() != 1)
         throw Exception("Args not matched, should be: region-id", ErrorCodes::BAD_ARGUMENTS);
 
-    RegionID region_id = (RegionID)safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value);
+    auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value));
     const auto region_name = "__snap_snap_" + std::to_string(region_id);
     auto [new_region, ingest_ids] = GLOBAL_REGION_MAP.popRegionSnap(region_name);
     auto & tmt = context.getTMTContext();
     context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithSnapshotFiles>(
-        RegionPtrWithSnapshotFiles{new_region, std::move(ingest_ids)}, tmt);
+        RegionPtrWithSnapshotFiles{new_region, std::move(ingest_ids)},
+        tmt);
 
-    std::stringstream ss;
-    ss << "success apply region " << new_region->id() << " with dt files";
-    output(ss.str());
+    output(fmt::format("success apply region {} with dt files", new_region->id()));
 }
 
 } // namespace DB

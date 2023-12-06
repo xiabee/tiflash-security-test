@@ -1,3 +1,17 @@
+# Copyright 2023 PingCAP, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 add_executable (expression expression.cpp)
 target_link_libraries (expression dbms)
 
@@ -37,15 +51,8 @@ add_executable (two_level_hash_map two_level_hash_map.cpp)
 target_include_directories (two_level_hash_map BEFORE PRIVATE ${SPARCEHASH_INCLUDE_DIR})
 target_link_libraries (two_level_hash_map dbms)
 
-add_executable (compiler_test compiler_test.cpp)
-target_link_libraries (compiler_test dbms)
-
 add_executable (logical_expressions_optimizer logical_expressions_optimizer.cpp)
 target_link_libraries (logical_expressions_optimizer dbms)
-
-add_executable (in_join_subqueries_preprocessor in_join_subqueries_preprocessor.cpp)
-target_link_libraries (in_join_subqueries_preprocessor dbms)
-add_check(in_join_subqueries_preprocessor)
 
 add_executable (users users.cpp)
 target_link_libraries (users dbms ${Boost_FILESYSTEM_LIBRARY} dbms)

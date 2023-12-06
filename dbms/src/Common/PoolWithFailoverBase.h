@@ -1,35 +1,50 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <time.h>
-#include <cstdlib>
-#include <climits>
-#include <random>
-#include <functional>
-#include <common/Types.h>
-#include <ext/scope_guard.h>
-#include <Core/Types.h>
+#include <Common/Exception.h>
+#include <Common/NetException.h>
 #include <Common/PoolBase.h>
 #include <Common/ProfileEvents.h>
-#include <Common/NetException.h>
-#include <Common/Exception.h>
 #include <Common/randomSeed.h>
+#include <Core/Types.h>
+#include <common/types.h>
+#include <time.h>
+
+#include <climits>
+#include <cstdlib>
+#include <ext/scope_guard.h>
+#include <functional>
+#include <random>
 
 
 namespace DB
 {
 namespace ErrorCodes
 {
-    extern const int ALL_CONNECTION_TRIES_FAILED;
-    extern const int ALL_REPLICAS_ARE_STALE;
-    extern const int LOGICAL_ERROR;
-}
-}
+extern const int ALL_CONNECTION_TRIES_FAILED;
+extern const int ALL_REPLICAS_ARE_STALE;
+extern const int LOGICAL_ERROR;
+} // namespace ErrorCodes
+} // namespace DB
 
 namespace ProfileEvents
 {
-    extern const Event DistributedConnectionFailTry;
-    extern const Event DistributedConnectionFailAtAll;
-}
+extern const Event DistributedConnectionFailTry;
+extern const Event DistributedConnectionFailAtAll;
+} // namespace ProfileEvents
 
 /// This class provides a pool with fault tolerance. It is used for pooling of connections to replicated DB.
 /// Initialized by several PoolBase objects.
@@ -54,10 +69,10 @@ public:
     using NestedPools = std::vector<NestedPoolPtr>;
 
     PoolWithFailoverBase(
-            NestedPools nested_pools_,
-            size_t max_tries_,
-            time_t decrease_error_period_,
-            Logger * log_)
+        NestedPools nested_pools_,
+        size_t max_tries_,
+        time_t decrease_error_period_,
+        Poco::Logger * log_)
         : nested_pools(std::move(nested_pools_))
         , max_tries(max_tries_)
         , decrease_error_period(decrease_error_period_)
@@ -87,7 +102,7 @@ public:
 
         Entry entry;
         bool is_usable = false; /// If false, the entry is unusable for current request
-                                /// (but may be usable for other requests, so error counts are not incremented)
+            /// (but may be usable for other requests, so error counts are not incremented)
         bool is_up_to_date = false; /// If true, the entry is a connection to up-to-date replica.
         double staleness = 0.0; /// Helps choosing the "least stale" option when all replicas are stale.
     };
@@ -108,10 +123,11 @@ public:
     /// The method will throw if it is unable to get min_entries alive connections or
     /// if fallback_to_stale_replicas is false and it is unable to get min_entries connections to up-to-date replicas.
     std::vector<TryResult> getMany(
-            size_t min_entries, size_t max_entries,
-            const TryGetEntryFunc & try_get_entry,
-            const GetPriorityFunc & get_priority = GetPriorityFunc(),
-            bool fallback_to_stale_replicas = true);
+        size_t min_entries,
+        size_t max_entries,
+        const TryGetEntryFunc & try_get_entry,
+        const GetPriorityFunc & get_priority = GetPriorityFunc(),
+        bool fallback_to_stale_replicas = true);
 
     void reportError(const Entry & entry);
 
@@ -134,7 +150,7 @@ protected:
     /// The time when error counts were last decreased.
     time_t last_error_decrease_time = 0;
 
-    Logger * log;
+    Poco::Logger * log;
 };
 
 template <typename TNestedPool>
@@ -144,18 +160,19 @@ PoolWithFailoverBase<TNestedPool>::get(const TryGetEntryFunc & try_get_entry, co
     std::vector<TryResult> results = getMany(1, 1, try_get_entry, get_priority);
     if (results.empty() || results[0].entry.isNull())
         throw DB::Exception(
-                "PoolWithFailoverBase::getMany() returned less than min_entries entries.",
-                DB::ErrorCodes::LOGICAL_ERROR);
+            "PoolWithFailoverBase::getMany() returned less than min_entries entries.",
+            DB::ErrorCodes::LOGICAL_ERROR);
     return results[0].entry;
 }
 
 template <typename TNestedPool>
 std::vector<typename PoolWithFailoverBase<TNestedPool>::TryResult>
 PoolWithFailoverBase<TNestedPool>::getMany(
-        size_t min_entries, size_t max_entries,
-        const TryGetEntryFunc & try_get_entry,
-        const GetPriorityFunc & get_priority,
-        bool fallback_to_stale_replicas)
+    size_t min_entries,
+    size_t max_entries,
+    const TryGetEntryFunc & try_get_entry,
+    const GetPriorityFunc & get_priority,
+    bool fallback_to_stale_replicas)
 {
     /// Update random numbers and error counts.
     PoolStates pool_states = updatePoolStates();
@@ -179,11 +196,11 @@ PoolWithFailoverBase<TNestedPool>::getMany(
     for (size_t i = 0; i < nested_pools.size(); ++i)
         shuffled_pools.push_back(ShuffledPool{nested_pools[i].get(), &pool_states[i], i, 0});
     std::sort(
-            shuffled_pools.begin(), shuffled_pools.end(),
-            [](const ShuffledPool & lhs, const ShuffledPool & rhs)
-            {
-                return PoolState::compare(*lhs.state, *rhs.state);
-            });
+        shuffled_pools.begin(),
+        shuffled_pools.end(),
+        [](const ShuffledPool & lhs, const ShuffledPool & rhs) {
+            return PoolState::compare(*lhs.state, *rhs.state);
+        });
 
     /// We will try to get a connection from each pool until a connection is produced or max_tries is reached.
     std::vector<TryResult> try_results(shuffled_pools.size());
@@ -194,11 +211,11 @@ PoolWithFailoverBase<TNestedPool>::getMany(
 
     /// At exit update shared error counts with error counts occured during this call.
     SCOPE_EXIT(
-    {
-        std::lock_guard<std::mutex> lock(pool_states_mutex);
-        for (const ShuffledPool & pool: shuffled_pools)
-            shared_pool_states[pool.index].error_count += pool.error_count;
-    });
+        {
+            std::lock_guard lock(pool_states_mutex);
+            for (const ShuffledPool & pool : shuffled_pools)
+                shared_pool_states[pool.index].error_count += pool.error_count;
+        });
 
     std::string fail_messages;
     bool finished = false;
@@ -236,8 +253,7 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             }
             else
             {
-                LOG_WARNING(log, "Connection failed at try №"
-                            << (shuffled_pool.error_count + 1) << ", reason: " << fail_message);
+                LOG_FMT_WARNING(log, "Connection failed at try No.{}, reason: {}", shuffled_pool.error_count + 1, fail_message);
                 ProfileEvents::increment(ProfileEvents::DistributedConnectionFailTry);
 
                 ++shuffled_pool.error_count;
@@ -253,23 +269,24 @@ PoolWithFailoverBase<TNestedPool>::getMany(
 
     if (usable_count < min_entries)
         throw DB::NetException(
-                "All connection tries failed. Log: \n\n" + fail_messages + "\n",
-                DB::ErrorCodes::ALL_CONNECTION_TRIES_FAILED);
+            "All connection tries failed. Log: \n\n" + fail_messages + "\n",
+            DB::ErrorCodes::ALL_CONNECTION_TRIES_FAILED);
 
     try_results.erase(
-            std::remove_if(
-                    try_results.begin(), try_results.end(),
-                    [](const TryResult & r) { return r.entry.isNull() || !r.is_usable; }),
-            try_results.end());
+        std::remove_if(
+            try_results.begin(),
+            try_results.end(),
+            [](const TryResult & r) { return r.entry.isNull() || !r.is_usable; }),
+        try_results.end());
 
     /// Sort so that preferred items are near the beginning.
     std::stable_sort(
-            try_results.begin(), try_results.end(),
-            [](const TryResult & left, const TryResult & right)
-            {
-                return std::forward_as_tuple(!left.is_up_to_date, left.staleness)
-                    < std::forward_as_tuple(!right.is_up_to_date, right.staleness);
-            });
+        try_results.begin(),
+        try_results.end(),
+        [](const TryResult & left, const TryResult & right) {
+            return std::forward_as_tuple(!left.is_up_to_date, left.staleness)
+                < std::forward_as_tuple(!right.is_up_to_date, right.staleness);
+        });
 
     if (up_to_date_count >= min_entries)
     {
@@ -286,9 +303,9 @@ PoolWithFailoverBase<TNestedPool>::getMany(
     }
     else
         throw DB::Exception(
-                "Could not find enough connections to up-to-date replicas. Got: " + std::to_string(up_to_date_count)
+            "Could not find enough connections to up-to-date replicas. Got: " + std::to_string(up_to_date_count)
                 + ", needed: " + std::to_string(min_entries),
-                DB::ErrorCodes::ALL_REPLICAS_ARE_STALE);
+            DB::ErrorCodes::ALL_REPLICAS_ARE_STALE);
 
     return try_results;
 }
@@ -300,7 +317,7 @@ void PoolWithFailoverBase<TNestedPool>::reportError(const Entry & entry)
     {
         if (nested_pools[i]->contains(entry))
         {
-            std::lock_guard<std::mutex> lock(pool_states_mutex);
+            std::lock_guard lock(pool_states_mutex);
             ++shared_pool_states[i].error_count;
             return;
         }
@@ -338,7 +355,7 @@ PoolWithFailoverBase<TNestedPool>::updatePoolStates()
     result.reserve(nested_pools.size());
 
     {
-        std::lock_guard<std::mutex> lock(pool_states_mutex);
+        std::lock_guard lock(pool_states_mutex);
 
         for (auto & state : shared_pool_states)
             state.randomize();

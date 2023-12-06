@@ -1,9 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
+#include <cstddef>
+#include <cstring>
 #include <string>
 #include <string_view>
-#include <cstring>
-#include <cstddef>
 
 
 namespace detail
@@ -46,7 +60,7 @@ template <typename T>
 std::string getOrdinalSuffix(T n)
 {
     static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>,
-        "Unsigned integer value required");
+                  "Unsigned integer value required");
 
     const auto last_digit = n % 10;
 
@@ -56,10 +70,14 @@ std::string getOrdinalSuffix(T n)
 
     switch (last_digit)
     {
-        case 1: return "st";
-        case 2: return "nd";
-        case 3: return "rd";
-        default: return "th";
+    case 1:
+        return "st";
+    case 2:
+        return "nd";
+    case 3:
+        return "rd";
+    default:
+        return "th";
     };
 }
 
@@ -131,4 +149,3 @@ inline bool equalsCaseInsensitive(char a, char b)
 {
     return a == b || (isAlphaASCII(a) && alternateCaseIfAlphaASCII(a) == b);
 }
-

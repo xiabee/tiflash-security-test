@@ -1,17 +1,32 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <limits>
-#include <algorithm>
-#include <climits>
-#include <sstream>
-#include <common/Types.h>
+#include <Common/NaNUtils.h>
+#include <Common/PODArray.h>
 #include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
-#include <Common/PODArray.h>
-#include <Common/NaNUtils.h>
 #include <Poco/Exception.h>
+#include <common/types.h>
+
+#include <algorithm>
+#include <climits>
+#include <limits>
 #include <pcg_random.hpp>
+#include <sstream>
 
 
 /// Implementing the Reservoir Sampling algorithm. Incrementally selects from the added objects a random subset of the sample_count size.
@@ -24,12 +39,12 @@ const size_t DEFAULT_SAMPLE_COUNT = 8192;
 /// What if there is not a single value - throw an exception, or return 0 or NaN in the case of double?
 namespace ReservoirSamplerOnEmpty
 {
-    enum Enum
-    {
-        THROW,
-        RETURN_NAN_OR_ZERO,
-    };
-}
+enum Enum
+{
+    THROW,
+    RETURN_NAN_OR_ZERO,
+};
+} // namespace ReservoirSamplerOnEmpty
 
 template <typename ResultType, bool IsFloatingPoint>
 struct NanLikeValueConstructor

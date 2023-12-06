@@ -1,11 +1,26 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <Common/Logger.h>
 #include <Common/TiFlashException.h>
 #include <Storages/DeltaMerge/RowKeyRangeUtils.h>
+#include <common/logger_useful.h>
 
 namespace DB
 {
 namespace DM
 {
-
 struct OffsetCount;
 using OffsetCounts = std::vector<OffsetCount>;
 
@@ -17,7 +32,10 @@ struct OffsetCount
     size_t count;
 
 public:
-    OffsetCount(size_t offset_, size_t count_) : offset(offset_), count(count_) {}
+    OffsetCount(size_t offset_, size_t count_)
+        : offset(offset_)
+        , count(count_)
+    {}
 };
 
 class MergeRangeHelper
@@ -27,7 +45,8 @@ private:
     OffsetCounts merged_stats;
 
 public:
-    MergeRangeHelper(RowKeyRanges && sorted_ranges_) : sorted_ranges(std::move(sorted_ranges_)) //
+    explicit MergeRangeHelper(RowKeyRanges && sorted_ranges_)
+        : sorted_ranges(std::move(sorted_ranges_))
     {
         genMergeStats();
     }
@@ -37,12 +56,12 @@ public:
         merged_stats.reserve(sorted_ranges.size());
 
         size_t offset = 0;
-        size_t count  = 1;
+        size_t count = 1;
         for (size_t i = 1; i < sorted_ranges.size(); ++i)
         {
-            auto & prev    = sorted_ranges[i - 1];
+            auto & prev = sorted_ranges[i - 1];
             auto & current = sorted_ranges[i];
-            auto   cmp_res = (*prev.end.value).compare(*current.start.value);
+            auto cmp_res = (*prev.end.value).compare(*current.start.value);
             if (current.none() || cmp_res == 0)
             {
                 // Merge current range into previous
@@ -53,7 +72,7 @@ public:
                 // Cannot merge, let's move on.
                 merged_stats.emplace_back(offset, count);
                 offset = i;
-                count  = 1;
+                count = 1;
             }
             else
             {
@@ -64,7 +83,7 @@ public:
                     ++count;
                 else
                     throw TiFlashException("Found overlap ranges: " + prev.toDebugString() + ", " + current.toDebugString(),
-                                        Errors::Coprocessor::BadRequest);
+                                           Errors::Coprocessor::BadRequest);
             }
         }
         merged_stats.emplace_back(offset, count);
@@ -78,7 +97,9 @@ public:
         // Use a heap to pick the range with largest count, then keep splitting it.
         // We don't use std::priority_queue here to avoid copy data around.
         // About heap operations: https://en.cppreference.com/w/cpp/algorithm/make_heap
-        auto cmp = [](const OffsetCount & a, const OffsetCount & b) { return a.count < b.count; };
+        auto cmp = [](const OffsetCount & a, const OffsetCount & b) {
+            return a.count < b.count;
+        };
         std::make_heap(merged_stats.begin(), merged_stats.end(), cmp);
 
         // The range with largest count is retrieved by front().
@@ -100,12 +121,14 @@ public:
 
         // Sort by offset, so that we can have an increasing order by range's start edge.
         std::sort(
-            merged_stats.begin(), merged_stats.end(), [](const OffsetCount & a, const OffsetCount & b) { return a.offset < b.offset; });
+            merged_stats.begin(),
+            merged_stats.end(),
+            [](const OffsetCount & a, const OffsetCount & b) { return a.offset < b.offset; });
     }
 
     RowKeyRanges getRanges()
     {
-        bool   is_common_handle   = sorted_ranges.front().is_common_handle;
+        bool is_common_handle = sorted_ranges.front().is_common_handle;
         size_t rowkey_column_size = sorted_ranges.front().rowkey_column_size;
 
         DM::RowKeyRanges merged_ranges;
@@ -113,7 +136,10 @@ public:
         for (auto & stat : merged_stats)
         {
             DM::RowKeyRange range(
-                sorted_ranges[stat.offset].start, sorted_ranges[stat.offset + stat.count - 1].end, is_common_handle, rowkey_column_size);
+                sorted_ranges[stat.offset].start,
+                sorted_ranges[stat.offset + stat.count - 1].end,
+                is_common_handle,
+                rowkey_column_size);
             merged_ranges.push_back(range);
         }
         return merged_ranges;
@@ -132,7 +158,7 @@ void sortRangesByStartEdge(RowKeyRanges & ranges)
     });
 }
 
-RowKeyRanges tryMergeRanges(RowKeyRanges && sorted_ranges, size_t expected_ranges_count, Logger * log)
+RowKeyRanges tryMergeRanges(RowKeyRanges && sorted_ranges, size_t expected_ranges_count, const LoggerPtr & log)
 {
     if (sorted_ranges.size() <= 1)
         return std::move(sorted_ranges);
@@ -146,12 +172,8 @@ RowKeyRanges tryMergeRanges(RowKeyRanges && sorted_ranges, size_t expected_range
     /// Try to make the number of merged_ranges result larger or equal to expected_ranges_count.
     do_merge_ranges.trySplit(expected_ranges_count);
 
-
     if (log)
-        LOG_TRACE(log,
-                  __FUNCTION__ << " [original ranges: " << ori_size << "] [expected ranges: " << expected_ranges_count
-                               << "] [after merged ranges: " << after_merge_count
-                               << "] [final ranges: " << do_merge_ranges.currentRangesCount() << "]");
+        LOG_FMT_TRACE(log, "[original ranges: {}] [expected ranges: {}] [after merged ranges: {}] [final ranges: {}]", ori_size, expected_ranges_count, after_merge_count, do_merge_ranges.currentRangesCount());
 
     return do_merge_ranges.getRanges();
 }

@@ -1,21 +1,31 @@
-#include <Common/config.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#include <Storages/registerStorages.h>
+#include <Common/config.h>
 #include <Storages/StorageFactory.h>
+#include <Storages/registerStorages.h>
 
 
 namespace DB
 {
-
 void registerStorageLog(StorageFactory & factory);
 void registerStorageTinyLog(StorageFactory & factory);
 void registerStorageDeltaMerge(StorageFactory & factory);
 void registerStorageStripeLog(StorageFactory & factory);
-void registerStorageMergeTree(StorageFactory & factory);
 void registerStorageNull(StorageFactory & factory);
 void registerStorageMerge(StorageFactory & factory);
 void registerStorageBuffer(StorageFactory & factory);
-void registerStorageDistributed(StorageFactory & factory);
 void registerStorageMemory(StorageFactory & factory);
 void registerStorageFile(StorageFactory & factory);
 void registerStorageDictionary(StorageFactory & factory);
@@ -33,11 +43,9 @@ void registerStorages()
     registerStorageTinyLog(factory);
     registerStorageDeltaMerge(factory);
     registerStorageStripeLog(factory);
-    registerStorageMergeTree(factory);
     registerStorageNull(factory);
     registerStorageMerge(factory);
     registerStorageBuffer(factory);
-    registerStorageDistributed(factory);
     registerStorageMemory(factory);
     registerStorageFile(factory);
     registerStorageDictionary(factory);
@@ -47,4 +55,4 @@ void registerStorages()
     registerStorageMaterializedView(factory);
 }
 
-}
+} // namespace DB

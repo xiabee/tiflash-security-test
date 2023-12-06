@@ -1,20 +1,36 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #if !(defined(__FreeBSD__) || defined(__APPLE__) || defined(_MSC_VER))
 
 #include <Common/Exception.h>
-#include <common/logger_useful.h>
-#include <ext/singleton.h>
 #include <Poco/Logger.h>
-#include <boost/range/iterator_range.hpp>
-#include <boost/noncopyable.hpp>
-#include <condition_variable>
-#include <future>
-#include <mutex>
-#include <map>
+#include <common/logger_useful.h>
+#include <common/types.h>
 #include <linux/aio_abi.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+#include <boost/noncopyable.hpp>
+#include <boost/range/iterator_range.hpp>
+#include <condition_variable>
+#include <ext/singleton.h>
+#include <future>
+#include <map>
+#include <mutex>
 
 
 /** Small wrappers for asynchronous I/O.
@@ -32,12 +48,12 @@ inline int io_destroy(aio_context_t ctx)
 }
 
 /// last argument is an array of pointers technically speaking
-inline int io_submit(aio_context_t ctx, long nr, struct iocb * iocbpp[])
+inline int io_submit(aio_context_t ctx, Int64 nr, struct iocb * iocbpp[])
 {
     return syscall(__NR_io_submit, ctx, nr, iocbpp);
 }
 
-inline int io_getevents(aio_context_t ctx, long min_nr, long max_nr, io_event *events, struct timespec * timeout)
+inline int io_getevents(aio_context_t ctx, Int64 min_nr, Int64 max_nr, io_event * events, struct timespec * timeout)
 {
     return syscall(__NR_io_getevents, ctx, min_nr, max_nr, events, timeout);
 }
@@ -47,7 +63,7 @@ struct AIOContext : private boost::noncopyable
 {
     aio_context_t ctx;
 
-    AIOContext(unsigned int nr_events = 128)
+    explicit AIOContext(unsigned int nr_events = 128)
     {
         ctx = 0;
         if (io_setup(nr_events, &ctx) < 0)
@@ -63,17 +79,16 @@ struct AIOContext : private boost::noncopyable
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int AIO_COMPLETION_ERROR;
-    extern const int AIO_SUBMIT_ERROR;
-}
+extern const int AIO_COMPLETION_ERROR;
+extern const int AIO_SUBMIT_ERROR;
+} // namespace ErrorCodes
 
 
-class AIOContextPool : public ext::singleton<AIOContextPool>
+class AIOContextPool : public ext::Singleton<AIOContextPool>
 {
-    friend class ext::singleton<AIOContextPool>;
+    friend class ext::Singleton<AIOContextPool>;
 
     static const auto max_concurrent_events = 128;
     static const auto timeout_sec = 1;
@@ -128,7 +143,7 @@ class AIOContextPool : public ext::singleton<AIOContextPool>
         }
     }
 
-    int getCompletionEvents(io_event events[], const int max_events)
+    int getCompletionEvents(io_event events[], const int max_events) const
     {
         timespec timeout{timeout_sec, 0};
 
@@ -138,7 +153,8 @@ class AIOContextPool : public ext::singleton<AIOContextPool>
         while ((num_events = io_getevents(aio_context.ctx, 1, max_events, events, &timeout)) < 0)
             if (errno != EINTR)
                 throwFromErrno("io_getevents: Failed to wait for asynchronous IO completion",
-                    ErrorCodes::AIO_COMPLETION_ERROR, errno);
+                               ErrorCodes::AIO_COMPLETION_ERROR,
+                               errno);
 
         return num_events;
     }
@@ -148,7 +164,7 @@ class AIOContextPool : public ext::singleton<AIOContextPool>
         if (num_events == 0)
             return;
 
-        const std::lock_guard<std::mutex> lock{mutex};
+        const std::lock_guard lock{mutex};
 
         /// look at returned events and find corresponding promise, set result and erase promise from map
         for (const auto & event : boost::make_iterator_range(events, events + num_events))
@@ -160,7 +176,7 @@ class AIOContextPool : public ext::singleton<AIOContextPool>
             const auto it = promises.find(id);
             if (it == std::end(promises))
             {
-                LOG_ERROR(&Poco::Logger::get("AIOcontextPool"), "Found io_event with unknown id " << id);
+                LOG_FMT_ERROR(&Poco::Logger::get("AIOcontextPool"), "Found io_event with unknown id {}", id);
                 continue;
             }
 
@@ -182,7 +198,7 @@ class AIOContextPool : public ext::singleton<AIOContextPool>
 
     void reportExceptionToAnyProducer()
     {
-        const std::lock_guard<std::mutex> lock{mutex};
+        const std::lock_guard lock{mutex};
 
         const auto any_promise_it = std::begin(promises);
         any_promise_it->second.set_exception(std::current_exception());
@@ -192,7 +208,7 @@ public:
     /// Request AIO read operation for iocb, returns a future with number of bytes read
     std::future<BytesRead> post(struct iocb & iocb)
     {
-        std::unique_lock<std::mutex> lock{mutex};
+        std::unique_lock lock{mutex};
 
         /// get current id and increment it by one
         const auto request_id = id++;
@@ -202,18 +218,18 @@ public:
         /// store id in AIO request for further identification
         iocb.aio_data = request_id;
 
-        auto num_requests = 0;
-        struct iocb * requests[] { &iocb };
+        struct iocb * requests[]{&iocb};
 
         /// submit a request
-        while ((num_requests = io_submit(aio_context.ctx, 1, requests)) < 0)
+        while (io_submit(aio_context.ctx, 1, requests) < 0)
         {
             if (errno == EAGAIN)
                 /// wait until at least one event has been completed (or a spurious wakeup) and try again
                 have_resources.wait(lock);
             else if (errno != EINTR)
                 throwFromErrno("io_submit: Failed to submit a request for asynchronous IO",
-                    ErrorCodes::AIO_SUBMIT_ERROR, errno);
+                               ErrorCodes::AIO_SUBMIT_ERROR,
+                               errno);
         }
 
         return promises[request_id].get_future();
@@ -221,6 +237,6 @@ public:
 };
 
 
-}
+} // namespace DB
 
 #endif

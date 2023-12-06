@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Columns/ColumnDecimal.h>
@@ -5,6 +19,7 @@
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/IDataType.h>
 #include <IO/WriteHelpers.h>
+#include <fmt/core.h>
 
 
 namespace DB
@@ -14,7 +29,8 @@ namespace ErrorCodes
 extern const int ARGUMENT_OUT_OF_BOUND;
 }
 
-// Implements Decimal(P, S), where P is precision, S is scale.
+// Implements Decimal(P, S), where P is precision (significant digits), and S is scale (digits following the decimal point).
+// For example, Decimal(5, 2) can represent numbers from -999.99 to 999.99
 // Maximum precisions for underlying types are:
 // Int32 9
 // Int64 18
@@ -22,7 +38,7 @@ extern const int ARGUMENT_OUT_OF_BOUND;
 // Int256 65
 
 template <typename T>
-class DataTypeDecimal : public IDataType
+class DataTypeDecimal final : public IDataType
 {
     static_assert(IsDecimal<T>);
 
@@ -41,9 +57,10 @@ public:
 
     static constexpr size_t maxPrecision() { return maxDecimalPrecision<T>(); }
 
-    // If scale is omitted, the default is 0. If precision is omitted, the default is 10.
+    // default values
     DataTypeDecimal()
-        : DataTypeDecimal(10, 0)
+        : precision(10)
+        , scale(0)
     {}
 
     DataTypeDecimal(size_t precision_, size_t scale_)
@@ -52,7 +69,20 @@ public:
     {
         if (precision > decimal_max_prec || scale > precision || scale > decimal_max_scale)
         {
-            throw Exception(getName() + "is out of bound", ErrorCodes::ARGUMENT_OUT_OF_BOUND);
+            std::string msg = getName() + "is out of bound";
+            if (precision > decimal_max_prec)
+            {
+                msg = fmt::format("{}, precision {} is greater than maximum value {}", msg, precision, decimal_max_prec);
+            }
+            else if (scale > precision)
+            {
+                msg = fmt::format("{}, scale {} is greater than precision {}", msg, scale, precision);
+            }
+            else
+            {
+                msg = fmt::format("{}, scale {} is greater than maximum value {}", msg, scale, decimal_max_scale);
+            }
+            throw Exception(msg, ErrorCodes::ARGUMENT_OUT_OF_BOUND);
         }
     }
 
@@ -119,7 +149,7 @@ public:
     void serializeTextJSON(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON &) const override;
 
     void serializeTextCSV(const IColumn & column, size_t row_num, WriteBuffer & ostr) const override;
-    void deserializeTextCSV(IColumn & column, ReadBuffer & istr, const char delimiter) const override;
+    void deserializeTextCSV(IColumn & column, ReadBuffer & istr, char delimiter) const override;
 
     void readText(T & x, ReadBuffer & istr) const;
 
@@ -214,15 +244,28 @@ typename std::enable_if_t<(sizeof(T) < sizeof(U)), const DataTypeDecimal<U>> dec
     return DataTypeDecimal<U>(maxDecimalPrecision<U>(), scale);
 }
 
-inline UInt32 getDecimalScale(const IDataType & data_type, UInt32 default_value = std::numeric_limits<UInt32>::max())
+inline PrecType getDecimalPrecision(const IDataType & data_type, PrecType default_value)
 {
-    if (auto * decimal_type = checkDecimal<Decimal32>(data_type))
+    if (const auto * decimal_type = checkDecimal<Decimal32>(data_type))
+        return decimal_type->getPrec();
+    if (const auto * decimal_type = checkDecimal<Decimal64>(data_type))
+        return decimal_type->getPrec();
+    if (const auto * decimal_type = checkDecimal<Decimal128>(data_type))
+        return decimal_type->getPrec();
+    if (const auto * decimal_type = checkDecimal<Decimal256>(data_type))
+        return decimal_type->getPrec();
+    return default_value;
+}
+
+inline ScaleType getDecimalScale(const IDataType & data_type, ScaleType default_value)
+{
+    if (const auto * decimal_type = checkDecimal<Decimal32>(data_type))
         return decimal_type->getScale();
-    if (auto * decimal_type = checkDecimal<Decimal64>(data_type))
+    if (const auto * decimal_type = checkDecimal<Decimal64>(data_type))
         return decimal_type->getScale();
-    if (auto * decimal_type = checkDecimal<Decimal128>(data_type))
+    if (const auto * decimal_type = checkDecimal<Decimal128>(data_type))
         return decimal_type->getScale();
-    if (auto * decimal_type = checkDecimal<Decimal256>(data_type))
+    if (const auto * decimal_type = checkDecimal<Decimal256>(data_type))
         return decimal_type->getScale();
     return default_value;
 }

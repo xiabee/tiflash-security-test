@@ -1,4 +1,20 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
+
+#include <Common/nocopyable.h>
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
@@ -91,31 +107,38 @@ private:
 
 protected:
     template <typename T>
-    class mutable_ptr : public IntrusivePtr<T>
+    class mutable_ptr : public IntrusivePtr<T> // NOLINT(readability-identifier-naming)
     {
     private:
         using Base = IntrusivePtr<T>;
 
-        template <typename> friend class COWPtr;
-        template <typename, typename> friend class COWPtrHelper;
+        template <typename>
+        friend class COWPtr;
+        template <typename, typename>
+        friend class COWPtrHelper;
 
-        explicit mutable_ptr(T * ptr) : Base(ptr) {}
+        explicit mutable_ptr(T * ptr)
+            : Base(ptr)
+        {}
 
     public:
         /// Copy: not possible.
-        mutable_ptr(const mutable_ptr &) = delete;
+        DISALLOW_COPY(mutable_ptr);
 
         /// Move: ok.
         mutable_ptr(mutable_ptr &&) = default;
         mutable_ptr & operator=(mutable_ptr &&) = default;
 
         /// Initializing from temporary of compatible type.
+        // The single-argument constructors are kept non-explicit for life saving, because POWPtr is basically ubiquitous
         template <typename U>
-        mutable_ptr(mutable_ptr<U> && other) : Base(std::move(other)) {}
+        mutable_ptr(mutable_ptr<U> && other) // NOLINT(google-explicit-constructor)
+            : Base(std::move(other))
+        {}
 
         mutable_ptr() = default;
 
-        mutable_ptr(const std::nullptr_t *) {}
+        mutable_ptr(const std::nullptr_t *) {} // NOLINT(google-explicit-constructor)
     };
 
 public:
@@ -123,15 +146,19 @@ public:
 
 protected:
     template <typename T>
-    class immutable_ptr : public IntrusivePtr<const T>
+    class immutable_ptr : public IntrusivePtr<const T> // NOLINT(readability-identifier-naming)
     {
     private:
         using Base = IntrusivePtr<const T>;
 
-        template <typename> friend class COWPtr;
-        template <typename, typename> friend class COWPtrHelper;
+        template <typename>
+        friend class COWPtr;
+        template <typename, typename>
+        friend class COWPtrHelper;
 
-        explicit immutable_ptr(const T * ptr) : Base(ptr) {}
+        explicit immutable_ptr(const T * ptr)
+            : Base(ptr)
+        {}
 
     public:
         /// Copy from immutable ptr: ok.
@@ -139,7 +166,9 @@ protected:
         immutable_ptr & operator=(const immutable_ptr &) = default;
 
         template <typename U>
-        immutable_ptr(const immutable_ptr<U> & other) : Base(other) {}
+        immutable_ptr(const immutable_ptr<U> & other) // NOLINT(google-explicit-constructor)
+            : Base(other)
+        {}
 
         /// Move: ok.
         immutable_ptr(immutable_ptr &&) = default;
@@ -147,11 +176,15 @@ protected:
 
         /// Initializing from temporary of compatible type.
         template <typename U>
-        immutable_ptr(immutable_ptr<U> && other) : Base(std::move(other)) {}
+        immutable_ptr(immutable_ptr<U> && other) // NOLINT(google-explicit-constructor)
+            : Base(std::move(other))
+        {}
 
         /// Move from mutable ptr: ok.
         template <typename U>
-        immutable_ptr(mutable_ptr<U> && other) : Base(std::move(other)) {}
+        immutable_ptr(mutable_ptr<U> && other) // NOLINT(google-explicit-constructor)
+            : Base(std::move(other))
+        {}
 
         /// Copy from mutable ptr: not possible.
         template <typename U>
@@ -159,17 +192,23 @@ protected:
 
         immutable_ptr() = default;
 
-        immutable_ptr(const std::nullptr_t *) {}
+        immutable_ptr(const std::nullptr_t *) {} // NOLINT(google-explicit-constructor)
     };
 
 public:
     using Ptr = immutable_ptr<Derived>;
 
     template <typename... Args>
-    static MutablePtr create(Args &&... args) { return MutablePtr(new Derived(std::forward<Args>(args)...)); }
+    static MutablePtr create(Args &&... args)
+    {
+        return MutablePtr(new Derived(std::forward<Args>(args)...));
+    }
 
     template <typename T>
-    static MutablePtr create(std::initializer_list<T> && arg) { return create(std::forward<std::initializer_list<T>>(arg)); }
+    static MutablePtr create(std::initializer_list<T> && arg)
+    {
+        return create(std::forward<std::initializer_list<T>>(arg));
+    }
 
 public:
     Ptr getPtr() const { return static_cast<Ptr>(derived()); }
@@ -185,7 +224,7 @@ public:
 
     MutablePtr assumeMutable() const
     {
-        return const_cast<COWPtr*>(this)->getPtr();
+        return const_cast<COWPtr *>(this)->getPtr();
     }
 
     Derived & assumeMutableRef() const
@@ -230,10 +269,16 @@ public:
     using MutablePtr = typename Base::template mutable_ptr<Derived>;
 
     template <typename... Args>
-    static MutablePtr create(Args &&... args) { return MutablePtr(new Derived(std::forward<Args>(args)...)); }
+    static MutablePtr create(Args &&... args)
+    {
+        return MutablePtr(new Derived(std::forward<Args>(args)...));
+    }
 
     template <typename T>
-    static MutablePtr create(std::initializer_list<T> && arg) { return create(std::forward<std::initializer_list<T>>(arg)); }
+    static MutablePtr create(std::initializer_list<T> && arg)
+    {
+        return create(std::forward<std::initializer_list<T>>(arg));
+    }
 
     typename Base::MutablePtr clone() const override { return typename Base::MutablePtr(new Derived(*derived())); }
 };

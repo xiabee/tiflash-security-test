@@ -1,89 +1,97 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <Columns/Collator.h>
+#include <Common/Logger.h>
+#include <Common/TiFlashException.h>
+#include <Common/typeid_cast.h>
+#include <Core/Field.h>
+#include <DataStreams/AggregatingBlockInputStream.h>
+#include <DataStreams/AsynchronousBlockInputStream.h>
+#include <DataStreams/ConcatBlockInputStream.h>
+#include <DataStreams/CreatingSetsBlockInputStream.h>
+#include <DataStreams/DistinctBlockInputStream.h>
+#include <DataStreams/DistinctSortedBlockInputStream.h>
 #include <DataStreams/ExpressionBlockInputStream.h>
 #include <DataStreams/FilterBlockInputStream.h>
 #include <DataStreams/LimitBlockInputStream.h>
 #include <DataStreams/LimitByBlockInputStream.h>
-#include <DataStreams/PartialSortingBlockInputStream.h>
+#include <DataStreams/MaterializingBlockInputStream.h>
 #include <DataStreams/MergeSortingBlockInputStream.h>
-#include <DataStreams/MergingSortedBlockInputStream.h>
-#include <DataStreams/AggregatingBlockInputStream.h>
 #include <DataStreams/MergingAggregatedBlockInputStream.h>
 #include <DataStreams/MergingAggregatedMemoryEfficientBlockInputStream.h>
-#include <DataStreams/AsynchronousBlockInputStream.h>
-#include <DataStreams/UnionBlockInputStream.h>
-#include <DataStreams/ParallelAggregatingBlockInputStream.h>
-#include <DataStreams/DistinctBlockInputStream.h>
-#include <DataStreams/DistinctSortedBlockInputStream.h>
+#include <DataStreams/MergingSortedBlockInputStream.h>
 #include <DataStreams/NullBlockInputStream.h>
+#include <DataStreams/ParallelAggregatingBlockInputStream.h>
+#include <DataStreams/PartialSortingBlockInputStream.h>
 #include <DataStreams/TotalsHavingBlockInputStream.h>
+#include <DataStreams/UnionBlockInputStream.h>
 #include <DataStreams/copyData.h>
-#include <DataStreams/CreatingSetsBlockInputStream.h>
-#include <DataStreams/MaterializingBlockInputStream.h>
-#include <DataStreams/ConcatBlockInputStream.h>
-
-#include <Parsers/ASTSelectQuery.h>
-#include <Parsers/ASTSelectWithUnionQuery.h>
-#include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTFunction.h>
-#include <Parsers/ASTLiteral.h>
-#include <Parsers/ASTOrderByElement.h>
-#include <Parsers/ASTTablesInSelectQuery.h>
-
 #include <Encryption/FileProvider.h>
+#include <Interpreters/ExpressionAnalyzer.h>
 #include <Interpreters/InterpreterSelectQuery.h>
 #include <Interpreters/InterpreterSelectWithUnionQuery.h>
 #include <Interpreters/InterpreterSetQuery.h>
-#include <Interpreters/ExpressionAnalyzer.h>
-#include <Storages/MergeTree/MergeTreeWhereOptimizer.h>
-#include <Storages/RegionQueryInfo.h>
-#include <Storages/Transaction/SchemaSyncer.h>
-#include <Storages/Transaction/TiKVRange.h>
-#include <Storages/Transaction/TMTContext.h>
-#include <Storages/Transaction/RegionRangeKeys.h>
-#include <Storages/Transaction/LearnerRead.h>
-#include <Storages/Transaction/StorageEngineType.h>
-
+#include <Parsers/ASTFunction.h>
+#include <Parsers/ASTIdentifier.h>
+#include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTOrderByElement.h>
+#include <Parsers/ASTSelectQuery.h>
+#include <Parsers/ASTSelectWithUnionQuery.h>
+#include <Parsers/ASTTablesInSelectQuery.h>
+#include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
-#include <Storages/StorageMergeTree.h>
-
+#include <Storages/RegionQueryInfo.h>
+#include <Storages/Transaction/LearnerRead.h>
+#include <Storages/Transaction/RegionRangeKeys.h>
+#include <Storages/Transaction/SchemaSyncer.h>
+#include <Storages/Transaction/StorageEngineType.h>
+#include <Storages/Transaction/TMTContext.h>
+#include <Storages/Transaction/TiKVRange.h>
 #include <TableFunctions/ITableFunction.h>
 #include <TableFunctions/TableFunctionFactory.h>
 
-#include <Core/Field.h>
-#include <Columns/Collator.h>
-#include <Common/typeid_cast.h>
-#include <Common/TiFlashException.h>
-
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-    #include <Poco/JSON/Parser.h>
-    #include <Poco/JSON/Array.h>
-    #include <Poco/Dynamic/Var.h>
-    #include <Poco/JSON/Object.h>
+#include <Poco/Dynamic/Var.h>
+#include <Poco/JSON/Array.h>
+#include <Poco/JSON/Object.h>
+#include <Poco/JSON/Parser.h>
 #pragma GCC diagnostic pop
 
 #include <google/protobuf/text_format.h>
 
 namespace ProfileEvents
 {
-    extern const Event SelectQuery;
+extern const Event SelectQuery;
 }
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int TOO_DEEP_SUBQUERIES;
-    extern const int THERE_IS_NO_COLUMN;
-    extern const int SAMPLING_NOT_SUPPORTED;
-    extern const int ILLEGAL_FINAL;
-    extern const int ILLEGAL_PREWHERE;
-    extern const int TOO_MANY_COLUMNS;
-    extern const int LOGICAL_ERROR;
-    extern const int NOT_IMPLEMENTED;
-    extern const int SCHEMA_VERSION_ERROR;
-    extern const int UNKNOWN_EXCEPTION;
-}
+extern const int TOO_DEEP_SUBQUERIES;
+extern const int THERE_IS_NO_COLUMN;
+extern const int SAMPLING_NOT_SUPPORTED;
+extern const int ILLEGAL_FINAL;
+extern const int ILLEGAL_PREWHERE;
+extern const int TOO_MANY_COLUMNS;
+extern const int LOGICAL_ERROR;
+extern const int NOT_IMPLEMENTED;
+extern const int SCHEMA_VERSION_ERROR;
+extern const int UNKNOWN_EXCEPTION;
+} // namespace ErrorCodes
 
 InterpreterSelectQuery::InterpreterSelectQuery(
     const ASTPtr & query_ptr_,
@@ -93,14 +101,14 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     size_t subquery_depth_,
     const BlockInputStreamPtr & input,
     bool only_analyze)
-    : query_ptr(query_ptr_->clone())    /// Note: the query is cloned because it will be modified during analysis.
+    : query_ptr(query_ptr_->clone()) /// Note: the query is cloned because it will be modified during analysis.
     , query(typeid_cast<ASTSelectQuery &>(*query_ptr))
     , context(context_)
     , to_stage(to_stage_)
     , subquery_depth(subquery_depth_)
     , only_analyze(only_analyze)
     , input(input)
-    , log(&Logger::get("InterpreterSelectQuery"))
+    , log(Logger::get("InterpreterSelectQuery"))
 {
     init(required_result_column_names_);
 }
@@ -113,7 +121,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(OnlyAnalyzeTag, const ASTPtr & qu
     , to_stage(QueryProcessingStage::Complete)
     , subquery_depth(0)
     , only_analyze(true)
-    , log(&Logger::get("InterpreterSelectQuery"))
+    , log(Logger::get("InterpreterSelectQuery"))
 {
     init({});
 }
@@ -133,7 +141,7 @@ void InterpreterSelectQuery::init(const Names & required_result_column_names)
 
     if (settings.max_subquery_depth && subquery_depth > settings.max_subquery_depth)
         throw Exception("Too deep subqueries. Maximum: " + settings.max_subquery_depth.toString(),
-            ErrorCodes::TOO_DEEP_SUBQUERIES);
+                        ErrorCodes::TOO_DEEP_SUBQUERIES);
 
     max_streams = settings.max_threads;
 
@@ -176,7 +184,13 @@ void InterpreterSelectQuery::init(const Names & required_result_column_names)
     }
 
     query_analyzer = std::make_unique<ExpressionAnalyzer>(
-        query_ptr, context, storage, source_columns, required_result_column_names, subquery_depth, !only_analyze);
+        query_ptr,
+        context,
+        storage,
+        source_columns,
+        required_result_column_names,
+        subquery_depth,
+        !only_analyze);
 
     if (!only_analyze)
     {
@@ -208,21 +222,21 @@ void InterpreterSelectQuery::getAndLockStorageWithSchemaVersion(const String & d
     auto get_and_lock_storage = [&](bool schema_synced) -> std::tuple<StoragePtr, TableLockHolder, Int64, bool> {
         /// Get storage in case it's dropped then re-created.
         // If schema synced, call getTable without try, leading to exception on table not existing.
-        auto storage_ = schema_synced ? context.getTable(database_name, table_name) : context.tryGetTable(database_name, table_name);
-        if (!storage_)
+        auto storage_tmp = schema_synced ? context.getTable(database_name, table_name) : context.tryGetTable(database_name, table_name);
+        if (!storage_tmp)
             return std::make_tuple(nullptr, nullptr, DEFAULT_UNSPECIFIED_SCHEMA_VERSION, false);
 
-        const auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage_);
+        const auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage_tmp);
         if (!managed_storage
-           || !(managed_storage->engineType() == ::TiDB::StorageEngine::TMT || managed_storage->engineType() == ::TiDB::StorageEngine::DT))
+            || !(managed_storage->engineType() == ::TiDB::StorageEngine::TMT || managed_storage->engineType() == ::TiDB::StorageEngine::DT))
         {
-            throw Exception("Specifying schema_version for storage: " + storage_->getName()
-                            + ", table: " + qualified_name + " is not allowed",
+            throw Exception("Specifying schema_version for storage: " + storage_tmp->getName()
+                                + ", table: " + qualified_name + " is not allowed",
                             ErrorCodes::LOGICAL_ERROR);
         }
 
         /// Lock storage.
-        auto lock = storage_->lockForShare(context.getCurrentQueryId());
+        auto lock = storage_tmp->lockForShare(context.getCurrentQueryId());
 
         /// Check schema version, requiring TiDB/TiSpark and TiFlash both use exactly the same schema.
         // We have three schema versions, two in TiFlash:
@@ -234,39 +248,36 @@ void InterpreterSelectQuery::getAndLockStorageWithSchemaVersion(const String & d
         // Not allow storage > query in any case, one example is time travel queries.
         if (storage_schema_version > query_schema_version)
             throw TiFlashException("Table " + qualified_name + " schema version " + toString(storage_schema_version) + " newer than query schema version " + toString(query_schema_version),
-                                    Errors::Table::SchemaVersionError);
+                                   Errors::Table::SchemaVersionError);
         // From now on we have storage <= query.
         // If schema was synced, it implies that global >= query, as mentioned above we have storage <= query, we are OK to serve.
         if (schema_synced)
-            return std::make_tuple(storage_, lock, storage_schema_version, true);
+            return std::make_tuple(storage_tmp, lock, storage_schema_version, true);
         // From now on the schema was not synced.
         // 1. storage == query, TiDB/TiSpark is using exactly the same schema that altered this table, we are just OK to serve.
         // 2. global >= query, TiDB/TiSpark is using a schema older than TiFlash global, but as mentioned above we have storage <= query,
         // meaning that the query schema is still newer than the time when this table was last altered, so we still OK to serve.
         if (storage_schema_version == query_schema_version || global_schema_version >= query_schema_version)
-            return std::make_tuple(storage_, lock, storage_schema_version, true);
+            return std::make_tuple(storage_tmp, lock, storage_schema_version, true);
         // From now on we have global < query.
         // Return false for outer to sync and retry.
         return std::make_tuple(nullptr, nullptr, storage_schema_version, false);
     };
 
     /// Try get storage and lock once.
-    StoragePtr storage_;
+    StoragePtr storage_tmp;
     TableLockHolder lock;
     Int64 storage_schema_version;
     auto log_schema_version = [&](const String & result) {
-        LOG_DEBUG(log, __PRETTY_FUNCTION__ << " Table " << qualified_name << " schema " << result
-            << " Schema version [storage, global, query]: "
-            << "[" << storage_schema_version << ", " << global_schema_version << ", " << query_schema_version
-            << "].");
+        LOG_FMT_DEBUG(log, "Table {} schema {} Schema version [storage, global, query]: [{}, {}, {}].", qualified_name, result, storage_schema_version, global_schema_version, query_schema_version);
     };
     bool ok;
     {
-        std::tie(storage_, lock, storage_schema_version, ok) = get_and_lock_storage(false);
+        std::tie(storage_tmp, lock, storage_schema_version, ok) = get_and_lock_storage(false);
         if (ok)
         {
             log_schema_version("OK, no syncing required.");
-            storage = storage_;
+            storage = storage_tmp;
             table_lock = lock;
             return;
         }
@@ -278,13 +289,13 @@ void InterpreterSelectQuery::getAndLockStorageWithSchemaVersion(const String & d
         auto start_time = Clock::now();
         context.getTMTContext().getSchemaSyncer()->syncSchemas(context);
         auto schema_sync_cost = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time).count();
-        LOG_DEBUG(log, __PRETTY_FUNCTION__ << " Table " << qualified_name << " schema sync cost " << schema_sync_cost << "ms.");
+        LOG_FMT_DEBUG(log, "Table {} schema sync cost {}ms.", qualified_name, schema_sync_cost);
 
-        std::tie(storage_, lock, storage_schema_version, ok) = get_and_lock_storage(true);
+        std::tie(storage_tmp, lock, storage_schema_version, ok) = get_and_lock_storage(true);
         if (ok)
         {
             log_schema_version("OK after syncing.");
-            storage = storage_;
+            storage = storage_tmp;
             table_lock = lock;
             return;
         }
@@ -465,7 +476,7 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
         throw Exception("Distributed on Distributed is not supported", ErrorCodes::NOT_IMPLEMENTED);
 
     if (!dry_run)
-        LOG_TRACE(log, QueryProcessingStage::toString(from_stage) << " -> " << QueryProcessingStage::toString(to_stage));
+        LOG_FMT_TRACE(log, "{} -> {}", QueryProcessingStage::toString(from_stage), QueryProcessingStage::toString(to_stage));
 
     AnalysisResult expressions = analyzeExpressions(from_stage);
 
@@ -476,18 +487,10 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
         /// Now we will compose block streams that perform the necessary actions.
 
         /// Do I need to aggregate in a separate row rows that have not passed max_rows_to_group_by.
-        bool aggregate_overflow_row =
-            expressions.need_aggregate &&
-            query.group_by_with_totals &&
-            settings.max_rows_to_group_by &&
-            settings.group_by_overflow_mode == OverflowMode::ANY &&
-            settings.totals_mode != TotalsMode::AFTER_HAVING_EXCLUSIVE;
+        bool aggregate_overflow_row = expressions.need_aggregate && query.group_by_with_totals && settings.max_rows_to_group_by && settings.group_by_overflow_mode == OverflowMode::ANY && settings.totals_mode != TotalsMode::AFTER_HAVING_EXCLUSIVE;
 
         /// Do I need to immediately finalize the aggregate functions after the aggregation?
-        bool aggregate_final =
-            expressions.need_aggregate &&
-            to_stage > QueryProcessingStage::WithMergeableState &&
-            !query.group_by_with_totals;
+        bool aggregate_final = expressions.need_aggregate && to_stage > QueryProcessingStage::WithMergeableState && !query.group_by_with_totals;
 
         if (expressions.first_stage)
         {
@@ -496,10 +499,13 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
                 const ASTTableJoin & join = static_cast<const ASTTableJoin &>(*query.join()->table_join);
                 if (join.kind == ASTTableJoin::Kind::Full || join.kind == ASTTableJoin::Kind::Right)
                     pipeline.stream_with_non_joined_data = expressions.before_join->createStreamWithNonJoinedDataIfFullOrRightJoin(
-                        pipeline.firstStream()->getHeader(), 0, 1, settings.max_block_size);
+                        pipeline.firstStream()->getHeader(),
+                        0,
+                        1,
+                        settings.max_block_size);
 
-                for (auto & stream : pipeline.streams)   /// Applies to all sources except stream_with_non_joined_data.
-                    stream = std::make_shared<ExpressionBlockInputStream>(stream, expressions.before_join);
+                for (auto & stream : pipeline.streams) /// Applies to all sources except stream_with_non_joined_data.
+                    stream = std::make_shared<ExpressionBlockInputStream>(stream, expressions.before_join, /*req_id=*/"");
             }
 
             if (expressions.has_where)
@@ -568,7 +574,7 @@ void InterpreterSelectQuery::executeImpl(Pipeline & pipeline, const BlockInputSt
                   */
                 if (!expressions.first_stage && !expressions.need_aggregate && !(query.group_by_with_totals && !aggregate_final))
                     executeMergeSorted(pipeline);
-                else    /// Otherwise, just sort.
+                else /// Otherwise, just sort.
                     executeOrder(pipeline);
             }
 
@@ -690,11 +696,15 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
         subquery_settings.max_result_rows = 0;
         subquery_settings.max_result_bytes = 0;
         /// The calculation of extremes does not make sense and is not necessary (if you do it, then the extremes of the subquery can be taken for whole query).
-        subquery_settings.extremes = 0;
+        subquery_settings.extremes = false;
         subquery_context.setSettings(subquery_settings);
 
         interpreter_subquery = std::make_unique<InterpreterSelectWithUnionQuery>(
-            query_table, subquery_context, required_columns, QueryProcessingStage::Complete, subquery_depth + 1);
+            query_table,
+            subquery_context,
+            required_columns,
+            QueryProcessingStage::Complete,
+            subquery_depth + 1);
 
         /// If there is an aggregation in the outer query, WITH TOTALS is ignored in the subquery.
         if (query_analyzer->hasAggregation())
@@ -707,9 +717,10 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
     /// It's not applied in 'dry_run' mode, because the query could be analyzed without removal of unnecessary columns.
     if (!dry_run && settings.max_columns_to_read && required_columns.size() > settings.max_columns_to_read)
         throw Exception("Limit for number of columns to read exceeded. "
-            "Requested: " + toString(required_columns.size())
-            + ", maximum: " + settings.max_columns_to_read.toString(),
-            ErrorCodes::TOO_MANY_COLUMNS);
+                        "Requested: "
+                            + toString(required_columns.size())
+                            + ", maximum: " + settings.max_columns_to_read.toString(),
+                        ErrorCodes::TOO_MANY_COLUMNS);
 
     size_t limit_length = 0;
     size_t limit_offset = 0;
@@ -788,23 +799,29 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
 
         if (!request_str.empty())
         {
+            TableID table_id = InvalidTableID;
+            if (auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage); managed_storage)
+            {
+                table_id = managed_storage->getTableInfo().id;
+            }
+            else
+            {
+                throw Exception("Not supported request on non-manageable storage");
+            }
             Poco::JSON::Parser parser;
             Poco::Dynamic::Var result = parser.parse(request_str);
             auto obj = result.extract<Poco::JSON::Object::Ptr>();
             Poco::Dynamic::Var regions_obj = obj->get("regions");
             auto arr = regions_obj.extract<Poco::JSON::Array::Ptr>();
 
-            for (size_t i = 0; i < arr->size() ; i++)
+            for (size_t i = 0; i < arr->size(); i++)
             {
-                String str =  arr->getElement<String>(i);
+                String str = arr->getElement<String>(i);
                 ::metapb::Region region;
                 ::google::protobuf::TextFormat::ParseFromString(str, &region);
 
-                RegionQueryInfo info;
-                info.region_id = region.id();
                 const auto & epoch = region.region_epoch();
-                info.version = epoch.version();
-                info.conf_version = epoch.conf_ver();
+                RegionQueryInfo info(region.id(), epoch.version(), epoch.conf_ver(), table_id);
                 if (const auto & managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage))
                 {
                     // Extract the handle range according to current table
@@ -821,24 +838,10 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
             query_info.mvcc_query_info->concurrent = 0.0;
         }
 
-        /// PREWHERE optimization
-        {
-            auto optimize_prewhere = [&](auto & merge_tree)
-            {
-                /// Try transferring some condition from WHERE to PREWHERE if enabled and viable
-                if (settings.optimize_move_to_prewhere && query.where_expression && !query.prewhere_expression && !query.final() && storage->supportsPrewhere())
-                    MergeTreeWhereOptimizer{query_info, context, merge_tree.getData(), required_columns, log};
-            };
-
-            if (const StorageMergeTree * merge_tree = dynamic_cast<const StorageMergeTree *>(storage.get()))
-                optimize_prewhere(*merge_tree);
-        }
-
         /// PARTITION SELECT only supports MergeTree family now.
         if (const ASTSelectQuery * select_query = typeid_cast<const ASTSelectQuery *>(query_info.query.get()))
         {
-            const StorageMergeTree * merge_tree = dynamic_cast<const StorageMergeTree *>(storage.get());
-            if (select_query->partition_expression_list && !merge_tree)
+            if (select_query->partition_expression_list)
             {
                 throw Exception("PARTITION SELECT only supports MergeTree family.");
             }
@@ -849,7 +852,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
             LearnerReadSnapshot learner_read_snapshot;
             // TODO: Note that we should do learner read without holding table's structure lock,
             // or there will be deadlocks between learner read and raft threads (#815).
-            // Here we do not follow the rule because this is not use in production environment 
+            // Here we do not follow the rule because this is not use in production environment
             // and it is hard to move learner read before acuqiring table's lock.
 
             // Do learner read only For DeltaTree.
@@ -863,7 +866,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
                     if (likely(!select_query->no_kvstore))
                     {
                         auto table_info = managed_storage->getTableInfo();
-                        learner_read_snapshot = doLearnerRead(table_info.id, *query_info.mvcc_query_info, max_streams, tmt, log);
+                        learner_read_snapshot = doLearnerRead(table_info.id, *query_info.mvcc_query_info, max_streams, false, context, log);
                     }
                 }
             }
@@ -879,8 +882,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
         if (pipeline.streams.empty())
             pipeline.streams.emplace_back(std::make_shared<NullBlockInputStream>(storage->getSampleBlockForColumns(required_columns)));
 
-        pipeline.transform([&](auto & stream)
-        {
+        pipeline.transform([&](auto & stream) {
             stream->addTableLock(table_lock);
         });
 
@@ -907,8 +909,7 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
 
             QuotaForIntervals & quota = context.getQuota();
 
-            pipeline.transform([&](auto & stream)
-            {
+            pipeline.transform([&](auto & stream) {
                 if (IProfilingBlockInputStream * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream.get()))
                 {
                     p_stream->setLimits(limits);
@@ -925,9 +926,8 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
     /// Aliases in table declaration.
     if (from_stage == QueryProcessingStage::FetchColumns && alias_actions)
     {
-        pipeline.transform([&](auto & stream)
-        {
-            stream = std::make_shared<ExpressionBlockInputStream>(stream, alias_actions);
+        pipeline.transform([&](auto & stream) {
+            stream = std::make_shared<ExpressionBlockInputStream>(stream, alias_actions, /*req_id=*/"");
         });
     }
 
@@ -937,18 +937,16 @@ QueryProcessingStage::Enum InterpreterSelectQuery::executeFetchColumns(Pipeline 
 
 void InterpreterSelectQuery::executeWhere(Pipeline & pipeline, const ExpressionActionsPtr & expression)
 {
-    pipeline.transform([&](auto & stream)
-    {
-        stream = std::make_shared<FilterBlockInputStream>(stream, expression, query.where_expression->getColumnName());
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<FilterBlockInputStream>(stream, expression, query.where_expression->getColumnName(), /*req_id=*/"");
     });
 }
 
 
 void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, const FileProviderPtr & file_provider, bool overflow_row, bool final)
 {
-    pipeline.transform([&](auto & stream)
-    {
-        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression);
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression, /*req_id=*/"");
     });
 
     Names key_names;
@@ -972,23 +970,22 @@ void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const Expre
       */
     bool allow_to_use_two_level_group_by = pipeline.streams.size() > 1 || settings.max_bytes_before_external_group_by != 0;
 
-    Aggregator::Params params(header, keys, aggregates,
-        overflow_row, settings.max_rows_to_group_by, settings.group_by_overflow_mode,
-        settings.compile ? &context.getCompiler() : nullptr, settings.min_count_to_compile,
-        allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold : SettingUInt64(0),
-        allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0),
-        settings.max_bytes_before_external_group_by, settings.empty_result_for_aggregation_by_empty_set,
-        context.getTemporaryPath());
+    Aggregator::Params params(header, keys, aggregates, overflow_row, settings.max_rows_to_group_by, settings.group_by_overflow_mode, allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold : SettingUInt64(0), allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0), settings.max_bytes_before_external_group_by, settings.empty_result_for_aggregation_by_empty_set, context.getTemporaryPath());
 
     /// If there are several sources, then we perform parallel aggregation
     if (pipeline.streams.size() > 1)
     {
         pipeline.firstStream() = std::make_shared<ParallelAggregatingBlockInputStream>(
-            pipeline.streams, pipeline.stream_with_non_joined_data, params, file_provider, final,
+            pipeline.streams,
+            pipeline.stream_with_non_joined_data,
+            params,
+            file_provider,
+            final,
             max_streams,
             settings.aggregation_memory_efficient_merge_threads
                 ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads)
-                : static_cast<size_t>(settings.max_threads));
+                : static_cast<size_t>(settings.max_threads),
+            /*req_id=*/"");
 
         pipeline.stream_with_non_joined_data = nullptr;
         pipeline.streams.resize(1);
@@ -1004,7 +1001,12 @@ void InterpreterSelectQuery::executeAggregation(Pipeline & pipeline, const Expre
         if (pipeline.stream_with_non_joined_data)
             inputs.push_back(pipeline.stream_with_non_joined_data);
 
-        pipeline.firstStream() = std::make_shared<AggregatingBlockInputStream>(std::make_shared<ConcatBlockInputStream>(inputs), params, file_provider, final);
+        pipeline.firstStream() = std::make_shared<AggregatingBlockInputStream>(
+            std::make_shared<ConcatBlockInputStream>(inputs, /*req_id=*/""),
+            params,
+            file_provider,
+            final,
+            /*req_id=*/"");
 
         pipeline.stream_with_non_joined_data = nullptr;
     }
@@ -1052,11 +1054,13 @@ void InterpreterSelectQuery::executeMergeAggregated(Pipeline & pipeline, bool ov
     }
     else
     {
-        pipeline.firstStream() = std::make_shared<MergingAggregatedMemoryEfficientBlockInputStream>(pipeline.streams, params, final,
+        pipeline.firstStream() = std::make_shared<MergingAggregatedMemoryEfficientBlockInputStream>(
+            pipeline.streams,
+            params,
+            final,
             max_streams,
-            settings.aggregation_memory_efficient_merge_threads
-                ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads)
-                : static_cast<size_t>(settings.max_threads));
+            settings.aggregation_memory_efficient_merge_threads ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads) : static_cast<size_t>(settings.max_threads),
+            /*req_id=*/"");
 
         pipeline.streams.resize(1);
     }
@@ -1065,9 +1069,8 @@ void InterpreterSelectQuery::executeMergeAggregated(Pipeline & pipeline, bool ov
 
 void InterpreterSelectQuery::executeHaving(Pipeline & pipeline, const ExpressionActionsPtr & expression)
 {
-    pipeline.transform([&](auto & stream)
-    {
-        stream = std::make_shared<FilterBlockInputStream>(stream, expression, query.having_expression->getColumnName());
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<FilterBlockInputStream>(stream, expression, query.having_expression->getColumnName(), /*req_id=*/"");
     });
 }
 
@@ -1079,16 +1082,19 @@ void InterpreterSelectQuery::executeTotalsAndHaving(Pipeline & pipeline, bool ha
     const Settings & settings = context.getSettingsRef();
 
     pipeline.firstStream() = std::make_shared<TotalsHavingBlockInputStream>(
-        pipeline.firstStream(), overflow_row, expression,
-        has_having ? query.having_expression->getColumnName() : "", settings.totals_mode, settings.totals_auto_threshold);
+        pipeline.firstStream(),
+        overflow_row,
+        expression,
+        has_having ? query.having_expression->getColumnName() : "",
+        settings.totals_mode,
+        settings.totals_auto_threshold);
 }
 
 
-void InterpreterSelectQuery::executeExpression(Pipeline & pipeline, const ExpressionActionsPtr & expression)
+void InterpreterSelectQuery::executeExpression(Pipeline & pipeline, const ExpressionActionsPtr & expression) // NOLINT
 {
-    pipeline.transform([&](auto & stream)
-    {
-        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression);
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression, /*req_id=*/"");
     });
 }
 
@@ -1135,9 +1141,8 @@ void InterpreterSelectQuery::executeOrder(Pipeline & pipeline)
 
     const Settings & settings = context.getSettingsRef();
 
-    pipeline.transform([&](auto & stream)
-    {
-        auto sorting_stream = std::make_shared<PartialSortingBlockInputStream>(stream, order_descr, limit);
+    pipeline.transform([&](auto & stream) {
+        auto sorting_stream = std::make_shared<PartialSortingBlockInputStream>(stream, order_descr, /*req_id=*/"", limit);
 
         /// Limits on sorting
         IProfilingBlockInputStream::LocalLimits limits;
@@ -1153,8 +1158,13 @@ void InterpreterSelectQuery::executeOrder(Pipeline & pipeline)
 
     /// Merge the sorted blocks.
     pipeline.firstStream() = std::make_shared<MergeSortingBlockInputStream>(
-        pipeline.firstStream(), order_descr, settings.max_block_size, limit,
-        settings.max_bytes_before_external_sort, context.getTemporaryPath());
+        pipeline.firstStream(),
+        order_descr,
+        settings.max_block_size,
+        limit,
+        settings.max_bytes_before_external_sort,
+        context.getTemporaryPath(),
+        /*req_id=*/"");
 }
 
 
@@ -1171,8 +1181,7 @@ void InterpreterSelectQuery::executeMergeSorted(Pipeline & pipeline)
         /** MergingSortedBlockInputStream reads the sources sequentially.
           * To make the data on the remote servers prepared in parallel, we wrap it in AsynchronousBlockInputStream.
           */
-        pipeline.transform([&](auto & stream)
-        {
+        pipeline.transform([&](auto & stream) {
             stream = std::make_shared<AsynchronousBlockInputStream>(stream);
         });
 
@@ -1183,11 +1192,10 @@ void InterpreterSelectQuery::executeMergeSorted(Pipeline & pipeline)
 }
 
 
-void InterpreterSelectQuery::executeProjection(Pipeline & pipeline, const ExpressionActionsPtr & expression)
+void InterpreterSelectQuery::executeProjection(Pipeline & pipeline, const ExpressionActionsPtr & expression) // NOLINT
 {
-    pipeline.transform([&](auto & stream)
-    {
-        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression);
+    pipeline.transform([&](auto & stream) {
+        stream = std::make_shared<ExpressionBlockInputStream>(stream, expression, /*req_id=*/"");
     });
 }
 
@@ -1208,8 +1216,7 @@ void InterpreterSelectQuery::executeDistinct(Pipeline & pipeline, bool before_or
         if (!query.order_expression_list || !before_order)
             limit_for_distinct = limit_length + limit_offset;
 
-        pipeline.transform([&](auto & stream)
-        {
+        pipeline.transform([&](auto & stream) {
             SizeLimits limits(settings.max_rows_in_distinct, settings.max_bytes_in_distinct, settings.distinct_overflow_mode);
 
             if (stream->isGroupedOutput())
@@ -1226,7 +1233,11 @@ void InterpreterSelectQuery::executeUnion(Pipeline & pipeline)
     /// If there are still several streams, then we combine them into one
     if (pipeline.hasMoreThanOneStream())
     {
-        pipeline.firstStream() = std::make_shared<UnionBlockInputStream<>>(pipeline.streams, pipeline.stream_with_non_joined_data, max_streams);
+        pipeline.firstStream() = std::make_shared<UnionBlockInputStream<>>(
+            pipeline.streams,
+            pipeline.stream_with_non_joined_data,
+            max_streams,
+            /*req_id=*/"");
         pipeline.stream_with_non_joined_data = nullptr;
         pipeline.streams.resize(1);
     }
@@ -1248,15 +1259,14 @@ void InterpreterSelectQuery::executePreLimit(Pipeline & pipeline)
     /// If there is LIMIT
     if (query.limit_length)
     {
-        pipeline.transform([&](auto & stream)
-        {
-            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length + limit_offset, 0, false);
+        pipeline.transform([&](auto & stream) {
+            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length + limit_offset, 0, /*req_id=*/"", false);
         });
     }
 }
 
 
-void InterpreterSelectQuery::executeLimitBy(Pipeline & pipeline)
+void InterpreterSelectQuery::executeLimitBy(Pipeline & pipeline) // NOLINT
 {
     if (!query.limit_by_value || !query.limit_by_expression_list)
         return;
@@ -1267,8 +1277,7 @@ void InterpreterSelectQuery::executeLimitBy(Pipeline & pipeline)
 
     size_t value = safeGet<UInt64>(typeid_cast<ASTLiteral &>(*query.limit_by_value).value);
 
-    pipeline.transform([&](auto & stream)
-    {
+    pipeline.transform([&](auto & stream) {
         stream = std::make_shared<LimitByBlockInputStream>(stream, value, columns);
     });
 }
@@ -1286,7 +1295,7 @@ bool hasWithTotalsInAnySubqueryInFromClause(const ASTSelectQuery & query)
     auto query_table = query.table();
     if (query_table)
     {
-        auto ast_union = typeid_cast<const ASTSelectWithUnionQuery *>(query_table.get());
+        const auto * ast_union = typeid_cast<const ASTSelectWithUnionQuery *>(query_table.get());
         if (ast_union)
         {
             for (const auto & elem : ast_union->list_of_selects->children)
@@ -1325,9 +1334,8 @@ void InterpreterSelectQuery::executeLimit(Pipeline & pipeline)
         if (!query.group_by_with_totals && hasWithTotalsInAnySubqueryInFromClause(query))
             always_read_till_end = true;
 
-        pipeline.transform([&](auto & stream)
-        {
-            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length, limit_offset, always_read_till_end);
+        pipeline.transform([&](auto & stream) {
+            stream = std::make_shared<LimitBlockInputStream>(stream, limit_length, limit_offset, /*req_id=*/"", always_read_till_end);
         });
     }
 }
@@ -1338,8 +1346,7 @@ void InterpreterSelectQuery::executeExtremes(Pipeline & pipeline)
     if (!context.getSettingsRef().extremes)
         return;
 
-    pipeline.transform([&](auto & stream)
-    {
+    pipeline.transform([&](auto & stream) {
         if (IProfilingBlockInputStream * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream.get()))
             p_stream->enableExtremes();
     });
@@ -1352,8 +1359,10 @@ void InterpreterSelectQuery::executeSubqueriesInSetsAndJoins(Pipeline & pipeline
 
     executeUnion(pipeline);
     pipeline.firstStream() = std::make_shared<CreatingSetsBlockInputStream>(
-        pipeline.firstStream(), subqueries_for_sets,
-        SizeLimits(settings.max_rows_to_transfer, settings.max_bytes_to_transfer, settings.transfer_overflow_mode));
+        pipeline.firstStream(),
+        subqueries_for_sets,
+        SizeLimits(settings.max_rows_to_transfer, settings.max_bytes_to_transfer, settings.transfer_overflow_mode),
+        /*req_id=*/"");
 }
 
 
@@ -1369,4 +1378,4 @@ void InterpreterSelectQuery::initSettings()
         InterpreterSetQuery(query.settings, context).executeForCurrentContext();
 }
 
-}
+} // namespace DB

@@ -1,8 +1,24 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <Common/FmtUtils.h>
 #include <Common/UnifiedLogPatternFormatter.h>
 #include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/Channel.h>
 #include <Poco/Ext/ThreadNumber.h>
+#include <fmt/core.h>
 #include <sys/time.h>
 
 #include <boost/algorithm/string.hpp>
@@ -13,7 +29,6 @@
 
 namespace DB
 {
-
 void UnifiedLogPatternFormatter::format(const Poco::Message & msg, std::string & text)
 {
     DB::WriteBufferFromString wb(text);
@@ -25,12 +40,12 @@ void UnifiedLogPatternFormatter::format(const Poco::Message & msg, std::string &
 
     std::string source_str = "<unknown>";
     if (msg.getSourceFile())
-        source_str = "<" + std::string(msg.getSourceFile()) + ":" + std::to_string(msg.getSourceLine()) + ">";
+        source_str = std::string(msg.getSourceFile()) + ":" + std::to_string(msg.getSourceLine());
 
     std::string message;
-    std::string source = msg.getSource();
+    const std::string & source = msg.getSource();
     if (!source.empty())
-        message = source + ": " + msg.getText();
+        message = fmt::format("{0}:{1}", source, msg.getText());
     else
         message = msg.getText();
 
@@ -59,38 +74,42 @@ void UnifiedLogPatternFormatter::format(const Poco::Message & msg, std::string &
     DB::writeString("]", wb);
 }
 
-std::string UnifiedLogPatternFormatter::getPriorityString(const Poco::Message::Priority & priority) const
+std::string UnifiedLogPatternFormatter::getPriorityString(const Poco::Message::Priority & priority)
 {
     switch (priority)
     {
-        case Poco::Message::Priority::PRIO_TRACE:
-            return "TRACE";
-        case Poco::Message::Priority::PRIO_DEBUG:
-            return "DEBUG";
-        case Poco::Message::Priority::PRIO_INFORMATION:
-            return "INFO";
-        case Poco::Message::Priority::PRIO_WARNING:
-            return "WARN";
-        case Poco::Message::Priority::PRIO_ERROR:
-            return "ERROR";
-        case Poco::Message::Priority::PRIO_FATAL:
-            return "FATAL";
-        case Poco::Message::Priority::PRIO_CRITICAL:
-            return "CRITICAL";
-        case Poco::Message::Priority::PRIO_NOTICE:
-            return "NOTICE";
+    case Poco::Message::Priority::PRIO_TRACE:
+        return "TRACE";
+    case Poco::Message::Priority::PRIO_DEBUG:
+        return "DEBUG";
+    case Poco::Message::Priority::PRIO_INFORMATION:
+        return "INFO";
+    case Poco::Message::Priority::PRIO_WARNING:
+        return "WARN";
+    case Poco::Message::Priority::PRIO_ERROR:
+        return "ERROR";
+    case Poco::Message::Priority::PRIO_FATAL:
+        return "FATAL";
+    case Poco::Message::Priority::PRIO_CRITICAL:
+        return "CRITICAL";
+    case Poco::Message::Priority::PRIO_NOTICE:
+        return "NOTICE";
 
-        default:
-            return "UNKNOWN";
+    default:
+        return "UNKNOWN";
     }
 }
 
-std::string UnifiedLogPatternFormatter::getTimestamp() const
+std::string UnifiedLogPatternFormatter::getTimestamp()
 {
+    // The format is "yyyy/MM/dd HH:mm:ss.SSS ZZZZZ"
     auto time_point = std::chrono::system_clock::now();
     auto tt = std::chrono::system_clock::to_time_t(time_point);
 
-    std::tm * local_tm = std::localtime(&tt);
+    std::tm buf_tm;
+    std::tm * local_tm = localtime_r(&tt, &buf_tm);
+    if (unlikely(!local_tm))
+        return "1970/01/01 00:00:00.000 +00:00";
     int year = local_tm->tm_year + 1900;
     int month = local_tm->tm_mon + 1;
     int day = local_tm->tm_mday;
@@ -101,30 +120,25 @@ std::string UnifiedLogPatternFormatter::getTimestamp() const
 
     int zone_offset = local_tm->tm_gmtoff;
 
-    char buffer[100] = "yyyy/MM/dd HH:mm:ss.SSS";
-
-    std::sprintf(buffer, "%04d/%02d/%02d %02d:%02d:%02d.%03d", year, month, day, hour, minute, second, milliseconds);
-
-    std::stringstream ss;
-    ss << buffer << " ";
+    FmtBuffer fmt_buf;
+    fmt_buf.fmtAppend("{0:04d}/{1:02d}/{2:02d} {3:02d}:{4:02d}:{5:02d}.{6:03d} ", year, month, day, hour, minute, second, milliseconds);
 
     // Handle time zone section
     int offset_value = std::abs(zone_offset);
     auto offset_seconds = std::chrono::seconds(offset_value);
     auto offset_tp = std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>(offset_seconds);
     auto offset_tt = std::chrono::system_clock::to_time_t(offset_tp);
-    std::tm * offset_tm = std::gmtime(&offset_tt);
+    std::tm * offset_tm = gmtime_r(&offset_tt, &buf_tm);
+    if (unlikely(!offset_tm))
+        return fmt_buf.toString() + "+00:00";
     if (zone_offset < 0)
-        ss << "-";
+        fmt_buf.append("-");
     else
-        ss << "+";
-    char buff[] = "hh:mm";
-    std::sprintf(buff, "%02d:%02d", offset_tm->tm_hour, offset_tm->tm_min);
+        fmt_buf.append("+");
 
-    ss << buff;
+    fmt_buf.fmtAppend("{0:02d}:{1:02d}", offset_tm->tm_hour, offset_tm->tm_min);
 
-    std::string result = ss.str();
-    return result;
+    return fmt_buf.toString();
 }
 
 void UnifiedLogPatternFormatter::writeEscapedString(DB::WriteBuffer & wb, const std::string & str)
@@ -161,66 +175,66 @@ void UnifiedLogPatternFormatter::writeJSONString(WriteBuffer & buf, const std::s
     {
         switch (*it)
         {
-            case '\b':
-                writeChar('\\', buf);
-                writeChar('b', buf);
-                break;
-            case '\f':
-                writeChar('\\', buf);
-                writeChar('f', buf);
-                break;
-            case '\n':
-                writeChar('\\', buf);
-                writeChar('n', buf);
-                break;
-            case '\r':
-                writeChar('\\', buf);
-                writeChar('r', buf);
-                break;
-            case '\t':
-                writeChar('\\', buf);
-                writeChar('t', buf);
-                break;
-            case '\\':
-                writeChar('\\', buf);
-                writeChar('\\', buf);
-                break;
-            case '"':
-                writeChar('\\', buf);
-                writeChar('"', buf);
-                break;
-            default:
-                UInt8 c = *it;
-                if (c <= 0x1F)
-                {
-                    /// Escaping of ASCII control characters.
+        case '\b':
+            writeChar('\\', buf);
+            writeChar('b', buf);
+            break;
+        case '\f':
+            writeChar('\\', buf);
+            writeChar('f', buf);
+            break;
+        case '\n':
+            writeChar('\\', buf);
+            writeChar('n', buf);
+            break;
+        case '\r':
+            writeChar('\\', buf);
+            writeChar('r', buf);
+            break;
+        case '\t':
+            writeChar('\\', buf);
+            writeChar('t', buf);
+            break;
+        case '\\':
+            writeChar('\\', buf);
+            writeChar('\\', buf);
+            break;
+        case '"':
+            writeChar('\\', buf);
+            writeChar('"', buf);
+            break;
+        default:
+            UInt8 c = *it;
+            if (c <= 0x1F)
+            {
+                /// Escaping of ASCII control characters.
 
-                    UInt8 higher_half = c >> 4;
-                    UInt8 lower_half = c & 0xF;
+                UInt8 higher_half = c >> 4;
+                UInt8 lower_half = c & 0xF;
 
-                    writeCString("\\u00", buf);
-                    writeChar('0' + higher_half, buf);
+                writeCString("\\u00", buf);
+                writeChar('0' + higher_half, buf);
 
-                    if (lower_half <= 9)
-                        writeChar('0' + lower_half, buf);
-                    else
-                        writeChar('A' + lower_half - 10, buf);
-                }
-                else if (end - it >= 3 && it[0] == '\xE2' && it[1] == '\x80' && (it[2] == '\xA8' || it[2] == '\xA9'))
-                {
-                    /// This is for compatibility with JavaScript, because unescaped line separators are prohibited in string literals,
-                    ///  and these code points are alternative line separators.
-
-                    if (it[2] == '\xA8')
-                        writeCString("\\u2028", buf);
-                    if (it[2] == '\xA9')
-                        writeCString("\\u2029", buf);
-
-                    /// Byte sequence is 3 bytes long. We have additional two bytes to skip.
-                    it += 2;
-                }
+                if (lower_half <= 9)
+                    writeChar('0' + lower_half, buf);
                 else
-                    writeChar(*it, buf);
+                    writeChar('A' + lower_half - 10, buf);
+            }
+            else if (end - it >= 3 && it[0] == '\xE2' && it[1] == '\x80' && (it[2] == '\xA8' || it[2] == '\xA9'))
+            {
+                /// This is for compatibility with JavaScript, because unescaped line separators are prohibited in string literals,
+                ///  and these code points are alternative line separators.
+
+                if (it[2] == '\xA8')
+                    writeCString("\\u2028", buf);
+                if (it[2] == '\xA9')
+                    writeCString("\\u2029", buf);
+
+                /// Byte sequence is 3 bytes long. We have additional two bytes to skip.
+                it += 2;
+            }
+            else
+                writeChar(*it, buf);
         }
     }
     writeChar('"', buf);

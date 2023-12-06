@@ -1,16 +1,30 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <string.h>
 #if !defined(__APPLE__) && !defined(__FreeBSD__)
 #include <malloc.h>
 #endif
-#include <cstdlib>
-#include <cstdint>
-#include <type_traits>
-
-#include <ext/bit_cast.h>
-#include <Core/Types.h>
 #include <Core/Defines.h>
+#include <Core/Types.h>
+
+#include <cstdint>
+#include <cstdlib>
+#include <ext/bit_cast.h>
+#include <type_traits>
 
 
 /** Radix sort, has the following functionality:
@@ -28,12 +42,12 @@
   */
 struct RadixSortMallocAllocator
 {
-    void * allocate(size_t size)
+    static void * allocate(size_t size)
     {
         return malloc(size);
     }
 
-    void deallocate(void * ptr, size_t /*size*/)
+    static void deallocate(void * ptr, size_t /*size*/)
     {
         return free(ptr);
     }
@@ -67,14 +81,14 @@ struct RadixSortFloatTransform
 template <typename Float>
 struct RadixSortFloatTraits
 {
-    using Element = Float;        /// The type of the element. It can be a structure with a key and some other payload. Or just a key.
-    using Key = Float;            /// The key to sort.
-    using CountType = uint32_t;   /// Type for calculating histograms. In the case of a known small number of elements, it can be less than size_t.
+    using Element = Float; /// The type of the element. It can be a structure with a key and some other payload. Or just a key.
+    using Key = Float; /// The key to sort.
+    using CountType = uint32_t; /// Type for calculating histograms. In the case of a known small number of elements, it can be less than size_t.
 
     /// The type to which the key is transformed to do bit operations. This UInt is the same size as the key.
     using KeyBits = std::conditional_t<sizeof(Float) == 8, uint64_t, uint32_t>;
 
-    static constexpr size_t PART_SIZE_BITS = 8;    /// With what pieces of the key, in bits, to do one pass - reshuffle of the array.
+    static constexpr size_t PART_SIZE_BITS = 8; /// With what pieces of the key, in bits, to do one pass - reshuffle of the array.
 
     /// Converting a key into KeyBits is such that the order relation over the key corresponds to the order relation over KeyBits.
     using Transform = RadixSortFloatTransform<KeyBits>;
@@ -94,8 +108,8 @@ struct RadixSortIdentityTransform
 {
     static constexpr bool transform_is_simple = true;
 
-    static KeyBits forward(KeyBits x)     { return x; }
-    static KeyBits backward(KeyBits x)    { return x; }
+    static KeyBits forward(KeyBits x) { return x; }
+    static KeyBits backward(KeyBits x) { return x; }
 };
 
 
@@ -104,8 +118,8 @@ struct RadixSortSignedTransform
 {
     static constexpr bool transform_is_simple = true;
 
-    static KeyBits forward(KeyBits x)     { return x ^ (KeyBits(1) << (sizeof(KeyBits) * 8 - 1)); }
-    static KeyBits backward(KeyBits x)    { return x ^ (KeyBits(1) << (sizeof(KeyBits) * 8 - 1)); }
+    static KeyBits forward(KeyBits x) { return x ^ (KeyBits(1) << (sizeof(KeyBits) * 8 - 1)); }
+    static KeyBits backward(KeyBits x) { return x ^ (KeyBits(1) << (sizeof(KeyBits) * 8 - 1)); }
 };
 
 
@@ -148,10 +162,10 @@ template <typename Traits>
 struct RadixSort
 {
 private:
-    using Element     = typename Traits::Element;
-    using Key         = typename Traits::Key;
-    using CountType   = typename Traits::CountType;
-    using KeyBits     = typename Traits::KeyBits;
+    using Element = typename Traits::Element;
+    using Key = typename Traits::Key;
+    using CountType = typename Traits::CountType;
+    using KeyBits = typename Traits::KeyBits;
 
     static constexpr size_t HISTOGRAM_SIZE = 1 << Traits::PART_SIZE_BITS;
     static constexpr size_t PART_BITMASK = HISTOGRAM_SIZE - 1;
@@ -260,4 +274,3 @@ radixSort(T * arr, size_t size)
 {
     return RadixSort<RadixSortFloatTraits<T>>::execute(arr, size);
 }
-

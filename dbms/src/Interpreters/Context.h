@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Core/NamesAndTypes.h>
@@ -6,7 +20,6 @@
 #include <Interpreters/ClientInfo.h>
 #include <Interpreters/Settings.h>
 #include <Interpreters/TimezoneInfo.h>
-#include <Storages/PartPathSelector.h>
 #include <common/MultiVersion.h>
 
 #include <chrono>
@@ -30,29 +43,18 @@ class IPAddress;
 }
 } // namespace Poco
 
-namespace zkutil
-{
-class ZooKeeper;
-}
-
-
 namespace DB
 {
-
 struct ContextShared;
 class IRuntimeComponentsFactory;
 class QuotaForIntervals;
 class EmbeddedDictionaries;
 class ExternalDictionaries;
 class ExternalModels;
-class InterserverIOHandler;
 class BackgroundProcessingPool;
 class MergeList;
-class Cluster;
-class Compiler;
 class MarkCache;
 class UncompressedCache;
-class PersistedCache;
 class DBGInvoker;
 class TMTContext;
 using TMTContextPtr = std::shared_ptr<TMTContext>;
@@ -60,13 +62,9 @@ class ProcessList;
 class ProcessListElement;
 class Macros;
 struct Progress;
-class Clusters;
 class QueryLog;
-class PartLog;
-struct MergeTreeSettings;
 class IDatabase;
 class DDLGuard;
-class DDLWorker;
 class IStorage;
 class ITableFunction;
 using StoragePtr = std::shared_ptr<IStorage>;
@@ -93,19 +91,22 @@ class KeyManager;
 using KeyManagerPtr = std::shared_ptr<KeyManager>;
 class FileProvider;
 using FileProviderPtr = std::shared_ptr<FileProvider>;
-class RateLimiter;
-using RateLimiterPtr = std::shared_ptr<RateLimiter>;
 struct TiFlashRaftConfig;
 class DAGContext;
+class IORateLimiter;
+class WriteLimiter;
+using WriteLimiterPtr = std::shared_ptr<WriteLimiter>;
+class ReadLimiter;
+using ReadLimiterPtr = std::shared_ptr<ReadLimiter>;
 
+enum class PageStorageRunMode : UInt8;
 namespace DM
 {
 class MinMaxIndexCache;
 class DeltaIndexManager;
+class GlobalStoragePool;
+using GlobalStoragePoolPtr = std::shared_ptr<GlobalStoragePool>;
 } // namespace DM
-
-class TiFlashMetrics;
-using TiFlashMetricsPtr = std::shared_ptr<TiFlashMetrics>;
 
 /// (database name, table name)
 using DatabaseAndTableName = std::pair<String, String>;
@@ -137,17 +138,17 @@ private:
     String current_database;
     Settings settings; /// Setting for query execution.
     using ProgressCallback = std::function<void(const Progress & progress)>;
-    ProgressCallback progress_callback;               /// Callback for tracking progress of query execution.
+    ProgressCallback progress_callback; /// Callback for tracking progress of query execution.
     ProcessListElement * process_list_elem = nullptr; /// For tracking total resource usage for query.
-
-    String default_format;              /// Format, used when server formats data by itself and if query does not have FORMAT specification.
-                                        /// Thus, used in HTTP interface. If not specified - then some globally default format is used.
+    /// Format, used when server formats data by itself and if query does not have FORMAT specification.
+    /// Thus, used in HTTP interface. If not specified - then some globally default format is used.
+    String default_format;
     TableAndCreateASTs external_tables; /// Temporary tables.
-    Tables table_function_results;      /// Temporary tables obtained by execution of table functions. Keyed by AST tree id.
+    Tables table_function_results; /// Temporary tables obtained by execution of table functions. Keyed by AST tree id.
     Context * query_context = nullptr;
     Context * session_context = nullptr; /// Session context or nullptr. Could be equal to this.
-    Context * global_context = nullptr;  /// Global context or nullptr. Could be equal to this.
-    SystemLogsPtr system_logs;           /// Used to log queries and operations on parts
+    Context * global_context = nullptr; /// Global context or nullptr. Could be equal to this.
+    SystemLogsPtr system_logs; /// Used to log queries and operations on parts
 
     UInt64 session_close_cycle = 0;
     bool session_is_used = false;
@@ -183,11 +184,11 @@ public:
     void setUserFilesPath(const String & path);
 
     void setPathPool(const Strings & main_data_paths,
-        const Strings & latest_data_paths,
-        const Strings & kvstore_paths,
-        bool enable_raft_compatible_mode,
-        PathCapacityMetricsPtr global_capacity_,
-        FileProviderPtr file_provider);
+                     const Strings & latest_data_paths,
+                     const Strings & kvstore_paths,
+                     bool enable_raft_compatible_mode,
+                     PathCapacityMetricsPtr global_capacity_,
+                     FileProviderPtr file_provider);
 
     using ConfigurationPtr = Poco::AutoPtr<Poco::Util::AbstractConfiguration>;
 
@@ -227,8 +228,8 @@ public:
       * when assertTableDoesntExist or assertDatabaseExists is called inside another function that already
       * made this check.
       */
-    void assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_acccess_rights = true) const;
-    void assertDatabaseExists(const String & database_name, bool check_database_acccess_rights = true) const;
+    void assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_access_rights = true) const;
+    void assertDatabaseExists(const String & database_name, bool check_database_access_rights = true) const;
 
     void assertDatabaseDoesntExist(const String & database_name) const;
     void checkDatabaseAccessRights(const std::string & database_name) const;
@@ -285,11 +286,6 @@ public:
     BlockInputStreamPtr getInputFormat(const String & name, ReadBuffer & buf, const Block & sample, size_t max_block_size) const;
     BlockOutputStreamPtr getOutputFormat(const String & name, WriteBuffer & buf, const Block & sample) const;
 
-    InterserverIOHandler & getInterserverIOHandler();
-
-    /// How other servers can access this for downloading replicated data.
-    void setInterserverIOAddress(const String & host, UInt16 port);
-    std::pair<String, UInt16> getInterserverIOAddress() const;
     /// The port that the server listens for executing SQL queries.
     UInt16 getTCPPort() const;
 
@@ -298,16 +294,14 @@ public:
     ASTPtr getCreateExternalTableQuery(const String & table_name) const;
     ASTPtr getCreateDatabaseQuery(const String & database_name) const;
 
-    const DatabasePtr getDatabase(const String & database_name) const;
-    DatabasePtr getDatabase(const String & database_name);
-    const DatabasePtr tryGetDatabase(const String & database_name) const;
-    DatabasePtr tryGetDatabase(const String & database_name);
-
-    const Databases getDatabases() const;
-    Databases getDatabases();
+    DatabasePtr getDatabase(const String & database_name) const;
+    DatabasePtr tryGetDatabase(const String & database_name) const;
+    Databases getDatabases() const;
 
     std::shared_ptr<Context> acquireSession(
-        const String & session_id, std::chrono::steady_clock::duration timeout, bool session_check) const;
+        const String & session_id,
+        std::chrono::steady_clock::duration timeout,
+        bool session_check) const;
     void releaseSession(const String & session_id, std::chrono::steady_clock::duration timeout);
 
     /// Close sessions, that has been expired. Returns how long to wait for next session to be expired, if no new sessions will be added.
@@ -319,7 +313,6 @@ public:
     const Context & getQueryContext() const;
     Context & getQueryContext();
     bool hasQueryContext() const { return query_context != nullptr; }
-
     const Context & getSessionContext() const;
     Context & getSessionContext();
     bool hasSessionContext() const { return session_context != nullptr; }
@@ -331,7 +324,6 @@ public:
     void setQueryContext(Context & context_) { query_context = &context_; }
     void setSessionContext(Context & context_) { session_context = &context_; }
     void setGlobalContext(Context & context_) { global_context = &context_; }
-
     const Settings & getSettingsRef() const { return settings; };
     Settings & getSettingsRef() { return settings; };
 
@@ -354,22 +346,10 @@ public:
     ProcessList & getProcessList();
     const ProcessList & getProcessList() const;
 
-    MergeList & getMergeList();
-    const MergeList & getMergeList() const;
-
-    /// If the current session is expired at the time of the call, synchronously creates and returns a new session with the startNewSession() call.
-    std::shared_ptr<zkutil::ZooKeeper> getZooKeeper() const;
-    /// Has ready or expired ZooKeeper
-    bool hasZooKeeper() const;
-
     /// Create a cache of uncompressed blocks of specified size. This can be done only once.
     void setUncompressedCache(size_t max_size_in_bytes);
     std::shared_ptr<UncompressedCache> getUncompressedCache() const;
     void dropUncompressedCache() const;
-
-    /// Create a persisted cache written in fast(er) disk device.
-    void setPersistedCache(size_t max_size_in_bytes, const std::string & persisted_path);
-    std::shared_ptr<PersistedCache> getPersistedCache() const;
 
     /// Execute inner functions, debug only.
     DBGInvoker & getDBGInvoker() const;
@@ -402,42 +382,36 @@ public:
 
     BackgroundProcessingPool & getBackgroundPool();
     BackgroundProcessingPool & getBlockableBackgroundPool();
-
-    void setDDLWorker(std::shared_ptr<DDLWorker> ddl_worker);
-    DDLWorker & getDDLWorker() const;
+    BackgroundProcessingPool & getPSBackgroundPool();
 
     void createTMTContext(const TiFlashRaftConfig & raft_config, pingcap::ClusterConfig && cluster_config);
 
     void initializeSchemaSyncService();
     SchemaSyncServicePtr & getSchemaSyncService();
 
-    void initializePathCapacityMetric(                                                    //
-        size_t global_capacity_quota,                                                     //
-        const Strings & main_data_paths, const std::vector<size_t> & main_capacity_quota, //
-        const Strings & latest_data_paths, const std::vector<size_t> & latest_capacity_quota);
+    void initializePathCapacityMetric(
+        size_t global_capacity_quota,
+        const Strings & main_data_paths,
+        const std::vector<size_t> & main_capacity_quota,
+        const Strings & latest_data_paths,
+        const std::vector<size_t> & latest_capacity_quota);
     PathCapacityMetricsPtr getPathCapacity() const;
 
-    void initializePartPathSelector(std::vector<std::string> && all_path, std::vector<std::string> && all_fast_path);
-    PartPathSelector & getPartPathSelector();
-
-    void initializeTiFlashMetrics();
-    TiFlashMetricsPtr getTiFlashMetrics() const;
+    void initializeTiFlashMetrics() const;
 
     void initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption);
     FileProviderPtr getFileProvider() const;
 
-    void initializeRateLimiter(TiFlashMetricsPtr metrics, UInt64 rate_limit_per_sec);
-    RateLimiterPtr getRateLimiter() const;
+    void initializeRateLimiter(Poco::Util::AbstractConfiguration & config, BackgroundProcessingPool & bg_pool, BackgroundProcessingPool & blockable_bg_pool) const;
+    WriteLimiterPtr getWriteLimiter() const;
+    ReadLimiterPtr getReadLimiter() const;
+    IORateLimiter & getIORateLimiter() const;
 
-    Clusters & getClusters() const;
-    std::shared_ptr<Cluster> getCluster(const std::string & cluster_name) const;
-    std::shared_ptr<Cluster> tryGetCluster(const std::string & cluster_name) const;
-    void setClustersConfig(const ConfigurationPtr & config, const String & config_name = "remote_servers");
-    /// Sets custom cluster, but doesn't update configuration
-    void setCluster(const String & cluster_name, const std::shared_ptr<Cluster> & cluster);
-    void reloadClusterConfig();
-
-    Compiler & getCompiler();
+    void initializePageStorageMode(const PathPool & path_pool, UInt64 storage_page_format_version);
+    void setPageStorageRunMode(PageStorageRunMode run_mode) const;
+    PageStorageRunMode getPageStorageRunMode() const;
+    bool initializeGlobalStoragePoolIfNeed(const PathPool & path_pool);
+    DM::GlobalStoragePoolPtr getGlobalStoragePool() const;
 
     /// Call after initialization before using system logs. Call for global context.
     void initializeSystemLogs();
@@ -445,18 +419,9 @@ public:
     /// Nullptr if the query log is not ready for this moment.
     QueryLog * getQueryLog();
 
-    /// Returns an object used to log opertaions with parts if it possible.
-    /// Provide table name to make required cheks.
-    PartLog * getPartLog(const String & part_database);
-
-    const MergeTreeSettings & getMergeTreeSettings();
-
     /// Prevents DROP TABLE if its size is greater than max_size (50GB by default, max_size=0 turn off this check)
     void setMaxTableSizeToDrop(size_t max_size);
     void checkTableCanBeDropped(const String & database, const String & table, size_t table_size);
-
-    /// Lets you select the compression settings according to the conditions described in the configuration file.
-    CompressionSettings chooseCompressionSettings(size_t part_size, double part_size_ratio) const;
 
     /// Get the server uptime in seconds.
     time_t getUptimeSeconds() const;
@@ -471,7 +436,7 @@ public:
     {
         SERVER, /// The program is run as clickhouse-server daemon (default behavior)
         CLIENT, /// clickhouse-client
-        LOCAL   /// clickhouse-local
+        LOCAL /// clickhouse-local
     };
 
     ApplicationType getApplicationType() const;
@@ -494,6 +459,8 @@ public:
     /// User name and session identifier. Named sessions are local to users.
     using SessionKey = std::pair<String, String>;
 
+    void reloadDeltaTreeConfig(const Poco::Util::AbstractConfiguration & config);
+
 private:
     /** Check if the current client has access to the specified database.
       * If access is denied, throw an exception.
@@ -512,6 +479,8 @@ private:
     /// Session will be closed after specified timeout.
     void scheduleCloseSession(const SessionKey & key, std::chrono::steady_clock::duration timeout);
 };
+
+using ContextPtr = std::shared_ptr<Context>;
 
 
 /// Puts an element into the map, erases it in the destructor.
@@ -536,7 +505,9 @@ private:
 class SessionCleaner
 {
 public:
-    SessionCleaner(Context & context_) : context{context_} {}
+    SessionCleaner(Context & context_)
+        : context{context_}
+    {}
     ~SessionCleaner();
 
 private:

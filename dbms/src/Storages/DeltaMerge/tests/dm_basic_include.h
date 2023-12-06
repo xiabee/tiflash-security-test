@@ -1,14 +1,34 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Columns/ColumnVector.h>
 #include <Common/typeid_cast.h>
 #include <Core/Block.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <IO/Operators.h>
+#include <IO/WriteBufferFromString.h>
 #include <Interpreters/Context.h>
+#include <Parsers/ASTIdentifier.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
+#include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
+
+#include <vector>
 
 namespace DB
 {
@@ -16,27 +36,28 @@ namespace DM
 {
 namespace tests
 {
-
 #define GET_REGION_RANGE(start, end, table_id) RowKeyRange::fromHandleRange(::DB::DM::HandleRange((start), (end))).toRegionRange((table_id))
 
 // Add this so that we can call typeFromString under namespace DB::DM::tests
 using DB::tests::typeFromString;
 
 /// helper functions for comparing HandleRange
-inline ::testing::AssertionResult HandleRangeCompare(const char *        lhs_expr,
-                                                     const char *        rhs_expr, //
-                                                     const HandleRange & lhs,
-                                                     const HandleRange & rhs)
+inline ::testing::AssertionResult HandleRangeCompare(
+    const char * lhs_expr,
+    const char * rhs_expr,
+    const HandleRange & lhs,
+    const HandleRange & rhs)
 {
     if (lhs == rhs)
         return ::testing::AssertionSuccess();
     return ::testing::internal::EqFailure(lhs_expr, rhs_expr, lhs.toDebugString(), rhs.toDebugString(), false);
 }
 /// helper functions for comparing HandleRange
-inline ::testing::AssertionResult RowKeyRangeCompare(const char *        lhs_expr,
-                                                     const char *        rhs_expr, //
-                                                     const RowKeyRange & lhs,
-                                                     const RowKeyRange & rhs)
+inline ::testing::AssertionResult RowKeyRangeCompare(
+    const char * lhs_expr,
+    const char * rhs_expr,
+    const RowKeyRange & lhs,
+    const RowKeyRange & rhs)
 {
     if (lhs == rhs)
         return ::testing::AssertionSuccess();
@@ -49,6 +70,32 @@ inline ::testing::AssertionResult RowKeyRangeCompare(const char *        lhs_exp
     (String() + ::testing::UnitTest::GetInstance()->current_test_info()->test_case_name() + "." \
      + ::testing::UnitTest::GetInstance()->current_test_info()->name())
 
+inline Strings createNumberStrings(size_t beg, size_t end)
+{
+    Strings values;
+    for (size_t i = beg; i < end; ++i)
+        values.emplace_back(DB::toString(i));
+    return values;
+}
+
+template <typename T>
+inline std::vector<T> createNumbers(size_t beg, size_t end, bool reversed = false)
+{
+    std::vector<T> values;
+    size_t num_rows = end - beg;
+    for (size_t i = 0; i < num_rows; ++i)
+        values.emplace_back(reversed ? static_cast<T>(end - 1 - i) : static_cast<T>(beg + i));
+    return values;
+}
+
+inline std::vector<Int64> createSignedNumbers(size_t beg, size_t end)
+{
+    std::vector<Int64> values;
+    for (size_t i = beg; i < end; ++i)
+        values.emplace_back(i * (i % 2 == 0 ? -1 : 1));
+    return values;
+}
+
 class DMTestEnv
 {
 public:
@@ -60,6 +107,8 @@ public:
     static constexpr const char * pk_name = "_tidb_rowid";
 
     static constexpr const char * PK_NAME_PK_IS_HANDLE = "id";
+
+    static constexpr ColId PK_ID_PK_IS_HANDLE = 2;
 
     enum class PkType
     {
@@ -104,10 +153,10 @@ public:
             columns->emplace_back(getExtraHandleColumnDefine(/*is_common_handle=*/true));
             break;
         case PkType::PkIsHandleInt64:
-            columns->emplace_back(ColumnDefine{2, PK_NAME_PK_IS_HANDLE, EXTRA_HANDLE_COLUMN_INT_TYPE});
+            columns->emplace_back(ColumnDefine{PK_ID_PK_IS_HANDLE, PK_NAME_PK_IS_HANDLE, EXTRA_HANDLE_COLUMN_INT_TYPE});
             break;
         case PkType::PkIsHandleInt32:
-            columns->emplace_back(ColumnDefine{2, PK_NAME_PK_IS_HANDLE, DataTypeFactory::instance().get("Int32")});
+            columns->emplace_back(ColumnDefine{PK_ID_PK_IS_HANDLE, PK_NAME_PK_IS_HANDLE, DataTypeFactory::instance().get("Int32")});
             break;
         default:
             throw Exception("Unknown pk type for test");
@@ -115,6 +164,96 @@ public:
         columns->emplace_back(getVersionColumnDefine());
         columns->emplace_back(getTagColumnDefine());
         return columns;
+    }
+
+    /// Returns a NamesAndTypesList that can be used to construct StorageDeltaMerge.
+    static NamesAndTypesList getDefaultTableColumns(PkType pk_type = PkType::HiddenTiDBRowID)
+    {
+        NamesAndTypesList columns;
+        switch (pk_type)
+        {
+        case PkType::HiddenTiDBRowID:
+            columns.push_back({EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_INT_TYPE});
+            break;
+        case PkType::CommonHandle:
+            columns.push_back({PK_NAME_PK_IS_HANDLE, EXTRA_HANDLE_COLUMN_STRING_TYPE}); // For common handle, there must be a user-given primary key.
+            columns.push_back({EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_STRING_TYPE}); // For common handle, a _tidb_rowid is also constructed.
+            break;
+        case PkType::PkIsHandleInt64:
+            columns.emplace_back(PK_NAME_PK_IS_HANDLE, EXTRA_HANDLE_COLUMN_INT_TYPE);
+            break;
+        case PkType::PkIsHandleInt32:
+            throw Exception("PkIsHandleInt32 is unsupported");
+        default:
+            throw Exception("Unknown pk type for test");
+        }
+        return columns;
+    }
+
+    /// Returns a TableInfo that can be used to construct StorageDeltaMerge.
+    static TiDB::TableInfo getMinimalTableInfo(TableID table_id, PkType pk_type = PkType::HiddenTiDBRowID)
+    {
+        TiDB::TableInfo table_info;
+        table_info.id = table_id;
+        switch (pk_type)
+        {
+        case PkType::HiddenTiDBRowID:
+            table_info.is_common_handle = false;
+            table_info.pk_is_handle = false;
+            break;
+        case PkType::CommonHandle:
+        {
+            table_info.is_common_handle = true;
+            table_info.pk_is_handle = false;
+            ColumnInfo pk_column; // For common handle, there must be a user-given primary key.
+            pk_column.id = PK_ID_PK_IS_HANDLE;
+            pk_column.name = PK_NAME_PK_IS_HANDLE;
+            pk_column.setPriKeyFlag();
+            table_info.columns.push_back(pk_column);
+            break;
+        }
+        case PkType::PkIsHandleInt64:
+        {
+            table_info.is_common_handle = false;
+            table_info.pk_is_handle = true;
+            ColumnInfo pk_column;
+            pk_column.id = PK_ID_PK_IS_HANDLE;
+            pk_column.name = PK_NAME_PK_IS_HANDLE;
+            pk_column.setPriKeyFlag();
+            table_info.columns.push_back(pk_column);
+            break;
+        }
+        case PkType::PkIsHandleInt32:
+            throw Exception("PkIsHandleInt32 is unsupported");
+        default:
+            throw Exception("Unknown pk type for test");
+        }
+        return table_info;
+    }
+
+    /// Return a ASTPtr that can be used to construct StorageDeltaMerge.
+    static ASTPtr getPrimaryKeyExpr(const String & table_name, PkType pk_type = PkType::HiddenTiDBRowID)
+    {
+        ASTPtr astptr(new ASTIdentifier(table_name, ASTIdentifier::Kind::Table));
+        String name;
+        switch (pk_type)
+        {
+        case PkType::HiddenTiDBRowID:
+            name = EXTRA_HANDLE_COLUMN_NAME;
+            break;
+        case PkType::CommonHandle:
+            name = EXTRA_HANDLE_COLUMN_NAME;
+            break;
+        case PkType::PkIsHandleInt64:
+            name = PK_NAME_PK_IS_HANDLE;
+            break;
+        case PkType::PkIsHandleInt32:
+            throw Exception("PkIsHandleInt32 is unsupported");
+        default:
+            throw Exception("Unknown pk type for test");
+        }
+        astptr->children.emplace_back(new ASTIdentifier(name));
+        return astptr;
     }
 
     /**
@@ -125,73 +264,103 @@ public:
      * @param reversed  increasing/decreasing insert `pk`'s value
      * @return
      */
-    static Block prepareSimpleWriteBlock(size_t         beg,
-                                         size_t         end,
-                                         bool           reversed,
-                                         UInt64         tso                = 2,
-                                         const String & pk_name_           = pk_name,
-                                         ColumnID       pk_col_id          = EXTRA_HANDLE_COLUMN_ID,
-                                         DataTypePtr    pk_type            = EXTRA_HANDLE_COLUMN_INT_TYPE,
-                                         bool           is_common_handle   = false,
-                                         size_t         rowkey_column_size = 1)
+    static Block prepareSimpleWriteBlock(size_t beg,
+                                         size_t end,
+                                         bool reversed,
+                                         UInt64 tso = 2,
+                                         const String & pk_name_ = pk_name,
+                                         ColumnID pk_col_id = EXTRA_HANDLE_COLUMN_ID,
+                                         DataTypePtr pk_type = EXTRA_HANDLE_COLUMN_INT_TYPE,
+                                         bool is_common_handle = false,
+                                         size_t rowkey_column_size = 1,
+                                         bool with_internal_columns = true,
+                                         bool is_deleted = false)
     {
-        Block        block;
+        Block block;
         const size_t num_rows = (end - beg);
+        if (is_common_handle)
         {
+            // common_pk_col
+            Strings values;
+            for (size_t i = 0; i < num_rows; i++)
             {
-                ColumnWithTypeAndName col1({}, pk_type, pk_name_, pk_col_id);
-                IColumn::MutablePtr   m_col = col1.type->createColumn();
-                // insert form large to small
-                for (size_t i = 0; i < num_rows; i++)
+                Int64 value = reversed ? end - 1 - i : beg + i;
+                WriteBufferFromOwnString ss;
+                for (size_t index = 0; index < rowkey_column_size; index++)
                 {
-                    Field field;
-                    if (is_common_handle)
-                    {
-                        Int64             value = reversed ? end - 1 - i : beg + i;
-                        std::stringstream ss;
-                        for (size_t index = 0; index < rowkey_column_size; index++)
-                        {
-                            ss << TiDB::CodecFlagInt;
-                            ::DB::EncodeInt64(value, ss);
-                        }
-                        field = ss.str();
-                    }
-                    else
-                    {
-                        field = reversed ? Int64(end - 1 - i) : Int64(beg + i);
-                    }
-                    m_col->insert(field);
+                    ::DB::EncodeUInt(static_cast<UInt8>(TiDB::CodecFlagInt), ss);
+                    ::DB::EncodeInt64(value, ss);
                 }
-                col1.column = std::move(m_col);
-                block.insert(col1);
+                values.emplace_back(ss.releaseStr());
             }
-
+            block.insert(DB::tests::createColumn<String>(
+                std::move(values),
+                pk_name_,
+                pk_col_id));
+        }
+        else
+        {
+            // int-like pk_col
+            block.insert(ColumnWithTypeAndName{
+                DB::tests::makeColumn<Int64>(pk_type, createNumbers<Int64>(beg, end, reversed)),
+                pk_type,
+                pk_name_,
+                pk_col_id});
+            // add extra column if need
+            if (pk_col_id != EXTRA_HANDLE_COLUMN_ID)
             {
-                ColumnWithTypeAndName version_col({}, VERSION_COLUMN_TYPE, VERSION_COLUMN_NAME, VERSION_COLUMN_ID);
-                IColumn::MutablePtr   m_col = version_col.type->createColumn();
-                for (size_t i = 0; i < num_rows; ++i)
-                {
-                    Field field = tso;
-                    m_col->insert(field);
-                }
-                version_col.column = std::move(m_col);
-                block.insert(version_col);
-            }
-
-            {
-                ColumnWithTypeAndName tag_col({}, TAG_COLUMN_TYPE, TAG_COLUMN_NAME, TAG_COLUMN_ID);
-                IColumn::MutablePtr   m_col       = tag_col.type->createColumn();
-                auto &                column_data = typeid_cast<ColumnVector<UInt8> &>(*m_col).getData();
-                column_data.resize(num_rows);
-                for (size_t i = 0; i < num_rows; ++i)
-                {
-                    column_data[i] = 0;
-                }
-                tag_col.column = std::move(m_col);
-                block.insert(tag_col);
+                block.insert(ColumnWithTypeAndName{
+                    DB::tests::makeColumn<Int64>(EXTRA_HANDLE_COLUMN_INT_TYPE, createNumbers<Int64>(beg, end, reversed)),
+                    EXTRA_HANDLE_COLUMN_INT_TYPE,
+                    EXTRA_HANDLE_COLUMN_NAME,
+                    EXTRA_HANDLE_COLUMN_ID});
             }
         }
+        if (with_internal_columns)
+        {
+            // version_col
+            block.insert(DB::tests::createColumn<UInt64>(
+                std::vector<UInt64>(num_rows, tso),
+                VERSION_COLUMN_NAME,
+                VERSION_COLUMN_ID));
+            // tag_col
+            block.insert(DB::tests::createColumn<UInt8>(
+                std::vector<UInt64>(num_rows, is_deleted),
+                TAG_COLUMN_NAME,
+                TAG_COLUMN_ID));
+        }
         return block;
+    }
+
+    /**
+     * Create a simple block with 3 columns:
+     *   * `pk` - Int64 / `version` / `tag`
+     * @param beg       `pk`'s value begin
+     * @param end       `pk`'s value end (not included)
+     * @param reversed  increasing/decreasing insert `pk`'s value
+     * @return
+     */
+    static Block prepareSimpleWriteBlock(size_t beg,
+                                         size_t end,
+                                         bool reversed,
+                                         PkType pk_type,
+                                         UInt64 tso = 2,
+                                         bool with_internal_columns = true)
+    {
+        switch (pk_type)
+        {
+        case PkType::HiddenTiDBRowID:
+            return prepareSimpleWriteBlock(beg, end, reversed, tso, EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_ID, EXTRA_HANDLE_COLUMN_INT_TYPE, false, 1, with_internal_columns);
+        case PkType::CommonHandle:
+            return prepareSimpleWriteBlock(beg, end, reversed, tso, EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_ID, EXTRA_HANDLE_COLUMN_STRING_TYPE, true, 1, with_internal_columns);
+        case PkType::PkIsHandleInt64:
+            return prepareSimpleWriteBlock(beg, end, reversed, tso, PK_NAME_PK_IS_HANDLE, PK_ID_PK_IS_HANDLE, EXTRA_HANDLE_COLUMN_INT_TYPE, false, 1, with_internal_columns);
+            break;
+        case PkType::PkIsHandleInt32:
+            throw Exception("PkIsHandleInt32 is unsupported");
+        default:
+            throw Exception("Unknown pk type for test");
+        }
     }
 
     /**
@@ -206,116 +375,85 @@ public:
      */
     static Block prepareBlockWithTso(Int64 pk, size_t ts_beg, size_t ts_end, bool reversed = false, bool deleted = false)
     {
-        Block        block;
+        Block block;
         const size_t num_rows = (ts_end - ts_beg);
-        {
-            ColumnWithTypeAndName col1(nullptr, std::make_shared<DataTypeInt64>(), pk_name, EXTRA_HANDLE_COLUMN_ID);
-            {
-                IColumn::MutablePtr m_col = col1.type->createColumn();
-                // insert form large to small
-                for (size_t i = 0; i < num_rows; i++)
-                {
-                    Field field = Int64(pk);
-                    m_col->insert(field);
-                }
-                col1.column = std::move(m_col);
-            }
-            block.insert(col1);
-
-            ColumnWithTypeAndName version_col(nullptr, VERSION_COLUMN_TYPE, VERSION_COLUMN_NAME, VERSION_COLUMN_ID);
-            {
-                IColumn::MutablePtr m_col = version_col.type->createColumn();
-                for (size_t i = 0; i < num_rows; ++i)
-                {
-                    Field field = reversed ? Int64(ts_end - 1 - i) : Int64(ts_beg + i);
-                    m_col->insert(field);
-                }
-                version_col.column = std::move(m_col);
-            }
-            block.insert(version_col);
-
-            ColumnWithTypeAndName tag_col(nullptr, TAG_COLUMN_TYPE, TAG_COLUMN_NAME, TAG_COLUMN_ID);
-            {
-                IColumn::MutablePtr m_col       = tag_col.type->createColumn();
-                auto &              column_data = typeid_cast<ColumnVector<UInt8> &>(*m_col).getData();
-                column_data.resize(num_rows);
-                for (size_t i = 0; i < num_rows; ++i)
-                {
-                    column_data[i] = deleted ? 1 : 0;
-                }
-                tag_col.column = std::move(m_col);
-            }
-            block.insert(tag_col);
-        }
+        // int64 pk_col
+        block.insert(DB::tests::createColumn<Int64>(
+            std::vector<Int64>(num_rows, pk),
+            pk_name,
+            EXTRA_HANDLE_COLUMN_ID));
+        // version_col
+        block.insert(DB::tests::createColumn<UInt64>(
+            createNumbers<UInt64>(ts_beg, ts_end, reversed),
+            VERSION_COLUMN_NAME,
+            VERSION_COLUMN_ID));
+        // tag_col
+        block.insert(DB::tests::createColumn<UInt8>(
+            std::vector<UInt64>(num_rows, deleted ? 1 : 0),
+            TAG_COLUMN_NAME,
+            TAG_COLUMN_ID));
         return block;
     }
 
     /// prepare a row like this:
     /// {"pk":pk, "version":tso, "delete_mark":mark, "colname":value}
     static Block prepareOneRowBlock(
-        Int64 pk, UInt64 tso, UInt8 mark, const String & colname, const String & value, bool is_common_handle, size_t rowkey_column_size)
+        Int64 pk,
+        UInt64 tso,
+        UInt8 mark,
+        const String & colname,
+        const String & value,
+        bool is_common_handle,
+        size_t rowkey_column_size)
     {
-        Block        block;
+        Block block;
         const size_t num_rows = 1;
+        if (is_common_handle)
         {
-            ColumnWithTypeAndName col1(nullptr,
-                                       is_common_handle ? EXTRA_HANDLE_COLUMN_STRING_TYPE : EXTRA_HANDLE_COLUMN_INT_TYPE,
-                                       pk_name,
-                                       EXTRA_HANDLE_COLUMN_ID);
+            Strings values;
             {
-                IColumn::MutablePtr m_col = col1.type->createColumn();
-                // insert form large to small
-                if (is_common_handle)
+                WriteBufferFromOwnString ss;
+                for (size_t index = 0; index < rowkey_column_size; index++)
                 {
-                    Field             field;
-                    std::stringstream ss;
-                    for (size_t index = 0; index < rowkey_column_size; index++)
-                    {
-                        ss << TiDB::CodecFlagInt;
-                        ::DB::EncodeInt64(pk, ss);
-                    }
-                    field = ss.str();
-                    m_col->insert(field);
+                    ::DB::EncodeUInt(static_cast<UInt8>(TiDB::CodecFlagInt), ss);
+                    ::DB::EncodeInt64(pk, ss);
                 }
-                else
-                    m_col->insert(pk);
-                col1.column = std::move(m_col);
+                values.emplace_back(ss.releaseStr());
             }
-            block.insert(col1);
-
-            ColumnWithTypeAndName version_col(nullptr, VERSION_COLUMN_TYPE, VERSION_COLUMN_NAME, VERSION_COLUMN_ID);
-            {
-                IColumn::MutablePtr m_col = version_col.type->createColumn();
-                m_col->insert(tso);
-                version_col.column = std::move(m_col);
-            }
-            block.insert(version_col);
-
-            ColumnWithTypeAndName tag_col(nullptr, TAG_COLUMN_TYPE, TAG_COLUMN_NAME, TAG_COLUMN_ID);
-            {
-                IColumn::MutablePtr m_col       = tag_col.type->createColumn();
-                auto &              column_data = typeid_cast<ColumnVector<UInt8> &>(*m_col).getData();
-                column_data.resize(num_rows);
-                column_data[0] = mark;
-                tag_col.column = std::move(m_col);
-            }
-            block.insert(tag_col);
-
-            ColumnWithTypeAndName str_col(nullptr, DataTypeFactory::instance().get("String"), colname);
-            {
-                IColumn::MutablePtr m_col = str_col.type->createColumn();
-                m_col->insert(value);
-                str_col.column = std::move(m_col);
-            }
-            block.insert(str_col);
+            block.insert(DB::tests::createColumn<String>(
+                std::move(values),
+                pk_name,
+                EXTRA_HANDLE_COLUMN_ID));
         }
+        else
+        {
+            // int64 pk_col
+            block.insert(DB::tests::createColumn<Int64>(
+                std::vector<Int64>(num_rows, pk),
+                pk_name,
+                EXTRA_HANDLE_COLUMN_ID));
+        }
+        // version_col
+        block.insert(DB::tests::createColumn<UInt64>(
+            std::vector<UInt64>(num_rows, tso),
+            VERSION_COLUMN_NAME,
+            VERSION_COLUMN_ID));
+        // tag_col
+        block.insert(DB::tests::createColumn<UInt8>(
+            std::vector<UInt64>(num_rows, mark),
+            TAG_COLUMN_NAME,
+            TAG_COLUMN_ID));
+        // string column
+        block.insert(DB::tests::createColumn<String>(
+            Strings{value},
+            colname));
         return block;
     }
 
     static void verifyClusteredIndexValue(const String & value, Int64 ans, size_t rowkey_column_size)
     {
         size_t cursor = 0;
-        size_t k      = 0;
+        size_t k = 0;
         for (; cursor < value.size() && k < rowkey_column_size; k++)
         {
             cursor++;
@@ -328,51 +466,41 @@ public:
 
     static RowKeyRange getRowKeyRangeForClusteredIndex(Int64 start, Int64 end, size_t rowkey_column_size)
     {
-        std::stringstream ss;
+        WriteBufferFromOwnString ss;
         for (size_t i = 0; i < rowkey_column_size; i++)
         {
-            ss << TiDB::CodecFlagInt;
+            EncodeUInt(static_cast<UInt8>(TiDB::CodecFlagInt), ss);
             EncodeInt64(start, ss);
         }
-        RowKeyValue start_key = RowKeyValue(true, std::make_shared<String>(ss.str()));
-        ss.str("");
+        RowKeyValue start_key = RowKeyValue(true, std::make_shared<String>(ss.releaseStr()));
+        ss.restart();
         for (size_t i = 0; i < rowkey_column_size; i++)
         {
-            ss << TiDB::CodecFlagInt;
+            EncodeUInt(static_cast<UInt8>(TiDB::CodecFlagInt), ss);
             EncodeInt64(end, ss);
         }
-        RowKeyValue end_key = RowKeyValue(true, std::make_shared<String>(ss.str()));
+        RowKeyValue end_key = RowKeyValue(true, std::make_shared<String>(ss.releaseStr()));
         return RowKeyRange(start_key, end_key, true, rowkey_column_size);
     }
 
     static Block prepareBlockWithIncreasingPKAndTs(size_t rows, Int64 start_pk, UInt64 start_ts)
     {
         Block block;
-        {
-            {
-                auto & col_def = getExtraHandleColumnDefine(false);
-                auto   col     = col_def.type->createColumn();
-                for (size_t i = 0; i < rows; ++i)
-                    col->insert((Int64)(start_pk + i));
-                block.insert(ColumnWithTypeAndName(std::move(col), col_def.type, col_def.name, col_def.id));
-            }
-
-            {
-                auto & col_def = getVersionColumnDefine();
-                auto   col     = col_def.type->createColumn();
-                for (size_t i = 0; i < rows; ++i)
-                    col->insert((UInt64)(start_ts + i));
-                block.insert(ColumnWithTypeAndName(std::move(col), col_def.type, col_def.name, col_def.id));
-            }
-
-            {
-                auto & col_def = getTagColumnDefine();
-                auto   col     = col_def.type->createColumn();
-                for (size_t i = 0; i < rows; ++i)
-                    col->insert((UInt64)0);
-                block.insert(ColumnWithTypeAndName(std::move(col), col_def.type, col_def.name, col_def.id));
-            }
-        }
+        // int64 pk_col
+        block.insert(DB::tests::createColumn<Int64>(
+            createNumbers<Int64>(start_pk, start_pk + rows),
+            EXTRA_HANDLE_COLUMN_NAME,
+            EXTRA_HANDLE_COLUMN_ID));
+        // version_col
+        block.insert(DB::tests::createColumn<UInt64>(
+            createNumbers<UInt64>(start_ts, start_ts + rows),
+            VERSION_COLUMN_NAME,
+            VERSION_COLUMN_ID));
+        // tag_col
+        block.insert(DB::tests::createColumn<UInt8>(
+            std::vector<UInt64>(rows, 0),
+            TAG_COLUMN_NAME,
+            TAG_COLUMN_ID));
         return block;
     }
 

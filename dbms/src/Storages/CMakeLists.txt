@@ -1,18 +1,30 @@
+# Copyright 2023 PingCAP, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 add_subdirectory (System)
 add_subdirectory (Page)
-set (save_CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-set (save_CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
-set (_save ${ENABLE_TESTS})
-set (ENABLE_TESTS 0)
 add_subdirectory (DeltaMerge/File/dtpb)
-set (ENABLE_TESTS ${_save})
-set (CMAKE_CXX_FLAGS ${save_CMAKE_CXX_FLAGS})
-set (CMAKE_C_FLAGS ${save_CMAKE_C_FLAGS})
+add_subdirectory (DeltaMerge/tools)
 
 if (ENABLE_TESTS)
     add_subdirectory (tests EXCLUDE_FROM_ALL)
     add_subdirectory (Transaction/tests EXCLUDE_FROM_ALL)
-    add_subdirectory (Page/tests EXCLUDE_FROM_ALL)
+    add_subdirectory (Page/V2/tests EXCLUDE_FROM_ALL)
+    if (ENABLE_V3_PAGESTORAGE)
+        add_subdirectory (Page/V3 EXCLUDE_FROM_ALL)
+        add_subdirectory (Page/V3/tests EXCLUDE_FROM_ALL)
+    endif ()
     add_subdirectory (DeltaMerge/tests EXCLUDE_FROM_ALL)
 endif ()
 

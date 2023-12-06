@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Common/Allocator.h>
@@ -7,9 +21,9 @@
 #include <Core/Types.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <Storages/DeltaMerge/Range.h>
+#include <Storages/FormatVersion.h>
 #include <Storages/MutableSupport.h>
 #include <Storages/Transaction/Types.h>
-#include <Storages/FormatVersion.h>
 
 #include <limits>
 #include <memory>
@@ -52,16 +66,16 @@ struct EmptyValueSpace
     void removeFromInsert(UInt64) {}
 };
 
-using EntryIterator    = DTEntryIterator<DT_M, DT_F, DT_S>;
+using EntryIterator = DTEntryIterator<DT_M, DT_F, DT_S>;
 using DefaultDeltaTree = DeltaTree<EmptyValueSpace, DT_M, DT_F, DT_S, ArenaWithFreeLists>;
-using DeltaTreePtr     = std::shared_ptr<DefaultDeltaTree>;
-using BlockPtr         = std::shared_ptr<Block>;
+using DeltaTreePtr = std::shared_ptr<DefaultDeltaTree>;
+using BlockPtr = std::shared_ptr<Block>;
 
-using RowId  = UInt64;
-using ColId  = DB::ColumnID;
+using RowId = UInt64;
+using ColId = DB::ColumnID;
 using Handle = DB::HandleID;
 
-using ColIds     = std::vector<ColId>;
+using ColIds = std::vector<ColId>;
 using HandlePair = std::pair<Handle, Handle>;
 
 using RowsAndBytes = std::pair<size_t, size_t>;
@@ -70,24 +84,27 @@ using OptionTableInfoConstRef = std::optional<std::reference_wrapper<const TiDB:
 
 struct ColumnDefine
 {
-    ColId       id;
-    String      name;
+    ColId id;
+    String name;
     DataTypePtr type;
-    Field       default_value;
+    Field default_value;
 
     explicit ColumnDefine(ColId id_ = 0, String name_ = "", DataTypePtr type_ = nullptr, Field default_value_ = Field{})
-        : id(id_), name(std::move(name_)), type(std::move(type_)), default_value(std::move(default_value_))
+        : id(id_)
+        , name(std::move(name_))
+        , type(std::move(type_))
+        , default_value(std::move(default_value_))
     {
     }
 };
 
-using ColumnDefines    = std::vector<ColumnDefine>;
+using ColumnDefines = std::vector<ColumnDefine>;
 using ColumnDefinesPtr = std::shared_ptr<ColumnDefines>;
-using ColumnDefineMap  = std::unordered_map<ColId, ColumnDefine>;
+using ColumnDefineMap = std::unordered_map<ColId, ColumnDefine>;
 
-using ColumnMap        = std::unordered_map<ColId, ColumnPtr>;
+using ColumnMap = std::unordered_map<ColId, ColumnPtr>;
 using MutableColumnMap = std::unordered_map<ColId, MutableColumnPtr>;
-using LockGuard        = std::lock_guard<std::mutex>;
+using LockGuard = std::lock_guard<std::mutex>;
 
 inline static const UInt64 INITIAL_EPOCH = 0;
 
@@ -95,15 +112,18 @@ inline static const UInt64 INITIAL_EPOCH = 0;
 #define EXTRA_HANDLE_COLUMN_NAME ::DB::MutableSupport::tidb_pk_column_name
 #define VERSION_COLUMN_NAME ::DB::MutableSupport::version_column_name
 #define TAG_COLUMN_NAME ::DB::MutableSupport::delmark_column_name
+#define EXTRA_TABLE_ID_COLUMN_NAME ::DB::MutableSupport::extra_table_id_column_name
 
 #define EXTRA_HANDLE_COLUMN_ID ::DB::TiDBPkColumnID
 #define VERSION_COLUMN_ID ::DB::VersionColumnID
 #define TAG_COLUMN_ID ::DB::DelMarkColumnID
+#define EXTRA_TABLE_ID_COLUMN_ID ::DB::ExtraTableIDColumnID
 
 #define EXTRA_HANDLE_COLUMN_INT_TYPE ::DB::MutableSupport::tidb_pk_column_int_type
 #define EXTRA_HANDLE_COLUMN_STRING_TYPE ::DB::MutableSupport::tidb_pk_column_string_type
 #define VERSION_COLUMN_TYPE ::DB::MutableSupport::version_column_type
 #define TAG_COLUMN_TYPE ::DB::MutableSupport::delmark_column_type
+#define EXTRA_TABLE_ID_COLUMN_TYPE ::DB::MutableSupport::extra_table_id_column_type
 
 inline const ColumnDefine & getExtraIntHandleColumnDefine()
 {
@@ -131,18 +151,14 @@ inline const ColumnDefine & getTagColumnDefine()
     static ColumnDefine TAG_COLUMN_DEFINE_{TAG_COLUMN_ID, TAG_COLUMN_NAME, TAG_COLUMN_TYPE};
     return TAG_COLUMN_DEFINE_;
 }
+inline const ColumnDefine & getExtraTableIDColumnDefine()
+{
+    static ColumnDefine EXTRA_TABLE_ID_COLUMN_DEFINE_{EXTRA_TABLE_ID_COLUMN_ID, EXTRA_TABLE_ID_COLUMN_NAME, EXTRA_TABLE_ID_COLUMN_TYPE};
+    return EXTRA_TABLE_ID_COLUMN_DEFINE_;
+}
 
-static constexpr UInt64 MIN_UINT64 = std::numeric_limits<UInt64>::min();
-static constexpr UInt64 MAX_UINT64 = std::numeric_limits<UInt64>::max();
-
-static constexpr Int64 MIN_INT64 = std::numeric_limits<Int64>::min();
-static constexpr Int64 MAX_INT64 = std::numeric_limits<Int64>::max();
-
-static constexpr Handle N_INF_HANDLE = MIN_INT64; // Used in range, indicating negative infinity.
-static constexpr Handle P_INF_HANDLE = MAX_INT64; // Used in range, indicating positive infinity.
-
-static_assert(static_cast<Int64>(static_cast<UInt64>(MIN_INT64)) == MIN_INT64, "Unsupported compiler!");
-static_assert(static_cast<Int64>(static_cast<UInt64>(MAX_INT64)) == MAX_INT64, "Unsupported compiler!");
+static_assert(static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::min())) == std::numeric_limits<Int64>::min(), "Unsupported compiler!");
+static_assert(static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::max())) == std::numeric_limits<Int64>::max(), "Unsupported compiler!");
 
 static constexpr bool DM_RUN_CHECK = true;
 

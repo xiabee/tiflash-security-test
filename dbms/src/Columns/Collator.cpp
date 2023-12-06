@@ -1,19 +1,32 @@
-#include <Columns/Collator.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+#include <Columns/Collator.h>
 #include <Common/config.h>
 
 #if USE_ICU
-    #pragma GCC diagnostic push
-    #ifdef __APPLE__
-    #pragma GCC diagnostic ignored "-Wold-style-cast"
-    #endif
-    #include <unicode/ucol.h>
-    #pragma GCC diagnostic pop
+#pragma GCC diagnostic push
+#ifdef __APPLE__
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#endif
+#include <unicode/ucol.h>
+#pragma GCC diagnostic pop
 #else
-    #if __clang__
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Wunused-private-field"
-    #endif
+#if __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#endif
 #endif
 
 #include <Common/Exception.h>
@@ -23,16 +36,17 @@
 
 namespace DB
 {
-    namespace ErrorCodes
-    {
-        extern const int UNSUPPORTED_COLLATION_LOCALE;
-        extern const int COLLATION_COMPARISON_FAILED;
-        extern const int SUPPORT_IS_DISABLED;
-    }
-}
+namespace ErrorCodes
+{
+extern const int UNSUPPORTED_COLLATION_LOCALE;
+extern const int COLLATION_COMPARISON_FAILED;
+extern const int SUPPORT_IS_DISABLED;
+} // namespace ErrorCodes
+} // namespace DB
 
 
-Collator::Collator(const std::string & locale_) : locale(Poco::toLower(locale_))
+Collator::Collator(const std::string & locale_)
+    : locale(Poco::toLower(locale_))
 {
 #if USE_ICU
     UErrorCode status = U_ZERO_ERROR;

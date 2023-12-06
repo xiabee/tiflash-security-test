@@ -1,14 +1,28 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <memory>
 #include <Common/COWPtr.h>
-#include <boost/noncopyable.hpp>
 #include <Core/Field.h>
+
+#include <boost/noncopyable.hpp>
+#include <memory>
 
 
 namespace DB
 {
-
 class ReadBuffer;
 class WriteBuffer;
 
@@ -87,7 +101,9 @@ public:
         /// Index of tuple element, starting at 1.
         String tuple_element_name;
 
-        Substream(Type type) : type(type) {}
+        Substream(Type type)
+            : type(type)
+        {}
     };
 
     using SubstreamPath = std::vector<Substream>;
@@ -100,8 +116,8 @@ public:
     void enumerateStreams(const StreamCallback & callback, SubstreamPath && path) const { enumerateStreams(callback, path); }
     void enumerateStreams(const StreamCallback & callback) const { enumerateStreams(callback, {}); }
 
-    using OutputStreamGetter = std::function<WriteBuffer*(const SubstreamPath &)>;
-    using InputStreamGetter = std::function<ReadBuffer*(const SubstreamPath &)>;
+    using OutputStreamGetter = std::function<WriteBuffer *(const SubstreamPath &)>;
+    using InputStreamGetter = std::function<ReadBuffer *(const SubstreamPath &)>;
 
     /** 'offset' and 'limit' are used to specify range.
       * limit = 0 - means no limit.
@@ -111,14 +127,25 @@ public:
       */
     virtual void serializeBinaryBulkWithMultipleStreams(
         const IColumn & column,
-        OutputStreamGetter getter,
+        const OutputStreamGetter & getter,
         size_t offset,
         size_t limit,
         bool /*position_independent_encoding*/,
-        SubstreamPath path) const
+        SubstreamPath & path) const
     {
         if (WriteBuffer * stream = getter(path))
             serializeBinaryBulk(column, *stream, offset, limit);
+    }
+
+    void serializeBinaryBulkWithMultipleStreams(
+        const IColumn & column,
+        const OutputStreamGetter & getter,
+        size_t offset,
+        size_t limit,
+        bool position_independent_encoding,
+        SubstreamPath && path) const
+    {
+        serializeBinaryBulkWithMultipleStreams(column, getter, offset, limit, position_independent_encoding, path);
     }
 
     /** Read no more than limit values and append them into column.
@@ -126,14 +153,25 @@ public:
       */
     virtual void deserializeBinaryBulkWithMultipleStreams(
         IColumn & column,
-        InputStreamGetter getter,
+        const InputStreamGetter & getter,
         size_t limit,
         double avg_value_size_hint,
         bool /*position_independent_encoding*/,
-        SubstreamPath path) const
+        SubstreamPath & path) const
     {
         if (ReadBuffer * stream = getter(path))
             deserializeBinaryBulk(column, *stream, limit, avg_value_size_hint);
+    }
+
+    void deserializeBinaryBulkWithMultipleStreams(
+        IColumn & column,
+        const InputStreamGetter & getter,
+        size_t limit,
+        double avg_value_size_hint,
+        bool position_independent_encoding,
+        SubstreamPath && path) const
+    {
+        deserializeBinaryBulkWithMultipleStreams(column, getter, limit, avg_value_size_hint, position_independent_encoding, path);
     }
 
     /** Override these methods for data types that require just single stream (most of data types).
@@ -145,28 +183,51 @@ public:
       */
     virtual void serializeWidenBinaryBulkWithMultipleStreams(
         const IColumn & column,
-        OutputStreamGetter getter,
+        const OutputStreamGetter & getter,
         size_t offset,
         size_t limit,
         bool /*position_independent_encoding*/,
-        SubstreamPath path) const
+        SubstreamPath & path) const
     {
         if (WriteBuffer * stream = getter(path))
             serializeWidenBinaryBulk(column, *stream, offset, limit);
     }
 
+    void serializeWidenBinaryBulkWithMultipleStreams(
+        const IColumn & column,
+        const OutputStreamGetter & getter,
+        size_t offset,
+        size_t limit,
+        bool position_independent_encoding,
+        SubstreamPath && path) const
+    {
+        serializeWidenBinaryBulkWithMultipleStreams(column, getter, offset, limit, position_independent_encoding, path);
+    }
+
+
     /** Widen version for `deserializeBinaryBulkWithMultipleStreams`.
       */
     virtual void deserializeWidenBinaryBulkWithMultipleStreams(
         IColumn & column,
-        InputStreamGetter getter,
+        const InputStreamGetter & getter,
         size_t limit,
         double avg_value_size_hint,
         bool /*position_independent_encoding*/,
-        SubstreamPath path) const
+        SubstreamPath & path) const
     {
         if (ReadBuffer * stream = getter(path))
             deserializeWidenBinaryBulk(column, *stream, limit, avg_value_size_hint);
+    }
+
+    void deserializeWidenBinaryBulkWithMultipleStreams(
+        IColumn & column,
+        const InputStreamGetter & getter,
+        size_t limit,
+        double avg_value_size_hint,
+        bool position_independent_encoding,
+        SubstreamPath && path) const
+    {
+        deserializeWidenBinaryBulkWithMultipleStreams(column, getter, limit, avg_value_size_hint, position_independent_encoding, path);
     }
 
     /** Widen version for `serializeBinaryBulk`.
@@ -343,6 +404,10 @@ public:
     virtual bool isInteger() const { return false; };
     virtual bool isUnsignedInteger() const { return false; };
 
+    /** Floating point values. Not Nullable. Not Enums. Not Date/DateTime.
+     */
+    virtual bool isFloatingPoint() const { return false; }
+
     /** Date, DateTime, MyDate, MyDateTime. Not Nullable.
       */
     virtual bool isDateOrDateTime() const { return false; };
@@ -350,6 +415,10 @@ public:
     /** MyDate, MyDateTime. Not Nullable.
       */
     virtual bool isMyDateOrMyDateTime() const { return false; };
+
+    /** MyTime. Not Nullable.
+     */
+    virtual bool isMyTime() const { return false; };
 
     /** Decimal. Not Nullable.
       */
@@ -429,5 +498,4 @@ public:
 };
 
 
-}
-
+} // namespace DB

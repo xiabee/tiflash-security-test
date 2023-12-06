@@ -1,10 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/TiFlashException.h>
 
 #include <set>
 
 namespace DB
 {
-
 void TiFlashErrorRegistry::initialize()
 {
     // Used to check uniqueness of classes
@@ -30,8 +43,7 @@ void TiFlashErrorRegistry::initialize()
 #undef E
 }
 
-void TiFlashErrorRegistry::registerError(const std::string & error_class, const std::string & error_code, const std::string & description,
-    const std::string & workaround, const std::string & message_template)
+void TiFlashErrorRegistry::registerError(const std::string & error_class, const std::string & error_code, const std::string & description, const std::string & workaround, const std::string & message_template)
 {
     TiFlashError error{error_class, error_code, description, workaround, message_template};
     if (all_errors.find({error_class, error_code}) == all_errors.end())
@@ -44,8 +56,7 @@ void TiFlashErrorRegistry::registerError(const std::string & error_class, const 
     }
 }
 
-void TiFlashErrorRegistry::registerErrorWithNumericCode(const std::string & error_class, int error_code, const std::string & description,
-    const std::string & workaround, const std::string & message_template)
+void TiFlashErrorRegistry::registerErrorWithNumericCode(const std::string & error_class, int error_code, const std::string & description, const std::string & workaround, const std::string & message_template)
 {
     std::string error_code_str = std::to_string(error_code);
     registerError(error_class, error_code_str, description, workaround, message_template);

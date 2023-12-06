@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/FailPoint.h>
 #include <Databases/DatabaseTiFlash.h>
 #include <Encryption/ReadBufferFromFileProvider.h>
@@ -31,18 +45,16 @@ extern const int SYNTAX_ERROR;
 namespace FailPoints
 {
 extern const char exception_before_rename_table_old_meta_removed[];
-}
+extern const char force_context_path[];
+} // namespace FailPoints
 
 extern String createDatabaseStmt(Context & context, const TiDB::DBInfo & db_info, const SchemaNameMapper & name_mapper);
 
 namespace tests
 {
-
-class DatabaseTiFlash_test : public ::testing::Test
+class DatabaseTiFlashTest : public ::testing::Test
 {
 public:
-    constexpr static const char * TEST_DB_NAME = "test";
-
     static void SetUpTestCase()
     {
         try
@@ -53,11 +65,23 @@ public:
         {
             // Maybe another test has already registed, ignore exception here.
         }
+
+        FailPointHelper::enableFailPoint(FailPoints::force_context_path);
     }
 
-    DatabaseTiFlash_test() : log(&Poco::Logger::get("DatabaseTiFlash_test")) {}
+    static void TearDownTestCase()
+    {
+        FailPointHelper::disableFailPoint(FailPoints::force_context_path);
+    }
 
-    void SetUp() override { recreateMetadataPath(); }
+    DatabaseTiFlashTest()
+        : log(&Poco::Logger::get("DatabaseTiFlashTest"))
+    {}
+
+    void SetUp() override
+    {
+        recreateMetadataPath();
+    }
 
     void TearDown() override
     {
@@ -75,15 +99,14 @@ public:
         String path = TiFlashTestEnv::getContext().getPath();
 
         auto p = path + "/metadata/";
-
         if (Poco::File file(p); file.exists())
             file.remove(true);
-        Poco::File{p}.createDirectory();
+        Poco::File{p}.createDirectories();
 
         p = path + "/data/";
         if (Poco::File file(p); file.exists())
             file.remove(true);
-        Poco::File{p}.createDirectory();
+        Poco::File{p}.createDirectories();
     }
 
 protected:
@@ -98,20 +121,20 @@ ASTPtr parseCreateStatement(const String & statement)
     const char * pos = statement.data();
     std::string error_msg;
     auto ast = tryParseQuery(parser,
-        pos,
-        pos + statement.size(),
-        error_msg,
-        /*hilite=*/false,
-        String("in ") + __PRETTY_FUNCTION__,
-        /*allow_multi_statements=*/false,
-        0);
+                             pos,
+                             pos + statement.size(),
+                             error_msg,
+                             /*hilite=*/false,
+                             String("in ") + __PRETTY_FUNCTION__,
+                             /*allow_multi_statements=*/false,
+                             0);
     if (!ast)
         throw Exception(error_msg, ErrorCodes::SYNTAX_ERROR);
     return ast;
 }
 } // namespace
 
-TEST_F(DatabaseTiFlash_test, CreateDBAndTable)
+TEST_F(DatabaseTiFlashTest, CreateDBAndTable)
 try
 {
     const String db_name = "db_1";
@@ -195,7 +218,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, RenameTable)
+TEST_F(DatabaseTiFlashTest, RenameTable)
 try
 {
     const String db_name = "db_1";
@@ -296,7 +319,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, RenameTableBetweenDatabase)
+TEST_F(DatabaseTiFlashTest, RenameTableBetweenDatabase)
 try
 {
     const String db_name = "db_1";
@@ -428,7 +451,7 @@ try
 CATCH
 
 
-TEST_F(DatabaseTiFlash_test, AtomicRenameTableBetweenDatabase)
+TEST_F(DatabaseTiFlashTest, AtomicRenameTableBetweenDatabase)
 try
 {
     const String db_name = "db_1";
@@ -482,7 +505,8 @@ try
     // Rename table to another database, and mock crash by failed point
     FailPointHelper::enableFailPoint(FailPoints::exception_before_rename_table_old_meta_removed);
     ASSERT_THROW(
-        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db2, to_tbl_name, db2_name, to_tbl_name), DB::Exception);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(ctx, tbl_name, *db2, to_tbl_name, db2_name, to_tbl_name),
+        DB::Exception);
 
     {
         // After fail point triggled we should have both meta file in disk
@@ -526,7 +550,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, RenameTableOnlyUpdateDisplayName)
+TEST_F(DatabaseTiFlashTest, RenameTableOnlyUpdateDisplayName)
 try
 {
     const String db_name = "db_1";
@@ -628,7 +652,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, ISSUE4596)
+TEST_F(DatabaseTiFlashTest, ISSUE4596)
 try
 {
     const String db_name = "db_1";
@@ -650,7 +674,7 @@ try
     {
         /// Create table
         ParserCreateQuery parser;
-        const String stmt = "CREATE TABLE `" + db_name + "`.`" + tbl_name + "` " +
+        const String stmt = fmt::format("CREATE TABLE `{}`.`{}` ", db_name, tbl_name) +
             R"stmt( 
                 (`id` Int32,`b` String) Engine = DeltaMerge((`id`),
                     '{
@@ -740,7 +764,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, ISSUE_1055)
+TEST_F(DatabaseTiFlashTest, ISSUE1055)
 try
 {
     CHECK_TESTS_WITH_DATA_ENABLED;
@@ -789,7 +813,7 @@ try
 }
 CATCH
 
-TEST_F(DatabaseTiFlash_test, ISSUE_1093)
+TEST_F(DatabaseTiFlashTest, ISSUE1093)
 try
 {
     // The json info get by `curl http://{tidb-ip}:{tidb-status-port}/schema`
@@ -888,7 +912,7 @@ String readFile(Context & ctx, const String & file)
 DatabasePtr detachThenAttach(Context & ctx, const String & db_name, DatabasePtr && db, Poco::Logger * log)
 {
     auto meta = readFile(ctx, getDatabaseMetadataPath(db->getMetadataPath()));
-    LOG_DEBUG(log, "After tombstone [meta=" << meta << "]");
+    LOG_FMT_DEBUG(log, "After tombstone [meta={}]", meta);
     {
         // Detach and load again
         auto detach_query = std::make_shared<ASTDropQuery>();
@@ -911,7 +935,7 @@ DatabasePtr detachThenAttach(Context & ctx, const String & db_name, DatabasePtr 
     return std::move(db);
 }
 
-TEST_F(DatabaseTiFlash_test, Tombstone)
+TEST_F(DatabaseTiFlashTest, Tombstone)
 try
 {
     const String db_name = "db_1";
@@ -952,7 +976,7 @@ try
 
         auto db = ctx.getDatabase(db_name);
         auto meta = readFile(ctx, getDatabaseMetadataPath(db->getMetadataPath()));
-        LOG_DEBUG(log, "After create [meta=" << meta << "]");
+        LOG_FMT_DEBUG(log, "After create [meta={}]", meta);
 
         DB::Timestamp tso = 1000;
         db->alterTombstone(ctx, tso);

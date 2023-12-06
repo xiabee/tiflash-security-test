@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Functions/FunctionsConversion.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 
@@ -5,27 +19,26 @@ namespace DB
 {
 namespace DM
 {
-
 void convertColumn(Block & block, size_t pos, const DataTypePtr & to_type, const Context & context)
 {
     const IDataType * to_type_ptr = to_type.get();
 
     if (checkDataType<DataTypeUInt8>(to_type_ptr))
-        FunctionToUInt8::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToUInt8::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeUInt16>(to_type_ptr))
-        FunctionToUInt16::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToUInt16::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeUInt32>(to_type_ptr))
-        FunctionToUInt32::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToUInt32::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeUInt64>(to_type_ptr))
-        FunctionToUInt64::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToUInt64::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeInt8>(to_type_ptr))
-        FunctionToInt8::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToInt8::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeInt16>(to_type_ptr))
-        FunctionToInt16::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToInt16::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeInt32>(to_type_ptr))
-        FunctionToInt32::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToInt32::create(context)).execute(block, {pos}, pos);
     else if (checkDataType<DataTypeInt64>(to_type_ptr))
-        FunctionToInt64::create(context)->execute(block, {pos}, pos);
+        DefaultExecutable(FunctionToInt64::create(context)).execute(block, {pos}, pos);
     else
         throw Exception("Forgot to support type: " + to_type->getName());
 }
@@ -33,7 +46,7 @@ void convertColumn(Block & block, size_t pos, const DataTypePtr & to_type, const
 void appendIntoHandleColumn(ColumnVector<Handle>::Container & handle_column, const DataTypePtr & type, const ColumnPtr & data)
 {
     auto * type_ptr = &(*type);
-    size_t size     = handle_column.size();
+    size_t size = handle_column.size();
 
 #define APPEND(SHIFT, MARK, DATA_VECTOR)           \
     for (size_t i = 0; i < size; ++i)              \

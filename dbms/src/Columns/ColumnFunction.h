@@ -1,12 +1,25 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Core/NamesAndTypes.h>
-#include <Core/ColumnsWithTypeAndName.h>
 #include <Columns/IColumn.h>
+#include <Core/ColumnsWithTypeAndName.h>
+#include <Core/NamesAndTypes.h>
 
 namespace DB
 {
-
 class IFunctionBase;
 using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
 
@@ -25,7 +38,7 @@ public:
 
     MutableColumnPtr cloneResized(size_t size) const override;
 
-    size_t size() const override { return size_; }
+    size_t size() const override { return column_size; }
 
     ColumnPtr cut(size_t start, size_t length) const override;
     ColumnPtr replicate(const Offsets & offsets) const override;
@@ -33,8 +46,9 @@ public:
     ColumnPtr permute(const Permutation & perm, size_t limit) const override;
     void insertDefault() override;
     void popBack(size_t n) override;
-    std::vector<MutableColumnPtr> scatter(IColumn::ColumnIndex num_columns,
-                                          const IColumn::Selector & selector) const override;
+    std::vector<MutableColumnPtr> scatter(
+        IColumn::ColumnIndex num_columns,
+        const IColumn::Selector & selector) const override;
 
     void getExtremes(Field &, Field &) const override {}
 
@@ -75,24 +89,29 @@ public:
         throw Exception("Cannot insert into " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    StringRef serializeValueIntoArena(size_t, Arena &, char const *&, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override
+    StringRef serializeValueIntoArena(size_t, Arena &, char const *&, const TiDB::TiDBCollatorPtr &, String &) const override
     {
         throw Exception("Cannot serialize from " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    const char * deserializeAndInsertFromArena(const char *, std::shared_ptr<TiDB::ITiDBCollator>) override
+    const char * deserializeAndInsertFromArena(const char *, const TiDB::TiDBCollatorPtr &) override
     {
         throw Exception("Cannot deserialize to " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    void updateHashWithValue(size_t, SipHash &, std::shared_ptr<TiDB::ITiDBCollator>, String &) const override
+    void updateHashWithValue(size_t, SipHash &, const TiDB::TiDBCollatorPtr &, String &) const override
     {
         throw Exception("updateHashWithValue is not implemented for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    void updateHashWithValues(IColumn::HashValues &, const std::shared_ptr<TiDB::ITiDBCollator> &, String &) const override
+    void updateHashWithValues(IColumn::HashValues &, const TiDB::TiDBCollatorPtr &, String &) const override
     {
         throw Exception("updateHashWithValues is not implemented for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
+    }
+
+    void updateWeakHash32(WeakHash32 &, const TiDB::TiDBCollatorPtr &, String &) const override
+    {
+        throw Exception("updateWeakHash32 is not implemented for " + getName(), ErrorCodes::NOT_IMPLEMENTED);
     }
 
     int compareAt(size_t, size_t, const IColumn &, int) const override
@@ -111,11 +130,11 @@ public:
     }
 
 private:
-    size_t size_;
+    size_t column_size;
     FunctionBasePtr function;
     ColumnsWithTypeAndName captured_columns;
 
     void appendArgument(const ColumnWithTypeAndName & column);
 };
 
-}
+} // namespace DB

@@ -1,19 +1,52 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
+#include <Common/Checksum.h>
 #include <Encryption/FileProvider.h>
 #include <IO/CompressedReadBufferBase.h>
 #include <IO/ReadBufferFromFileBase.h>
-
 #include <time.h>
+
 #include <memory>
 
 
 namespace DB
 {
+/// CompressedSeekableReaderBuffer provides an extra abstraction layer to unify compressed buffers
+/// This helps to unify CompressedReadBufferFromFileProvider<false> and CompressedReadBufferFromFileProvider<true>
+struct CompressedSeekableReaderBuffer : public BufferWithOwnMemory<ReadBuffer>
+{
+    virtual void setProfileCallback(
+        const ReadBufferFromFileBase::ProfileCallback & profile_callback_,
+        clockid_t clock_type_ = CLOCK_MONOTONIC_COARSE)
+        = 0;
+
+    virtual void seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block) = 0;
+
+    CompressedSeekableReaderBuffer()
+        : BufferWithOwnMemory<ReadBuffer>(0)
+    {}
+};
 
 
 /// Unlike CompressedReadBuffer, it can do seek.
-class CompressedReadBufferFromFileProvider : public CompressedReadBufferBase, public BufferWithOwnMemory<ReadBuffer>
+template <bool has_checksum = true>
+class CompressedReadBufferFromFileProvider
+    : public CompressedReadBufferBase<has_checksum>
+    , public CompressedSeekableReaderBuffer
 {
 private:
     /** At any time, one of two things is true:
@@ -30,15 +63,33 @@ private:
     bool nextImpl() override;
 
 public:
-    CompressedReadBufferFromFileProvider(FileProviderPtr & file_provider, const std::string & path, const EncryptionPath & encryption_path,
-        size_t estimated_size, size_t aio_threshold, size_t buf_size = DBMS_DEFAULT_BUFFER_SIZE);
+    CompressedReadBufferFromFileProvider(
+        FileProviderPtr & file_provider,
+        const std::string & path,
+        const EncryptionPath & encryption_path,
+        size_t estimated_size,
+        size_t aio_threshold,
+        const ReadLimiterPtr & read_limiter_,
+        size_t buf_size = DBMS_DEFAULT_BUFFER_SIZE);
 
-    void seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block);
+    /// @attention: estimated_size should be at least DBMS_DEFAULT_BUFFER_SIZE if one want to do seeking; however, if one knows that target file
+    /// only consists of a single small frame, one can use a smaller estimated_size to reduce memory footprint.
+    CompressedReadBufferFromFileProvider(
+        FileProviderPtr & file_provider,
+        const std::string & path,
+        const EncryptionPath & encryption_path,
+        size_t estimated_size,
+        const ReadLimiterPtr & read_limiter,
+        ChecksumAlgo checksum_algorithm,
+        size_t checksum_frame_size);
+
+    void seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block) override;
 
     size_t readBig(char * to, size_t n) override;
 
     void setProfileCallback(
-        const ReadBufferFromFileBase::ProfileCallback & profile_callback_, clockid_t clock_type_ = CLOCK_MONOTONIC_COARSE)
+        const ReadBufferFromFileBase::ProfileCallback & profile_callback_,
+        clockid_t clock_type_ = CLOCK_MONOTONIC_COARSE) override
     {
         file_in.setProfileCallback(profile_callback_, clock_type_);
     }

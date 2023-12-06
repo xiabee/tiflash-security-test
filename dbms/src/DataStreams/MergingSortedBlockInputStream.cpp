@@ -1,24 +1,45 @@
-#include <queue>
-#include <iomanip>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <DataStreams/MergingSortedBlockInputStream.h>
-#include <Core/TMTSortCursor.hpp>
+
+#include <iomanip>
+#include <queue>
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int LOGICAL_ERROR;
-    extern const int NUMBER_OF_COLUMNS_DOESNT_MATCH;
-}
+extern const int LOGICAL_ERROR;
+extern const int NUMBER_OF_COLUMNS_DOESNT_MATCH;
+} // namespace ErrorCodes
 
 
 MergingSortedBlockInputStream::MergingSortedBlockInputStream(
-    const BlockInputStreams & inputs_, const SortDescription & description_,
-    size_t max_block_size_, size_t limit_, WriteBuffer * out_row_sources_buf_, bool quiet_)
-    : description(description_), max_block_size(max_block_size_), limit(limit_), quiet(quiet_)
-    , source_blocks(inputs_.size()), cursors(inputs_.size()), out_row_sources_buf(out_row_sources_buf_)
+    const BlockInputStreams & inputs_,
+    const SortDescription & description_,
+    size_t max_block_size_,
+    size_t limit_,
+    WriteBuffer * out_row_sources_buf_,
+    bool quiet_)
+    : description(description_)
+    , max_block_size(max_block_size_)
+    , limit(limit_)
+    , quiet(quiet_)
+    , source_blocks(inputs_.size())
+    , cursors(inputs_.size())
+    , out_row_sources_buf(out_row_sources_buf_)
 {
     children.insert(children.end(), inputs_.begin(), inputs_.end());
     header = children.at(0)->getHeader();
@@ -86,9 +107,9 @@ void MergingSortedBlockInputStream::initQueue()
 template <typename TSortCursor>
 void MergingSortedBlockInputStream::initQueue(std::priority_queue<TSortCursor> & queue)
 {
-    for (size_t i = 0; i < cursors.size(); ++i)
-        if (!cursors[i].empty())
-            queue.push(TSortCursor(&cursors[i]));
+    for (auto & cursor : cursors)
+        if (!cursor.empty())
+            queue.push(TSortCursor(&cursor));
 }
 
 
@@ -134,29 +155,9 @@ void MergingSortedBlockInputStream::fetchNextBlock(const TSortCursor & current, 
     }
 }
 
-template
-void MergingSortedBlockInputStream::fetchNextBlock<SortCursor>(const SortCursor & current, std::priority_queue<SortCursor> & queue);
+template void MergingSortedBlockInputStream::fetchNextBlock<SortCursor>(const SortCursor & current, std::priority_queue<SortCursor> & queue);
 
-template
-void MergingSortedBlockInputStream::fetchNextBlock<SortCursorWithCollation>(const SortCursorWithCollation & current, std::priority_queue<SortCursorWithCollation> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorInt64PK>(const TMTSortCursorInt64PK & current, std::priority_queue<TMTSortCursorInt64PK> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorUInt64PK>(const TMTSortCursorUInt64PK & current, std::priority_queue<TMTSortCursorUInt64PK> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorUnspecifiedPK>(const TMTSortCursorUnspecifiedPK & current, std::priority_queue<TMTSortCursorUnspecifiedPK> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorInt64>(const TMTSortCursorInt64 & current, std::priority_queue<TMTSortCursorInt64> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorUInt64>(const TMTSortCursorUInt64 & current, std::priority_queue<TMTSortCursorUInt64> & queue);
-
-template
-void MergingSortedBlockInputStream::fetchNextBlock<TMTSortCursorUnspecified>(const TMTSortCursorUnspecified & current, std::priority_queue<TMTSortCursorUnspecified> & queue);
+template void MergingSortedBlockInputStream::fetchNextBlock<SortCursorWithCollation>(const SortCursorWithCollation & current, std::priority_queue<SortCursorWithCollation> & queue);
 
 template <typename TSortCursor>
 void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::priority_queue<TSortCursor> & queue)
@@ -166,25 +167,17 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
     /** Increase row counters.
       * Return true if it's time to finish generating the current data block.
       */
-    auto count_row_and_check_limit = [&, this]()
-    {
+    auto count_row_and_check_limit = [&, this]() {
         ++total_merged_rows;
         if (limit && total_merged_rows == limit)
         {
-    //        std::cerr << "Limit reached\n";
             cancel(false);
             finished = true;
             return true;
         }
 
         ++merged_rows;
-        if (merged_rows == max_block_size)
-        {
-    //        std::cerr << "max_block_size reached\n";
-            return true;
-        }
-
-        return false;
+        return merged_rows == expected_block_size;
     };
 
     /// Take rows in required order and put them into `merged_columns`, while the rows are no more than `max_block_size`
@@ -200,12 +193,9 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
               */
             if (current.impl->isFirst() && (queue.empty() || current.totallyLessOrEquals(queue.top())))
             {
-    //            std::cerr << "current block is totally less or equals\n";
-
                 /// If there are already data in the current block, we first return it. We'll get here again the next time we call the merge function.
                 if (merged_rows != 0)
                 {
-    //                std::cerr << "merged rows is non-zero\n";
                     queue.push(current);
                     return;
                 }
@@ -218,8 +208,6 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
 
                 for (size_t i = 0; i < num_columns; ++i)
                     merged_columns[i] = (*std::move(source_blocks[source_num]->getByPosition(i).column)).mutate();
-
-    //            std::cerr << "copied columns\n";
 
                 size_t merged_rows = merged_columns.at(0)->size();
 
@@ -243,15 +231,11 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
                         out_row_sources_buf->write(row_source.data);
                 }
 
-    //            std::cerr << "fetching next block\n";
-
                 total_merged_rows += merged_rows;
                 fetchNextBlock(current, queue);
                 return;
             }
 
-    //        std::cerr << "total_merged_rows: " << total_merged_rows << ", merged_rows: " << merged_rows << "\n";
-    //        std::cerr << "Inserting row\n";
             for (size_t i = 0; i < num_columns; ++i)
                 merged_columns[i]->insertFrom(*current->all_columns[i], current->pos);
 
@@ -264,32 +248,27 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
 
             if (!current->isLast())
             {
-    //            std::cerr << "moving to next row\n";
                 current->next();
 
                 if (queue.empty() || !(current.greater(queue.top())))
                 {
                     if (count_row_and_check_limit())
                     {
-    //                    std::cerr << "pushing back to queue\n";
                         queue.push(current);
                         return;
                     }
 
                     /// Do not put the cursor back in the queue, but continue to work with the current cursor.
-    //                std::cerr << "current is still on top, using current row\n";
                     continue;
                 }
                 else
                 {
-    //                std::cerr << "next row is not least, pushing back to queue\n";
                     queue.push(current);
                 }
             }
             else
             {
                 /// We get the next block from the corresponding source, if there is one.
-    //            std::cerr << "It was last row, fetching next block\n";
                 fetchNextBlock(current, queue);
             }
 
@@ -307,16 +286,12 @@ void MergingSortedBlockInputStream::merge(MutableColumns & merged_columns, std::
 
 void MergingSortedBlockInputStream::readSuffixImpl()
 {
-     if (quiet)
-         return;
+    if (quiet)
+        return;
 
     const BlockStreamProfileInfo & profile_info = getProfileInfo();
     double seconds = profile_info.total_stopwatch.elapsedSeconds();
-    LOG_DEBUG(log, std::fixed << std::setprecision(2)
-        << "Merge sorted " << profile_info.blocks << " blocks, " << profile_info.rows << " rows"
-        << " in " << seconds << " sec., "
-        << profile_info.rows / seconds << " rows/sec., "
-        << profile_info.bytes / 1000000.0 / seconds << " MB/sec.");
+    LOG_FMT_DEBUG(log, "Merge sorted {} blocks, {} rows, {} bytes, {:.2f} rows/sec, {:.2f} MB/sec", profile_info.blocks, profile_info.rows, profile_info.bytes, profile_info.rows / seconds, profile_info.bytes / 1000000.0 / seconds);
 }
 
-}
+} // namespace DB

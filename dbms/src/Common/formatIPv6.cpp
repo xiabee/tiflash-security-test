@@ -1,12 +1,26 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/formatIPv6.h>
 #include <Common/hex.h>
-#include <ext/range.h>
+
 #include <array>
+#include <ext/range.h>
 
 
 namespace DB
 {
-
 /// integer logarithm, return ceil(log(value, base)) (the smallest integer greater or equal  than log(value, base)
 static constexpr UInt32 intLog(const UInt32 value, const UInt32 base, const bool carry)
 {
@@ -63,7 +77,10 @@ static void formatIPv4(const unsigned char * src, char *& dst, UInt8 zeroed_tail
 
 void formatIPv6(const unsigned char * src, char *& dst, UInt8 zeroed_tail_bytes_count)
 {
-    struct { int base, len; } best{-1, 0}, cur{-1, 0};
+    struct
+    {
+        int base, len;
+    } best{-1, 0}, cur{-1, 0};
     std::array<UInt16, IPV6_BINARY_LENGTH / sizeof(UInt16)> words{};
 
     /** Preprocess:
@@ -127,10 +144,10 @@ void formatIPv6(const unsigned char * src, char *& dst, UInt8 zeroed_tail_bytes_
     }
 
     /// Was it a trailing run of 0x00's?
-    if (best.base != -1 && (best.base + best.len) == words.size())
+    if (best.base != -1 && static_cast<size_t>(best.base + best.len) == words.size())
         *dst++ = ':';
 
     *dst++ = '\0';
 }
 
-}
+} // namespace DB

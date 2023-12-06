@@ -1,10 +1,24 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <string>
 #include <string.h>
 
 #include <Poco/UTF8Encoding.h>
-#include <Poco/NumberFormatter.h>
 #include <Poco/NumberParser.h>
 #include <common/JSON.h>
-#include <common/find_first_symbols.h>
+#include <common/find_symbols.h>
 #include <common/preciseExp10.h>
 
 #include <iostream>
@@ -90,10 +104,8 @@ static Int64 readIntText(const char * buf, const char * end)
         }
         ++buf;
     }
-    if (negative)
-        x = -x;
 
-    return x;
+    return negative ? -x : x;
 }
 
 
@@ -217,7 +229,7 @@ JSON::ElementType JSON::getType() const
 
 void JSON::checkPos(Pos pos) const
 {
-    if (pos >= ptr_end)
+    if (pos >= ptr_end || ptr_begin == nullptr)
         throw JSONException("JSON: unexpected end of data.");
 }
 
@@ -343,7 +355,7 @@ JSON::Pos JSON::skipArray() const
     if (*pos == ']')
         return ++pos;
 
-    while (1)
+    while (true)
     {
         pos = JSON(pos, ptr_end, level + 1).skipElement();
 
@@ -375,7 +387,7 @@ JSON::Pos JSON::skipObject() const
     if (*pos == '}')
         return ++pos;
 
-    while (1)
+    while (true)
     {
         pos = JSON(pos, ptr_end, level + 1).skipNameValuePair();
 
@@ -401,7 +413,7 @@ JSON::Pos JSON::skipElement() const
 
     ElementType type = getType();
 
-    switch(type)
+    switch (type)
     {
         case TYPE_NULL:
             return skipNull();
@@ -418,7 +430,7 @@ JSON::Pos JSON::skipElement() const
         case TYPE_OBJECT:
             return skipObject();
         default:
-            throw JSONException("Logical error in JSON: unknown element type: " + Poco::NumberFormatter::format(type));
+            throw JSONException("Logical error in JSON: unknown element type: " + std::to_string(type));
     }
 }
 
@@ -453,10 +465,13 @@ JSON JSON::operator[] (size_t n) const
     size_t i = 0;
     const_iterator it = begin();
     while (i < n && it != end())
-        ++it, ++i;
+    {
+        ++it;
+        ++i;
+    }
 
     if (i != n)
-        throw JSONException("JSON: array index " + Poco::NumberFormatter::format(Poco::UInt64(n)) + " out of bounds.");
+        throw JSONException("JSON: array index " + std::to_string(n) + " out of bounds.");
 
     return *it;
 }
@@ -589,7 +604,7 @@ std::string JSON::getString() const
                 ++s;
                 checkPos(s);
 
-                switch(*s)
+                switch (*s)
                 {
                     case '"':
                         buf += '"';
@@ -628,7 +643,7 @@ std::string JSON::getString() const
                         {
                             unicode = Poco::NumberParser::parseHex(hex);
                         }
-                        catch (const Poco::SyntaxException & e)
+                        catch (const Poco::SyntaxException &)
                         {
                             throw JSONException("JSON: incorrect syntax: incorrect HEX code.");
                         }
@@ -636,7 +651,7 @@ std::string JSON::getString() const
                         int res = utf8.convert(unicode,
                             reinterpret_cast<unsigned char *>(const_cast<char*>(buf.data())) + buf.size() - 6, 6);
                         if (!res)
-                            throw JSONException("JSON: cannot convert unicode " + Poco::NumberFormatter::format(unicode)
+                            throw JSONException("JSON: cannot convert unicode " + std::to_string(unicode)
                                 + " to UTF8.");
                         buf.resize(buf.size() - 6 + res);
                         break;
@@ -667,7 +682,7 @@ StringRef JSON::getRawString() const
     if (*s != '"')
         throw JSONException(std::string("JSON: expected \", got ") + *s);
     while (++s != ptr_end && *s != '"');
-    if (s != ptr_end )
+    if (s != ptr_end)
         return StringRef(ptr_begin + 1, s - ptr_begin - 1);
     throw JSONException("JSON: incorrect syntax (expected end of string, found end of JSON).");
 }
@@ -778,7 +793,7 @@ JSON::iterator & JSON::iterator::operator++()
     return *this;
 }
 
-JSON::iterator JSON::iterator::operator++(int)
+JSON::iterator JSON::iterator::operator++(int) // NOLINT
 {
     iterator copy(*this);
     ++*this;

@@ -1,21 +1,33 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <DataStreams/MergeSortingBlockInputStream.h>
 #include <DataStreams/MergingSortedBlockInputStream.h>
 #include <DataStreams/NativeBlockOutputStream.h>
 #include <DataStreams/copyData.h>
-#include <IO/WriteBufferFromFile.h>
 #include <IO/CompressedWriteBuffer.h>
+#include <IO/WriteBufferFromFile.h>
 
 
 namespace ProfileEvents
 {
-    extern const Event ExternalSortWritePart;
-    extern const Event ExternalSortMerge;
-}
+extern const Event ExternalSortWritePart;
+extern const Event ExternalSortMerge;
+} // namespace ProfileEvents
 
 namespace DB
 {
-
-
 /** Remove constant columns from block.
   */
 static void removeConstantsFromBlock(Block & block)
@@ -36,14 +48,14 @@ static void removeConstantsFromBlock(Block & block)
 
 static void removeConstantsFromSortDescription(const Block & header, SortDescription & description)
 {
-    description.erase(std::remove_if(description.begin(), description.end(),
-        [&](const SortColumnDescription & elem)
-        {
+    description.erase(
+        std::remove_if(description.begin(), description.end(), [&](const SortColumnDescription & elem) {
             if (!elem.column_name.empty())
                 return header.getByName(elem.column_name).column->isColumnConst();
             else
                 return header.safeGetByPosition(elem.column_number).column->isColumnConst();
-        }), description.end());
+        }),
+        description.end());
 }
 
 /** Add into block, whose constant columns was removed by previous function,
@@ -64,11 +76,19 @@ static void enrichBlockWithConstants(Block & block, const Block & header)
 
 
 MergeSortingBlockInputStream::MergeSortingBlockInputStream(
-    const BlockInputStreamPtr & input, SortDescription & description_,
-    size_t max_merged_block_size_, size_t limit_,
-    size_t max_bytes_before_external_sort_, const std::string & tmp_path_)
-    : description(description_), max_merged_block_size(max_merged_block_size_), limit(limit_),
-    max_bytes_before_external_sort(max_bytes_before_external_sort_), tmp_path(tmp_path_)
+    const BlockInputStreamPtr & input,
+    SortDescription & description_,
+    size_t max_merged_block_size_,
+    size_t limit_,
+    size_t max_bytes_before_external_sort_,
+    const std::string & tmp_path_,
+    const String & req_id)
+    : description(description_)
+    , max_merged_block_size(max_merged_block_size_)
+    , limit(limit_)
+    , max_bytes_before_external_sort(max_bytes_before_external_sort_)
+    , tmp_path(tmp_path_)
+    , log(Logger::get(NAME, req_id))
 {
     children.push_back(input);
     header = children.at(0)->getHeader();
@@ -113,12 +133,12 @@ Block MergeSortingBlockInputStream::readImpl()
                 WriteBufferFromFile file_buf(path);
                 CompressedWriteBuffer compressed_buf(file_buf);
                 NativeBlockOutputStream block_out(compressed_buf, 0, header_without_constants);
-                MergeSortingBlocksBlockInputStream block_in(blocks, description, max_merged_block_size, limit);
+                MergeSortingBlocksBlockInputStream block_in(blocks, description, log->identifier(), max_merged_block_size, limit);
 
-                LOG_INFO(log, "Sorting and writing part of data into temporary file " + path);
+                LOG_FMT_INFO(log, "Sorting and writing part of data into temporary file {}", path);
                 ProfileEvents::increment(ProfileEvents::ExternalSortWritePart);
-                copyData(block_in, block_out, &is_cancelled);    /// NOTE. Possibly limit disk usage.
-                LOG_INFO(log, "Done writing part of data into temporary file " + path);
+                copyData(block_in, block_out, &is_cancelled); /// NOTE. Possibly limit disk usage.
+                LOG_FMT_INFO(log, "Done writing part of data into temporary file {}", path);
 
                 blocks.clear();
                 sum_bytes_in_blocks = 0;
@@ -130,14 +150,14 @@ Block MergeSortingBlockInputStream::readImpl()
 
         if (temporary_files.empty())
         {
-            impl = std::make_unique<MergeSortingBlocksBlockInputStream>(blocks, description, max_merged_block_size, limit);
+            impl = std::make_unique<MergeSortingBlocksBlockInputStream>(blocks, description, log->identifier(), max_merged_block_size, limit);
         }
         else
         {
             /// If there was temporary files.
             ProfileEvents::increment(ProfileEvents::ExternalSortMerge);
 
-            LOG_INFO(log, "There are " << temporary_files.size() << " temporary sorted parts to merge.");
+            LOG_FMT_INFO(log, "There are {} temporary sorted parts to merge.", temporary_files.size());
 
             /// Create sorted streams to merge.
             for (const auto & file : temporary_files)
@@ -148,7 +168,12 @@ Block MergeSortingBlockInputStream::readImpl()
 
             /// Rest of blocks in memory.
             if (!blocks.empty())
-                inputs_to_merge.emplace_back(std::make_shared<MergeSortingBlocksBlockInputStream>(blocks, description, max_merged_block_size, limit));
+                inputs_to_merge.emplace_back(std::make_shared<MergeSortingBlocksBlockInputStream>(
+                    blocks,
+                    description,
+                    log->identifier(),
+                    max_merged_block_size,
+                    limit));
 
             /// Will merge that sorted streams.
             impl = std::make_unique<MergingSortedBlockInputStream>(inputs_to_merge, description, max_merged_block_size, limit);
@@ -163,8 +188,17 @@ Block MergeSortingBlockInputStream::readImpl()
 
 
 MergeSortingBlocksBlockInputStream::MergeSortingBlocksBlockInputStream(
-    Blocks & blocks_, SortDescription & description_, size_t max_merged_block_size_, size_t limit_)
-    : blocks(blocks_), header(blocks.at(0).cloneEmpty()), description(description_), max_merged_block_size(max_merged_block_size_), limit(limit_)
+    Blocks & blocks_,
+    SortDescription & description_,
+    const String & req_id,
+    size_t max_merged_block_size_,
+    size_t limit_)
+    : blocks(blocks_)
+    , header(blocks.at(0).cloneEmpty())
+    , description(description_)
+    , max_merged_block_size(max_merged_block_size_)
+    , limit(limit_)
+    , log(Logger::get(NAME, req_id))
 {
     Blocks nonempty_blocks;
     for (const auto & block : blocks)
@@ -181,13 +215,13 @@ MergeSortingBlocksBlockInputStream::MergeSortingBlocksBlockInputStream(
 
     if (!has_collation)
     {
-        for (size_t i = 0; i < cursors.size(); ++i)
-            queue.push(SortCursor(&cursors[i]));
+        for (auto & cursor : cursors)
+            queue.push(SortCursor(&cursor));
     }
     else
     {
-        for (size_t i = 0; i < cursors.size(); ++i)
-            queue_with_collation.push(SortCursorWithCollation(&cursors[i]));
+        for (auto & cursor : cursors)
+            queue_with_collation.push(SortCursorWithCollation(&cursor));
     }
 }
 
@@ -254,4 +288,4 @@ Block MergeSortingBlocksBlockInputStream::mergeImpl(std::priority_queue<TSortCur
 }
 
 
-}
+} // namespace DB

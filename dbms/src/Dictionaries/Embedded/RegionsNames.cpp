@@ -1,12 +1,23 @@
-#include <Dictionaries/Embedded/RegionsNames.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Dictionaries/Embedded/GeodataProviders/INamesProvider.h>
-
-#include <Poco/Util/Application.h>
-#include <Poco/Exception.h>
-
-#include <common/logger_useful.h>
-
+#include <Dictionaries/Embedded/RegionsNames.h>
 #include <IO/WriteHelpers.h>
+#include <Poco/Exception.h>
+#include <Poco/Util/Application.h>
+#include <common/logger_useful.h>
 
 
 RegionsNames::RegionsNames(IRegionsNamesDataProviderPtr data_provider)
@@ -22,7 +33,7 @@ RegionsNames::RegionsNames(IRegionsNamesDataProviderPtr data_provider)
 
 std::string RegionsNames::dumpSupportedLanguagesNames()
 {
-    std::string res = "";
+    std::string res;
     for (size_t i = 0; i < LANGUAGE_ALIASES_COUNT; ++i)
     {
         if (i > 0)
@@ -36,7 +47,7 @@ std::string RegionsNames::dumpSupportedLanguagesNames()
 
 void RegionsNames::reload()
 {
-    Logger * log = &Logger::get("RegionsNames");
+    Poco::Logger * log = &Poco::Logger::get("RegionsNames");
     LOG_DEBUG(log, "Reloading regions names");
 
     RegionID max_region_id = 0;
@@ -49,7 +60,7 @@ void RegionsNames::reload()
         if (!names_source->isModified())
             continue;
 
-        LOG_DEBUG(log, "Reloading regions names for language: " << language);
+        LOG_FMT_DEBUG(log, "Reloading regions names for language: {}", language);
 
         auto names_reader = names_source->createReader();
 

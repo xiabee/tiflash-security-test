@@ -1,17 +1,32 @@
-#include <IO/CascadeWriteBuffer.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/Exception.h>
+#include <IO/CascadeWriteBuffer.h>
 
 namespace DB
 {
-
 namespace ErrorCodes
 {
-    extern const int CANNOT_WRITE_AFTER_END_OF_BUFFER;
-    extern const int CANNOT_CREATE_IO_BUFFER;
-}
+extern const int CANNOT_WRITE_AFTER_END_OF_BUFFER;
+extern const int CANNOT_CREATE_IO_BUFFER;
+} // namespace ErrorCodes
 
 CascadeWriteBuffer::CascadeWriteBuffer(WriteBufferPtrs && prepared_sources_, WriteBufferConstructors && lazy_sources_)
-    : WriteBuffer(nullptr, 0), prepared_sources(std::move(prepared_sources_)), lazy_sources(std::move(lazy_sources_))
+    : WriteBuffer(nullptr, 0)
+    , prepared_sources(std::move(prepared_sources_))
+    , lazy_sources(std::move(lazy_sources_))
 {
     first_lazy_source_num = prepared_sources.size();
     num_sources = first_lazy_source_num + lazy_sources.size();
@@ -47,8 +62,6 @@ void CascadeWriteBuffer::nextImpl()
     }
 
     set(curr_buffer->position(), curr_buffer->buffer().end() - curr_buffer->position());
-//     std::cerr << "CascadeWriteBuffer a count=" << count() << " bytes=" << bytes << " offset=" << offset()
-//     << " bytes+size=" << bytes + buffer().size() << "\n";
 }
 
 
@@ -99,4 +112,4 @@ CascadeWriteBuffer::~CascadeWriteBuffer()
 }
 
 
-}
+} // namespace DB

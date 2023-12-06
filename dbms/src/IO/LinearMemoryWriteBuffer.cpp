@@ -1,16 +1,34 @@
-#include <common/likely.h>
-#include <boost/noncopyable.hpp>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <IO/LinearMemoryWriteBuffer.h>
+#include <common/likely.h>
+
+#include <boost/noncopyable.hpp>
 
 namespace DB
 {
-
-class ReadBufferFromLinearMemoryWriteBuffer : public ReadBuffer, boost::noncopyable
+class ReadBufferFromLinearMemoryWriteBuffer
+    : public ReadBuffer
+    , private boost::noncopyable
 {
 public:
     explicit ReadBufferFromLinearMemoryWriteBuffer(LinearMemoryWriteBuffer && origin)
-        : ReadBuffer(nullptr, 0), allocator(origin.allocator), chunk_list(std::move(origin.chunk_list)), end_pos(origin.position())
+        : ReadBuffer(nullptr, 0)
+        , allocator(origin.allocator)
+        , chunk_list(std::move(origin.chunk_list))
+        , end_pos(origin.position())
     {
         chunk_head = chunk_list.begin();
         setChunk();
@@ -50,7 +68,7 @@ private:
         else
         {
             buffer() = internalBuffer() = Buffer(nullptr, nullptr);
-            position()                  = nullptr;
+            position() = nullptr;
         }
 
         return buffer().size() != 0;
@@ -60,14 +78,16 @@ private:
 
     RecycledAllocator & allocator;
 
-    Container           chunk_list;
+    Container chunk_list;
     Container::iterator chunk_head;
-    Position            end_pos;
+    Position end_pos;
 };
 
 
 LinearMemoryWriteBuffer::LinearMemoryWriteBuffer(RecycledAllocator & allocator_, size_t chunk_size_)
-    : WriteBuffer(nullptr, 0), allocator(allocator_), chunk_size(chunk_size_)
+    : WriteBuffer(nullptr, 0)
+    , allocator(allocator_)
+    , chunk_size(chunk_size_)
 {
     addChunk();
 }
@@ -94,7 +114,7 @@ void LinearMemoryWriteBuffer::addChunk()
     }
 
     Position begin = reinterpret_cast<Position>(allocator.alloc(chunk_size));
-    chunk_tail     = chunk_list.emplace_after(chunk_tail, begin, begin + chunk_size);
+    chunk_tail = chunk_list.emplace_after(chunk_tail, begin, begin + chunk_size);
     total_chunks_size += chunk_size;
 
     set(chunk_tail->begin(), chunk_tail->size());

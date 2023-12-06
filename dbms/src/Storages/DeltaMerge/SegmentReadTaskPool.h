@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Storages/DeltaMerge/RowKeyRangeUtils.h>
@@ -15,20 +29,20 @@ using SegmentPtr = std::shared_ptr<Segment>;
 struct SegmentSnapshot;
 using SegmentSnapshotPtr = std::shared_ptr<SegmentSnapshot>;
 
-using DMContextPtr       = std::shared_ptr<DMContext>;
+using DMContextPtr = std::shared_ptr<DMContext>;
 using SegmentReadTaskPtr = std::shared_ptr<SegmentReadTask>;
-using SegmentReadTasks   = std::list<SegmentReadTaskPtr>;
-using AfterSegmentRead   = std::function<void(const DMContextPtr &, const SegmentPtr &)>;
+using SegmentReadTasks = std::list<SegmentReadTaskPtr>;
+using AfterSegmentRead = std::function<void(const DMContextPtr &, const SegmentPtr &)>;
 
 struct SegmentReadTask
 {
-    SegmentPtr         segment;
+    SegmentPtr segment;
     SegmentSnapshotPtr read_snapshot;
-    RowKeyRanges       ranges;
+    RowKeyRanges ranges;
 
-    SegmentReadTask(const SegmentPtr &         segment_, //
+    SegmentReadTask(const SegmentPtr & segment_, //
                     const SegmentSnapshotPtr & read_snapshot_,
-                    const RowKeyRanges &       ranges_);
+                    const RowKeyRanges & ranges_);
 
     explicit SegmentReadTask(const SegmentPtr & segment_, const SegmentSnapshotPtr & read_snapshot_);
 
@@ -46,7 +60,9 @@ struct SegmentReadTask
 class SegmentReadTaskPool : private boost::noncopyable
 {
 public:
-    SegmentReadTaskPool(SegmentReadTasks && tasks_) : tasks(std::move(tasks_)) {}
+    explicit SegmentReadTaskPool(SegmentReadTasks && tasks_)
+        : tasks(std::move(tasks_))
+    {}
 
     SegmentReadTaskPtr nextTask()
     {

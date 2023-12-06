@@ -1,26 +1,37 @@
-#include <Storages/IStorage.h>
-#include <DataStreams/OneBlockInputStream.h>
-#include <DataStreams/BlockIO.h>
-#include <DataTypes/DataTypeString.h>
-#include <Parsers/queryToString.h>
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Common/typeid_cast.h>
-#include <TableFunctions/ITableFunction.h>
-#include <TableFunctions/TableFunctionFactory.h>
-#include <Interpreters/InterpreterSelectWithUnionQuery.h>
+#include <DataStreams/BlockIO.h>
+#include <DataStreams/OneBlockInputStream.h>
+#include <DataTypes/DataTypeString.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterDescribeQuery.h>
-#include <Parsers/ASTIdentifier.h>
+#include <Interpreters/InterpreterSelectWithUnionQuery.h>
 #include <Parsers/ASTFunction.h>
+#include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/TablePropertiesQueriesASTs.h>
-
-#include <Storages/StorageMergeTree.h>
+#include <Parsers/queryToString.h>
+#include <Storages/IStorage.h>
 #include <Storages/MutableSupport.h>
+#include <TableFunctions/ITableFunction.h>
+#include <TableFunctions/TableFunctionFactory.h>
 
 
 namespace DB
 {
-
 BlockIO InterpreterDescribeQuery::execute()
 {
     BlockIO res;
@@ -135,4 +146,4 @@ BlockInputStreamPtr InterpreterDescribeQuery::executeImpl()
     return std::make_shared<OneBlockInputStream>(sample_block.cloneWithColumns(std::move(res_columns)));
 }
 
-}
+} // namespace DB

@@ -1,20 +1,34 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Poco/UTF8Encoding.h>
-#include <Poco/Unicode.h>
-#include <DataTypes/DataTypesNumber.h>
-#include <DataTypes/DataTypeString.h>
-#include <DataTypes/DataTypeFixedString.h>
-#include <DataTypes/DataTypeArray.h>
-#include <Columns/ColumnString.h>
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnFixedString.h>
-#include <Common/hex.h>
+#include <Columns/ColumnString.h>
 #include <Common/Volnitsky.h>
-#include <Functions/IFunction.h>
+#include <Common/hex.h>
+#include <DataTypes/DataTypeArray.h>
+#include <DataTypes/DataTypeFixedString.h>
+#include <DataTypes/DataTypeString.h>
+#include <DataTypes/DataTypesNumber.h>
 #include <Functions/FunctionHelpers.h>
+#include <Functions/IFunction.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
+#include <Poco/UTF8Encoding.h>
+#include <Poco/Unicode.h>
 
 
 /** Functions for retrieving "visit parameters".
@@ -38,7 +52,6 @@
 
 namespace DB
 {
-
 struct HasParam
 {
     using ResultType = UInt8;
@@ -96,15 +109,15 @@ struct ExtractRaw
         UInt8 close_char = 0;
         switch (open_char)
         {
-            case '[':
-                close_char = ']';
-                break;
-            case '{':
-                close_char = '}';
-                break;
-            case '"':
-                close_char = '"';
-                break;
+        case '[':
+            close_char = ']';
+            break;
+        case '{':
+            close_char = '}';
+            break;
+        case '"':
+            close_char = '"';
+            break;
         }
 
         if (close_char != 0)
@@ -170,14 +183,16 @@ template <typename ParamExtractor>
 struct ExtractParamImpl
 {
     using ResultType = typename ParamExtractor::ResultType;
+    /// need customized escape char when do the string search
+    static const bool need_customized_escape_char = false;
+    /// support match type when do the string search, used in regexp
+    static const bool support_match_type = false;
 
     /// It is assumed that `res` is the correct size and initialized with zeros.
-    static void vector_constant(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-        std::string needle, const UInt8 escape_char, std::shared_ptr<TiDB::ITiDBCollator> collator,
-        PaddedPODArray<ResultType> & res)
+    static void vectorConstant(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, std::string needle, const UInt8 escape_char, const std::string & match_type, const TiDB::TiDBCollatorPtr & collator, PaddedPODArray<ResultType> & res)
     {
-        if (escape_char != '\\' || collator != nullptr)
-            throw Exception("PositionImpl don't support customized escape char and tidb collator", ErrorCodes::NOT_IMPLEMENTED);
+        if (escape_char != '\\' || !match_type.empty() || collator != nullptr)
+            throw Exception("ExtractParamImpl don't support customized escape char/match_type/tidb collator", ErrorCodes::NOT_IMPLEMENTED);
         /// We are looking for a parameter simply as a substring of the form "name"
         needle = "\"" + needle + "\":";
 
@@ -213,10 +228,10 @@ struct ExtractParamImpl
         memset(&res[i], 0, (res.size() - i) * sizeof(res[0]));
     }
 
-    static void constant_constant(const std::string & data, std::string needle, const UInt8 escape_char, std::shared_ptr<TiDB::ITiDBCollator> collator, ResultType & res)
+    static void constantConstant(const std::string & data, std::string needle, const UInt8 escape_char, const std::string & match_type, const TiDB::TiDBCollatorPtr & collator, ResultType & res)
     {
-        if (escape_char != '\\' || collator != nullptr)
-            throw Exception("PositionImpl don't support customized escape char and tidb collator", ErrorCodes::NOT_IMPLEMENTED);
+        if (escape_char != '\\' || !match_type.empty() || collator != nullptr)
+            throw Exception("ExtractParamImpl don't support customized escape char/match_type/tidb collator", ErrorCodes::NOT_IMPLEMENTED);
         needle = "\"" + needle + "\":";
         size_t pos = data.find(needle);
         if (pos == std::string::npos)
@@ -224,16 +239,17 @@ struct ExtractParamImpl
         else
             res = ParamExtractor::extract(
                 reinterpret_cast<const UInt8 *>(data.data() + pos + needle.size()),
-                reinterpret_cast<const UInt8 *>(data.data() + data.size())
-            );
+                reinterpret_cast<const UInt8 *>(data.data() + data.size()));
     }
 
-    template <typename... Args> static void vector_vector(Args &&...)
+    template <typename... Args>
+    static void vectorVector(Args &&...)
     {
         throw Exception("Functions 'visitParamHas' and 'visitParamExtract*' doesn't support non-constant needle argument", ErrorCodes::ILLEGAL_COLUMN);
     }
 
-    template <typename... Args> static void constant_vector(Args &&...)
+    template <typename... Args>
+    static void constantVector(Args &&...)
     {
         throw Exception("Functions 'visitParamHas' and 'visitParamExtract*' doesn't support non-constant needle argument", ErrorCodes::ILLEGAL_COLUMN);
     }
@@ -245,12 +261,10 @@ struct ExtractParamImpl
 template <typename ParamExtractor>
 struct ExtractParamToStringImpl
 {
-    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets,
-                       std::string needle,
-                       ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
+    static void vector(const ColumnString::Chars_t & data, const ColumnString::Offsets & offsets, std::string needle, ColumnString::Chars_t & res_data, ColumnString::Offsets & res_offsets)
     {
         /// Constant 5 is taken from a function that performs a similar task FunctionsStringSearch.h::ExtractImpl
-        res_data.reserve(data.size()  / 5);
+        res_data.reserve(data.size() / 5);
         res_offsets.resize(offsets.size());
 
         /// We are looking for a parameter simply as a substring of the form "name"
@@ -297,5 +311,4 @@ struct ExtractParamToStringImpl
 };
 
 
-
-}
+} // namespace DB

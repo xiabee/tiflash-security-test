@@ -1,18 +1,31 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
-#include <Interpreters/Aggregator.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
 #include <Common/ConcurrentBoundedQueue.h>
+#include <Common/Logger.h>
+#include <Common/ThreadManager.h>
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <Interpreters/Aggregator.h>
 #include <common/ThreadPool.h>
+
 #include <condition_variable>
 
 
-class MemoryTracker;
-
 namespace DB
 {
-
-
 /** Pre-aggregates block streams, holding in RAM only one or more (up to merging_threads) blocks from each source.
   * This saves RAM in case of using two-level aggregation, where in each source there will be up to 256 blocks with parts of the result.
   *
@@ -59,13 +72,18 @@ namespace DB
 class MergingAggregatedMemoryEfficientBlockInputStream final : public IProfilingBlockInputStream
 {
 public:
+    static constexpr auto name = "MergingAggregatedMemoryEfficient";
     MergingAggregatedMemoryEfficientBlockInputStream(
-        BlockInputStreams inputs_, const Aggregator::Params & params, bool final_,
-        size_t reading_threads_, size_t merging_threads_);
+        BlockInputStreams inputs_,
+        const Aggregator::Params & params,
+        bool final_,
+        size_t reading_threads_,
+        size_t merging_threads_,
+        const String & req_id);
 
     ~MergingAggregatedMemoryEfficientBlockInputStream() override;
 
-    String getName() const override { return "MergingAggregatedMemoryEfficient"; }
+    String getName() const override { return name; }
 
     /// Sends the request (initiates calculations) earlier than `read`.
     void readPrefix() override;
@@ -86,6 +104,8 @@ protected:
 private:
     static constexpr int NUM_BUCKETS = 256;
 
+    const LoggerPtr log;
+
     Aggregator aggregator;
     bool final;
     size_t reading_threads;
@@ -93,12 +113,9 @@ private:
 
     bool started = false;
     bool all_read = false;
-    std::atomic<bool> has_two_level {false};
-    std::atomic<bool> has_overflows {false};
+    std::atomic<bool> has_two_level{false};
+    std::atomic<bool> has_overflows{false};
     int current_bucket_num = -1;
-
-    Logger * log = &Logger::get("MergingAggregatedMemoryEfficientBlockInputStream");
-
 
     struct Input
     {
@@ -108,7 +125,9 @@ private:
         std::vector<Block> splitted_blocks;
         bool is_exhausted = false;
 
-        Input(BlockInputStreamPtr & stream_) : stream(stream_) {}
+        explicit Input(BlockInputStreamPtr & stream_)
+            : stream(stream_)
+        {}
     };
 
     std::vector<Input> inputs;
@@ -126,13 +145,13 @@ private:
 
     struct ParallelMergeData
     {
-        ThreadPool pool;
+        std::shared_ptr<ThreadPoolManager> thread_pool;
 
         /// Now one of the merging threads receives next blocks for the merge. This operation must be done sequentially.
         std::mutex get_next_blocks_mutex;
 
-        std::atomic<bool> exhausted {false};    /// No more source data.
-        std::atomic<bool> finish {false};        /// Need to terminate early.
+        std::atomic<bool> exhausted{false}; /// No more source data.
+        std::atomic<bool> finish{false}; /// Need to terminate early.
 
         std::exception_ptr exception;
         /// It is necessary to give out blocks in the order of the key (bucket_num).
@@ -146,14 +165,16 @@ private:
         /// An event by which the main thread is telling merging threads that it is possible to process the next group of blocks.
         std::condition_variable have_space;
 
-        explicit ParallelMergeData(size_t max_threads) : pool(max_threads) {}
+        explicit ParallelMergeData(size_t max_threads)
+            : thread_pool(newThreadPoolManager(max_threads))
+        {}
     };
 
     std::unique_ptr<ParallelMergeData> parallel_merge_data;
 
-    void mergeThread(MemoryTracker * memory_tracker);
+    void mergeThread();
 
     void finalize();
 };
 
-}
+} // namespace DB

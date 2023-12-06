@@ -1,3 +1,17 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <Columns/ColumnFixedString.h>
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnString.h>
@@ -6,11 +20,13 @@
 #include <Functions/FunctionHelpers.h>
 #include <IO/WriteHelpers.h>
 
-#include "FunctionsArithmetic.h"
-
 
 namespace DB
 {
+namespace ErrorCodes
+{
+extern const int ILLEGAL_COLUMN;
+}
 
 const ColumnConst * checkAndGetColumnConstStringOrFixedString(const IColumn * column)
 {
@@ -67,14 +83,15 @@ static Block createBlockWithNestedColumnsImpl(const Block & block, const std::un
             }
             else if (col.column->isColumnConst())
             {
-                const auto & nested_col = static_cast<const ColumnNullable &>( //
-                    static_cast<const ColumnConst &>(*col.column).getDataColumn())
+                const auto & nested_col = static_cast<const ColumnNullable &>(
+                                              static_cast<const ColumnConst &>(*col.column).getDataColumn())
                                               .getNestedColumnPtr();
 
                 res.insert({ColumnConst::create(nested_col, rows), nested_type, col.name});
             }
             else
-                throw Exception("Illegal column for DataTypeNullable:" + col.type->getName() + " [column_name=" + col.name
+                throw Exception(
+                    "Illegal column for DataTypeNullable:" + col.type->getName() + " [column_name=" + col.name
                         + "] [created=" + DB::toString(bool(col.column))
                         + "] [nullable=" + (col.column ? DB::toString(bool(col.column->isColumnNullable())) : "null")
                         + "] [const=" + (col.column ? DB::toString(bool(col.column->isColumnConst())) : "null") + "]",
@@ -101,11 +118,15 @@ Block createBlockWithNestedColumns(const Block & block, const ColumnNumbers & ar
     return createBlockWithNestedColumnsImpl(block, args_set);
 }
 
-bool functionIsInOperator(const String & name) { return name == "in" || name == "notIn" || name == "tidbIn" || name == "tidbNotIn"; }
+bool functionIsInOperator(const String & name)
+{
+    return name == "in" || name == "notIn" || name == "tidbIn" || name == "tidbNotIn";
+}
 
 bool functionIsInOrGlobalInOperator(const String & name)
 {
     return name == "in" || name == "notIn" || name == "globalIn" || name == "globalNotIn" || name == "tidbIn" || name == "tidbNotIn";
 }
+
 
 } // namespace DB

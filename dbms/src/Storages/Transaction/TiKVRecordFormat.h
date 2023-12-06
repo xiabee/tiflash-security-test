@@ -1,8 +1,23 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #pragma once
 
 #include <Common/Exception.h>
 #include <Core/Types.h>
 #include <IO/Endian.h>
+#include <IO/WriteBufferFromString.h>
 #include <Storages/Transaction/Datum.h>
 #include <Storages/Transaction/DatumCodec.h>
 #include <Storages/Transaction/TiKVHandle.h>
@@ -63,30 +78,48 @@ static const size_t RAW_KEY_SIZE = RAW_KEY_NO_HANDLE_SIZE + 8;
 // https://github.com/tikv/tikv/blob/289ce2ddac505d7883ec616c078e184c00844d17/src/util/codec/bytes.rs#L33-L63
 inline TiKVKey encodeAsTiKVKey(const String & ori_str)
 {
-    std::stringstream ss;
+    WriteBufferFromOwnString ss;
     EncodeBytes(ori_str, ss);
-    return TiKVKey(ss.str());
+    return TiKVKey(ss.releaseStr());
 }
 
-inline UInt64 encodeUInt64(const UInt64 x) { return toBigEndian(x); }
+inline UInt64 encodeUInt64(const UInt64 x)
+{
+    return toBigEndian(x);
+}
 
-inline UInt64 encodeInt64(const Int64 x) { return encodeUInt64(static_cast<UInt64>(x) ^ SIGN_MASK); }
+inline UInt64 encodeInt64(const Int64 x)
+{
+    return encodeUInt64(static_cast<UInt64>(x) ^ SIGN_MASK);
+}
 
-inline UInt64 encodeUInt64Desc(const UInt64 x) { return encodeUInt64(~x); }
+inline UInt64 encodeUInt64Desc(const UInt64 x)
+{
+    return encodeUInt64(~x);
+}
 
-inline UInt64 decodeUInt64(const UInt64 x) { return toBigEndian(x); }
+inline UInt64 decodeUInt64(const UInt64 x)
+{
+    return toBigEndian(x);
+}
 
-inline UInt64 decodeUInt64Desc(const UInt64 x) { return ~decodeUInt64(x); }
+inline UInt64 decodeUInt64Desc(const UInt64 x)
+{
+    return ~decodeUInt64(x);
+}
 
-inline Int64 decodeInt64(const UInt64 x) { return static_cast<Int64>(decodeUInt64(x) ^ SIGN_MASK); }
+inline Int64 decodeInt64(const UInt64 x)
+{
+    return static_cast<Int64>(decodeUInt64(x) ^ SIGN_MASK);
+}
 
-inline void encodeInt64(const Int64 x, std::stringstream & ss)
+inline void encodeInt64(const Int64 x, WriteBuffer & ss)
 {
     auto u = RecordKVFormat::encodeInt64(x);
     ss.write(reinterpret_cast<const char *>(&u), sizeof(u));
 }
 
-inline void encodeUInt64(const UInt64 x, std::stringstream & ss)
+inline void encodeUInt64(const UInt64 x, WriteBuffer & ss)
 {
     auto u = RecordKVFormat::encodeUInt64(x);
     ss.write(reinterpret_cast<const char *>(&u), sizeof(u));
@@ -107,10 +140,13 @@ inline DecodedTiKVKey genRawKey(const TableID tableId, const HandleID handleId)
     memcpy(key.data() + 1 + 8, RecordKVFormat::RECORD_PREFIX_SEP, 2);
     auto big_endian_handle_id = encodeInt64(handleId);
     memcpy(key.data() + RAW_KEY_NO_HANDLE_SIZE, reinterpret_cast<const char *>(&big_endian_handle_id), 8);
-    return std::move(key);
+    return key;
 }
 
-inline TiKVKey genKey(const TableID tableId, const HandleID handleId) { return encodeAsTiKVKey(genRawKey(tableId, handleId)); }
+inline TiKVKey genKey(const TableID tableId, const HandleID handleId)
+{
+    return encodeAsTiKVKey(genRawKey(tableId, handleId));
+}
 
 inline TiKVKey genKey(const TiDB::TableInfo & table_info, std::vector<Field> keys)
 {
@@ -119,12 +155,19 @@ inline TiKVKey genKey(const TiDB::TableInfo & table_info, std::vector<Field> key
     auto big_endian_table_id = encodeInt64(table_info.id);
     memcpy(key.data() + 1, reinterpret_cast<const char *>(&big_endian_table_id), 8);
     memcpy(key.data() + 1 + 8, RecordKVFormat::RECORD_PREFIX_SEP, 2);
-    std::stringstream ss;
+    WriteBufferFromOwnString ss;
+
+    std::unordered_map<String, size_t> column_name_columns_index_map;
+    for (size_t i = 0; i < table_info.columns.size(); i++)
+    {
+        column_name_columns_index_map.emplace(table_info.columns[i].name, i);
+    }
     for (size_t i = 0; i < keys.size(); i++)
     {
-        DB::EncodeDatum(keys[i], table_info.columns[table_info.getPrimaryIndexInfo().idx_cols[i].offset].getCodecFlag(), ss);
+        auto idx = column_name_columns_index_map[table_info.getPrimaryIndexInfo().idx_cols[i].name];
+        DB::EncodeDatum(keys[i], table_info.columns[idx].getCodecFlag(), ss);
     }
-    return encodeAsTiKVKey(key + ss.str());
+    return encodeAsTiKVKey(key + ss.releaseStr());
 }
 
 inline bool checkKeyPaddingValid(const char * ptr, const UInt8 pad_size)
@@ -161,29 +204,50 @@ inline std::tuple<DecodedTiKVKey, size_t> decodeTiKVKeyFull(const TiKVKey & key)
     }
 }
 
-inline DecodedTiKVKey decodeTiKVKey(const TiKVKey & key) { return std::get<0>(decodeTiKVKeyFull(key)); }
+inline DecodedTiKVKey decodeTiKVKey(const TiKVKey & key)
+{
+    return std::get<0>(decodeTiKVKeyFull(key));
+}
 
-inline Timestamp getTs(const TiKVKey & key) { return decodeUInt64Desc(read<UInt64>(key.data() + key.dataSize() - 8)); }
+inline Timestamp getTs(const TiKVKey & key)
+{
+    return decodeUInt64Desc(read<UInt64>(key.data() + key.dataSize() - 8));
+}
 
-inline TableID getTableId(const DecodedTiKVKey & key) { return decodeInt64(read<UInt64>(key.data() + 1)); }
+inline TableID getTableId(const DecodedTiKVKey & key)
+{
+    return decodeInt64(read<UInt64>(key.data() + 1));
+}
 
-inline HandleID getHandle(const DecodedTiKVKey & key) { return decodeInt64(read<UInt64>(key.data() + RAW_KEY_NO_HANDLE_SIZE)); }
+inline HandleID getHandle(const DecodedTiKVKey & key)
+{
+    return decodeInt64(read<UInt64>(key.data() + RAW_KEY_NO_HANDLE_SIZE));
+}
 
 inline RawTiDBPK getRawTiDBPK(const DecodedTiKVKey & key)
 {
     return std::make_shared<const std::string>(key.begin() + RAW_KEY_NO_HANDLE_SIZE, key.end());
 }
 
-inline TableID getTableId(const TiKVKey & key) { return getTableId(decodeTiKVKey(key)); }
+inline TableID getTableId(const TiKVKey & key)
+{
+    return getTableId(decodeTiKVKey(key));
+}
 
-inline HandleID getHandle(const TiKVKey & key) { return getHandle(decodeTiKVKey(key)); }
+inline HandleID getHandle(const TiKVKey & key)
+{
+    return getHandle(decodeTiKVKey(key));
+}
 
 inline bool isRecord(const DecodedTiKVKey & raw_key)
 {
     return raw_key.size() >= RAW_KEY_SIZE && raw_key[0] == TABLE_PREFIX && memcmp(raw_key.data() + 9, RECORD_PREFIX_SEP, 2) == 0;
 }
 
-inline TiKVKey truncateTs(const TiKVKey & key) { return TiKVKey(String(key.data(), key.dataSize() - sizeof(Timestamp))); }
+inline TiKVKey truncateTs(const TiKVKey & key)
+{
+    return TiKVKey(String(key.data(), key.dataSize() - sizeof(Timestamp)));
+}
 
 inline TiKVKey appendTs(const TiKVKey & key, Timestamp ts)
 {
@@ -200,26 +264,31 @@ inline TiKVKey genKey(TableID tableId, HandleID handleId, Timestamp ts)
 }
 
 inline TiKVValue encodeLockCfValue(
-    UInt8 lock_type, const String & primary, Timestamp ts, UInt64 ttl, const String * short_value = nullptr, Timestamp min_commit_ts = 0)
+    UInt8 lock_type,
+    const String & primary,
+    Timestamp ts,
+    UInt64 ttl,
+    const String * short_value = nullptr,
+    Timestamp min_commit_ts = 0)
 {
-    std::stringstream res;
-    res.put(lock_type);
+    WriteBufferFromOwnString res;
+    res.write(lock_type);
     TiKV::writeVarInt(static_cast<Int64>(primary.size()), res);
     res.write(primary.data(), primary.size());
     TiKV::writeVarUInt(ts, res);
     TiKV::writeVarUInt(ttl, res);
     if (short_value)
     {
-        res.put(SHORT_VALUE_PREFIX);
-        res.put(static_cast<char>(short_value->size()));
+        res.write(SHORT_VALUE_PREFIX);
+        res.write(static_cast<char>(short_value->size()));
         res.write(short_value->data(), short_value->size());
     }
     if (min_commit_ts)
     {
-        res.put(MIN_COMMIT_TS_PREFIX);
+        res.write(MIN_COMMIT_TS_PREFIX);
         encodeUInt64(min_commit_ts, res);
     }
-    return TiKVValue(res.str());
+    return TiKVValue(res.releaseStr());
 }
 
 struct DecodedLockCFValue : boost::noncopyable
@@ -260,7 +329,10 @@ inline R readVarInt(const char *& data, size_t & len)
     return res;
 }
 
-inline UInt64 readVarUInt(const char *& data, size_t & len) { return readVarInt<UInt64>(data, len); }
+inline UInt64 readVarUInt(const char *& data, size_t & len)
+{
+    return readVarInt<UInt64>(data, len);
+}
 
 inline UInt8 readUInt8(const char *& data, size_t & len)
 {
@@ -280,7 +352,7 @@ template <typename R>
 inline R readRawString(const char *& data, size_t & len, size_t str_len)
 {
     R res{};
-    if constexpr (!std::is_same_v<R, nullptr_t>)
+    if constexpr (!std::is_same_v<R, std::nullptr_t>)
     {
         res = R(data, str_len);
     }
@@ -332,51 +404,50 @@ inline DecodedWriteCFValue decodeWriteCfValue(const TiKVValue & value)
         auto flag = RecordKVFormat::readUInt8(data, len);
         switch (flag)
         {
-            case RecordKVFormat::SHORT_VALUE_PREFIX:
-            {
-                size_t slen = RecordKVFormat::readUInt8(data, len);
-                if (slen > len)
-                    throw Exception("content len not equal to short value len", ErrorCodes::LOGICAL_ERROR);
-                short_value = RecordKVFormat::readRawString<std::string_view>(data, len, slen);
-                break;
-            }
-            case RecordKVFormat::FLAG_OVERLAPPED_ROLLBACK:
-                // ignore
-                break;
-            case RecordKVFormat::GC_FENCE_PREFIX:
-                /**
+        case RecordKVFormat::SHORT_VALUE_PREFIX:
+        {
+            size_t slen = RecordKVFormat::readUInt8(data, len);
+            if (slen > len)
+                throw Exception("content len not equal to short value len", ErrorCodes::LOGICAL_ERROR);
+            short_value = RecordKVFormat::readRawString<std::string_view>(data, len, slen);
+            break;
+        }
+        case RecordKVFormat::FLAG_OVERLAPPED_ROLLBACK:
+            // ignore
+            break;
+        case RecordKVFormat::GC_FENCE_PREFIX:
+            /**
                  * according to https://github.com/tikv/tikv/pull/9207, when meet `GC fence` flag, it is definitely a
                  * rewriting record and there must be a complete row written to tikv, just ignore it in tiflash.
                  */
-                return std::nullopt;
-            default:
-                throw Exception("invalid flag " + std::to_string(flag) + " in write cf", ErrorCodes::LOGICAL_ERROR);
+            return std::nullopt;
+        default:
+            throw Exception("invalid flag " + std::to_string(flag) + " in write cf", ErrorCodes::LOGICAL_ERROR);
         }
     }
 
-    return InnerDecodedWriteCFValue{write_type, prewrite_ts,
-        short_value.empty() ? nullptr : std::make_shared<const TiKVValue>(short_value.data(), short_value.length())};
+    return InnerDecodedWriteCFValue{write_type, prewrite_ts, short_value.empty() ? nullptr : std::make_shared<const TiKVValue>(short_value.data(), short_value.length())};
 }
 
 inline TiKVValue encodeWriteCfValue(UInt8 write_type, Timestamp ts, std::string_view short_value = {}, bool gc_fence = false)
 {
-    std::stringstream res;
-    res.put(write_type);
+    WriteBufferFromOwnString res;
+    res.write(write_type);
     TiKV::writeVarUInt(ts, res);
     if (!short_value.empty())
     {
-        res.put(SHORT_VALUE_PREFIX);
-        res.put(static_cast<char>(short_value.size()));
+        res.write(SHORT_VALUE_PREFIX);
+        res.write(static_cast<char>(short_value.size()));
         res.write(short_value.data(), short_value.size());
     }
     // just for test
-    res.put(FLAG_OVERLAPPED_ROLLBACK);
+    res.write(FLAG_OVERLAPPED_ROLLBACK);
     if (gc_fence)
     {
-        res.put(GC_FENCE_PREFIX);
+        res.write(GC_FENCE_PREFIX);
         encodeUInt64(8888, res);
     }
-    return TiKVValue(res.str());
+    return TiKVValue(res.releaseStr());
 }
 
 template <bool start>
