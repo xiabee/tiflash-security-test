@@ -16,8 +16,9 @@
 
 #include <Common/FmtUtils.h>
 #include <Flash/Statistics/traverseExecutors.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/TiFlashTestException.h>
+#include <common/types.h>
+
 namespace DB
 {
 namespace tests
@@ -28,7 +29,8 @@ public:
     String serialize(const tipb::DAGRequest * dag_request);
 
 private:
-    void serialize(const tipb::Executor & root_executor, size_t level);
+    void serializeListStruct(const tipb::DAGRequest * dag_request);
+    void serializeTreeStruct(const tipb::Executor & root_executor, size_t level);
     void addPrefix(size_t level) { buf.append(String(level, ' ')); }
 
 private:

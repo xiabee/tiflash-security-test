@@ -14,7 +14,6 @@
 
 #include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -75,7 +74,7 @@ public:
                     FieldType(static_cast<Native>(-9999999), 4)),
                 createColumn<Nullable<Int32>>({4, 0, -1, 31, 5, 1, 2})));
         ASSERT_COLUMN_EQ(
-            createConstColumn<Nullable<String>>(1, "-1,000.000"),
+            createConstColumn<String>(1, "-1,000.000"),
             executeFunction(
                 func_name,
                 createConstColumn<NullableDecimal>(
@@ -118,7 +117,7 @@ public:
                     FieldType(static_cast<Native>(-9999999), 4)),
                 createColumn<Nullable<UInt32>>({4, 0, 31, 5, 1, 2})));
         ASSERT_COLUMN_EQ(
-            createConstColumn<Nullable<String>>(1, "-1,000.000"),
+            createConstColumn<String>(1, "-1,000.000"),
             executeFunction(
                 func_name,
                 createConstColumn<NullableDecimal>(
@@ -229,7 +228,7 @@ try
             createColumn<Nullable<Int32>>({4, 0, -1, 31, 5, 1, 2})));
     /// const, const
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(1, "-1,000.000"),
+        createConstColumn<String>(1, "-1,000.000"),
         executeFunction(
             func_name,
             createConstColumn<Nullable<Float64>>(1, -999.9999),
@@ -259,7 +258,7 @@ try
             createColumn<Nullable<UInt32>>({4, 0, 31, 5, 1, 2})));
     /// const, const
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(1, "-1,000.000"),
+        createConstColumn<String>(1, "-1,000.000"),
         executeFunction(
             func_name,
             createConstColumn<Nullable<Float64>>(1, -999.9999),
@@ -268,7 +267,7 @@ try
     /// float32, int
     /// const, const
     ASSERT_COLUMN_EQ(
-        createConstColumn<Nullable<String>>(1, "12.123"),
+        createConstColumn<String>(1, "12.123"),
         executeFunction(
             func_name,
             createConstColumn<Nullable<Float32>>(1, 12.1235),

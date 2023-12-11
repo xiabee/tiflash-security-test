@@ -17,7 +17,6 @@
 #include <Common/SyncPoint/Ctl.h>
 #include <Common/nocopyable.h>
 
-#include <atomic>
 #include <condition_variable>
 #include <mutex>
 

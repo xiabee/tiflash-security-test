@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <Common/Allocator.h>
+#include <Common/Exception.h>
 #include <Common/FailPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
@@ -26,10 +27,10 @@
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/RegionBlockReader.h>
 #include <Storages/Transaction/RegionTable.h>
-#include <Storages/Transaction/SchemaSyncer.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TiKVRange.h>
 #include <Storages/Transaction/Utils.h>
+#include <TiDB/Schema/SchemaSyncer.h>
 #include <common/logger_useful.h>
 
 namespace DB
@@ -37,8 +38,9 @@ namespace DB
 namespace FailPoints
 {
 extern const char pause_before_apply_raft_cmd[];
-extern const char pause_before_apply_raft_snapshot[];
 extern const char force_set_safepoint_when_decode_block[];
+extern const char unblock_query_init_after_write[];
+extern const char pause_query_init[];
 } // namespace FailPoints
 
 namespace ErrorCodes
@@ -54,17 +56,18 @@ static void writeRegionDataToStorage(
     Context & context,
     const RegionPtrWithBlock & region,
     RegionDataReadInfoList & data_list_read,
-    Poco::Logger * log)
+    const LoggerPtr & log)
 {
     constexpr auto FUNCTION_NAME = __FUNCTION__; // NOLINT(readability-identifier-naming)
     const auto & tmt = context.getTMTContext();
+    auto keyspace_id = region->getKeyspaceID();
     TableID table_id = region->getMappedTableID();
     UInt64 region_decode_cost = -1, write_part_cost = -1;
 
     /// Declare lambda of atomic read then write to call multiple times.
     auto atomic_read_write = [&](bool force_decode) {
         /// Get storage based on table ID.
-        auto storage = tmt.getStorages().get(table_id);
+        auto storage = tmt.getStorages().get(keyspace_id, table_id);
         if (storage == nullptr || storage->isTombstone())
         {
             if (!force_decode) // Need to update.
@@ -77,7 +80,7 @@ static void writeRegionDataToStorage(
         TableStructureLockHolder lock;
         try
         {
-            lock = storage->lockStructureForShare(getThreadName());
+            lock = storage->lockStructureForShare(getThreadNameAndID());
         }
         catch (DB::Exception & e)
         {
@@ -97,7 +100,7 @@ static void writeRegionDataToStorage(
             auto schema_version = storage->getTableInfo().schema_version;
             std::stringstream ss;
             region.pre_decode_cache->toString(ss);
-            LOG_FMT_DEBUG(log, "{}: {} got pre-decode cache {}, storage schema version: {}", FUNCTION_NAME, region->toString(), ss.str(), schema_version);
+            LOG_DEBUG(log, "{}: {} got pre-decode cache {}, storage schema version: {}", FUNCTION_NAME, region->toString(), ss.str(), schema_version);
 
             if (region.pre_decode_cache->schema_version == schema_version)
             {
@@ -106,7 +109,7 @@ static void writeRegionDataToStorage(
             }
             else
             {
-                LOG_FMT_DEBUG(log, "{}: schema version not equal, try to re-decode region cache into block", FUNCTION_NAME);
+                LOG_DEBUG(log, "{}: schema version not equal, try to re-decode region cache into block", FUNCTION_NAME);
                 region.pre_decode_cache->block.clear();
             }
         }
@@ -118,7 +121,7 @@ static void writeRegionDataToStorage(
         BlockUPtr block_ptr = nullptr;
         if (need_decode)
         {
-            LOG_FMT_TRACE(log, "{} begin to decode table {}, region {}", FUNCTION_NAME, table_id, region->id());
+            LOG_TRACE(log, "{} begin to decode table {}, region {}", FUNCTION_NAME, table_id, region->id());
             DecodingStorageSchemaSnapshotConstPtr decoding_schema_snapshot;
             std::tie(decoding_schema_snapshot, block_ptr) = storage->getSchemaSnapshotAndBlockForDecoding(lock, true);
             block_decoding_schema_version = decoding_schema_snapshot->decoding_schema_version;
@@ -150,12 +153,13 @@ static void writeRegionDataToStorage(
         default:
             throw Exception("Unknown StorageEngine: " + toString(static_cast<Int32>(storage->engineType())), ErrorCodes::LOGICAL_ERROR);
         }
+
         write_part_cost = watch.elapsedMilliseconds();
         GET_METRIC(tiflash_raft_write_data_to_storage_duration_seconds, type_write).Observe(write_part_cost / 1000.0);
         if (need_decode)
             storage->releaseDecodingBlock(block_decoding_schema_version, std::move(block_ptr));
 
-        LOG_FMT_TRACE(log, "{}: table {}, region {}, cost [region decode {},  write part {}] ms", FUNCTION_NAME, table_id, region->id(), region_decode_cost, write_part_cost);
+        LOG_TRACE(log, "{}: table {}, region {}, cost [region decode {},  write part {}] ms", FUNCTION_NAME, table_id, region->id(), region_decode_cost, write_part_cost);
         return true;
     };
 
@@ -164,22 +168,34 @@ static void writeRegionDataToStorage(
     /// decoding data. Check the test case for more details.
     FAIL_POINT_PAUSE(FailPoints::pause_before_apply_raft_cmd);
 
+    /// disable pause_query_init when the write action finish, to make the query action continue.
+    /// the usage of unblock_query_init_after_write and pause_query_init can refer to InterpreterSelectQuery::init
+    SCOPE_EXIT({
+        fiu_do_on(FailPoints::unblock_query_init_after_write, {
+            FailPointHelper::disableFailPoint(FailPoints::pause_query_init);
+        });
+    });
+
     /// Try read then write once.
     {
         if (atomic_read_write(false))
+        {
             return;
+        }
     }
 
     /// If first try failed, sync schema and force read then write.
     {
         GET_METRIC(tiflash_schema_trigger_count, type_raft_decode).Increment();
-        tmt.getSchemaSyncer()->syncSchemas(context);
+        tmt.getSchemaSyncer()->syncSchemas(context, keyspace_id);
 
         if (!atomic_read_write(true))
+        {
             // Failure won't be tolerated this time.
             // TODO: Enrich exception message.
             throw Exception("Write region " + std::to_string(region->id()) + " to table " + std::to_string(table_id) + " failed",
                             ErrorCodes::LOGICAL_ERROR);
+        }
     }
 }
 
@@ -196,7 +212,7 @@ std::variant<RegionDataReadInfoList, RegionException::RegionReadStatus, LockInfo
     RegionDataReadInfoList data_list_read;
     DecodedLockCFValuePtr lock_value;
     {
-        auto scanner = region->createCommittedScanner();
+        auto scanner = region->createCommittedScanner(true, need_data_value);
 
         /// Some sanity checks for region meta.
         {
@@ -237,12 +253,13 @@ std::variant<RegionDataReadInfoList, RegionException::RegionReadStatus, LockInfo
             if (!scanner.hasNext())
                 return data_list_read;
 
+            // If worked with raftstore v2, the final size may not equal to here.
             data_list_read.reserve(scanner.writeMapSize());
 
             // Tiny optimization for queries that need only handle, tso, delmark.
             do
             {
-                data_list_read.emplace_back(scanner.next(need_data_value));
+                data_list_read.emplace_back(scanner.next());
             } while (scanner.hasNext());
         }
     }
@@ -255,7 +272,7 @@ std::variant<RegionDataReadInfoList, RegionException::RegionReadStatus, LockInfo
 
 std::optional<RegionDataReadInfoList> ReadRegionCommitCache(const RegionPtr & region, bool lock_region)
 {
-    auto scanner = region->createCommittedScanner(lock_region);
+    auto scanner = region->createCommittedScanner(lock_region, true);
 
     /// Some sanity checks for region meta.
     if (region->isPendingRemove())
@@ -275,7 +292,7 @@ std::optional<RegionDataReadInfoList> ReadRegionCommitCache(const RegionPtr & re
     return data_list_read;
 }
 
-void RemoveRegionCommitCache(const RegionPtr & region, const RegionDataReadInfoList & data_list_read, bool lock_region = true)
+void RemoveRegionCommitCache(const RegionPtr & region, const RegionDataReadInfoList & data_list_read, bool lock_region)
 {
     /// Remove data in region.
     auto remover = region->createCommittedRemover(lock_region);
@@ -283,7 +300,6 @@ void RemoveRegionCommitCache(const RegionPtr & region, const RegionDataReadInfoL
     {
         std::ignore = write_type;
         std::ignore = value;
-
         remover.remove({handle, commit_ts});
     }
 }
@@ -322,7 +338,7 @@ void RegionTable::writeBlockByRegion(
     Context & context,
     const RegionPtrWithBlock & region,
     RegionDataReadInfoList & data_list_to_remove,
-    Poco::Logger * log,
+    const LoggerPtr & log,
     bool lock_region)
 {
     std::optional<RegionDataReadInfoList> data_list_read = std::nullopt;
@@ -348,60 +364,6 @@ void RegionTable::writeBlockByRegion(
     data_list_to_remove = std::move(*data_list_read);
 }
 
-RegionTable::ReadBlockByRegionRes RegionTable::readBlockByRegion(const TiDB::TableInfo & table_info,
-                                                                 const ColumnsDescription & columns [[maybe_unused]],
-                                                                 const Names & column_names_to_read,
-                                                                 const RegionPtr & region,
-                                                                 RegionVersion region_version,
-                                                                 RegionVersion conf_version,
-                                                                 bool resolve_locks,
-                                                                 Timestamp start_ts,
-                                                                 const std::unordered_set<UInt64> * bypass_lock_ts,
-                                                                 RegionScanFilterPtr scan_filter)
-{
-    if (!region)
-        throw Exception(std::string(__PRETTY_FUNCTION__) + ": region is null", ErrorCodes::LOGICAL_ERROR);
-
-    // Tiny optimization for queries that need only handle, tso, delmark.
-    bool need_value = column_names_to_read.size() != 3;
-    auto region_data_lock = resolveLocksAndReadRegionData(
-        table_info.id,
-        region,
-        start_ts,
-        bypass_lock_ts,
-        region_version,
-        conf_version,
-        resolve_locks,
-        need_value);
-
-    return std::visit(variant_op::overloaded{
-                          [&](RegionDataReadInfoList & data_list_read) -> ReadBlockByRegionRes {
-                              /// Read region data as block.
-                              Block block;
-                              // FIXME: remove this deprecated function
-                              assert(0);
-                              {
-                                  auto reader = RegionBlockReader(nullptr);
-                                  bool ok = reader.setStartTs(start_ts)
-                                                .setFilter(scan_filter)
-                                                .read(block, data_list_read, /*force_decode*/ true);
-                                  if (!ok)
-                                      // TODO: Enrich exception message.
-                                      throw Exception("Read region " + std::to_string(region->id()) + " of table "
-                                                          + std::to_string(table_info.id) + " failed",
-                                                      ErrorCodes::LOGICAL_ERROR);
-                              }
-                              return block;
-                          },
-                          [&](LockInfoPtr & lock_value) -> ReadBlockByRegionRes {
-                              assert(lock_value);
-                              throw LockException(region->id(), std::move(lock_value));
-                          },
-                          [](RegionException::RegionReadStatus & s) -> ReadBlockByRegionRes { return s; },
-                      },
-                      region_data_lock);
-}
-
 RegionTable::ResolveLocksAndWriteRegionRes RegionTable::resolveLocksAndWriteRegion(TMTContext & tmt,
                                                                                    const TiDB::TableID table_id,
                                                                                    const RegionPtr & region,
@@ -409,7 +371,7 @@ RegionTable::ResolveLocksAndWriteRegionRes RegionTable::resolveLocksAndWriteRegi
                                                                                    const std::unordered_set<UInt64> * bypass_lock_ts,
                                                                                    RegionVersion region_version,
                                                                                    RegionVersion conf_version,
-                                                                                   Poco::Logger * log)
+                                                                                   const LoggerPtr & log)
 {
     auto region_data_lock = resolveLocksAndReadRegionData(table_id,
                                                           region,
@@ -434,105 +396,6 @@ RegionTable::ResolveLocksAndWriteRegionRes RegionTable::resolveLocksAndWriteRegi
                       region_data_lock);
 }
 
-/// Pre-decode region data into block cache and remove committed data from `region`
-RegionPtrWithBlock::CachePtr GenRegionPreDecodeBlockData(const RegionPtr & region, Context & context)
-{
-    const auto & tmt = context.getTMTContext();
-    {
-        Timestamp gc_safe_point = 0;
-        if (auto pd_client = tmt.getPDClient(); !pd_client->isMock())
-        {
-            gc_safe_point
-                = PDClientHelper::getGCSafePointWithRetry(pd_client, false, context.getSettingsRef().safe_point_update_interval_seconds);
-        }
-        /**
-         * In 5.0.1, feature `compaction filter` is enabled by default. Under such feature tikv will do gc in write & default cf individually.
-         * If some rows were updated and add tiflash replica, tiflash store may receive region snapshot with unmatched data in write & default cf sst files.
-         */
-        region->tryCompactionFilter(gc_safe_point);
-    }
-    std::optional<RegionDataReadInfoList> data_list_read = std::nullopt;
-    try
-    {
-        data_list_read = ReadRegionCommitCache(region, true);
-        if (!data_list_read)
-            return nullptr;
-    }
-    catch (const Exception & e)
-    {
-        if (e.code() == ErrorCodes::ILLFORMAT_RAFT_ROW)
-        {
-            // br or lighting may write illegal data into tikv, skip pre-decode and ingest sst later.
-            LOG_FMT_WARNING(&Poco::Logger::get(__PRETTY_FUNCTION__),
-                            "Got error while reading region committed cache: {}. Skip pre-decode and keep original cache.",
-                            e.displayText());
-            // set data_list_read and let apply snapshot process use empty block
-            data_list_read = RegionDataReadInfoList();
-        }
-        else
-            throw;
-    }
-
-    TableID table_id = region->getMappedTableID();
-    Int64 schema_version = DEFAULT_UNSPECIFIED_SCHEMA_VERSION;
-    Block res_block;
-
-    const auto atomic_decode = [&](bool force_decode) -> bool {
-        Stopwatch watch;
-        auto storage = tmt.getStorages().get(table_id);
-        if (storage == nullptr || storage->isTombstone())
-        {
-            if (!force_decode) // Need to update.
-                return false;
-            if (storage == nullptr) // Table must have just been GC-ed.
-                return true;
-        }
-
-        /// Get a structure read lock throughout decode, during which schema must not change.
-        TableStructureLockHolder lock;
-        try
-        {
-            lock = storage->lockStructureForShare(getThreadName());
-        }
-        catch (DB::Exception & e)
-        {
-            // If the storage is physical dropped (but not removed from `ManagedStorages`) when we want to decode snapshot, consider the decode done.
-            if (e.code() == ErrorCodes::TABLE_IS_DROPPED)
-                return true;
-            else
-                throw;
-        }
-
-        DecodingStorageSchemaSnapshotConstPtr decoding_schema_snapshot;
-        std::tie(decoding_schema_snapshot, std::ignore) = storage->getSchemaSnapshotAndBlockForDecoding(lock, false);
-        res_block = createBlockSortByColumnID(decoding_schema_snapshot);
-        auto reader = RegionBlockReader(decoding_schema_snapshot);
-        if (!reader.read(res_block, *data_list_read, force_decode))
-            return false;
-        GET_METRIC(tiflash_raft_write_data_to_storage_duration_seconds, type_decode).Observe(watch.elapsedSeconds());
-        return true;
-    };
-
-    /// In TiFlash, the actions between applying raft log and schema changes are not strictly synchronized.
-    /// There could be a chance that some raft logs come after a table gets tombstoned. Take care of it when
-    /// decoding data. Check the test case for more details.
-    FAIL_POINT_PAUSE(FailPoints::pause_before_apply_raft_snapshot);
-
-    if (!atomic_decode(false))
-    {
-        GET_METRIC(tiflash_schema_trigger_count, type_raft_decode).Increment();
-        tmt.getSchemaSyncer()->syncSchemas(context);
-
-        if (!atomic_decode(true))
-            throw Exception("Pre-decode " + region->toString() + " cache to table " + std::to_string(table_id) + " block failed",
-                            ErrorCodes::LOGICAL_ERROR);
-    }
-
-    RemoveRegionCommitCache(region, *data_list_read);
-
-    return std::make_unique<RegionPreDecodeBlockData>(std::move(res_block), schema_version, std::move(*data_list_read));
-}
-
 std::tuple<TableLockHolder, std::shared_ptr<StorageDeltaMerge>, DecodingStorageSchemaSnapshotConstPtr> //
 AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
 {
@@ -540,11 +403,12 @@ AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
     std::shared_ptr<StorageDeltaMerge> dm_storage;
     DecodingStorageSchemaSnapshotConstPtr schema_snapshot;
 
+    auto keyspace_id = region->getKeyspaceID();
     auto table_id = region->getMappedTableID();
-    LOG_FMT_DEBUG(&Poco::Logger::get(__PRETTY_FUNCTION__), "Get schema for table {}", table_id);
+    LOG_DEBUG(Logger::get(__PRETTY_FUNCTION__), "Get schema for table {}", table_id);
     auto context = tmt.getContext();
     const auto atomic_get = [&](bool force_decode) -> bool {
-        auto storage = tmt.getStorages().get(table_id);
+        auto storage = tmt.getStorages().get(keyspace_id, table_id);
         if (storage == nullptr)
         {
             if (!force_decode)
@@ -554,7 +418,7 @@ AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
         }
         // Get a structure read lock. It will throw exception if the table has been dropped,
         // the caller should handle this situation.
-        auto table_lock = storage->lockStructureForShare(getThreadName());
+        auto table_lock = storage->lockStructureForShare(getThreadNameAndID());
         dm_storage = std::dynamic_pointer_cast<StorageDeltaMerge>(storage);
         // only dt storage engine support `getSchemaSnapshotAndBlockForDecoding`, other engine will throw exception
         std::tie(schema_snapshot, std::ignore) = storage->getSchemaSnapshotAndBlockForDecoding(table_lock, false);
@@ -565,7 +429,7 @@ AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
     if (!atomic_get(false))
     {
         GET_METRIC(tiflash_schema_trigger_count, type_raft_decode).Increment();
-        tmt.getSchemaSyncer()->syncSchemas(context);
+        tmt.getSchemaSyncer()->syncSchemas(context, keyspace_id);
 
         if (!atomic_get(true))
             throw Exception("Get " + region->toString() + " belonging table " + DB::toString(table_id) + " is_command_handle fail",

@@ -14,9 +14,14 @@
 
 #include <Common/FailPoint.h>
 #include <Common/Stopwatch.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Mpp/MPPHandler.h>
+#include <Flash/Mpp/MPPTask.h>
 #include <Flash/Mpp/Utils.h>
+#include <Interpreters/Context.h>
+#include <Interpreters/SharedContexts/Disagg.h>
+
+#include <ext/scope_guard.h>
 
 namespace DB
 {
@@ -26,29 +31,13 @@ extern const char exception_before_mpp_non_root_task_run[];
 extern const char exception_before_mpp_root_task_run[];
 } // namespace FailPoints
 
-void MPPHandler::handleError(const MPPTaskPtr & task, String error)
+namespace
 {
-    try
-    {
-        if (task)
-            task->cancel(error);
-    }
-    catch (...)
-    {
-        tryLogCurrentException(log, "Fail to handle error and clean task");
-    }
-}
-// execute is responsible for making plan , register tasks and tunnels and start the running thread.
-grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskResponse * response)
+void addRetryRegion(const ContextPtr & context, mpp::DispatchTaskResponse * response)
 {
-    MPPTaskPtr task = nullptr;
-    current_memory_tracker = nullptr; /// to avoid reusing threads in gRPC
-    try
+    // For tiflash_compute mode, all regions are fetched from remote, so no need to refresh TiDB's region cache.
+    if (!context->getSharedContextDisagg()->isDisaggregatedComputeMode())
     {
-        Stopwatch stopwatch;
-        task = MPPTask::newTask(task_request.meta(), context);
-
-        task->prepare(task_request);
         for (const auto & table_region_info : context->getDAGContext()->tables_regions_info.getTableRegionsInfoMap())
         {
             for (const auto & region : table_region_info.second.remote_regions)
@@ -59,27 +48,62 @@ grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskRe
                 retry_region->mutable_region_epoch()->set_version(region.region_version);
             }
         }
-        if (task->isRootMPPTask())
+    }
+}
+
+void injectFailPointBeforeMPPTaskRun(bool is_root_task)
+{
+    if (is_root_task)
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_root_task_run);
+    else
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_non_root_task_run);
+}
+} // namespace
+
+void MPPHandler::handleError(const MPPTaskPtr & task, String error)
+{
+    if (task)
+    {
+        try
         {
-            FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_root_task_run);
+            task->handleError(error);
         }
-        else
+        catch (...)
         {
-            FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_non_root_task_run);
+            tryLogCurrentException(log, "Fail to handle error and clean task");
         }
+        task->unregisterTask();
+    }
+}
+// execute is responsible for making plan , register tasks and tunnels and start the running thread.
+grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskResponse * response)
+{
+    MPPTaskPtr task = nullptr;
+    SCOPE_EXIT({
+        current_memory_tracker = nullptr; /// to avoid reusing threads in gRPC
+    });
+    try
+    {
+        Stopwatch stopwatch;
+        task = MPPTask::newTask(task_request.meta(), context);
+        task->prepare(task_request);
+
+        addRetryRegion(context, response);
+        injectFailPointBeforeMPPTaskRun(task->isRootMPPTask());
+
         task->run();
-        LOG_FMT_INFO(log, "processing dispatch is over; the time cost is {} ms", stopwatch.elapsedMilliseconds());
+        LOG_INFO(log, "processing dispatch is over; the time cost is {} ms", stopwatch.elapsedMilliseconds());
     }
     catch (Exception & e)
     {
-        LOG_FMT_ERROR(log, "dispatch task meet error : {}", e.displayText());
+        LOG_ERROR(log, "dispatch task meet error : {}", e.displayText());
         auto * err = response->mutable_error();
         err->set_msg(e.displayText());
         handleError(task, e.displayText());
     }
     catch (std::exception & e)
     {
-        LOG_FMT_ERROR(log, "dispatch task meet error : {}", e.what());
+        LOG_ERROR(log, "dispatch task meet error : {}", e.what());
         auto * err = response->mutable_error();
         err->set_msg(e.what());
         handleError(task, e.what());

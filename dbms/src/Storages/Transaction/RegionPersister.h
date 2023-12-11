@@ -18,13 +18,15 @@
 #include <IO/MemoryReadWriteBuffer.h>
 #include <Storages/Page/FileUsage.h>
 #include <Storages/Page/PageStorage.h>
-#include <Storages/Page/WriteBatch.h>
+#include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
+#include <Storages/Page/WriteBatchImpl.h>
 #include <Storages/Transaction/Types.h>
 
 namespace DB
 {
 class Context;
 
+class PathPool;
 class Region;
 using RegionPtr = std::shared_ptr<Region>;
 using RegionMap = std::unordered_map<RegionID, RegionPtr>;
@@ -33,14 +35,6 @@ class RegionTaskLock;
 struct RegionManager;
 
 struct TiFlashRaftProxyHelper;
-namespace PS
-{
-namespace V1
-{
-class PageStorage;
-}
-} // namespace PS
-class PageStorage;
 
 class RegionPersister final : private boost::noncopyable
 {
@@ -50,36 +44,41 @@ public:
     void drop(RegionID region_id, const RegionTaskLock &);
     void persist(const Region & region);
     void persist(const Region & region, const RegionTaskLock & lock);
-    RegionMap restore(const TiFlashRaftProxyHelper * proxy_helper = nullptr, PageStorage::Config config = PageStorage::Config{});
+    RegionMap restore(PathPool & path_pool, const TiFlashRaftProxyHelper * proxy_helper = nullptr, PageStorageConfig config = PageStorageConfig{});
     bool gc();
 
     using RegionCacheWriteElement = std::tuple<RegionID, MemoryWriteBuffer, size_t, UInt64>;
     static void computeRegionWriteBuffer(const Region & region, RegionCacheWriteElement & region_write_buffer);
 
-    PageStorage::Config getPageStorageSettings() const;
+    PageStorageConfig getPageStorageSettings() const;
 
     FileUsageStatistics getFileUsageStatistics() const;
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#endif
-
     void forceTransformKVStoreV2toV3();
 
     void doPersist(RegionCacheWriteElement & region_write_buffer, const RegionTaskLock & lock, const Region & region);
     void doPersist(const Region & region, const RegionTaskLock * lock);
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#endif
+    inline std::variant<String, NamespaceID> getWriteBatchPrefix() const
+    {
+        switch (run_mode)
+        {
+        case PageStorageRunMode::UNI_PS:
+            return UniversalPageIdFormat::toFullPrefix(NullspaceID, StorageType::KVStore, ns_id);
+        default:
+            return ns_id;
+        }
+    }
 
+private:
     Context & global_context;
+    PageStorageRunMode run_mode;
     PageWriterPtr page_writer;
     PageReaderPtr page_reader;
 
-    std::shared_ptr<PS::V1::PageStorage> stable_page_storage;
-
-    NamespaceId ns_id = KVSTORE_NAMESPACE_ID;
+    NamespaceID ns_id = KVSTORE_NAMESPACE_ID;
     const RegionManager & region_manager;
     std::mutex mutex;
     LoggerPtr log;

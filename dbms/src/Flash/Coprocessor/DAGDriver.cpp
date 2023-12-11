@@ -17,15 +17,15 @@
 #include <DataStreams/BlockIO.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/copyData.h>
-#include <Flash/Coprocessor/DAGBlockOutputStream.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGDriver.h>
-#include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Flash/Coprocessor/StreamWriter.h>
 #include <Flash/Coprocessor/StreamingDAGResponseWriter.h>
 #include <Flash/Coprocessor/UnaryDAGResponseWriter.h>
+#include <Flash/Statistics/ExecutorStatisticsCollector.h>
+#include <Flash/executeQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ProcessList.h>
-#include <Interpreters/executeQuery.h>
 #include <Storages/Transaction/LockException.h>
 #include <Storages/Transaction/RegionException.h>
 #include <pingcap/Exception.h>
@@ -55,7 +55,7 @@ DAGDriver<false>::DAGDriver(
     , dag_response(dag_response_)
     , writer(nullptr)
     , internal(internal_)
-    , log(&Poco::Logger::get("DAGDriver"))
+    , log(Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -72,9 +72,10 @@ DAGDriver<true>::DAGDriver(
     ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer_,
     bool internal_)
     : context(context_)
+    , dag_response(nullptr)
     , writer(writer_)
     , internal(internal_)
-    , log(&Poco::Logger::get("DAGDriver"))
+    , log(Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -88,28 +89,35 @@ void DAGDriver<batch>::execute()
 try
 {
     auto start_time = Clock::now();
-    DAGQuerySource dag(context);
     DAGContext & dag_context = *context.getDAGContext();
 
-    BlockIO streams = executeQuery(dag, context, internal, QueryProcessingStage::Complete);
-    if (!streams.in || streams.out)
-        // Only query is allowed, so streams.in must not be null and streams.out must be null
+    auto query_executor = queryExecute(context, internal);
+    if (!query_executor)
+        // Only query is allowed, so query_executor must not be null
         throw TiFlashException("DAG is not query.", Errors::Coprocessor::Internal);
 
     auto end_time = Clock::now();
     Int64 compile_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count();
     dag_context.compile_time_ns = compile_time_ns;
-    LOG_FMT_DEBUG(log, "Compile dag request cost {} ms", compile_time_ns / 1000000);
+    LOG_DEBUG(log, "Compile dag request cost {} ms", compile_time_ns / 1000000);
 
     BlockOutputStreamPtr dag_output_stream = nullptr;
     if constexpr (!batch)
     {
-        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<UnaryDAGResponseWriter>(
+        auto response_writer = std::make_unique<UnaryDAGResponseWriter>(
             dag_response,
             context.getSettingsRef().dag_records_per_chunk,
             dag_context);
-        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
-        copyData(*streams.in, *dag_output_stream);
+        response_writer->prepare(query_executor->getSampleBlock());
+        query_executor->execute([&response_writer](const Block & block) { response_writer->write(block); }).verify();
+        response_writer->flush();
+
+        if (dag_context.collect_execution_summaries)
+        {
+            ExecutorStatisticsCollector statistics_collector(log->identifier());
+            statistics_collector.initialize(&dag_context);
+            statistics_collector.fillExecuteSummaries(*dag_response);
+        }
     }
     else
     {
@@ -128,22 +136,37 @@ try
 
         auto streaming_writer = std::make_shared<StreamWriter>(writer);
         TiDB::TiDBCollators collators;
-
-        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<StreamingDAGResponseWriter<StreamWriterPtr>>(
+        auto response_writer = std::make_unique<StreamingDAGResponseWriter<StreamWriterPtr>>(
             streaming_writer,
-            std::vector<Int64>(),
-            collators,
-            tipb::ExchangeType::PassThrough,
             context.getSettingsRef().dag_records_per_chunk,
             context.getSettingsRef().batch_send_min_limit,
-            true,
             dag_context);
-        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
-        copyData(*streams.in, *dag_output_stream);
+        response_writer->prepare(query_executor->getSampleBlock());
+        query_executor->execute([&response_writer](const Block & block) { response_writer->write(block); }).verify();
+        response_writer->flush();
+
+        if (dag_context.collect_execution_summaries)
+        {
+            ExecutorStatisticsCollector statistics_collector(log->identifier());
+            statistics_collector.initialize(&dag_context);
+            auto execution_summary_response = statistics_collector.genExecutionSummaryResponse();
+            streaming_writer->write(execution_summary_response);
+        }
     }
 
-    auto throughput = dag_context.getTableScanThroughput();
-    if (throughput.first)
+    auto ru = query_executor->collectRequestUnit();
+    if constexpr (!batch)
+    {
+        LOG_INFO(log, "cop finish with request unit: {}", ru);
+        GET_METRIC(tiflash_compute_request_unit, type_cop).Increment(ru);
+    }
+    else
+    {
+        LOG_INFO(log, "batch cop finish with request unit: {}", ru);
+        GET_METRIC(tiflash_compute_request_unit, type_batch).Increment(ru);
+    }
+
+    if (auto throughput = dag_context.getTableScanThroughput(); throughput.first)
         GET_METRIC(tiflash_storage_logical_throughput_bytes).Observe(throughput.second);
 
     if (context.getProcessListElement())
@@ -156,28 +179,17 @@ try
         }
         else
         {
-            GET_METRIC(tiflash_coprocessor_request_memory_usage, type_super_batch).Observe(peak_memory);
+            GET_METRIC(tiflash_coprocessor_request_memory_usage, type_batch).Observe(peak_memory);
         }
     }
 
-    if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(streams.in.get()))
-    {
-        LOG_FMT_DEBUG(
-            log,
-            "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
-            p_stream->getProfileInfo().execution_time / (double)1000000000,
-            p_stream->getProfileInfo().rows,
-            p_stream->getProfileInfo().bytes);
-
-        if constexpr (!batch)
-        {
-            // Under some test cases, there may be dag response whose size is bigger than INT_MAX, and GRPC can not limit it.
-            // Throw exception to prevent receiver from getting wrong response.
-            if (accurate::greaterOp(p_stream->getProfileInfo().bytes, std::numeric_limits<int>::max()))
-                throw TiFlashException("DAG response is too big, please check config about region size or region merge scheduler",
-                                       Errors::Coprocessor::Internal);
-        }
-    }
+    auto runtime_statistics = query_executor->getRuntimeStatistics();
+    LOG_DEBUG(
+        log,
+        "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
+        runtime_statistics.execution_time_ns / static_cast<double>(1000000000),
+        runtime_statistics.rows,
+        runtime_statistics.bytes);
 }
 catch (const RegionException & e)
 {
@@ -189,27 +201,27 @@ catch (const LockException & e)
 }
 catch (const TiFlashException & e)
 {
-    LOG_FMT_ERROR(log, "{}\n{}", e.standardText(), e.getStackTrace().toString());
+    LOG_ERROR(log, "{}\n{}", e.standardText(), e.getStackTrace().toString());
     recordError(grpc::StatusCode::INTERNAL, e.standardText());
 }
 catch (const Exception & e)
 {
-    LOG_FMT_ERROR(log, "DB Exception: {}\n{}", e.message(), e.getStackTrace().toString());
+    LOG_ERROR(log, "DB Exception: {}\n{}", e.message(), e.getStackTrace().toString());
     recordError(e.code(), e.message());
 }
 catch (const pingcap::Exception & e)
 {
-    LOG_FMT_ERROR(log, "KV Client Exception: {}", e.message());
+    LOG_ERROR(log, "KV Client Exception: {}", e.message());
     recordError(e.code(), e.message());
 }
 catch (const std::exception & e)
 {
-    LOG_FMT_ERROR(log, "std exception: {}", e.what());
+    LOG_ERROR(log, "std exception: {}", e.what());
     recordError(ErrorCodes::UNKNOWN_EXCEPTION, e.what());
 }
 catch (...)
 {
-    LOG_FMT_ERROR(log, "other exception");
+    LOG_ERROR(log, "other exception");
     recordError(ErrorCodes::UNKNOWN_EXCEPTION, "other exception");
 }
 

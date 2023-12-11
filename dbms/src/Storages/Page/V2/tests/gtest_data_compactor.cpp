@@ -17,7 +17,6 @@
 
 #include <Common/FailPoint.h>
 #include <IO/WriteHelpers.h>
-#include <Interpreters/Context.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/V2/PageStorage.h>
 #include <Storages/Page/V2/gc/DataCompactor.h>
@@ -44,7 +43,7 @@ try
 {
     CHECK_TESTS_WITH_DATA_ENABLED;
 
-    PageStorage::Config config;
+    PageStorageConfig config;
     config.num_write_slots = 2;
 #ifndef GENERATE_TEST_DATA
     const Strings test_paths = TiFlashTestEnv::findTestDataPath("page_storage_compactor_migrate");
@@ -59,8 +58,7 @@ try
     };
 #endif
 
-    auto ctx = TiFlashTestEnv::getContext(DB::Settings());
-    const auto file_provider = ctx.getFileProvider();
+    const auto file_provider = TiFlashTestEnv::getDefaultFileProvider();
     PSDiskDelegatorPtr delegate = std::make_shared<DB::tests::MockDiskDelegatorMulti>(test_paths);
 
     auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
@@ -136,7 +134,7 @@ try
         for (size_t i = 0; i < records.size(); ++i)
         {
             const auto & rec = records[i];
-            EXPECT_EQ(rec.type, WriteBatch::WriteType::UPSERT);
+            EXPECT_EQ(rec.type, WriteBatchWriteType::UPSERT);
             // Page 1, 2, 6 is moved to PageFile{2,1}
             if (rec.page_id == 1 || rec.page_id == 2 || rec.page_id == 6)
             {

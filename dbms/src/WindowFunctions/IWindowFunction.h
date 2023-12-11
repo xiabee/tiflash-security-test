@@ -14,42 +14,36 @@
 
 #pragma once
 
+#include <Core/ColumnNumbers.h>
 #include <Core/Field.h>
 #include <Core/Types.h>
-#include <DataTypes/DataTypesNumber.h>
-
-#include <memory>
+#include <DataTypes/IDataType.h>
 
 
 namespace DB
 {
-class WindowBlockInputStream;
-using WindowBlockInputStreamPtr = std::shared_ptr<WindowBlockInputStream>;
+struct WindowTransformAction;
 
 class IWindowFunction
 {
 public:
-    IWindowFunction(const std::string & name_,
-                    const DataTypes & argument_types_)
-        : name(name_)
-        , argument_types(argument_types_)
+    explicit IWindowFunction(const DataTypes & argument_types_)
+        : argument_types(argument_types_)
     {}
 
-    String getName()
-    {
-        return name;
-    }
+    virtual String getName() const = 0;
 
     virtual ~IWindowFunction() = default;
 
     virtual DataTypePtr getReturnType() const = 0;
     // Must insert the result for current_row.
-    virtual void windowInsertResultInto(WindowBlockInputStreamPtr streamPtr,
-                                        size_t function_index)
+    virtual void windowInsertResultInto(
+        WindowTransformAction & action,
+        size_t function_index,
+        const ColumnNumbers & arguments)
         = 0;
 
 protected:
-    std::string name;
     DataTypes argument_types;
 };
 

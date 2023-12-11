@@ -24,15 +24,11 @@
 #include <IO/Progress.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
+#include <Interpreters/Context.h>
 #include <Poco/Net/TCPServerConnection.h>
 #include <Storages/Transaction/RegionLockInfo.h>
 
 #include "IServer.h"
-
-namespace CurrentMetrics
-{
-extern const Metric TCPConnection;
-}
 
 namespace Poco
 {
@@ -131,8 +127,6 @@ private:
     /// At the moment, only one ongoing query in the connection is supported at a time.
     QueryState state;
 
-    CurrentMetrics::Increment metric_increment{CurrentMetrics::TCPConnection};
-
     /// It is the name of the server that will be sent to the client.
     String server_display_name;
 
@@ -160,7 +154,6 @@ private:
     void sendProgress();
     void sendEndOfStream();
     void sendProfileInfo();
-    void sendTotals();
     void sendExtremes();
 
     /// Creates state.block_in/block_out for blocks read/write, depending on whether compression is enabled.

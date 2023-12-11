@@ -34,11 +34,19 @@ struct RegionMergeResult;
 class Region;
 class MetaRaftCommandDelegate;
 class RegionRaftCommandDelegate;
-enum class WaitIndexResult
+enum class WaitIndexStatus
 {
     Finished,
-    Terminated,
+    Terminated, // Read index is terminated due to upper layer.
     Timeout,
+};
+struct WaitIndexResult
+{
+    WaitIndexStatus status{WaitIndexStatus::Finished};
+    // the applied index before wait index
+    UInt64 prev_index = 0;
+    // the applied index when wait index finish
+    UInt64 current_index = 0;
 };
 
 struct RegionMetaSnapshot
@@ -70,10 +78,12 @@ public:
     UInt64 storeId() const;
 
     UInt64 appliedIndex() const;
+    UInt64 appliedIndexTerm() const;
 
     ImutRegionRangePtr getRange() const;
 
     metapb::Peer getPeer() const;
+    void setPeer(metapb::Peer &&);
 
     UInt64 version() const;
 
@@ -101,17 +111,20 @@ public:
     // If `timeout_ms` == 0, it waits infinite except `check_running` return false.
     //    `timeout_ms` != 0 and not reaching `index` after waiting for `timeout_ms`, Return WaitIndexResult::Timeout.
     // If `check_running` return false, returns WaitIndexResult::Terminated
-    WaitIndexResult waitIndex(UInt64 index, const UInt64 timeout_ms, std::function<bool(void)> && check_running) const;
+    WaitIndexResult waitIndex(UInt64 index, UInt64 timeout_ms, std::function<bool(void)> && check_running) const;
     bool checkIndex(UInt64 index) const;
 
     RegionMetaSnapshot dumpRegionMetaSnapshot() const;
     MetaRaftCommandDelegate & makeRaftCommandDelegate();
 
-    metapb::Region getMetaRegion() const;
-    raft_serverpb::MergeState getMergeState() const;
+    const metapb::Region & getMetaRegion() const;
+    metapb::Region cloneMetaRegion() const;
+    const raft_serverpb::MergeState & getMergeState() const;
+    raft_serverpb::MergeState cloneMergeState() const;
+
+    RegionMeta() = delete;
 
 private:
-    RegionMeta() = delete;
     friend class MetaRaftCommandDelegate;
     friend class tests::RegionKVStoreTest;
 
@@ -157,8 +170,6 @@ class MetaRaftCommandDelegate
     friend class RegionRaftCommandDelegate;
     friend class tests::RegionKVStoreTest;
 
-    MetaRaftCommandDelegate() = delete;
-
     const metapb::Peer & getPeer() const;
     const raft_serverpb::RaftApplyState & applyState() const;
     const RegionState & regionState() const;
@@ -192,6 +203,8 @@ public:
     static RegionMergeResult computeRegionMergeResult(
         const metapb::Region & source_region,
         const metapb::Region & target_region);
+
+    MetaRaftCommandDelegate() = delete;
 };
 
 } // namespace DB

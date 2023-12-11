@@ -19,7 +19,16 @@
 #include <fiu-local.h>
 #include <fiu.h>
 
+#include <any>
 #include <unordered_map>
+
+namespace Poco
+{
+namespace Util
+{
+class LayeredConfiguration;
+}
+} // namespace Poco
 
 namespace DB
 {
@@ -35,18 +44,34 @@ extern const int FAIL_POINT_ERROR;
 // When `fail_point` is enabled, wait till it is disabled
 #define FAIL_POINT_PAUSE(fail_point) fiu_do_on(fail_point, FailPointHelper::wait(fail_point);)
 
-
 class FailPointChannel;
 class FailPointHelper
 {
 public:
-    static void enableFailPoint(const String & fail_point_name);
+    static void enableFailPoint(const String & fail_point_name, std::optional<std::any> v = std::nullopt);
+
+    static std::optional<std::any> getFailPointVal(const String & fail_point_name);
+
+    static void enablePauseFailPoint(const String & fail_point_name, UInt64 time);
 
     static void disableFailPoint(const String & fail_point_name);
 
     static void wait(const String & fail_point_name);
 
+    /*
+     * For Server RandomFailPoint test usage. When FIU_ENABLE is defined, this function does the following work:
+     * 1. Return if TiFlash config has empty flash.random_fail_points cfg
+     * 2. Parse flash.random_fail_points, which expect to has "FailPointA-RatioA,FailPointB-RatioB,..." format
+     * 3. Call enableRandomFailPoint method with parsed FailPointName and Rate
+     */
+    static void initRandomFailPoints(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
+
+    static void enableRandomFailPoint(const String & fail_point_name, double rate);
+
 private:
+#ifdef FIU_ENABLE
     static std::unordered_map<String, std::shared_ptr<FailPointChannel>> fail_point_wait_channels;
+    static std::unordered_map<String, std::any> fail_point_val;
+#endif
 };
 } // namespace DB

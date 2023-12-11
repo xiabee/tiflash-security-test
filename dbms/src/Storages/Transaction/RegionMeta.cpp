@@ -72,6 +72,12 @@ metapb::Peer RegionMeta::getPeer() const
     return peer;
 }
 
+void RegionMeta::setPeer(metapb::Peer && p)
+{
+    std::lock_guard lock(mutex);
+    peer = p;
+}
+
 raft_serverpb::RaftApplyState RegionMeta::getApplyState() const
 {
     std::lock_guard lock(mutex);
@@ -104,6 +110,12 @@ UInt64 RegionMeta::appliedIndex() const
 {
     std::lock_guard lock(mutex);
     return apply_state.applied_index();
+}
+
+UInt64 RegionMeta::appliedIndexTerm() const
+{
+    std::lock_guard lock(mutex);
+    return applied_term;
 }
 
 RegionMeta::RegionMeta(RegionMeta && rhs)
@@ -157,38 +169,41 @@ void RegionMeta::setPeerState(const raft_serverpb::PeerState peer_state_)
 WaitIndexResult RegionMeta::waitIndex(UInt64 index, const UInt64 timeout_ms, std::function<bool(void)> && check_running) const
 {
     std::unique_lock lock(mutex);
-    WaitIndexResult status = WaitIndexResult::Finished;
+    WaitIndexResult res;
+    res.prev_index = apply_state.applied_index();
     if (timeout_ms != 0)
     {
         // wait for applied index with a timeout
         auto timeout_timepoint = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         if (!cv.wait_until(lock, timeout_timepoint, [&] {
+                res.current_index = apply_state.applied_index();
                 if (!check_running())
                 {
-                    status = WaitIndexResult::Terminated;
+                    res.status = WaitIndexStatus::Terminated;
                     return true;
                 }
                 return doCheckIndex(index);
             }))
         {
             // not terminated && not reach the `index` => timeout
-            status = WaitIndexResult::Timeout;
+            res.status = WaitIndexStatus::Timeout;
         }
     }
     else
     {
         // wait infinitely
         cv.wait(lock, [&] {
+            res.current_index = apply_state.applied_index();
             if (!check_running())
             {
-                status = WaitIndexResult::Terminated;
+                res.status = WaitIndexStatus::Terminated;
                 return true;
             }
             return doCheckIndex(index);
         });
     }
 
-    return status;
+    return res;
 }
 
 bool RegionMeta::checkIndex(UInt64 index) const
@@ -247,7 +262,7 @@ RegionMergeResult MetaRaftCommandDelegate::computeRegionMergeResult(
     const metapb::Region & source_region,
     const metapb::Region & target_region)
 {
-    RegionMergeResult res;
+    RegionMergeResult res{};
 
     res.version = std::max(source_region.region_epoch().version(), target_region.region_epoch().version()) + 1;
 
@@ -436,16 +451,27 @@ RegionMeta::RegionMeta(metapb::Peer peer_, metapb::Region region, raft_serverpb:
     region_state.setRegion(std::move(region));
 }
 
-metapb::Region RegionMeta::getMetaRegion() const
+metapb::Region RegionMeta::cloneMetaRegion() const
 {
     std::lock_guard lock(mutex);
     return region_state.getRegion();
 }
 
-raft_serverpb::MergeState RegionMeta::getMergeState() const
+const metapb::Region & RegionMeta::getMetaRegion() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getRegion();
+}
+
+raft_serverpb::MergeState RegionMeta::cloneMergeState() const
 {
     std::lock_guard lock(mutex);
     return region_state.getMergeState();
 }
 
+const raft_serverpb::MergeState & RegionMeta::getMergeState() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getMergeState();
+}
 } // namespace DB

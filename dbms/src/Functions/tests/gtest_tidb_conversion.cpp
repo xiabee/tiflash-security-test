@@ -103,6 +103,22 @@ public:
     }
 
     template <typename Input, typename Output>
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(const DecimalField<Decimal64> & input, const MyDateTime & output, int fraction)
+    {
+        auto meta = std::make_tuple(19, input.getScale());
+        auto inner_test = [&](bool is_const) {
+            ASSERT_COLUMN_EQ(
+                is_const ? createDateTimeColumnConst(1, output, fraction) : createDateTimeColumn({output}, fraction),
+                executeFunction(
+                    func_name,
+                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input) : createColumn<Nullable<Input>>(meta, {input}),
+                     createCastTypeConstColumn(fmt::format("Nullable(MyDateTime({}))", fraction))}));
+        };
+        inner_test(true);
+        inner_test(false);
+    }
+
+    template <typename Input, typename Output>
     typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(const Input & input, const MyDateTime & output, int fraction)
     {
         auto inner_test = [&](bool is_const) {
@@ -172,6 +188,21 @@ public:
                 executeFunction(
                     func_name,
                     {is_const ? createConstColumn<Nullable<Input>>(1, input) : createColumn<Nullable<Input>>({input}),
+                     createCastTypeConstColumn(fmt::format("Nullable(MyDateTime({}))", fraction))}));
+        };
+        inner_test(true);
+        inner_test(false);
+    }
+
+    template <typename Input, typename Output>
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testReturnNull(const DecimalField<Input> & input, const std::tuple<UInt32, UInt32> & meta, int fraction)
+    {
+        auto inner_test = [&](bool is_const) {
+            ASSERT_COLUMN_EQ(
+                is_const ? createDateTimeColumnConst(1, {}, fraction) : createDateTimeColumn({{}}, fraction),
+                executeFunction(
+                    func_name,
+                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input) : createColumn<Nullable<Input>>(meta, {input}),
                      createCastTypeConstColumn(fmt::format("Nullable(MyDateTime({}))", fraction))}));
         };
         inner_test(true);
@@ -889,10 +920,10 @@ try
         executeFunction(func_name,
                         {createColumn<Nullable<Int32>>({-999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
 
-    DAGContext * dag_context = context.getDAGContext();
-    UInt64 ori_flags = dag_context->getFlags();
-    dag_context->addFlag(TiDBSQLFlags::OVERFLOW_AS_WARNING);
-    dag_context->clearWarnings();
+    auto & dag_context = getDAGContext();
+    UInt64 ori_flags = dag_context.getFlags();
+    dag_context.addFlag(TiDBSQLFlags::OVERFLOW_AS_WARNING);
+    dag_context.clearWarnings();
 
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal32>>(
@@ -922,7 +953,7 @@ try
         executeFunction(func_name,
                         {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(2, 2))")}));
 
-    dag_context->setFlags(ori_flags);
+    dag_context.setFlags(ori_flags);
 }
 CATCH
 
@@ -1136,10 +1167,10 @@ try
     // in default mode
     // for round test, tidb throw warnings: Truncated incorrect DECIMAL value: xxx
     // tiflash is same as mysql, don't throw warnings.
-    DAGContext * dag_context = context.getDAGContext();
-    UInt64 ori_flags = dag_context->getFlags();
-    dag_context->addFlag(TiDBSQLFlags::TRUNCATE_AS_WARNING);
-    dag_context->clearWarnings();
+    auto & dag_context = getDAGContext();
+    UInt64 ori_flags = dag_context.getFlags();
+    dag_context.addFlag(TiDBSQLFlags::TRUNCATE_AS_WARNING);
+    dag_context.clearWarnings();
 
     testNotOnlyNull<Float32, Decimal32>(12.213f, DecimalField32(1221, 2), std::make_tuple(9, 2));
     testNotOnlyNull<Float32, Decimal32>(-12.213f, DecimalField32(-1221, 2), std::make_tuple(9, 2));
@@ -1196,8 +1227,8 @@ try
     // TiFlash:    123.12345678912344293376
     testNotOnlyNull<Float64, Decimal256>(123.123456789123456789, DecimalField256(Decimal256(Int256("12312345678912344293376")), 20), std::make_tuple(50, 20));
 
-    dag_context->setFlags(ori_flags);
-    dag_context->clearWarnings();
+    dag_context.setFlags(ori_flags);
+    dag_context.clearWarnings();
 }
 CATCH
 
@@ -1208,49 +1239,95 @@ try
     testOnlyNull<Float64, MyDateTime>();
 
     // TODO add tests after non-expected results fixed
-
-    // mysql: null, warning.
-    // tiflash: null, no warning.
-    // tidb: 0000-00-00 00:00:00
-    testReturnNull<Float32, MyDateTime>(0, 6);
     testReturnNull<Float32, MyDateTime>(12.213, 6);
     testReturnNull<Float32, MyDateTime>(-12.213, 6);
     testReturnNull<Float32, MyDateTime>(MAX_FLOAT32, 6);
     testReturnNull<Float32, MyDateTime>(MIN_FLOAT32, 6);
-    // mysql: 2000-01-11 00:00:00
-    // tiflash / tidb: null, warnings
-    // testNotOnlyNull<Float32, MyDateTime>(111, {2000, 1, 11, 0, 0, 0, 0}, 6);
-    testReturnNull<Float32, MyDateTime>(-111, 6);
-    // mysql: 2000-01-11 00:00:00
-    // tiflash / tidb: null, warnings
-    // testNotOnlyNull<Float32, MyDateTime>(111.1, {2000, 1, 11, 0, 0, 0, 0}, 6);
 
-    // mysql: null, warning.
-    // tiflash: null, no warning.
-    // tidb: 0000-00-00 00:00:00
-    // testReturnNull<Float64, MyDateTime>(0, 6);
+    testNotOnlyNull<Float32, MyDateTime>(0, {0, 0, 0, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float32, MyDateTime>(111, {2000, 1, 11, 0, 0, 0, 0}, 6);
+    testReturnNull<Float32, MyDateTime>(-111, 6);
+    testNotOnlyNull<Float32, MyDateTime>(111.1, {2000, 1, 11, 0, 0, 0, 0}, 6);
+
     testReturnNull<Float64, MyDateTime>(12.213, 6);
     testReturnNull<Float64, MyDateTime>(-12.213, 6);
     testReturnNull<Float64, MyDateTime>(MAX_FLOAT64, 6);
     testReturnNull<Float64, MyDateTime>(MIN_FLOAT64, 6);
-    // mysql: 2000-01-11 00:00:00
-    // tiflash / tidb: null, warnings
-    // testNotOnlyNull<Float64, MyDateTime>(111, {2000, 1, 11, 0, 0, 0, 0}, 6);
+    testReturnNull<Float64, MyDateTime>(1.1, 6);
+    testReturnNull<Float64, MyDateTime>(48.1, 6);
+    testReturnNull<Float64, MyDateTime>(100.1, 6);
+    testReturnNull<Float64, MyDateTime>(1301.11, 6);
+    testReturnNull<Float64, MyDateTime>(1131.111, 6);
+    testReturnNull<Float64, MyDateTime>(100001111.111, 6);
+    testReturnNull<Float64, MyDateTime>(20121212121260.1111111, 6);
+    testReturnNull<Float64, MyDateTime>(20121212126012.1111111, 6);
+    testReturnNull<Float64, MyDateTime>(20121212241212.1111111, 6);
+    testNotOnlyNull<Float64, MyDateTime>(111, {2000, 1, 11, 0, 0, 0, 0}, 6);
     testReturnNull<Float64, MyDateTime>(-111, 6);
-    // mysql: 2000-01-11 00:00:00
-    // tiflash / tidb: null, warnings
-    // testNotOnlyNull<Float64, MyDateTime>(111.1, {2000, 1, 11, 0, 0, 0, 0}, 6);
+
+    testNotOnlyNull<Float64, MyDateTime>(0, {0, 0, 0, 0, 0, 0, 0}, 6);
     testNotOnlyNull<Float64, MyDateTime>(20210201, {2021, 2, 1, 0, 0, 0, 0}, 6);
-    // mysql: 2021-02-01 00:00:00
-    // tiflash / tidb: 2021-02-01 01:00:00
-    // testNotOnlyNull<Float64, MyDateTime>(20210201.1, {2021, 2, 1, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(20210201.1, {2021, 2, 1, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(20210000.1, {2021, 0, 0, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(120012.1, {2012, 0, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(121200.1, {2012, 12, 00, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(101.1, {2000, 1, 1, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(111.1, {2000, 1, 11, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(1122.1, {2000, 11, 22, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(31212.111, {2003, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(121212.1111, {2012, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(1121212.111111, {112, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(11121212.111111, {1112, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(99991111.1111111, {9999, 11, 11, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Float64, MyDateTime>(1212121212.111111, {2000, 12, 12, 12, 12, 12, 111111}, 6);
+}
+CATCH
+
+TEST_F(TestTidbConversion, castDecimalAsTime)
+try
+{
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(11, 1), std::make_tuple(19, 1), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(481, 1), std::make_tuple(19, 1), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(1001, 1), std::make_tuple(19, 1), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(130111, 2), std::make_tuple(19, 2), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(1131111, 3), std::make_tuple(19, 3), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(100001111111, 3), std::make_tuple(19, 3), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(12121212126011111, 5), std::make_tuple(19, 6), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(121212126012111111, 5), std::make_tuple(19, 4), 6);
+    testReturnNull<Decimal64, MyDateTime>(DecimalField64(12121224121211111, 5), std::make_tuple(19, 4), 6);
+
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(1011, 1), {2000, 1, 1, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(1111, 1), {2000, 1, 11, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(11221, 1), {2000, 11, 22, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(31212111, 3), {2003, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(30000111, 3), {2003, 0, 0, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(1212121111, 4), {2012, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(1121212111111, 6), {112, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(11121212111111, 6), {1112, 12, 12, 0, 0, 0, 0}, 6);
+    testNotOnlyNull<Decimal64, MyDateTime>(DecimalField64(99991111111111, 6), {9999, 11, 11, 0, 0, 0, 0}, 6);
+}
+CATCH
+
+TEST_F(TestTidbConversion, truncateInCastDecimalAsDecimal)
+try
+{
+    DAGContext * dag_context = context->getDAGContext();
+    UInt64 ori_flags = dag_context->getFlags();
+    dag_context->addFlag(TiDBSQLFlags::IN_INSERT_STMT | TiDBSQLFlags::IN_UPDATE_OR_DELETE_STMT);
+    dag_context->clearWarnings();
+
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_EQ(dag_context->getWarningCount(), 4);
+    dag_context->setFlags(ori_flags);
+    dag_context->clearWarnings();
 }
 CATCH
 
 TEST_F(TestTidbConversion, castDecimalAsDecimalWithRound)
 try
 {
-    DAGContext * dag_context = context.getDAGContext();
+    DAGContext * dag_context = context->getDAGContext();
     UInt64 ori_flags = dag_context->getFlags();
     dag_context->addFlag(TiDBSQLFlags::TRUNCATE_AS_WARNING);
     dag_context->clearWarnings();
@@ -1366,7 +1443,7 @@ try
     const auto from_type = std::make_shared<DataTypeMyDuration>(3);
     const auto to_type_1 = std::make_shared<DataTypeMyDuration>(5); // from_fsp <  to_fsp
     const auto to_type_2 = std::make_shared<DataTypeMyDuration>(3); // from_fsp == to_fsp
-    const auto to_type_3 = std::make_shared<DataTypeMyDuration>(2); // from_fsp <  to_fsp
+    const auto to_type_3 = std::make_shared<DataTypeMyDuration>(2); // from_fsp >  to_fsp
 
     ColumnWithTypeAndName input(
         createColumn<DataTypeMyDuration::FieldType>({(20 * 3600 + 20 * 60 + 20) * 1000000000L + 555000000L,
@@ -1544,76 +1621,76 @@ TEST_F(TestTidbConversion, skipCheckOverflowIntToDeciaml)
     const ScaleType scale = 0;
 
     // int8(max_prec: 3) -> decimal32(max_prec: 9)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal32, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal32, scale));
     // int16(max_prec: 5) -> decimal32(max_prec: 9)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal32, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal32, scale));
     // int32(max_prec: 10) -> decimal32(max_prec: 9)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal32, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal32, scale));
     // int64(max_prec: 20) -> decimal32(max_prec: 9)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal32, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal32, scale));
 
     // uint8(max_prec: 3) -> decimal32(max_prec: 9)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal32, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal32, scale));
     // uint16(max_prec: 5) -> decimal32(max_prec: 9)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal32, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal32, scale));
     // uint32(max_prec: 10) -> decimal32(max_prec: 9)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal32, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal32, scale));
     // uint64(max_prec: 20) -> decimal32(max_prec: 9)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal32, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal32, scale));
 
     // int8(max_prec: 3) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal64, scale));
     // int16(max_prec: 5) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal64, scale));
     // int32(max_prec: 10) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal64, scale));
     // int64(max_prec: 20) -> decimal64(max_prec: 18)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal64, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal64, scale));
 
     // uint8(max_prec: 3) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal64, scale));
     // uint16(max_prec: 5) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal64, scale));
     // uint32(max_prec: 10) -> decimal64(max_prec: 18)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal64, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal64, scale));
     // uint64(max_prec: 20) -> decimal64(max_prec: 18)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal64, scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal64, scale));
 
     // int8(max_prec: 3) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal128, scale));
     // int16(max_prec: 5) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal128, scale));
     // int32(max_prec: 10) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal128, scale));
     // int64(max_prec: 20) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal128, scale));
 
     // uint8(max_prec: 3) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal128, scale));
     // uint16(max_prec: 5) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal128, scale));
     // uint32(max_prec: 10) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal128, scale));
     // uint64(max_prec: 20) -> decimal128(max_prec: 38)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal128, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal128, scale));
 
     // int8(max_prec: 3) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, prec_decimal256, scale));
     // int16(max_prec: 5) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt16>(int16_ptr, prec_decimal256, scale));
     // int32(max_prec: 10) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt32>(int32_ptr, prec_decimal256, scale));
     // int64(max_prec: 20) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, prec_decimal256, scale));
 
     // uint8(max_prec: 3) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt8>(uint8_ptr, prec_decimal256, scale));
     // uint16(max_prec: 5) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt16>(uint16_ptr, prec_decimal256, scale));
     // uint32(max_prec: 10) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt32>(uint32_ptr, prec_decimal256, scale));
     // uint64(max_prec: 20) -> decimal256(max_prec: 65)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal256, scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeUInt64>(uint64_ptr, prec_decimal256, scale));
 }
 
 TEST_F(TestTidbConversion, skipCheckOverflowDecimalToDecimal)
@@ -1621,24 +1698,24 @@ TEST_F(TestTidbConversion, skipCheckOverflowDecimalToDecimal)
     DataTypePtr decimal32_ptr_8_3 = createDecimal(8, 3);
     DataTypePtr decimal32_ptr_8_2 = createDecimal(8, 2);
 
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 8, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_3, 8, 2));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 7, 5));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 8, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_3, 8, 2));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 7, 5));
 
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 9, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 9, 1));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 9, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_8_2, 9, 1));
 
     DataTypePtr decimal32_ptr_6_4 = createDecimal(6, 4);
     // decimal(6, 4) -> decimal(5, 3)
     // because select cast(99.9999 as decimal(5, 3)); -> 100.000 is greater than 99.999.
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 5, 3));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 5, 3));
     // decimal(6, 4) -> decimal(7, 5)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 7, 5));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 7, 5));
 
     // decimal(6, 4) -> decimal(6, 5)
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 6, 5));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 6, 5));
     // decimal(6, 4) -> decimal(8, 5)
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 8, 5));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeDecimal32>(decimal32_ptr_6_4, 8, 5));
 }
 
 TEST_F(TestTidbConversion, skipCheckOverflowEnumToDecimal)
@@ -1653,15 +1730,15 @@ TEST_F(TestTidbConversion, skipCheckOverflowEnumToDecimal)
     enum16_values.push_back({"b1", 2000});
     DataTypePtr enum16_ptr = std::make_shared<DataTypeEnum16>(enum16_values);
 
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 3, 0));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 4, 1));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 2, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 4, 2));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 3, 0));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 4, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 2, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum8>(enum8_ptr, 4, 2));
 
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 5, 0));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 6, 1));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 4, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 6, 2));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 5, 0));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 6, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 4, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeEnum16>(enum16_ptr, 6, 2));
 }
 
 TEST_F(TestTidbConversion, skipCheckOverflowMyDateTimeToDeciaml)
@@ -1670,18 +1747,18 @@ TEST_F(TestTidbConversion, skipCheckOverflowMyDateTimeToDeciaml)
     DataTypePtr datetime_ptr_fsp_5 = std::make_shared<DataTypeMyDateTime>(5);
 
     // rule for no fsp: 14 + to_scale <= to_prec.
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 5, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 18, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 17, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 18, 4));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 14, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 14, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 5, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 18, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 17, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 18, 4));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 14, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_no_fsp, 14, 1));
 
     // rule for fsp: 20 + scale_diff <= to_prec.
     // 20 + (3 - 6 + 1) = 18
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 19, 3));
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 18, 3));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 17, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 19, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 18, 3));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDateTime>(datetime_ptr_fsp_5, 17, 3));
 }
 
 TEST_F(TestTidbConversion, skipCheckOverflowMyDateToDeciaml)
@@ -1689,30 +1766,30 @@ TEST_F(TestTidbConversion, skipCheckOverflowMyDateToDeciaml)
     DataTypePtr date_ptr = std::make_shared<DataTypeMyDate>();
 
     // rule: 8 + to_scale <= to_prec.
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 11, 3));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 11, 4));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 10, 3));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 11, 3));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 11, 4));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDate>(date_ptr, 10, 3));
 }
 
 TEST_F(TestTidbConversion, skipCheckOverflowOtherToDecimal)
 {
     // float and string not support skip overflow check.
     DataTypePtr string_ptr = std::make_shared<DataTypeString>();
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeString>(string_ptr, 1, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeString>(string_ptr, 60, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeString>(string_ptr, 1, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeString>(string_ptr, 60, 1));
 
     DataTypePtr float32_ptr = std::make_shared<DataTypeFloat32>();
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeFloat32>(float32_ptr, 1, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeFloat32>(float32_ptr, 60, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeFloat32>(float32_ptr, 1, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeFloat32>(float32_ptr, 60, 1));
 
     DataTypePtr float64_ptr = std::make_shared<DataTypeFloat64>();
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeFloat64>(float64_ptr, 1, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeFloat64>(float64_ptr, 60, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeFloat64>(float64_ptr, 1, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeFloat64>(float64_ptr, 60, 1));
 
     // cast duration to decimal is not supported to push down to tiflash for now.
     DataTypePtr duration_ptr = std::make_shared<DataTypeMyDuration>();
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDuration>(duration_ptr, 1, 0));
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeMyDuration>(duration_ptr, 60, 1));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDuration>(duration_ptr, 1, 0));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeMyDuration>(duration_ptr, 60, 1));
 }
 
 // check if template argument of CastInternalType is correct or not.
@@ -1724,7 +1801,7 @@ try
     ScaleType to_scale = 3;
     DataTypePtr int8_ptr = std::make_shared<DataTypeInt8>();
     // from_prec(3) + to_scale(3) <= Decimal32::prec(9), so we **CAN** skip check overflow.
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, to_prec, to_scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, to_prec, to_scale));
 
     // from_prec(3) + to_scale(3) <= Int32::real_prec(10) - 1, so CastInternalType should be **Int32**.
     ASSERT_COLUMN_EQ(
@@ -1739,13 +1816,13 @@ try
     to_prec = 9;
     to_scale = 7;
     // from_prec(3) + to_scale(7) > Decimal32::prec(9), so we **CANNOT** skip check overflow.
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, to_prec, to_scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt8>(int8_ptr, to_prec, to_scale));
 
     // from_prec(3) + to_scale(7) > Int32::real_prec(10) - 1, so CastInternalType should be **Int64**.
-    DAGContext * dag_context = context.getDAGContext();
-    UInt64 ori_flags = dag_context->getFlags();
-    dag_context->addFlag(TiDBSQLFlags::OVERFLOW_AS_WARNING);
-    dag_context->clearWarnings();
+    auto & dag_context = getDAGContext();
+    UInt64 ori_flags = dag_context.getFlags();
+    dag_context.addFlag(TiDBSQLFlags::OVERFLOW_AS_WARNING);
+    dag_context.clearWarnings();
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(to_prec, to_scale),
@@ -1753,14 +1830,14 @@ try
         executeFunction(func_name,
                         {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
                          createCastTypeConstColumn("Nullable(Decimal(9,7))")}));
-    dag_context->setFlags(ori_flags);
+    dag_context.setFlags(ori_flags);
 
     // case3: cast(bigint as decimal(40, 20))
     // from_prec(19) + to_scale(20) <= Decimal256::prec(40), so we **CAN** skip check overflow.
     to_prec = 40;
     to_scale = 20;
     DataTypePtr int64_ptr = std::make_shared<DataTypeInt64>();
-    ASSERT_TRUE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, to_prec, to_scale));
+    ASSERT_TRUE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, to_prec, to_scale));
 
     // from_prec(19) + to_scale(20) > Int128::real_prec(39) - 1, so CastInternalType should be **Int256**.
     ASSERT_COLUMN_EQ(
@@ -1775,7 +1852,7 @@ try
     // from_prec(19) + to_scale(20) > Decimal256::prec(38), so we **CANNOT** skip check overflow.
     to_prec = 38;
     to_scale = 20;
-    ASSERT_FALSE(FunctionTiDBCast::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, to_prec, to_scale));
+    ASSERT_FALSE(FunctionTiDBCast<>::canSkipCheckOverflowForDecimal<DataTypeInt64>(int64_ptr, to_prec, to_scale));
 
     // from_prec(19) + to_scale(20) > Int128::real_prec(39) - 1, so CastInternalType should be **Int256**.
     ASSERT_COLUMN_EQ(
@@ -1816,6 +1893,178 @@ try
     {
         ASSERT_EQ(except_packed, nullable_result.column.get()->get64(i));
     }
+}
+CATCH
+
+TEST_F(TestTidbConversion, castTimeAsDuration)
+try
+{
+    const auto to_type_1 = std::make_shared<DataTypeMyDuration>(5); // from_fsp <  to_fsp
+    const auto to_type_2 = std::make_shared<DataTypeMyDuration>(4); // from_fsp == to_fsp
+    const auto to_type_3 = std::make_shared<DataTypeMyDuration>(2); // from_fsp >  to_fsp
+    // cast datetime to duration
+    const auto datetime_type_ptr = std::make_shared<DataTypeMyDateTime>(4);
+    MyDateTime date(2021, 10, 26, 0, 0, 0, 0);
+    MyDateTime datetime(2021, 10, 26, 11, 11, 11, 0);
+    MyDateTime datetime_frac1(2021, 10, 26, 11, 11, 11, 111100);
+    MyDateTime datetime_frac2(2021, 10, 26, 11, 11, 11, 123500);
+    MyDateTime datetime_frac3(2021, 10, 26, 11, 11, 11, 999900);
+
+    auto col_datetime = ColumnUInt64::create();
+    col_datetime->insert(Field(date.toPackedUInt()));
+    col_datetime->insert(Field(datetime.toPackedUInt()));
+    col_datetime->insert(Field(datetime_frac1.toPackedUInt()));
+    col_datetime->insert(Field(datetime_frac2.toPackedUInt()));
+    col_datetime->insert(Field(datetime_frac3.toPackedUInt()));
+
+    auto ctn_datetime = ColumnWithTypeAndName(std::move(col_datetime), datetime_type_ptr, "datetime");
+    ColumnWithTypeAndName datetime_output1(
+        createColumn<DataTypeMyDuration::FieldType>({(0 * 3600 + 0 * 60 + 0) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 111100000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 999900000L})
+            .column,
+        to_type_1,
+        "datetime_output1");
+    ColumnWithTypeAndName datetime_output2(
+        createColumn<DataTypeMyDuration::FieldType>({(0 * 3600 + 0 * 60 + 0) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 111100000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 999900000L})
+            .column,
+        to_type_2,
+        "datetime_output2");
+
+    ColumnWithTypeAndName datetime_output3(
+        createColumn<DataTypeMyDuration::FieldType>({(0 * 3600 + 0 * 60 + 0) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 000000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 110000000L,
+                                                     (11 * 3600 + 11 * 60 + 11) * 1000000000L + 120000000L,
+                                                     (11 * 3600 + 11 * 60 + 12) * 1000000000L + 000000000L})
+            .column,
+        to_type_3,
+        "datetime_output3");
+
+
+    ASSERT_COLUMN_EQ(datetime_output1, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_1->getName())}));
+    ASSERT_COLUMN_EQ(datetime_output2, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_2->getName())}));
+    ASSERT_COLUMN_EQ(datetime_output3, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_3->getName())}));
+
+
+    // Test Const
+    ColumnWithTypeAndName input_const(createConstColumn<DataTypeMyDateTime::FieldType>(1, datetime_frac2.toPackedUInt()).column, datetime_type_ptr, "input_const");
+    ColumnWithTypeAndName output1_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L).column, to_type_1, "output1_const");
+    ColumnWithTypeAndName output2_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L).column, to_type_2, "output2_const");
+    ColumnWithTypeAndName output3_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 120000000L).column, to_type_3, "output3_const");
+
+    ASSERT_COLUMN_EQ(output1_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_1->getName())}));
+    ASSERT_COLUMN_EQ(output2_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_2->getName())}));
+    ASSERT_COLUMN_EQ(output3_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_3->getName())}));
+
+    // Test Nullable
+    ColumnWithTypeAndName input_nullable(
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({datetime_frac1.toPackedUInt(),
+                                                               {},
+                                                               datetime_frac2.toPackedUInt(),
+                                                               {},
+                                                               datetime_frac3.toPackedUInt()})
+            .column,
+        makeNullable(datetime_type_ptr),
+        "input_nullable");
+    ColumnWithTypeAndName output1_nullable(
+        createColumn<Nullable<DataTypeMyDuration::FieldType>>({(11 * 3600 + 11 * 60 + 11) * 1000000000L + 111100000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 11) * 1000000000L + 999900000L})
+            .column,
+        makeNullable(to_type_1),
+        "output1_output");
+    ColumnWithTypeAndName output2_nullable(
+        createColumn<Nullable<DataTypeMyDuration::FieldType>>({(11 * 3600 + 11 * 60 + 11) * 1000000000L + 111100000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 11) * 1000000000L + 999900000L})
+            .column,
+        makeNullable(to_type_2),
+        "output2_output");
+    ColumnWithTypeAndName output3_nullable(
+        createColumn<Nullable<DataTypeMyDuration::FieldType>>({(11 * 3600 + 11 * 60 + 11) * 1000000000L + 110000000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 11) * 1000000000L + 120000000L,
+                                                               {},
+                                                               (11 * 3600 + 11 * 60 + 12) * 1000000000L + 000000000L})
+            .column,
+        makeNullable(to_type_3),
+        "output3_output");
+
+    ASSERT_COLUMN_EQ(output1_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_1)->getName())}));
+    ASSERT_COLUMN_EQ(output2_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_2)->getName())}));
+    ASSERT_COLUMN_EQ(output3_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_3)->getName())}));
+}
+CATCH
+
+// for https://github.com/pingcap/tics/issues/3595
+TEST_F(TestTidbConversion, castStringAsDateTime3595)
+try
+{
+    auto & dag_context = getDAGContext();
+    dag_context.addFlag(TiDBSQLFlags::TRUNCATE_AS_WARNING);
+    auto to_datetime_column = createConstColumn<String>(1, "Nullable(MyDateTime(6))");
+    ColumnWithTypeAndName expect_datetime_column(
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({{}}).column,
+        makeNullable(std::make_shared<DataTypeMyDateTime>(6)),
+        "result");
+    auto to_date_column = createConstColumn<String>(1, "Nullable(MyDate)");
+    ColumnWithTypeAndName expect_date_column(
+        createColumn<Nullable<DataTypeMyDate::FieldType>>({{}}).column,
+        makeNullable(std::make_shared<DataTypeMyDate>()),
+        "result");
+
+    auto from_column = createColumn<String>({"08:45:16"});
+    auto vector_result = executeFunction("tidb_cast", {from_column, to_datetime_column});
+    for (size_t i = 0; i < from_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_datetime_column, vector_result);
+    }
+    vector_result = executeFunction("tidb_cast", {from_column, to_date_column});
+    for (size_t i = 0; i < from_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_date_column, vector_result);
+    }
+
+    auto from_decimal_column = createColumn<Decimal32>(std::make_tuple(9, 3), {"102310.023"});
+    vector_result = executeFunction("tidb_cast", {from_decimal_column, to_datetime_column});
+    for (size_t i = 0; i < from_decimal_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_datetime_column, vector_result);
+    }
+    vector_result = executeFunction("tidb_cast", {from_decimal_column, to_date_column});
+    for (size_t i = 0; i < from_decimal_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_date_column, vector_result);
+    }
+
+    auto from_float_column = createColumn<DataTypeFloat64::FieldType>({102310.023});
+    vector_result = executeFunction("tidb_cast", {from_float_column, to_datetime_column});
+    for (size_t i = 0; i < from_float_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_datetime_column, vector_result);
+    }
+    vector_result = executeFunction("tidb_cast", {from_float_column, to_date_column});
+    for (size_t i = 0; i < from_float_column.column->size(); i++)
+    {
+        ASSERT_COLUMN_EQ(expect_date_column, vector_result);
+    }
+
+    ASSERT_COLUMN_EQ(
+        createDateTimeColumn({{{2012, 0, 0, 0, 0, 0, 0}}}, 6),
+        executeFunction(func_name,
+                        {createColumn<Nullable<String>>({"20120000"}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
 }
 CATCH
 

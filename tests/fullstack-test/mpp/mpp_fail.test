@@ -16,84 +16,104 @@
 => DBGInvoke __init_fail_point()
 
 mysql> drop table if exists test.t
+mysql> drop table if exists test.t1
 mysql> create table test.t (id int, value varchar(64))
 mysql> insert into test.t values(1,'a'),(2,'b'),(3,'c')
+mysql> create table test.t1 (id int, value varchar(64))
+mysql> insert into test.t1 values(4,'d')
 mysql> alter table test.t set tiflash replica 1
+mysql> alter table test.t1 set tiflash replica 1
 
 func> wait_table test t
+func> wait_table test t1
+mysql> analyze table test.t
+mysql> analyze table test.t1
 
 
 # Data.
+=> DBGInvoke wait_until_no_temp_active_threads_in_dynamic_thread_pool(5)
+┌─wait_until_no_temp_active_threads_in_dynamic_thread_pool(5)─┐
+│ 0                                                           │
+└─────────────────────────────────────────────────────────────┘
+## exception during mpp hash probe
+## mysql> desc format='brief' select * from t1 left join t t2 on t1.id = t2.id;
+## +-----------------------------------+---------+--------------+---------------+----------------------------------------------------------------------------------------------+
+## | id                                | estRows | task         | access object | operator info                                                                                |
+## +-----------------------------------+---------+--------------+---------------+----------------------------------------------------------------------------------------------+
+## | TableReader                       | 1.00    | root         |               | data:ExchangeSender                                                                          |
+## | └─ExchangeSender                  | 1.00    | mpp[tiflash] |               | ExchangeType: PassThrough                                                                    |
+## |   └─HashJoin                      | 1.00    | mpp[tiflash] |               | left outer join, equal:[eq(test.t1.id, test.t.id)], stream_count: 8                          |
+## |     ├─ExchangeReceiver(Build)     | 1.00    | mpp[tiflash] |               | stream_count: 8                                                                              |
+## |     │ └─ExchangeSender            | 1.00    | mpp[tiflash] |               | ExchangeType: HashPartition, Hash Cols: [name: test.t1.id, collate: binary], stream_count: 8 |
+## |     │   └─TableFullScan           | 1.00    | mpp[tiflash] | table:t1      | keep order:false                                                                             |
+## |     └─ExchangeReceiver(Probe)     | 5.99    | mpp[tiflash] |               |                                                                                              |
+## |       └─ExchangeSender            | 5.99    | mpp[tiflash] |               | ExchangeType: HashPartition, Hash Cols: [name: test.t.id, collate: binary]                   |
+## |         └─Selection               | 5.99    | mpp[tiflash] |               | not(isnull(test.t.id))                                                                       |
+## |           └─TableFullScan         | 6.00    | mpp[tiflash] | table:t2      | keep order:false, stats:pseudo                                                               |
+## +-----------------------------------+---------+--------------+---------------+----------------------------------------------------------------------------------------------+
+=> DBGInvoke __enable_fail_point(exception_mpp_hash_probe)
+mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; set @@tidb_broadcast_join_threshold_count=0; set @@tidb_broadcast_join_threshold_size=0; select * from t1 left join t t2 on t1.id = t2.id;
+{#REGEXP}.*Fail point FailPoints::exception_mpp_hash_probe is triggered.*
+=> DBGInvoke __disable_fail_point(exception_mpp_hash_probe)
+## note: this test only works if dynamic thread pool is enabled, the result may be false negative if dynamic thread pool is not enabled, it works now because dynamic thread pool is enabled by default
+=> DBGInvoke wait_until_no_temp_active_threads_in_dynamic_thread_pool(5)
+┌─wait_until_no_temp_active_threads_in_dynamic_thread_pool(5)─┐
+│ 0                                                           │
+└─────────────────────────────────────────────────────────────┘
 
 ## exception before mpp register non root mpp task
 => DBGInvoke __enable_fail_point(exception_before_mpp_register_non_root_mpp_task)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_register_non_root_mpp_task is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_register_non_root_mpp_task is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_register_non_root_mpp_task)
 
 ## exception before mpp register root mpp task
 => DBGInvoke __enable_fail_point(exception_before_mpp_register_root_mpp_task)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_register_root_mpp_task is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_register_root_mpp_task is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_register_root_mpp_task)
 
 ## exception before mpp register tunnel for non root mpp task
 => DBGInvoke __enable_fail_point(exception_before_mpp_register_tunnel_for_non_root_mpp_task)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_register_tunnel_for_non_root_mpp_task is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_register_tunnel_for_non_root_mpp_task is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_register_tunnel_for_non_root_mpp_task)
 
 ## exception before mpp register tunnel for root mpp task
 => DBGInvoke __enable_fail_point(exception_before_mpp_register_tunnel_for_root_mpp_task)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_register_tunnel_for_root_mpp_task is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_register_tunnel_for_root_mpp_task is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_register_tunnel_for_root_mpp_task)
 
 ## exception during mpp register tunnel for non root mpp task
 => DBGInvoke __enable_fail_point(exception_during_mpp_register_tunnel_for_non_root_mpp_task)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_during_mpp_register_tunnel_for_non_root_mpp_task is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_during_mpp_register_tunnel_for_non_root_mpp_task is triggered.*
 => DBGInvoke __disable_fail_point(exception_during_mpp_register_tunnel_for_non_root_mpp_task)
 
 ## exception before mpp run non root task
 => DBGInvoke __enable_fail_point(exception_before_mpp_non_root_task_run)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_non_root_task_run is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_non_root_task_run is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_non_root_task_run)
 
 ## exception before mpp run root task
 => DBGInvoke __enable_fail_point(exception_before_mpp_root_task_run)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: DB::Exception: Fail point FailPoints::exception_before_mpp_root_task_run is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_before_mpp_root_task_run is triggered.*
 => DBGInvoke __disable_fail_point(exception_before_mpp_root_task_run)
 
 ## exception during mpp run non root task
 => DBGInvoke __enable_fail_point(exception_during_mpp_non_root_task_run)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Exchange receiver meet error : DB::Exception: Fail point FailPoints::exception_during_mpp_non_root_task_run is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_during_mpp_non_root_task_run is triggered.*
 => DBGInvoke __disable_fail_point(exception_during_mpp_non_root_task_run)
 
 ## exception during mpp run root task
 => DBGInvoke __enable_fail_point(exception_during_mpp_root_task_run)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Fail point FailPoints::exception_during_mpp_root_task_run is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_during_mpp_root_task_run is triggered.*
 => DBGInvoke __disable_fail_point(exception_during_mpp_root_task_run)
-
-## exception during mpp write err to tunnel
-=> DBGInvoke __enable_fail_point(exception_during_mpp_non_root_task_run)
-=> DBGInvoke __enable_fail_point(exception_during_mpp_write_err_to_tunnel)
-mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Exchange receiver meet error : Failed to write error msg to tunnel
-=> DBGInvoke __disable_fail_point(exception_during_mpp_non_root_task_run)
-=> DBGInvoke __disable_fail_point(exception_during_mpp_write_err_to_tunnel)
-
-## exception during mpp write close tunnel
-=> DBGInvoke __enable_fail_point(exception_during_mpp_non_root_task_run)
-=> DBGInvoke __enable_fail_point(exception_during_mpp_close_tunnel)
-mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; select count(value), id from t group by id;
-ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Exchange receiver meet error : DB::Exception: Fail point FailPoints::exception_during_mpp_non_root_task_run is triggered.
-=> DBGInvoke __disable_fail_point(exception_during_mpp_non_root_task_run)
-=> DBGInvoke __disable_fail_point(exception_during_mpp_close_tunnel)
 
 ## exception during mpp hash build
 ## desc format='brief' select t1.id from test.t t1 join test.t t2 on t1.id = t2.id and t1.id <2 join (select id from test.t group by id) t3 on t2.id=t3.id;
@@ -124,8 +144,9 @@ ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Exchang
 ## ensure build1, build2-probe1, probe2 in the CreatingSets, test the bug where build1 throw exception but not change the build state, thus block the build2-probe1, at last this query hangs.
 => DBGInvoke __enable_fail_point(exception_mpp_hash_build)
 mysql> use test; set @@tidb_isolation_read_engines='tiflash'; set @@tidb_allow_mpp=1; set @@tidb_broadcast_join_threshold_count=0; set @@tidb_broadcast_join_threshold_size=0; select t1.id from test.t t1 join test.t t2 on t1.id = t2.id and t1.id <2 join (select id from test.t group by id) t3 on t2.id=t3.id;
-ERROR 1105 (HY000) at line 1: other error for mpp stream: DB::Exception: Fail point FailPoints::exception_mpp_hash_build is triggered.
+{#REGEXP}.*Fail point FailPoints::exception_mpp_hash_build is triggered.*
 => DBGInvoke __disable_fail_point(exception_mpp_hash_build)
 
 # Clean up.
-mysql> drop table if exists test.t
+# mysql> drop table if exists test.t
+# mysql> drop table if exists test.t1

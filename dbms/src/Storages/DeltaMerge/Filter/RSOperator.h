@@ -28,7 +28,7 @@ using RSOperatorPtr = std::shared_ptr<RSOperator>;
 using RSOperators = std::vector<RSOperatorPtr>;
 using Fields = std::vector<Field>;
 
-inline static const RSOperatorPtr EMPTY_FILTER{};
+inline static const RSOperatorPtr EMPTY_RS_OPERATOR{};
 
 struct RSCheckParam
 {
@@ -142,6 +142,8 @@ RSOperatorPtr createNotIn(const Attr & attr, const Fields & values);
 //
 RSOperatorPtr createLike(const Attr & attr, const Field & value);
 RSOperatorPtr createNotLike(const Attr & attr, const Field & values);
+//
+RSOperatorPtr createIsNull(const Attr & attr);
 //
 RSOperatorPtr createUnsupported(const String & content, const String & reason, bool is_not);
 

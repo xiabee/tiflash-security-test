@@ -22,18 +22,14 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include <Common/CPUAffinityManager.h>
 #include <Common/Config/TOMLConfiguration.h>
 #include <Common/Logger.h>
 #include <Poco/Util/LayeredConfiguration.h>
+#include <boost_wrapper/string.h>
 #include <common/logger_useful.h>
 #include <gtest/gtest.h>
 #include <unistd.h>
-
-#include <boost/algorithm/string.hpp>
-
-#define private public
-#include <Common/CPUAffinityManager.h>
-#undef private
 
 namespace DB
 {
@@ -49,7 +45,7 @@ static auto loadConfigFromString(const std::string & s)
     return config;
 }
 
-TEST(CPUAffinityManager_test, readConfig)
+TEST(CPUAffinityManagerTest, readConfig)
 {
     std::vector<std::string> vs = {
         R"(
@@ -78,7 +74,7 @@ query_cpu_percent=77
 }
 
 #ifdef __linux__
-TEST(CPUAffinityManager_test, CPUAffinityManager)
+TEST(CPUAffinityManagerTest, CPUAffinityManager)
 {
     auto & cpu_affinity = CPUAffinityManager::getInstance();
 
@@ -92,10 +88,10 @@ TEST(CPUAffinityManager_test, CPUAffinityManager)
     auto cpu_cores = cpu_affinity.cpuSetToVec(cpu_set);
     if (n_cpu != cpu_cores.size())
     {
-        LOG_FMT_INFO(Logger::get("CPUAffinityManager_test"), "n_cpu = {}, cpu_cores = {}, CPU number and CPU cores not match, don't not check CPUAffinityManager", n_cpu, cpu_cores);
+        LOG_INFO(Logger::get(), "n_cpu = {}, cpu_cores = {}, CPU number and CPU cores not match, don't not check CPUAffinityManager", n_cpu, cpu_cores);
         return;
     }
-    LOG_FMT_DEBUG(Logger::get("CPUAffinityManager_test"), "n_cpu = {}, cpu_cores = {}", n_cpu, cpu_cores);
+    LOG_DEBUG(Logger::get(), "n_cpu = {}, cpu_cores = {}", n_cpu, cpu_cores);
 
     cpu_affinity.bindSelfQueryThread();
     cpu_set_t cpu_set0;

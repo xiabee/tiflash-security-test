@@ -14,12 +14,10 @@
 
 #pragma once
 
+#include <Common/TiFlashSecurity.h>
+#include <Interpreters/Context_fwd.h>
 #include <Poco/Logger.h>
 #include <Poco/Util/LayeredConfiguration.h>
-
-#include <Common/TiFlashSecurity.h>
-#include <Interpreters/Context.h>
-
 
 namespace DB
 {
@@ -36,12 +34,10 @@ public:
     /// Returns global application's context.
     virtual Context & context() const = 0;
 
-    virtual const TiFlashSecurityConfig & securityConfig() const = 0;
-
     /// Returns true if shutdown signaled.
     virtual bool isCancelled() const = 0;
 
     virtual ~IServer() {}
 };
 
-}
+} // namespace DB

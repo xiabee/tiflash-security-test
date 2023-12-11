@@ -18,11 +18,13 @@
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/PathCapacityMetrics.h>
+#include <Storages/S3/S3Common.h>
 #include <Storages/Transaction/ProxyFFI.h>
 #include <common/logger_useful.h>
 #include <sys/statvfs.h>
 
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,7 @@ namespace CurrentMetrics
 extern const Metric StoreSizeCapacity;
 extern const Metric StoreSizeAvailable;
 extern const Metric StoreSizeUsed;
+extern const Metric StoreSizeUsedRemote;
 } // namespace CurrentMetrics
 
 
@@ -44,11 +47,13 @@ inline size_t safeGetQuota(const std::vector<size_t> & quotas, size_t idx)
 PathCapacityMetrics::PathCapacityMetrics(
     const size_t capacity_quota_, // will be ignored if `main_capacity_quota` is not empty
     const Strings & main_paths_,
-    const std::vector<size_t> main_capacity_quota_,
+    const std::vector<size_t> & main_capacity_quota_,
     const Strings & latest_paths_,
-    const std::vector<size_t> latest_capacity_quota_)
+    const std::vector<size_t> & latest_capacity_quota_,
+    const Strings & remote_cache_paths,
+    const std::vector<size_t> & remote_cache_capacity_quota_)
     : capacity_quota(capacity_quota_)
-    , log(&Poco::Logger::get("PathCapacityMetrics"))
+    , log(Logger::get())
 {
     if (!main_capacity_quota_.empty())
     {
@@ -78,10 +83,14 @@ PathCapacityMetrics::PathCapacityMetrics(
             all_paths[latest_paths_[i]] = safeGetQuota(latest_capacity_quota_, i);
         }
     }
+    for (size_t i = 0; i < remote_cache_paths.size(); ++i)
+    {
+        all_paths[remote_cache_paths[i]] = safeGetQuota(remote_cache_capacity_quota_, i);
+    }
 
     for (auto && [path, quota] : all_paths)
     {
-        LOG_FMT_INFO(log, "Init capacity [path={}] [capacity={}]", path, formatReadableSizeWithBinarySuffix(quota));
+        LOG_INFO(log, "Init capacity [path={}] [capacity={}]", path, formatReadableSizeWithBinarySuffix(quota));
         path_infos.emplace_back(CapacityInfo{path, quota});
     }
 }
@@ -91,7 +100,7 @@ void PathCapacityMetrics::addUsedSize(std::string_view file_path, size_t used_by
     ssize_t path_idx = locatePath(file_path);
     if (path_idx == INVALID_INDEX)
     {
-        LOG_FMT_ERROR(log, "Can not locate path in addUsedSize. File: {}", file_path);
+        LOG_ERROR(log, "Can not locate path in addUsedSize. File: {}", file_path);
         return;
     }
 
@@ -104,12 +113,58 @@ void PathCapacityMetrics::freeUsedSize(std::string_view file_path, size_t used_b
     ssize_t path_idx = locatePath(file_path);
     if (path_idx == INVALID_INDEX)
     {
-        LOG_FMT_ERROR(log, "Can not locate path in removeUsedSize. File: {}", file_path);
+        LOG_ERROR(log, "Can not locate path in removeUsedSize. File: {}", file_path);
         return;
     }
 
     // Now we expect size of path_infos not change, don't acquire heavy lock on `path_infos` now.
     path_infos[path_idx].used_bytes -= used_bytes;
+}
+
+void PathCapacityMetrics::addRemoteUsedSize(KeyspaceID keyspace_id, size_t used_bytes)
+{
+    if (used_bytes == 0)
+        return;
+    std::unique_lock<std::mutex> lock(mutex);
+    auto iter = keyspace_id_to_used_bytes.emplace(keyspace_id, 0);
+    iter.first->second += used_bytes;
+}
+
+void PathCapacityMetrics::freeRemoteUsedSize(KeyspaceID keyspace_id, size_t used_bytes)
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    auto iter = keyspace_id_to_used_bytes.find(keyspace_id);
+    RUNTIME_CHECK(iter != keyspace_id_to_used_bytes.end(), keyspace_id);
+    iter->second -= used_bytes;
+    RUNTIME_CHECK_MSG(iter->second >= 0, "Remote size {} is invalid after remove {} bytes for keyspace {}", iter->second, used_bytes, keyspace_id);
+    if (iter->second == 0)
+        keyspace_id_to_used_bytes.erase(iter);
+}
+
+std::unordered_map<KeyspaceID, UInt64> PathCapacityMetrics::getKeyspaceUsedSizes()
+{
+    size_t local_toal_size = 0;
+    for (auto & path_info : path_infos)
+    {
+        local_toal_size += path_info.used_bytes;
+    }
+
+    std::unordered_map<KeyspaceID, UInt64> keyspace_id_to_total_size;
+
+    std::unique_lock<std::mutex> lock(mutex);
+
+    size_t remote_total_size = 0;
+    for (auto & [keyspace_id, size] : keyspace_id_to_used_bytes)
+    {
+        remote_total_size += size;
+    }
+
+    for (auto & [keyspace_id, size] : keyspace_id_to_used_bytes)
+    {
+        // cannot get accurate local used size for each keyspace, so we use a simple way to estimate it.
+        keyspace_id_to_total_size.emplace(keyspace_id, size + static_cast<size_t>(size * 1.0 / remote_total_size * local_toal_size));
+    }
+    return keyspace_id_to_total_size;
 }
 
 std::map<FSID, DiskCapacity> PathCapacityMetrics::getDiskStats()
@@ -137,7 +192,7 @@ std::map<FSID, DiskCapacity> PathCapacityMetrics::getDiskStats()
     return disk_stats_map;
 }
 
-FsStats PathCapacityMetrics::getFsStats()
+FsStats PathCapacityMetrics::getFsStats(bool finalize_capacity)
 {
     // Now we assume the size of `path_infos` will not change, don't acquire heavy lock on `path_infos`.
     FsStats total_stat{};
@@ -180,25 +235,40 @@ FsStats PathCapacityMetrics::getFsStats()
         total_stat.capacity_size = capacity_quota;
         total_stat.avail_size = std::min(total_stat.avail_size, total_stat.capacity_size - total_stat.used_size);
     }
-
     // PD get weird if used_size == 0, make it 1 byte at least
     total_stat.used_size = std::max<UInt64>(1, total_stat.used_size);
 
     const double avail_rate = 1.0 * total_stat.avail_size / total_stat.capacity_size;
     // Default threshold "schedule.low-space-ratio" in PD is 0.8, log warning message if avail ratio is low.
     if (avail_rate <= 0.2)
-        LOG_FMT_WARNING(
+        LOG_WARNING(
             log,
             "Available space is only {:.2f}% of capacity size. Avail size: {}, used size: {}, capacity size: {}",
             avail_rate * 100.0,
             formatReadableSizeWithBinarySuffix(total_stat.avail_size),
             formatReadableSizeWithBinarySuffix(total_stat.used_size),
             formatReadableSizeWithBinarySuffix(total_stat.capacity_size));
-    total_stat.ok = 1;
 
+    // Just report local disk capacity and available size is enough
     CurrentMetrics::set(CurrentMetrics::StoreSizeCapacity, total_stat.capacity_size);
     CurrentMetrics::set(CurrentMetrics::StoreSizeAvailable, total_stat.avail_size);
     CurrentMetrics::set(CurrentMetrics::StoreSizeUsed, total_stat.used_size);
+
+    size_t remote_used_size = 0;
+    if (finalize_capacity && S3::ClientFactory::instance().isEnabled())
+    {
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            for (const auto & [keyspace_id, used_bytes] : keyspace_id_to_used_bytes)
+            {
+                UNUSED(keyspace_id);
+                remote_used_size += used_bytes;
+            }
+        }
+    }
+    CurrentMetrics::set(CurrentMetrics::StoreSizeUsedRemote, remote_used_size);
+
+    total_stat.ok = 1;
 
     return total_stat;
 }
@@ -208,7 +278,7 @@ std::tuple<FsStats, struct statvfs> PathCapacityMetrics::getFsStatsOfPath(std::s
     ssize_t path_idx = locatePath(file_path);
     if (unlikely(path_idx == INVALID_INDEX))
     {
-        LOG_FMT_ERROR(log, "Can not locate path in getFsStatsOfPath. File: {}", file_path);
+        LOG_ERROR(log, "Can not locate path in getFsStatsOfPath. File: {}", file_path);
         return {FsStats{}, {}};
     }
 
@@ -248,18 +318,20 @@ ssize_t PathCapacityMetrics::locatePath(std::string_view file_path) const
     return max_match_index;
 }
 
-std::tuple<FsStats, struct statvfs> PathCapacityMetrics::CapacityInfo::getStats(Poco::Logger * log) const
+std::tuple<FsStats, struct statvfs> PathCapacityMetrics::CapacityInfo::getStats(const LoggerPtr & log) const
 {
     FsStats res{};
     /// Get capacity, used, available size for one path.
     /// Similar to `handle_store_heartbeat` in TiKV release-4.0 branch
     /// https://github.com/tikv/tikv/blob/f14e8288f3/components/raftstore/src/store/worker/pd.rs#L593
-    struct statvfs vfs;
+    struct statvfs vfs
+    {
+    };
     if (int code = statvfs(path.data(), &vfs); code != 0)
     {
         if (log)
         {
-            LOG_FMT_ERROR(log, "Could not calculate available disk space (statvfs) of path: {}, errno: {}", path, errno);
+            LOG_ERROR(log, "Could not calculate available disk space (statvfs) of path: {}, errno: {}", path, errno);
         }
         return {};
     }
@@ -281,7 +353,7 @@ std::tuple<FsStats, struct statvfs> PathCapacityMetrics::CapacityInfo::getStats(
     if (capacity > res.used_size)
         avail = capacity - res.used_size;
     else if (log)
-        LOG_FMT_WARNING(
+        LOG_WARNING(
             log,
             "No available space for path: {}, capacity: {}, used: {}",
             path,

@@ -15,21 +15,24 @@
 #pragma once
 
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
+#include <Storages/DeltaMerge/Remote/Serializer_fwd.h>
 
 namespace DB
 {
 namespace DM
 {
 class ColumnFileInMemory;
-using ColumnInMemoryFilePtr = std::shared_ptr<ColumnFileInMemory>;
+using ColumnFileInMemoryPtr = std::shared_ptr<ColumnFileInMemory>;
 
 /// A column file which is only resides in memory
 class ColumnFileInMemory : public ColumnFile
 {
     friend class ColumnFileInMemoryReader;
+    friend struct Remote::Serializer;
 
 private:
-    BlockPtr schema;
+    ColumnFileSchemaPtr schema;
 
     UInt64 rows = 0;
     UInt64 bytes = 0;
@@ -39,27 +42,22 @@ private:
 
     // The cache data in memory.
     CachePtr cache;
-    // Used to map column id to column instance in a Block.
-    ColIdToOffset colid_to_offset;
 
 private:
     void fillColumns(const ColumnDefines & col_defs, size_t col_count, Columns & result) const;
 
     const DataTypePtr & getDataType(ColId column_id) const
     {
-        // Note that column_id must exist
-        auto index = colid_to_offset.at(column_id);
-        return schema->getByPosition(index).type;
+        return schema->getDataType(column_id);
     }
 
 public:
-    explicit ColumnFileInMemory(const BlockPtr & schema_, const CachePtr & cache_ = nullptr)
+    explicit ColumnFileInMemory(const ColumnFileSchemaPtr & schema_, const CachePtr & cache_ = nullptr)
         : schema(schema_)
-        , cache(cache_ ? cache_ : std::make_shared<Cache>(*schema_))
+        , cache(cache_ ? cache_ : std::make_shared<Cache>(schema_->getSchema()))
     {
-        colid_to_offset.clear();
-        for (size_t i = 0; i < schema->columns(); ++i)
-            colid_to_offset.emplace(schema->getByPosition(i).column_id, i);
+        rows = cache->block.rows();
+        bytes = cache->block.bytes();
     }
 
     Type getType() const override { return Type::INMEMORY_FILE; }
@@ -70,17 +68,17 @@ public:
     CachePtr getCache() { return cache; }
 
     /// The schema of this pack.
-    BlockPtr getSchema() const { return schema; }
-    /// Replace the schema with a new schema, and the new schema instance should be exactly the same as the previous one.
-    void resetIdenticalSchema(BlockPtr schema_) { schema = schema_; }
+    ColumnFileSchemaPtr getSchema() const { return schema; }
 
-    ColumnInMemoryFilePtr clone()
+    ColumnFileInMemoryPtr clone()
     {
         return std::make_shared<ColumnFileInMemory>(*this);
     }
 
-    ColumnFileReaderPtr
-    getReader(const DMContext & context, const StorageSnapshotPtr & storage_snap, const ColumnDefinesPtr & col_defs) const override;
+    ColumnFileReaderPtr getReader(
+        const DMContext & context,
+        const IColumnFileDataProviderPtr & data_provider,
+        const ColumnDefinesPtr & col_defs) const override;
 
     bool isAppendable() const override
     {
@@ -90,16 +88,18 @@ public:
     {
         disable_append = true;
     }
-    bool append(DMContext & dm_context, const Block & data, size_t offset, size_t limit, size_t data_bytes) override;
+    bool append(const DMContext & dm_context, const Block & data, size_t offset, size_t limit, size_t data_bytes) override;
 
     Block readDataForFlush() const;
+
+    bool mayBeFlushedFrom(ColumnFile *) const override { return false; }
 
     String toString() const override
     {
         String s = "{in_memory_file,rows:" + DB::toString(rows) //
             + ",bytes:" + DB::toString(bytes) //
             + ",disable_append:" + DB::toString(disable_append) //
-            + ",schema:" + (schema ? schema->dumpStructure() : "none") //
+            + ",schema:" + (schema ? schema->toString() : "none") //
             + ",cache_block:" + (cache ? cache->block.dumpStructure() : "none") + "}";
         return s;
     }
@@ -135,9 +135,11 @@ public:
     ColumnPtr getPKColumn();
     ColumnPtr getVersionColumn();
 
-    size_t readRows(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range) override;
+    std::pair<size_t, size_t> readRows(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range) override;
 
     Block readNextBlock() override;
+
+    size_t skipNextBlock() override;
 
     ColumnFileReaderPtr createNewReader(const ColumnDefinesPtr & new_col_defs) override;
 };

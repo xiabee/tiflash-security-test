@@ -49,13 +49,6 @@ StringRef ColumnVector<T>::serializeValueIntoArena(size_t n, Arena & arena, char
 }
 
 template <typename T>
-const char * ColumnVector<T>::deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &)
-{
-    data.push_back(*reinterpret_cast<const T *>(pos));
-    return pos + sizeof(T);
-}
-
-template <typename T>
 void ColumnVector<T>::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const
 {
     hash.update(data[n]);
@@ -182,19 +175,19 @@ UInt64 ColumnVector<T>::get64(size_t n) const
 template <typename T>
 UInt64 ColumnVector<T>::getUInt(size_t n) const
 {
-    return UInt64(data[n]);
+    return static_cast<UInt64>(data[n]);
 }
 
 template <typename T>
 Int64 ColumnVector<T>::getInt(size_t n) const
 {
-    return Int64(data[n]);
+    return static_cast<Int64>(data[n]);
 }
 
 template <typename T>
 void ColumnVector<T>::insertRangeFrom(const IColumn & src, size_t start, size_t length)
 {
-    const ColumnVector & src_vec = static_cast<const ColumnVector &>(src);
+    const auto & src_vec = static_cast<const ColumnVector &>(src);
 
     if (start + length > src_vec.data.size())
         throw Exception(
@@ -300,27 +293,34 @@ ColumnPtr ColumnVector<T>::permute(const IColumn::Permutation & perm, size_t lim
 }
 
 template <typename T>
-ColumnPtr ColumnVector<T>::replicate(const IColumn::Offsets & offsets) const
+ColumnPtr ColumnVector<T>::replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const
 {
     size_t size = data.size();
     if (size != offsets.size())
         throw Exception("Size of offsets doesn't match size of column.", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+
+    assert(start_row < end_row);
+    assert(end_row <= size);
 
     if (0 == size)
         return this->create();
 
     auto res = this->create();
     typename Self::Container & res_data = res->getData();
-    res_data.reserve(offsets.back());
+
+    res_data.reserve(offsets[end_row - 1]);
 
     IColumn::Offset prev_offset = 0;
-    for (size_t i = 0; i < size; ++i)
+
+    for (size_t i = start_row; i < end_row; ++i)
     {
         size_t size_to_replicate = offsets[i] - prev_offset;
         prev_offset = offsets[i];
 
         for (size_t j = 0; j < size_to_replicate; ++j)
+        {
             res_data.push_back(data[i]);
+        }
     }
 
     return res;
@@ -339,8 +339,8 @@ void ColumnVector<T>::getExtremes(Field & min, Field & max) const
 
     if (size == 0)
     {
-        min = typename NearestFieldType<T>::Type(0);
-        max = typename NearestFieldType<T>::Type(0);
+        min = static_cast<typename NearestFieldType<T>::Type>(0);
+        max = static_cast<typename NearestFieldType<T>::Type>(0);
         return;
     }
 
@@ -374,8 +374,8 @@ void ColumnVector<T>::getExtremes(Field & min, Field & max) const
             cur_max = x;
     }
 
-    min = typename NearestFieldType<T>::Type(cur_min);
-    max = typename NearestFieldType<T>::Type(cur_max);
+    min = static_cast<typename NearestFieldType<T>::Type>(cur_min);
+    max = static_cast<typename NearestFieldType<T>::Type>(cur_max);
 }
 
 /// Explicit template instantiations - to avoid code bloat in headers.

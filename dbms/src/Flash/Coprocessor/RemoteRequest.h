@@ -14,14 +14,16 @@
 
 #pragma once
 
-#include <Flash/Coprocessor/PushDownFilter.h>
+#include <Flash/Coprocessor/FilterConditions.h>
+#include <Flash/Coprocessor/RegionInfo.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 #include <Storages/Transaction/TiDB.h>
-#include <pingcap/coprocessor/Client.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include <kvproto/coprocessor.pb.h>
+#include <pingcap/coprocessor/Client.h>
 #include <tipb/select.pb.h>
 #pragma GCC diagnostic pop
 
@@ -30,7 +32,7 @@
 namespace DB
 {
 using RegionRetryList = std::list<std::reference_wrapper<const RegionInfo>>;
-using DAGColumnInfo = std::pair<String, ColumnInfo>;
+using DAGColumnInfo = std::pair<String, TiDB::ColumnInfo>;
 using DAGSchema = std::vector<DAGColumnInfo>;
 
 struct RemoteRequest
@@ -43,16 +45,20 @@ struct RemoteRequest
         , schema(std::move(schema_))
         , key_ranges(std::move(key_ranges_))
     {}
-    tipb::DAGRequest dag_request;
-    DAGSchema schema;
-    /// the sorted key ranges
-    std::vector<pingcap::coprocessor::KeyRange> key_ranges;
+
     static RemoteRequest build(
         const RegionRetryList & retry_regions,
         DAGContext & dag_context,
         const TiDBTableScan & table_scan,
         const TiDB::TableInfo & table_info,
-        const PushDownFilter & push_down_filter,
+        const FilterConditions & filter_conditions,
         const LoggerPtr & log);
+    static std::vector<pingcap::coprocessor::KeyRange> buildKeyRanges(const RegionRetryList & retry_regions);
+    static std::string printRetryRegions(const RegionRetryList & retry_regions, TableID table_id);
+
+    tipb::DAGRequest dag_request;
+    DAGSchema schema;
+    /// the sorted key ranges
+    std::vector<pingcap::coprocessor::KeyRange> key_ranges;
 };
 } // namespace DB

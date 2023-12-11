@@ -15,6 +15,9 @@
 #include <Common/CurrentMetrics.h>
 #include <Common/nocopyable.h>
 #include <Interpreters/Context.h>
+#include <Storages/DeltaMerge/ExternalDTFileInfo.h>
+#include <Storages/Page/V3/Universal/RaftDataReader.h>
+#include <Storages/Page/V3/Universal/UniversalWriteBatchImpl.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/Transaction/FileEncryption.h>
 #include <Storages/Transaction/KVStore.h>
@@ -23,6 +26,8 @@
 #include <Storages/Transaction/Region.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <kvproto/diagnosticspb.pb.h>
+
+#include <ext/scope_guard.h>
 
 #define CHECK_PARSE_PB_BUFF_IMPL(n, a, b, c)                                              \
     do                                                                                    \
@@ -126,6 +131,274 @@ EngineStoreApplyRes HandleAdminRaftCmd(
     }
 }
 
+uint8_t NeedFlushData(EngineStoreServerWrap * server, uint64_t region_id)
+{
+    try
+    {
+        auto & kvstore = server->tmt->getKVStore();
+        return kvstore->needFlushRegionData(region_id, *server->tmt);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+uint8_t TryFlushData(EngineStoreServerWrap * server, uint64_t region_id, uint8_t flush_pattern, uint64_t index, uint64_t term)
+{
+    try
+    {
+        auto & kvstore = server->tmt->getKVStore();
+        return kvstore->tryFlushRegionData(region_id, false, flush_pattern, *server->tmt, index, term);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+RawCppPtr CreateWriteBatch(const EngineStoreServerWrap * dummy)
+{
+    try
+    {
+        // Don't move the dummy argument, it is useful on proxy's side.
+        // This function is not protected by try-catch, since it's rarely throw.
+        UNUSED(dummy);
+        return GenRawCppPtr(new UniversalWriteBatch(), RawCppPtrTypeImpl::WriteBatch);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void WriteBatchPutPage(RawVoidPtr ptr, BaseBuffView page_id, BaseBuffView value)
+{
+    try
+    {
+        LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI write page {}", UniversalPageId(page_id.data, page_id.len)));
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        MemoryWriteBuffer buf(0, value.len);
+        buf.write(value.data, value.len);
+        auto data_size = buf.count();
+        assert(data_size == value.len);
+        wb->putPage(UniversalPageId(page_id.data, page_id.len), 0, buf.tryGetReadBuffer(), data_size);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void WriteBatchDelPage(RawVoidPtr ptr, BaseBuffView page_id)
+{
+    try
+    {
+        LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI delete page {}", UniversalPageId(page_id.data, page_id.len)));
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        wb->delPage(UniversalPageId(page_id.data, page_id.len));
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+uint64_t GetWriteBatchSize(RawVoidPtr ptr)
+{
+    try
+    {
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        return wb->getTotalDataSize();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+uint8_t IsWriteBatchEmpty(RawVoidPtr ptr)
+{
+    try
+    {
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        return wb->empty();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void HandleMergeWriteBatch(RawVoidPtr lhs, RawVoidPtr rhs)
+{
+    try
+    {
+        auto * lwb = reinterpret_cast<UniversalWriteBatch *>(lhs);
+        auto * rwb = reinterpret_cast<UniversalWriteBatch *>(rhs);
+        lwb->merge(*rwb);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void HandleClearWriteBatch(RawVoidPtr ptr)
+{
+    try
+    {
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        wb->clear();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void HandleConsumeWriteBatch(const EngineStoreServerWrap * server, RawVoidPtr ptr)
+{
+    try
+    {
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        auto * wb = reinterpret_cast<UniversalWriteBatch *>(ptr);
+        LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI consume write batch {}", wb->toString()));
+        uni_ps->write(std::move(*wb));
+        wb->clear();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+CppStrWithView HandleReadPage(const EngineStoreServerWrap * server, BaseBuffView page_id)
+{
+    try
+    {
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        RaftDataReader reader(*uni_ps);
+        auto * page = new Page(reader.read(UniversalPageId(page_id.data, page_id.len)));
+        if (page->isValid())
+        {
+            LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI read page {} success", UniversalPageId(page_id.data, page_id.len)));
+            return CppStrWithView{.inner = GenRawCppPtr(page, RawCppPtrTypeImpl::UniversalPage), .view = BaseBuffView{page->data.begin(), page->data.size()}};
+        }
+        else
+        {
+            LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI read page {} fail", UniversalPageId(page_id.data, page_id.len)));
+            return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}};
+        }
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+RawCppPtrCarr HandleScanPage(const EngineStoreServerWrap * server, BaseBuffView start_page_id, BaseBuffView end_page_id)
+{
+    try
+    {
+        LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI scan page from {} to {}", UniversalPageId(start_page_id.data, start_page_id.len), UniversalPageId(end_page_id.data, end_page_id.len)));
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        RaftDataReader reader(*uni_ps);
+        std::vector<UniversalPageId> page_ids;
+        std::vector<DB::Page *> pages;
+        auto checker = [&](const UniversalPageId & page_id, DB::Page page) {
+            page_ids.push_back(page_id);
+            pages.push_back(new Page(std::move(page)));
+        };
+        reader.traverse(
+            UniversalPageId(start_page_id.data, start_page_id.len),
+            UniversalPageId(end_page_id.data, end_page_id.len),
+            checker);
+        auto * data = static_cast<PageAndCppStrWithView *>(malloc(pages.size() * sizeof(PageAndCppStrWithView))); // NOLINT(cppcoreguidelines-no-malloc)
+        for (size_t i = 0; i < pages.size(); i++)
+        {
+            auto * target = data + i;
+            auto * key_str = RawCppString::New(page_ids[i].data(), page_ids[i].size());
+            new (target) PageAndCppStrWithView{
+                .page = GenRawCppPtr(pages[i], RawCppPtrTypeImpl::UniversalPage),
+                .key = GenRawCppPtr(key_str, RawCppPtrTypeImpl::String),
+                .page_view = BaseBuffView{.data = pages[i]->data.begin(), .len = pages[i]->data.size()},
+                .key_view = BaseBuffView{.data = key_str->data(), .len = key_str->size()}};
+        }
+        return RawCppPtrCarr{.inner = data, .len = pages.size(), .type = static_cast<RawCppPtrType>(RawCppPtrTypeImpl::PageAndCppStr)};
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+CppStrWithView HandleGetLowerBound(const EngineStoreServerWrap * server, BaseBuffView raw_page_id)
+{
+    try
+    {
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        RaftDataReader reader(*uni_ps);
+        auto page_id_opt = reader.getLowerBound(UniversalPageId(raw_page_id.data, raw_page_id.len));
+        if (page_id_opt.has_value())
+        {
+            LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI get lower bound for page {} success", UniversalPageId(raw_page_id.data, raw_page_id.len)));
+            auto * s = RawCppString::New(page_id_opt->asStr());
+            return CppStrWithView{.inner = GenRawCppPtr(s, RawCppPtrTypeImpl::String), .view = BaseBuffView{s->data(), s->size()}};
+        }
+        else
+        {
+            LOG_TRACE(&Poco::Logger::get("ProxyFFI"), fmt::format("FFI get lower bound for page {} fail", UniversalPageId(raw_page_id.data, raw_page_id.len)));
+            return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}};
+        }
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+uint8_t IsPSEmpty(const EngineStoreServerWrap * server)
+{
+    try
+    {
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        return uni_ps->isEmpty();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+void HandlePurgePageStorage(const EngineStoreServerWrap * server)
+{
+    try
+    {
+        auto uni_ps = server->tmt->getContext().getWriteNodePageStorage();
+        uni_ps->gc({});
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
 static_assert(sizeof(RaftStoreProxyFFIHelper) == sizeof(TiFlashRaftProxyHelper));
 static_assert(alignof(RaftStoreProxyFFIHelper) == alignof(TiFlashRaftProxyHelper));
 
@@ -155,7 +428,7 @@ void AtomicUpdateProxy(DB::EngineStoreServerWrap * server, RaftStoreProxyFFIHelp
         RustGcHelper::instance().setRustPtrGcFn(proxy->fn_gc_rust_ptr);
     }
     server->proxy_helper = static_cast<TiFlashRaftProxyHelper *>(proxy);
-    std::atomic_thread_fence(std::memory_order::memory_order_seq_cst);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 void HandleDestroy(EngineStoreServerWrap * server, uint64_t region_id)
@@ -304,36 +577,24 @@ RawRustPtrWrap::~RawRustPtrWrap()
     RustGcHelper::instance().gcRustPtr(ptr, type);
 }
 RawRustPtrWrap::RawRustPtrWrap(RawRustPtrWrap && src)
+    : RawRustPtr()
 {
     RawRustPtr & tar = (*this);
     tar = src;
     src.ptr = nullptr;
 }
 
-struct PreHandledSnapshotWithBlock
-{
-    ~PreHandledSnapshotWithBlock() { CurrentMetrics::sub(CurrentMetrics::RaftNumSnapshotsPendingApply); }
-    PreHandledSnapshotWithBlock(const RegionPtr & region_, RegionPtrWithBlock::CachePtr && cache_)
-        : region(region_)
-        , cache(std::move(cache_))
-    {
-        CurrentMetrics::add(CurrentMetrics::RaftNumSnapshotsPendingApply);
-    }
-    RegionPtr region;
-    RegionPtrWithBlock::CachePtr cache;
-};
-
 struct PreHandledSnapshotWithFiles
 {
     ~PreHandledSnapshotWithFiles() { CurrentMetrics::sub(CurrentMetrics::RaftNumSnapshotsPendingApply); }
-    PreHandledSnapshotWithFiles(const RegionPtr & region_, std::vector<UInt64> && ids_)
+    PreHandledSnapshotWithFiles(const RegionPtr & region_, std::vector<DM::ExternalDTFileInfo> && external_files_)
         : region(region_)
-        , ingest_ids(std::move(ids_))
+        , external_files(std::move(external_files_))
     {
         CurrentMetrics::add(CurrentMetrics::RaftNumSnapshotsPendingApply);
     }
     RegionPtr region;
-    std::vector<UInt64> ingest_ids; // The file_ids storing pre-handled files
+    std::vector<DM::ExternalDTFileInfo> external_files; // The file_ids storing pre-handled files
 };
 
 RawCppPtr PreHandleSnapshot(
@@ -360,26 +621,11 @@ RawCppPtr PreHandleSnapshot(
         }
 #endif
 
-        switch (kvstore->applyMethod())
-        {
-        case TiDB::SnapshotApplyMethod::Block:
-        {
-            // Pre-decode as a block
-            auto new_region_block_cache = kvstore->preHandleSnapshotToBlock(new_region, snaps, index, term, tmt);
-            auto * res = new PreHandledSnapshotWithBlock{new_region, std::move(new_region_block_cache)};
-            return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithBlock);
-        }
-        case TiDB::SnapshotApplyMethod::DTFile_Directory:
-        case TiDB::SnapshotApplyMethod::DTFile_Single:
-        {
-            // Pre-decode and save as DTFiles
-            auto ingest_ids = kvstore->preHandleSnapshotToFiles(new_region, snaps, index, term, tmt);
-            auto * res = new PreHandledSnapshotWithFiles{new_region, std::move(ingest_ids)};
-            return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithFiles);
-        }
-        default:
-            throw Exception("Unknow Region apply method: " + applyMethodToString(kvstore->applyMethod()));
-        }
+        // Pre-decode and save as DTFiles
+        // TODO Forward deadline_index when TiKV supports.
+        auto ingest_ids = kvstore->preHandleSnapshotToFiles(new_region, snaps, index, term, std::nullopt, tmt);
+        auto * res = new PreHandledSnapshotWithFiles{new_region, std::move(ingest_ids)};
+        return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithFiles);
     }
     catch (...)
     {
@@ -391,20 +637,14 @@ RawCppPtr PreHandleSnapshot(
 template <typename PreHandledSnapshot>
 void ApplyPreHandledSnapshot(EngineStoreServerWrap * server, PreHandledSnapshot * snap)
 {
-    static_assert(
-        std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithBlock> || std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithFiles>,
-        "Unknown pre-handled snapshot type");
+    static_assert(std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithFiles>, "Unknown pre-handled snapshot type");
 
     try
     {
         auto & kvstore = server->tmt->getKVStore();
-        if constexpr (std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithBlock>)
+        if constexpr (std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithFiles>)
         {
-            kvstore->handlePreApplySnapshot(RegionPtrWithBlock{snap->region, std::move(snap->cache)}, *server->tmt);
-        }
-        else if constexpr (std::is_same_v<PreHandledSnapshot, PreHandledSnapshotWithFiles>)
-        {
-            kvstore->handlePreApplySnapshot(RegionPtrWithSnapshotFiles{snap->region, std::move(snap->ingest_ids)}, *server->tmt);
+            kvstore->applyPreHandledSnapshot(RegionPtrWithSnapshotFiles{snap->region, std::move(snap->external_files)}, *server->tmt);
         }
     }
     catch (...)
@@ -418,12 +658,6 @@ void ApplyPreHandledSnapshot(EngineStoreServerWrap * server, RawVoidPtr res, Raw
 {
     switch (static_cast<RawCppPtrTypeImpl>(type))
     {
-    case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
-    {
-        auto * snap = reinterpret_cast<PreHandledSnapshotWithBlock *>(res);
-        ApplyPreHandledSnapshot(server, snap);
-        break;
-    }
     case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
     {
         auto * snap = reinterpret_cast<PreHandledSnapshotWithFiles *>(res);
@@ -431,7 +665,7 @@ void ApplyPreHandledSnapshot(EngineStoreServerWrap * server, RawVoidPtr res, Raw
         break;
     }
     default:
-        LOG_FMT_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
+        LOG_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
         exit(-1);
     }
 }
@@ -445,17 +679,75 @@ void GcRawCppPtr(RawVoidPtr ptr, RawCppPtrType type)
         case RawCppPtrTypeImpl::String:
             delete reinterpret_cast<RawCppStringPtr>(ptr);
             break;
-        case RawCppPtrTypeImpl::PreHandledSnapshotWithBlock:
-            delete reinterpret_cast<PreHandledSnapshotWithBlock *>(ptr);
-            break;
         case RawCppPtrTypeImpl::PreHandledSnapshotWithFiles:
             delete reinterpret_cast<PreHandledSnapshotWithFiles *>(ptr);
             break;
         case RawCppPtrTypeImpl::WakerNotifier:
             delete reinterpret_cast<AsyncNotifier *>(ptr);
             break;
+        case RawCppPtrTypeImpl::WriteBatch:
+            delete reinterpret_cast<UniversalWriteBatch *>(ptr);
+            break;
+        case RawCppPtrTypeImpl::UniversalPage:
+            delete reinterpret_cast<Page *>(ptr);
+            break;
         default:
-            LOG_FMT_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
+            LOG_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", type);
+            exit(-1);
+        }
+    }
+}
+
+void GcRawCppPtrCArr(RawVoidPtr ptr, RawCppPtrType type, uint64_t len)
+{
+    if (ptr)
+    {
+        switch (static_cast<RawCppPtrTypeImpl>(type))
+        {
+        case RawCppPtrTypeImpl::PageAndCppStr:
+        {
+            auto * inner = reinterpret_cast<PageAndCppStrWithView *>(ptr);
+            for (size_t i = 0; i < len; i++)
+            {
+                GcRawCppPtr(inner[i].page.ptr, inner[i].page.type);
+                GcRawCppPtr(inner[i].key.ptr, inner[i].key.type);
+            }
+            delete inner;
+            break;
+        }
+        default:
+            LOG_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type arr {}", type);
+            exit(-1);
+        }
+    }
+}
+
+void GcSpecialRawCppPtr(void * ptr, uint64_t hint_size, SpecialCppPtrType type)
+{
+    UNUSED(hint_size);
+    if (ptr)
+    {
+        switch (static_cast<SpecialCppPtrType>(type))
+        {
+        case SpecialCppPtrType::None:
+            // Do nothing.
+            break;
+        case SpecialCppPtrType::TupleOfRawCppPtr:
+        {
+            auto * special_ptr = reinterpret_cast<RawCppPtrTuple *>(ptr);
+            delete special_ptr->inner;
+            delete special_ptr;
+            break;
+        }
+        case SpecialCppPtrType::ArrayOfRawCppPtr:
+        {
+            auto * special_ptr = reinterpret_cast<RawCppPtrArr *>(ptr);
+            delete special_ptr->inner;
+            delete special_ptr;
+            break;
+        }
+        default:
+            LOG_ERROR(&Poco::Logger::get(__FUNCTION__), "unknown type {}", static_cast<std::underlying_type_t<SpecialCppPtrType>>(type));
             exit(-1);
         }
     }
@@ -469,6 +761,7 @@ const char * IntoEncryptionMethodName(EncryptionMethod method)
         "Aes128Ctr",
         "Aes192Ctr",
         "Aes256Ctr",
+        "SM4Ctr",
     };
     return encryption_method_name[static_cast<uint8_t>(method)];
 }
@@ -486,7 +779,7 @@ CppStrWithView GetConfig(EngineStoreServerWrap * server, [[maybe_unused]] uint8_
         config_file_path = server->tmt->getContext().getConfigRef().getString("config-file");
         std::ifstream stream(config_file_path);
         if (!stream)
-            return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}};
+            return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}};
         auto * s = RawCppString::New((std::istreambuf_iterator<char>(stream)),
                                      std::istreambuf_iterator<char>());
         stream.close();
@@ -500,7 +793,7 @@ CppStrWithView GetConfig(EngineStoreServerWrap * server, [[maybe_unused]] uint8_
     }
     catch (...)
     {
-        return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{}};
+        return CppStrWithView{.inner = GenRawCppPtr(), .view = BaseBuffView{nullptr, 0}};
     }
 }
 
@@ -516,7 +809,7 @@ void SetStore(EngineStoreServerWrap * server, BaseBuffView buff)
 
 void MockSetFFI::MockSetRustGcHelper(void (*fn_gc_rust_ptr)(RawVoidPtr, RawRustPtrType))
 {
-    LOG_FMT_WARNING(&Poco::Logger::get(__FUNCTION__), "Set mock rust ptr gc function");
+    LOG_WARNING(&Poco::Logger::get(__FUNCTION__), "Set mock rust ptr gc function");
     RustGcHelper::instance().setRustPtrGcFn(fn_gc_rust_ptr);
 }
 
@@ -560,6 +853,26 @@ raft_serverpb::RegionLocalState TiFlashRaftProxyHelper::getRegionLocalState(uint
         break;
     }
     return state;
+}
+
+void HandleSafeTSUpdate(EngineStoreServerWrap * server, uint64_t region_id, uint64_t self_safe_ts, uint64_t leader_safe_ts)
+{
+    try
+    {
+        RegionTable & region_table = server->tmt->getRegionTable();
+        region_table.updateSafeTS(region_id, leader_safe_ts, self_safe_ts);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        exit(-1);
+    }
+}
+
+
+std::string_view buffToStrView(const BaseBuffView & buf)
+{
+    return std::string_view{buf.data, buf.len};
 }
 
 } // namespace DB

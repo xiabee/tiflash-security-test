@@ -23,7 +23,9 @@
 #include <Storages/Page/PageStorage.h>
 #include <Storages/Page/Snapshot.h>
 #include <Storages/Page/V2/PageStorage.h>
-#include <common/defines.h>
+#include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
+#include <Storages/Page/V3/Universal/UniversalPageStorage.h>
+#include <Storages/PathPool.h>
 #include <fmt/format.h>
 
 
@@ -48,14 +50,8 @@ extern const char force_set_dtfile_exist_when_acquire_id[];
 
 namespace DM
 {
-enum class StorageType
-{
-    Log = 1,
-    Data = 2,
-    Meta = 3,
-};
 
-PageStorage::Config extractConfig(const Settings & settings, StorageType subtype)
+PageStorageConfig extractConfig(const Settings & settings, StorageType subtype)
 {
 #define SET_CONFIG(NAME)                                                            \
     config.num_write_slots = settings.dt_storage_pool_##NAME##_write_slots;         \
@@ -65,7 +61,7 @@ PageStorage::Config extractConfig(const Settings & settings, StorageType subtype
     config.gc_max_valid_rate = settings.dt_storage_pool_##NAME##_gc_max_valid_rate; \
     config.blob_heavy_gc_valid_rate = settings.dt_page_gc_threshold;
 
-    PageStorage::Config config = getConfigFromSettings(settings);
+    PageStorageConfig config = getConfigFromSettings(settings);
 
     switch (subtype)
     {
@@ -88,19 +84,19 @@ PageStorage::Config extractConfig(const Settings & settings, StorageType subtype
 
 GlobalStoragePool::GlobalStoragePool(const PathPool & path_pool, Context & global_ctx, const Settings & settings)
     : log_storage(PageStorage::create("__global__.log",
-                                      path_pool.getPSDiskDelegatorGlobalMulti("log"),
+                                      path_pool.getPSDiskDelegatorGlobalMulti(PathPool::log_path_prefix),
                                       extractConfig(settings, StorageType::Log),
                                       global_ctx.getFileProvider(),
                                       global_ctx,
                                       true))
     , data_storage(PageStorage::create("__global__.data",
-                                       path_pool.getPSDiskDelegatorGlobalMulti("data"),
+                                       path_pool.getPSDiskDelegatorGlobalMulti(PathPool::data_path_prefix),
                                        extractConfig(settings, StorageType::Data),
                                        global_ctx.getFileProvider(),
                                        global_ctx,
                                        true))
     , meta_storage(PageStorage::create("__global__.meta",
-                                       path_pool.getPSDiskDelegatorGlobalMulti("meta"),
+                                       path_pool.getPSDiskDelegatorGlobalMulti(PathPool::meta_path_prefix),
                                        extractConfig(settings, StorageType::Meta),
                                        global_ctx.getFileProvider(),
                                        global_ctx,
@@ -112,11 +108,7 @@ GlobalStoragePool::GlobalStoragePool(const PathPool & path_pool, Context & globa
 
 GlobalStoragePool::~GlobalStoragePool()
 {
-    if (gc_handle)
-    {
-        global_context.getBackgroundPool().removeTask(gc_handle);
-        gc_handle = nullptr;
-    }
+    shutdown();
 }
 
 void GlobalStoragePool::restore()
@@ -132,6 +124,15 @@ void GlobalStoragePool::restore()
         false);
 }
 
+void GlobalStoragePool::shutdown()
+{
+    if (gc_handle)
+    {
+        global_context.getBackgroundPool().removeTask(gc_handle);
+        gc_handle = {};
+    }
+}
+
 FileUsageStatistics GlobalStoragePool::getLogFileUsage() const
 {
     return log_storage->getFileUsageStatistics();
@@ -139,7 +140,7 @@ FileUsageStatistics GlobalStoragePool::getLogFileUsage() const
 
 bool GlobalStoragePool::gc()
 {
-    return gc(global_context.getSettingsRef(), true, DELTA_MERGE_GC_PERIOD);
+    return gc(global_context.getSettingsRef(), /*immediately=*/true, DELTA_MERGE_GC_PERIOD);
 }
 
 bool GlobalStoragePool::gc(const Settings & settings, bool immediately, const Seconds & try_gc_period)
@@ -172,10 +173,13 @@ bool GlobalStoragePool::gc(const Settings & settings, bool immediately, const Se
     return done_anything;
 }
 
-StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPool & storage_path_pool, const String & name)
-    : logger(Logger::get("StoragePool", !name.empty() ? name : DB::toString(ns_id_)))
+StoragePool::StoragePool(Context & global_ctx, KeyspaceID keyspace_id_, NamespaceID ns_id_, StoragePathPool & storage_path_pool_, const String & name)
+    : logger(Logger::get(!name.empty() ? name : DB::toString(ns_id_)))
     , run_mode(global_ctx.getPageStorageRunMode())
+    , keyspace_id(keyspace_id_)
     , ns_id(ns_id_)
+    , storage_path_pool(storage_path_pool_)
+    , uni_ps(run_mode == PageStorageRunMode::UNI_PS ? global_ctx.getWriteNodePageStorage() : nullptr)
     , global_context(global_ctx)
     , storage_pool_metrics(CurrentMetrics::StoragePoolV3Only, 0)
 {
@@ -199,13 +203,13 @@ StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPo
                                               extractConfig(global_context.getSettingsRef(), StorageType::Meta),
                                               global_context.getFileProvider(),
                                               global_context);
-        log_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, log_storage_v2, /*storage_v3_*/ nullptr, nullptr);
-        data_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, data_storage_v2, /*storage_v3_*/ nullptr, nullptr);
-        meta_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, meta_storage_v2, /*storage_v3_*/ nullptr, nullptr);
+        log_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Log, ns_id, log_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr, nullptr);
+        data_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Data, ns_id, data_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr, nullptr);
+        meta_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, meta_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr, nullptr);
 
-        log_storage_writer = std::make_shared<PageWriter>(run_mode, log_storage_v2, /*storage_v3_*/ nullptr);
-        data_storage_writer = std::make_shared<PageWriter>(run_mode, data_storage_v2, /*storage_v3_*/ nullptr);
-        meta_storage_writer = std::make_shared<PageWriter>(run_mode, meta_storage_v2, /*storage_v3_*/ nullptr);
+        log_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Log, log_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr);
+        data_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Data, data_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr);
+        meta_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Meta, meta_storage_v2, /*storage_v3_*/ nullptr, /*uni_ps_*/ nullptr);
         break;
     }
     case PageStorageRunMode::ONLY_V3:
@@ -215,13 +219,13 @@ StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPo
         data_storage_v3 = global_storage_pool->data_storage;
         meta_storage_v3 = global_storage_pool->meta_storage;
 
-        log_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, /*storage_v2_*/ nullptr, log_storage_v3, nullptr);
-        data_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, /*storage_v2_*/ nullptr, data_storage_v3, nullptr);
-        meta_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, /*storage_v2_*/ nullptr, meta_storage_v3, nullptr);
+        log_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Log, ns_id, /*storage_v2_*/ nullptr, log_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+        data_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Data, ns_id, /*storage_v2_*/ nullptr, data_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+        meta_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, /*storage_v2_*/ nullptr, meta_storage_v3, /*uni_ps_*/ nullptr, nullptr);
 
-        log_storage_writer = std::make_shared<PageWriter>(run_mode, /*storage_v2_*/ nullptr, log_storage_v3);
-        data_storage_writer = std::make_shared<PageWriter>(run_mode, /*storage_v2_*/ nullptr, data_storage_v3);
-        meta_storage_writer = std::make_shared<PageWriter>(run_mode, /*storage_v2_*/ nullptr, meta_storage_v3);
+        log_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Log, /*storage_v2_*/ nullptr, log_storage_v3, /*uni_ps_*/ nullptr);
+        data_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Data, /*storage_v2_*/ nullptr, data_storage_v3, /*uni_ps_*/ nullptr);
+        meta_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Meta, /*storage_v2_*/ nullptr, meta_storage_v3, /*uni_ps_*/ nullptr);
         break;
     }
     case PageStorageRunMode::MIX_MODE:
@@ -231,29 +235,64 @@ StoragePool::StoragePool(Context & global_ctx, NamespaceId ns_id_, StoragePathPo
         data_storage_v3 = global_storage_pool->data_storage;
         meta_storage_v3 = global_storage_pool->meta_storage;
 
-        log_storage_v2 = PageStorage::create(name + ".log",
-                                             storage_path_pool.getPSDiskDelegatorMulti("log"),
-                                             extractConfig(global_context.getSettingsRef(), StorageType::Log),
-                                             global_context.getFileProvider(),
-                                             global_context);
-        data_storage_v2 = PageStorage::create(name + ".data",
-                                              storage_path_pool.getPSDiskDelegatorMulti("data"),
-                                              extractConfig(global_context.getSettingsRef(), StorageType::Data),
-                                              global_context.getFileProvider(),
-                                              global_context);
-        meta_storage_v2 = PageStorage::create(name + ".meta",
-                                              storage_path_pool.getPSDiskDelegatorMulti("meta"),
-                                              extractConfig(global_context.getSettingsRef(), StorageType::Meta),
-                                              global_context.getFileProvider(),
-                                              global_context);
+        if (storage_path_pool.isPSV2Deleted())
+        {
+            LOG_INFO(logger, "PageStorage V2 is already mark deleted. Current pagestorage change from {} to {} [ns_id={}]", //
+                     static_cast<UInt8>(PageStorageRunMode::MIX_MODE), //
+                     static_cast<UInt8>(PageStorageRunMode::ONLY_V3), //
+                     ns_id);
+            log_storage_v2 = nullptr;
+            data_storage_v2 = nullptr;
+            meta_storage_v2 = nullptr;
+            run_mode = PageStorageRunMode::ONLY_V3;
+            storage_path_pool.clearPSV2ObsoleteData();
+        }
+        else
+        {
+            // Although there is no more write to ps v2 in mixed mode, the ps instances will keep running if there is some data in log storage when restart,
+            // so we keep its original config here.
+            // And we rely on the mechanism that writing file will be rotated if no valid pages in non writing files to reduce the disk space usage of these ps instances.
+            log_storage_v2 = PageStorage::create(name + ".log",
+                                                 storage_path_pool.getPSDiskDelegatorMulti("log"),
+                                                 extractConfig(global_context.getSettingsRef(), StorageType::Log),
+                                                 global_context.getFileProvider(),
+                                                 global_context,
+                                                 /* use_v3 */ false,
+                                                 /* no_more_write_to_v2 */ true);
+            data_storage_v2 = PageStorage::create(name + ".data",
+                                                  storage_path_pool.getPSDiskDelegatorMulti("data"),
+                                                  extractConfig(global_context.getSettingsRef(), StorageType::Data),
+                                                  global_context.getFileProvider(),
+                                                  global_context,
+                                                  /* use_v3 */ false,
+                                                  /* no_more_write_to_v2 */ true);
+            meta_storage_v2 = PageStorage::create(name + ".meta",
+                                                  storage_path_pool.getPSDiskDelegatorMulti("meta"),
+                                                  extractConfig(global_context.getSettingsRef(), StorageType::Meta),
+                                                  global_context.getFileProvider(),
+                                                  global_context,
+                                                  /* use_v3 */ false,
+                                                  /* no_more_write_to_v2 */ true);
+        }
 
-        log_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, log_storage_v2, log_storage_v3, nullptr);
-        data_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, data_storage_v2, data_storage_v3, nullptr);
-        meta_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, meta_storage_v2, meta_storage_v3, nullptr);
+        log_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Log, ns_id, log_storage_v2, log_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+        data_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Data, ns_id, data_storage_v2, data_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+        meta_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, meta_storage_v2, meta_storage_v3, /*uni_ps_*/ nullptr, nullptr);
 
-        log_storage_writer = std::make_shared<PageWriter>(run_mode, log_storage_v2, log_storage_v3);
-        data_storage_writer = std::make_shared<PageWriter>(run_mode, data_storage_v2, data_storage_v3);
-        meta_storage_writer = std::make_shared<PageWriter>(run_mode, meta_storage_v2, meta_storage_v3);
+        log_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Log, log_storage_v2, log_storage_v3, /*uni_ps_*/ nullptr);
+        data_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Data, data_storage_v2, data_storage_v3, /*uni_ps_*/ nullptr);
+        meta_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Meta, meta_storage_v2, meta_storage_v3, /*uni_ps_*/ nullptr);
+        break;
+    }
+    case PageStorageRunMode::UNI_PS:
+    {
+        log_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Log, ns_id, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps, nullptr);
+        data_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Data, ns_id, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps, nullptr);
+        meta_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps, nullptr);
+
+        log_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Log, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps);
+        data_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Data, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps);
+        meta_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Meta, /*storage_v2_*/ nullptr, /*storage_v3_*/ nullptr, uni_ps);
         break;
     }
     default:
@@ -267,8 +306,8 @@ void StoragePool::forceTransformMetaV2toV3()
         throw Exception(fmt::format("Transform meta must run under mix mode [run_mode={}]", static_cast<Int32>(run_mode)));
     assert(meta_storage_v2 != nullptr);
     assert(meta_storage_v3 != nullptr);
-    auto meta_transform_storage_writer = std::make_shared<PageWriter>(run_mode, meta_storage_v2, meta_storage_v3);
-    auto meta_transform_storage_reader = std::make_shared<PageReader>(run_mode, ns_id, meta_storage_v2, meta_storage_v3, nullptr);
+    auto meta_transform_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Meta, meta_storage_v2, meta_storage_v3, /*uni_ps_*/ nullptr);
+    auto meta_transform_storage_reader = std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, meta_storage_v2, meta_storage_v3, /*uni_ps_*/ nullptr, nullptr);
 
     Pages pages_transform = {};
     auto meta_transform_acceptor = [&](const DB::Page & page) {
@@ -287,7 +326,7 @@ void StoragePool::forceTransformMetaV2toV3()
         const auto & page_transform_entry = meta_transform_storage_reader->getPageEntry(page_transform.page_id);
         if (!page_transform_entry.field_offsets.empty())
         {
-            throw Exception(fmt::format("Can't transfrom meta from V2 to V3, [page_id={}] {}", //
+            throw Exception(fmt::format("Can't transform meta from V2 to V3, [page_id={}] {}", //
                                         page_transform.page_id,
                                         page_transform_entry.toDebugString()),
                             ErrorCodes::LOGICAL_ERROR);
@@ -303,7 +342,7 @@ void StoragePool::forceTransformMetaV2toV3()
     }
 
     // Will rewrite into V3.
-    meta_transform_storage_writer->write(std::move(write_batch_transform), nullptr);
+    meta_transform_storage_writer->writeIntoV3(std::move(write_batch_transform), nullptr);
 
     // DEL must call after rewrite.
     meta_transform_storage_writer->writeIntoV2(std::move(write_batch_del_v2), nullptr);
@@ -321,7 +360,7 @@ void StoragePool::forceTransformDataV2toV3()
         throw Exception(fmt::format("Transform meta must run under mix mode [run_mode={}]", static_cast<Int32>(run_mode)));
     assert(data_storage_v2 != nullptr);
     assert(data_storage_v3 != nullptr);
-    auto data_transform_storage_writer = std::make_shared<PageWriter>(run_mode, data_storage_v2, data_storage_v3);
+    auto data_transform_storage_writer = std::make_shared<PageWriter>(run_mode, StorageType::Data, data_storage_v2, data_storage_v3, /*uni_ps_*/ nullptr);
 
     auto snapshot = data_storage_v2->getSnapshot("transformDataV2toV3");
     auto * v2_snap = toV2ConcreteSnapshot(snapshot);
@@ -348,7 +387,7 @@ void StoragePool::forceTransformDataV2toV3()
     WriteBatch write_batch_transform{ns_id};
     WriteBatch write_batch_del_v2{ns_id};
 
-    std::set<PageId> created_dt_file_id;
+    PageIdU64Set created_dt_file_id;
     for (const auto page_id : all_page_ids)
     {
         // resolve the page_id into dtfile id
@@ -419,57 +458,62 @@ PageStorageRunMode StoragePool::restore()
         // However, the pages on meta V2 can not be deleted. As the pages in meta are small, we perform a forceTransformMetaV2toV3 to convert pages before all.
         if (const auto & meta_remain_pages = meta_storage_v2->getNumberOfPages(); meta_remain_pages != 0)
         {
-            LOG_FMT_INFO(logger, "Current pool.meta transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, meta_remain_pages);
+            LOG_INFO(logger, "Current pool.meta transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, meta_remain_pages);
             forceTransformMetaV2toV3();
             const auto & meta_remain_pages_after_transform = meta_storage_v2->getNumberOfPages();
-            LOG_FMT_INFO(logger, "Current pool.meta transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
-                         ns_id,
-                         meta_remain_pages_after_transform == 0,
-                         meta_remain_pages,
-                         meta_remain_pages_after_transform);
+            LOG_INFO(logger, "Current pool.meta transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
+                     ns_id,
+                     meta_remain_pages_after_transform == 0,
+                     meta_remain_pages,
+                     meta_remain_pages_after_transform);
         }
         else
         {
-            LOG_FMT_INFO(logger, "Current pool.meta translate already done before restored [ns_id={}] ", ns_id);
+            LOG_INFO(logger, "Current pool.meta transform already done before restored [ns_id={}] ", ns_id);
         }
 
         if (const auto & data_remain_pages = data_storage_v2->getNumberOfPages(); data_remain_pages != 0)
         {
-            LOG_FMT_INFO(logger, "Current pool.data transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, data_remain_pages);
+            LOG_INFO(logger, "Current pool.data transform to V3 begin [ns_id={}] [pages_before_transform={}]", ns_id, data_remain_pages);
             forceTransformDataV2toV3();
             const auto & data_remain_pages_after_transform = data_storage_v2->getNumberOfPages();
-            LOG_FMT_INFO(logger, "Current pool.data transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
-                         ns_id,
-                         data_remain_pages_after_transform == 0,
-                         data_remain_pages,
-                         data_remain_pages_after_transform);
+            LOG_INFO(logger, "Current pool.data transform to V3 finished [ns_id={}] [done={}] [pages_before_transform={}], [pages_after_transform={}]", //
+                     ns_id,
+                     data_remain_pages_after_transform == 0,
+                     data_remain_pages,
+                     data_remain_pages_after_transform);
         }
         else
         {
-            LOG_FMT_INFO(logger, "Current pool.data translate already done before restored [ns_id={}] ", ns_id);
+            LOG_INFO(logger, "Current pool.data transform already done before restored [ns_id={}]", ns_id);
         }
 
         // Check number of valid pages in v2
         // If V2 already have no any data in disk, Then change run_mode to ONLY_V3
         if (log_storage_v2->getNumberOfPages() == 0 && data_storage_v2->getNumberOfPages() == 0 && meta_storage_v2->getNumberOfPages() == 0)
         {
-            // TODO: Need drop V2 in disk and check.
-            LOG_FMT_INFO(logger, "Current pagestorage change from {} to {}", //
-                         static_cast<UInt8>(PageStorageRunMode::MIX_MODE),
-                         static_cast<UInt8>(PageStorageRunMode::ONLY_V3));
-
+            LOG_INFO(logger, "Current pagestorage change from {} to {} [ns_id={}]", //
+                     static_cast<UInt8>(PageStorageRunMode::MIX_MODE),
+                     static_cast<UInt8>(PageStorageRunMode::ONLY_V3),
+                     ns_id);
+            if (storage_path_pool.createPSV2DeleteMarkFile())
+            {
+                log_storage_v2->drop();
+                data_storage_v2->drop();
+                meta_storage_v2->drop();
+            }
             log_storage_v2 = nullptr;
             data_storage_v2 = nullptr;
             meta_storage_v2 = nullptr;
 
             // Must init by PageStorageRunMode::ONLY_V3
-            log_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, ns_id, /*storage_v2_*/ nullptr, log_storage_v3, nullptr);
-            data_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, ns_id, /*storage_v2_*/ nullptr, data_storage_v3, nullptr);
-            meta_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, ns_id, /*storage_v2_*/ nullptr, meta_storage_v3, nullptr);
+            log_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, keyspace_id, StorageType::Log, ns_id, /*storage_v2_*/ nullptr, log_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+            data_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, keyspace_id, StorageType::Data, ns_id, /*storage_v2_*/ nullptr, data_storage_v3, /*uni_ps_*/ nullptr, nullptr);
+            meta_storage_reader = std::make_shared<PageReader>(PageStorageRunMode::ONLY_V3, keyspace_id, StorageType::Meta, ns_id, /*storage_v2_*/ nullptr, meta_storage_v3, /*uni_ps_*/ nullptr, nullptr);
 
-            log_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, /*storage_v2_*/ nullptr, log_storage_v3);
-            data_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, /*storage_v2_*/ nullptr, data_storage_v3);
-            meta_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, /*storage_v2_*/ nullptr, meta_storage_v3);
+            log_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, StorageType::Log, /*storage_v2_*/ nullptr, log_storage_v3, /*uni_ps_*/ nullptr);
+            data_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, StorageType::Data, /*storage_v2_*/ nullptr, data_storage_v3, /*uni_ps_*/ nullptr);
+            meta_storage_writer = std::make_shared<PageWriter>(PageStorageRunMode::ONLY_V3, StorageType::Meta, /*storage_v2_*/ nullptr, meta_storage_v3, /*uni_ps_*/ nullptr);
 
             max_log_page_id = log_storage_v3->getMaxId();
             max_data_page_id = data_storage_v3->getMaxId();
@@ -487,16 +531,23 @@ PageStorageRunMode StoragePool::restore()
         }
         break;
     }
+    case PageStorageRunMode::UNI_PS:
+    {
+        max_log_page_id = uni_ps->getMaxIdAfterRestart();
+        max_data_page_id = uni_ps->getMaxIdAfterRestart();
+        max_meta_page_id = uni_ps->getMaxIdAfterRestart();
+        break;
+    }
     default:
         throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
-    LOG_FMT_TRACE(logger, "Finished StoragePool restore. [current_run_mode={}] [ns_id={}]"
-                          " [max_log_page_id={}] [max_data_page_id={}] [max_meta_page_id={}]",
-                  static_cast<UInt8>(run_mode),
-                  ns_id,
-                  max_log_page_id,
-                  max_data_page_id,
-                  max_meta_page_id);
+    LOG_TRACE(logger, "Finished StoragePool restore. [current_run_mode={}] [ns_id={}]"
+                      " [max_log_page_id={}] [max_data_page_id={}] [max_meta_page_id={}]",
+              static_cast<UInt8>(run_mode),
+              ns_id,
+              max_log_page_id,
+              max_data_page_id,
+              max_meta_page_id);
     return run_mode;
 }
 
@@ -505,34 +556,41 @@ StoragePool::~StoragePool()
     shutdown();
 }
 
-void StoragePool::enableGC()
-{
-    // The data in V3 will be GCed by `GlobalStoragePool::gc`, only register gc task under only v2/mix mode
-    if (run_mode == PageStorageRunMode::ONLY_V2 || run_mode == PageStorageRunMode::MIX_MODE)
-    {
-        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
-    }
-}
-
-void StoragePool::dataRegisterExternalPagesCallbacks(const ExternalPageCallbacks & callbacks)
+void StoragePool::startup(ExternalPageCallbacks && callbacks)
 {
     switch (run_mode)
     {
     case PageStorageRunMode::ONLY_V2:
     {
+        // For V2, we need a per physical table gc handle to perform the gc of its PageStorage instances.
         data_storage_v2->registerExternalPagesCallbacks(callbacks);
+        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
         break;
     }
     case PageStorageRunMode::ONLY_V3:
     {
+        // For V3, the GC is handled by `GlobalStoragePool::gc`, just register callbacks is OK.
         data_storage_v3->registerExternalPagesCallbacks(callbacks);
         break;
     }
     case PageStorageRunMode::MIX_MODE:
     {
-        // We have transformed all pages from V2 to V3 in `restore`, so
-        // only need to register callbacks for V3.
+        // For V3, the GC is handled by `GlobalStoragePool::gc`.
+        // Since we have transformed all external pages from V2 to V3 in `StoragePool::restore`,
+        // just register callbacks to V3 is OK
         data_storage_v3->registerExternalPagesCallbacks(callbacks);
+        // we still need a gc_handle to reclaim the V2 disk space.
+        gc_handle = global_context.getBackgroundPool().addTask([this] { return this->gc(global_context.getSettingsRef()); });
+        break;
+    }
+    case PageStorageRunMode::UNI_PS:
+    {
+        // For uni ps, the GC is handled by `UniversalPageStorageService`, register callbacks with prefix for this table
+        UniversalExternalPageCallbacks us_callbacks;
+        us_callbacks.remover = std::move(callbacks.remover);
+        us_callbacks.scanner = std::move(callbacks.scanner);
+        us_callbacks.prefix = UniversalPageIdFormat::toFullPrefix(keyspace_id, StorageType::Data, ns_id);
+        uni_ps->registerUniversalExternalPagesCallbacks(us_callbacks);
         break;
     }
     default:
@@ -540,12 +598,22 @@ void StoragePool::dataRegisterExternalPagesCallbacks(const ExternalPageCallbacks
     }
 }
 
-void StoragePool::dataUnregisterExternalPagesCallbacks(NamespaceId ns_id)
+void StoragePool::shutdown()
 {
+    // Note: Should reset the gc_handle before unregistering the pages callbacks
+    if (gc_handle)
+    {
+        global_context.getBackgroundPool().removeTask(gc_handle);
+        gc_handle = nullptr;
+    }
+
     switch (run_mode)
     {
     case PageStorageRunMode::ONLY_V2:
     {
+        meta_storage_v2->shutdown();
+        log_storage_v2->shutdown();
+        data_storage_v2->shutdown();
         data_storage_v2->unregisterExternalPagesCallbacks(ns_id);
         break;
     }
@@ -556,15 +624,23 @@ void StoragePool::dataUnregisterExternalPagesCallbacks(NamespaceId ns_id)
     }
     case PageStorageRunMode::MIX_MODE:
     {
-        // no need unregister callback in V2.
+        meta_storage_v2->shutdown();
+        log_storage_v2->shutdown();
+        data_storage_v2->shutdown();
+        // We have transformed all external pages from V2 to V3 in `restore`, so
+        // only need to unregister callbacks for V3.
         data_storage_v3->unregisterExternalPagesCallbacks(ns_id);
+        break;
+    }
+    case PageStorageRunMode::UNI_PS:
+    {
+        uni_ps->unregisterUniversalExternalPagesCallbacks(UniversalPageIdFormat::toFullPrefix(keyspace_id, StorageType::Data, ns_id));
         break;
     }
     default:
         throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 }
-
 
 bool StoragePool::doV2Gc(const Settings & settings)
 {
@@ -588,7 +664,7 @@ bool StoragePool::doV2Gc(const Settings & settings)
 
 bool StoragePool::gc(const Settings & settings, const Seconds & try_gc_period)
 {
-    if (run_mode == PageStorageRunMode::ONLY_V3)
+    if (run_mode == PageStorageRunMode::ONLY_V3 || run_mode == PageStorageRunMode::UNI_PS)
         return false;
 
     {
@@ -606,21 +682,6 @@ bool StoragePool::gc(const Settings & settings, const Seconds & try_gc_period)
     return doV2Gc(settings);
 }
 
-void StoragePool::shutdown()
-{
-    if (gc_handle)
-    {
-        global_context.getBackgroundPool().removeTask(gc_handle);
-        gc_handle = nullptr;
-    }
-    if (run_mode != PageStorageRunMode::ONLY_V3)
-    {
-        meta_storage_v2->shutdown();
-        log_storage_v2->shutdown();
-        data_storage_v2->shutdown();
-    }
-}
-
 void StoragePool::drop()
 {
     shutdown();
@@ -633,20 +694,20 @@ void StoragePool::drop()
     }
 }
 
-PageId StoragePool::newDataPageIdForDTFile(StableDiskDelegator & delegator, const char * who)
+PageIdU64 StoragePool::newDataPageIdForDTFile(StableDiskDelegator & delegator, const char * who)
 {
     // In case that there is a DTFile created on disk but TiFlash crashes without persisting the ID.
     // After TiFlash process restored, the ID will be inserted into the stable delegator, but we may
     // get a duplicated ID from the `storage_pool.data`. (tics#2756)
-    PageId dtfile_id;
+    PageIdU64 dtfile_id;
     do
     {
         dtfile_id = ++max_data_page_id;
 
         auto existed_path = delegator.getDTFilePath(dtfile_id, /*throw_on_not_exist=*/false);
         fiu_do_on(FailPoints::force_set_dtfile_exist_when_acquire_id, {
-            static size_t fail_point_called = 0;
-            if (existed_path.empty() && fail_point_called % 10 == 0)
+            static std::atomic<UInt64> fail_point_called(0);
+            if (existed_path.empty() && fail_point_called.load() % 10 == 0)
             {
                 existed_path = "<mock for existed path>";
             }
@@ -657,62 +718,71 @@ PageId StoragePool::newDataPageIdForDTFile(StableDiskDelegator & delegator, cons
             break;
         }
         // else there is a DTFile with that id, continue to acquire a new ID.
-        LOG_FMT_WARNING(logger,
-                        "The DTFile is already exists, continute to acquire another ID. [call={}][path={}] [id={}]",
-                        who,
-                        existed_path,
-                        dtfile_id);
+        LOG_WARNING(logger,
+                    "The DTFile is already exists, continute to acquire another ID. [call={}][path={}] [id={}]",
+                    who,
+                    existed_path,
+                    dtfile_id);
     } while (true);
     return dtfile_id;
 }
 
 template <typename T>
-inline static PageReader newReader(const PageStorageRunMode run_mode, const NamespaceId ns_id, T & storage_v2, T & storage_v3, ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
+inline static PageReaderPtr newReader(const PageStorageRunMode run_mode, KeyspaceID keyspace_id, StorageType tag, const NamespaceID ns_id, T & storage_v2, T & storage_v3, UniversalPageStoragePtr uni_ps, ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
 {
     switch (run_mode)
     {
     case PageStorageRunMode::ONLY_V2:
-        return PageReader(run_mode, ns_id, storage_v2, nullptr, snapshot_read ? storage_v2->getSnapshot(tracing_id) : nullptr, read_limiter);
+        return std::make_shared<PageReader>(run_mode, keyspace_id, tag, ns_id, storage_v2, nullptr, /*uni_ps*/ nullptr, snapshot_read ? storage_v2->getSnapshot(tracing_id) : nullptr, read_limiter);
     case PageStorageRunMode::ONLY_V3:
-        return PageReader(run_mode, ns_id, nullptr, storage_v3, snapshot_read ? storage_v3->getSnapshot(tracing_id) : nullptr, read_limiter);
+        return std::make_shared<PageReader>(run_mode, keyspace_id, tag, ns_id, nullptr, storage_v3, /*uni_ps*/ nullptr, snapshot_read ? storage_v3->getSnapshot(tracing_id) : nullptr, read_limiter);
     case PageStorageRunMode::MIX_MODE:
-        return PageReader(run_mode, ns_id, storage_v2, storage_v3, snapshot_read ? std::make_shared<PageStorageSnapshotMixed>(storage_v2->getSnapshot(fmt::format("{}-v2", tracing_id)), //
-                                                                                                                              storage_v3->getSnapshot(fmt::format("{}-v3", tracing_id)))
-                                                                                 : nullptr,
-                          read_limiter);
+        return std::make_shared<PageReader>(
+            run_mode,
+            keyspace_id,
+            tag,
+            ns_id,
+            storage_v2,
+            storage_v3,
+            /*uni_ps*/ nullptr,
+            snapshot_read ? std::make_shared<PageStorageSnapshotMixed>(storage_v2->getSnapshot(fmt::format("{}-v2", tracing_id)), storage_v3->getSnapshot(fmt::format("{}-v3", tracing_id)))
+                          : nullptr,
+            read_limiter);
+    case PageStorageRunMode::UNI_PS:
+        return std::make_shared<PageReader>(run_mode, keyspace_id, tag, ns_id, nullptr, nullptr, uni_ps, snapshot_read ? uni_ps->getSnapshot(tracing_id) : nullptr, read_limiter);
     default:
         throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 }
 
-PageReader StoragePool::newLogReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
+PageReaderPtr StoragePool::newLogReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
 {
-    return newReader(run_mode, ns_id, log_storage_v2, log_storage_v3, read_limiter, snapshot_read, tracing_id);
+    return newReader(run_mode, keyspace_id, StorageType::Log, ns_id, log_storage_v2, log_storage_v3, uni_ps, read_limiter, snapshot_read, tracing_id);
 }
 
-PageReader StoragePool::newLogReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
+PageReaderPtr StoragePool::newLogReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
 {
-    return PageReader(run_mode, ns_id, log_storage_v2, log_storage_v3, snapshot, read_limiter);
+    return std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Log, ns_id, log_storage_v2, log_storage_v3, uni_ps, snapshot, read_limiter);
 }
 
-PageReader StoragePool::newDataReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
+PageReaderPtr StoragePool::newDataReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
 {
-    return newReader(run_mode, ns_id, data_storage_v2, data_storage_v3, read_limiter, snapshot_read, tracing_id);
+    return newReader(run_mode, keyspace_id, StorageType::Data, ns_id, data_storage_v2, data_storage_v3, uni_ps, read_limiter, snapshot_read, tracing_id);
 }
 
-PageReader StoragePool::newDataReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
+PageReaderPtr StoragePool::newDataReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
 {
-    return PageReader(run_mode, ns_id, data_storage_v2, data_storage_v3, snapshot, read_limiter);
+    return std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Data, ns_id, data_storage_v2, data_storage_v3, uni_ps, snapshot, read_limiter);
 }
 
-PageReader StoragePool::newMetaReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
+PageReaderPtr StoragePool::newMetaReader(ReadLimiterPtr read_limiter, bool snapshot_read, const String & tracing_id)
 {
-    return newReader(run_mode, ns_id, meta_storage_v2, meta_storage_v3, read_limiter, snapshot_read, tracing_id);
+    return newReader(run_mode, keyspace_id, StorageType::Meta, ns_id, meta_storage_v2, meta_storage_v3, uni_ps, read_limiter, snapshot_read, tracing_id);
 }
 
-PageReader StoragePool::newMetaReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
+PageReaderPtr StoragePool::newMetaReader(ReadLimiterPtr read_limiter, PageStorage::SnapshotPtr & snapshot)
 {
-    return PageReader(run_mode, ns_id, meta_storage_v2, meta_storage_v3, snapshot, read_limiter);
+    return std::make_shared<PageReader>(run_mode, keyspace_id, StorageType::Meta, ns_id, meta_storage_v2, meta_storage_v3, uni_ps, snapshot, read_limiter);
 }
 
 } // namespace DM

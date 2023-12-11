@@ -16,7 +16,6 @@
 #include <Common/Exception.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsDateTime.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -82,9 +81,9 @@ protected:
                         .column,
                     makeNullable(std::make_shared<DT>()),
                     "result");
-                result_day = createConstColumn<Nullable<UInt8>>(1, {day});
-                result_month = createConstColumn<Nullable<UInt8>>(1, {month});
-                result_year = createConstColumn<Nullable<UInt16>>(1, {year});
+                result_day = createConstColumn<UInt8>(1, {day});
+                result_month = createConstColumn<UInt8>(1, {month});
+                result_year = createConstColumn<UInt16>(1, {year});
             }
             else
             {

@@ -107,6 +107,7 @@ DBGInvoker::DBGInvoker()
 
     regSchemalessFunc("init_fail_point", DbgFailPointFunc::dbgInitFailPoint);
     regSchemalessFunc("enable_fail_point", DbgFailPointFunc::dbgEnableFailPoint);
+    regSchemalessFunc("enable_pause_fail_point", DbgFailPointFunc::dbgEnablePauseFailPoint);
     regSchemalessFunc("disable_fail_point", DbgFailPointFunc::dbgDisableFailPoint);
     regSchemalessFunc("wait_fail_point", DbgFailPointFunc::dbgDisableFailPoint);
 
@@ -118,12 +119,16 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("mapped_database", dbgFuncMappedDatabase);
     regSchemalessFunc("mapped_table", dbgFuncMappedTable);
     regSchemafulFunc("query_mapped", dbgFuncQueryMapped);
+    regSchemalessFunc("get_tiflash_replica_count", dbgFuncGetTiflashReplicaCount);
+    regSchemalessFunc("get_partition_tables_tiflash_replica_count", dbgFuncGetPartitionTablesTiflashReplicaCount);
 
     regSchemalessFunc("search_log_for_key", dbgFuncSearchLogForKey);
     regSchemalessFunc("tidb_dag", dbgFuncTiDBQueryFromNaturalDag);
     regSchemalessFunc("gc_global_storage_pool", dbgFuncTriggerGlobalPageStorageGC);
 
     regSchemalessFunc("read_index_stress_test", ReadIndexStressTest::dbgFuncStressTest);
+
+    regSchemalessFunc("wait_until_no_temp_active_threads_in_dynamic_thread_pool", dbgFuncWaitUntilNoTempActiveThreadsInDynamicThreadPool);
 }
 
 void replaceSubstr(std::string & str, const std::string & target, const std::string & replacement)

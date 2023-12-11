@@ -22,10 +22,11 @@
 #include <Common/TiFlashException.h>
 #include <Encryption/FileProvider.h>
 #include <IO/WriteHelpers.h>
+#include <Storages/Page/Page.h>
+#include <boost_wrapper/string_split.h>
 #include <common/logger_useful.h>
 
 #include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/split.hpp>
 #include <random>
 
 #ifndef __APPLE__
@@ -303,6 +304,8 @@ inline T get(std::conditional_t<advance, char *&, const char *> pos)
         pos += sizeof(T);
     return v;
 }
+
+std::vector<size_t> getFieldSizes(const std::set<FieldOffsetInsidePage> & field_offsets, size_t data_size);
 
 } // namespace PageUtil
 

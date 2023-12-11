@@ -20,13 +20,6 @@
 #include <Poco/Net/DNS.h>
 #include <Poco/Net/NetException.h>
 
-
-namespace ProfileEvents
-{
-extern const Event DistributedConnectionMissingTable;
-extern const Event DistributedConnectionStaleReplica;
-} // namespace ProfileEvents
-
 namespace DB
 {
 namespace ErrorCodes
@@ -50,7 +43,7 @@ ConnectionPoolWithFailover::ConnectionPoolWithFailover(
     hostname_differences.resize(nested_pools.size());
     for (size_t i = 0; i < nested_pools.size(); ++i)
     {
-        ConnectionPool & connection_pool = dynamic_cast<ConnectionPool &>(*nested_pools[i]);
+        auto & connection_pool = dynamic_cast<ConnectionPool &>(*nested_pools[i]);
         hostname_differences[i] = getHostNameDifference(local_hostname, connection_pool.getHost());
     }
 }
@@ -112,7 +105,7 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     PoolMode pool_mode,
     const TryGetEntryFunc & try_get_entry)
 {
-    size_t min_entries = (settings && settings->skip_unavailable_shards) ? 0 : 1;
+    size_t min_entries = 1;
     size_t max_entries;
     if (pool_mode == PoolMode::GET_ALL)
     {
@@ -122,7 +115,7 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     else if (pool_mode == PoolMode::GET_ONE)
         max_entries = 1;
     else if (pool_mode == PoolMode::GET_MANY)
-        max_entries = settings ? size_t(settings->max_parallel_replicas) : 1;
+        max_entries = 1;
     else
         throw DB::Exception("Unknown pool allocation mode", DB::ErrorCodes::LOGICAL_ERROR);
 
@@ -143,7 +136,8 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
         break;
     }
 
-    bool fallback_to_stale_replicas = settings ? bool(settings->fallback_to_stale_replicas_for_distributed_queries) : true;
+    /*fallback_to_stale_replicas_for_distributed_queries*/
+    bool fallback_to_stale_replicas = true;
 
     return Base::getMany(min_entries, max_entries, try_get_entry, get_priority, fallback_to_stale_replicas);
 }
@@ -187,14 +181,13 @@ ConnectionPoolWithFailover::tryGetEntry(
             fail_message = "There is no table " + table_to_check->database + "." + table_to_check->table
                 + " on server: " + result.entry->getDescription();
             LOG_WARNING(log, fail_message);
-            ProfileEvents::increment(ProfileEvents::DistributedConnectionMissingTable);
 
             return result;
         }
 
         result.is_usable = true;
 
-        UInt64 max_allowed_delay = settings ? UInt64(settings->max_replica_delay_for_distributed_queries) : 0;
+        UInt64 max_allowed_delay = settings ? /*max_replica_delay_for_distributed_queries*/ 300 : 0;
         if (!max_allowed_delay)
         {
             result.is_up_to_date = true;
@@ -210,14 +203,13 @@ ConnectionPoolWithFailover::tryGetEntry(
             result.is_up_to_date = false;
             result.staleness = delay;
 
-            LOG_FMT_TRACE(
+            LOG_TRACE(
                 log,
                 "Server {} has unacceptable replica delay for table {}.{}: {}",
                 result.entry->getDescription(),
                 table_to_check->database,
                 table_to_check->table,
                 delay);
-            ProfileEvents::increment(ProfileEvents::DistributedConnectionStaleReplica);
         }
     }
     catch (const Exception & e)

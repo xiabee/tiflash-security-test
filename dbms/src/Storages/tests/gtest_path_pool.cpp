@@ -14,10 +14,12 @@
 
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
+#include <Interpreters/Context.h>
+#include <Storages/Page/V3/PageDefines.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/PathPool.h>
 #include <Storages/Transaction/ProxyFFI.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 #include <fmt/format.h>
@@ -31,7 +33,7 @@ class PathPoolTest : public ::testing::Test
 {
 public:
     PathPoolTest()
-        : log(&Poco::Logger::get("PathPoolTest"))
+        : log(Logger::get("PathPoolTest"))
     {}
 
     static void SetUpTestCase() {}
@@ -49,7 +51,7 @@ public:
     }
 
 protected:
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 TEST_F(PathPoolTest, AlignPaths)
@@ -58,7 +60,7 @@ try
     Strings paths = getMultiTestPaths();
     auto ctx = TiFlashTestEnv::getContext();
 
-    PathPool pool(paths, paths, Strings{}, ctx.getPathCapacity(), ctx.getFileProvider());
+    PathPool pool(paths, paths, Strings{}, ctx->getPathCapacity(), ctx->getFileProvider());
     auto spool = pool.withTable("test", "t", false);
 
     // Stable delegate
@@ -82,8 +84,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -115,8 +117,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -149,8 +151,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -183,8 +185,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -203,7 +205,7 @@ try
     Strings latest_paths(paths.begin(), paths.begin() + 1);
     auto ctx = TiFlashTestEnv::getContext();
 
-    PathPool pool(paths, latest_paths, Strings{}, ctx.getPathCapacity(), ctx.getFileProvider());
+    PathPool pool(paths, latest_paths, Strings{}, ctx->getPathCapacity(), ctx->getFileProvider());
     auto spool = pool.withTable("test", "t", false);
     // Stable delegate
     {
@@ -226,8 +228,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -259,8 +261,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -293,8 +295,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -327,8 +329,8 @@ try
 
         for (const auto & r : res)
         {
-            auto stat = std::get<0>(ctx.getPathCapacity()->getFsStatsOfPath(r));
-            LOG_FMT_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
+            auto stat = std::get<0>(ctx->getPathCapacity()->getFsStatsOfPath(r));
+            LOG_INFO(log, "[path={}] [used_size={}]", r, stat.used_size);
         }
 
         for (size_t i = 0; i < TEST_NUMBER_FOR_CHOOSE; ++i)
@@ -340,13 +342,50 @@ try
 }
 CATCH
 
+TEST_F(PathPoolTest, FileLifecycle)
+{
+    Strings paths = getMultiTestPaths();
+    Strings latest_paths(paths.begin(), paths.begin() + 1);
+    auto ctx = TiFlashTestEnv::getContext();
+
+    PathPool pool(paths, paths, Strings{}, ctx->getPathCapacity(), ctx->getFileProvider());
+    auto delegator = pool.getPSDiskDelegatorGlobalMulti("log");
+    PageFileIdAndLevel id_lvl{100, 0};
+    // create new page data file
+    const String chosen_path = delegator->choosePath(id_lvl);
+    EXPECT_FALSE(delegator->fileExist(id_lvl));
+    delegator->addPageFileUsedSize(id_lvl, 1024, chosen_path, true);
+    // add size to page data file
+    delegator->addPageFileUsedSize(id_lvl, 2048, chosen_path, false);
+    // remove size to page data file
+    delegator->freePageFileUsedSize(id_lvl, 2048, chosen_path);
+    delegator->freePageFileUsedSize(id_lvl, 512, chosen_path);
+    delegator->freePageFileUsedSize(id_lvl, 512, chosen_path);
+    EXPECT_TRUE(delegator->fileExist(id_lvl));
+    // get page data file path
+    EXPECT_EQ(delegator->getPageFilePath(id_lvl), chosen_path);
+    // add size to page data file
+    delegator->addPageFileUsedSize(id_lvl, 256, chosen_path, false);
+    // remove page data file
+    delegator->removePageFile(id_lvl, 256, false, false);
+    EXPECT_FALSE(delegator->fileExist(id_lvl));
+}
+
 class MockPathCapacityMetrics : public PathCapacityMetrics
 {
 public:
-    MockPathCapacityMetrics(const size_t capacity_quota_, const Strings & main_paths_, const std::vector<size_t> main_capacity_quota_, //
-                            const Strings & latest_paths_,
-                            const std::vector<size_t> latest_capacity_quota_)
-        : PathCapacityMetrics(capacity_quota_, main_paths_, main_capacity_quota_, latest_paths_, latest_capacity_quota_)
+    MockPathCapacityMetrics(
+        const size_t capacity_quota_,
+        const Strings & main_paths_,
+        const std::vector<size_t> main_capacity_quota_,
+        const Strings & latest_paths_,
+        const std::vector<size_t> latest_capacity_quota_)
+        : PathCapacityMetrics(
+            capacity_quota_,
+            main_paths_,
+            main_capacity_quota_,
+            latest_paths_,
+            latest_capacity_quota_)
     {}
 
     std::map<FSID, DiskCapacity> getDiskStats() override { return disk_stats_map; }
@@ -382,7 +421,7 @@ class PathCapacity : public DB::base::TiFlashStorageTestBasic
     }
 
 protected:
-    struct statvfs vfs_info;
+    struct statvfs vfs_info = {};
     std::string main_data_path;
     std::string latest_data_path;
 };
@@ -399,7 +438,7 @@ TEST_F(PathCapacity, SingleDiskSinglePathTest)
         auto capacity = PathCapacityMetrics(0, {main_data_path}, {capactity}, {latest_data_path}, {capactity});
 
         capacity.addUsedSize(main_data_path, used);
-        auto stats = capacity.getFsStats();
+        auto stats = capacity.getFsStats(false);
         ASSERT_EQ(stats.capacity_size, capactity * 2);
         ASSERT_EQ(stats.used_size, used);
         ASSERT_EQ(stats.avail_size, capactity * 2 - used);
@@ -429,7 +468,7 @@ TEST_F(PathCapacity, SingleDiskSinglePathTest)
         capacity.addUsedSize(main_data_path1, used);
         capacity.addUsedSize(latest_data_path, used);
 
-        auto stats = capacity.getFsStats();
+        auto stats = capacity.getFsStats(false);
         ASSERT_EQ(stats.capacity_size, capactity * 6);
         ASSERT_EQ(stats.used_size, 3 * used);
         ASSERT_EQ(stats.avail_size, capactity * 6 - (3 * used));
@@ -469,7 +508,7 @@ TEST_F(PathCapacity, MultiDiskMultiPathTest)
                                   {.used_size = 12, .avail_size = 50, .capacity_size = 1000, .ok = 1},
                               }};
     capacity.setDiskStats(disk_capacity_map);
-    FsStats total_stats = capacity.getFsStats();
+    FsStats total_stats = capacity.getFsStats(false);
     ASSERT_EQ(total_stats.capacity_size, 100);
     ASSERT_EQ(total_stats.used_size, 16);
     ASSERT_EQ(total_stats.avail_size, 50);
@@ -494,7 +533,7 @@ TEST_F(PathCapacity, MultiDiskMultiPathTest)
                               }};
     capacity.setDiskStats(disk_capacity_map);
 
-    total_stats = capacity.getFsStats();
+    total_stats = capacity.getFsStats(false);
     ASSERT_EQ(total_stats.capacity_size, 100 + 98);
     ASSERT_EQ(total_stats.used_size, 16 + 52);
     ASSERT_EQ(total_stats.avail_size, 50 + 46);
@@ -508,14 +547,14 @@ try
     {
         PathCapacityMetrics path_capacity(global_capacity_quota, {main_data_path}, {capacity}, {latest_data_path}, {capacity});
 
-        FsStats fs_stats = path_capacity.getFsStats();
+        FsStats fs_stats = path_capacity.getFsStats(false);
         EXPECT_EQ(fs_stats.capacity_size, 2 * capacity); // summing the capacity of main and latest path
     }
 
     {
         PathCapacityMetrics path_capacity(global_capacity_quota, {main_data_path}, {}, {latest_data_path}, {});
 
-        FsStats fs_stats = path_capacity.getFsStats();
+        FsStats fs_stats = path_capacity.getFsStats(false);
         EXPECT_EQ(fs_stats.capacity_size, global_capacity_quota); // Use `global_capacity_quota` when `main_capacity_quota_` is empty
     }
 }

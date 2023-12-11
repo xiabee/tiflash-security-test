@@ -16,6 +16,7 @@
 #include <IO/WriteHelpers.h>
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
+#include <Poco/Util/AbstractConfiguration.h>
 #include <Poco/Util/LayeredConfiguration.h>
 #include <Server/RaftConfigParser.h>
 #include <Storages/MutableSupport.h>
@@ -30,13 +31,27 @@ extern const int INVALID_CONFIG_PARAMETER;
 } // namespace ErrorCodes
 
 /// Load raft related configs.
-TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfiguration & config, Poco::Logger * log)
+TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::AbstractConfiguration & config, const LoggerPtr & log)
 {
     TiFlashRaftConfig res;
+    // The ip/port that flash service bind to
     res.flash_server_addr = config.getString("flash.service_addr", "0.0.0.0:3930");
+    // The ip/port that other flash server connect to
+    res.advertise_engine_addr = config.getString(
+        "flash.proxy.advertise-engine-addr",
+        config.getString("flash.proxy.engine-addr", res.flash_server_addr));
 
-    if (!config.has("raft"))
-        return res;
+    // "addr" - The raft ip/port that raft service bind to
+    // "advertise-addr" - The raft ip/port that other raft server connect to
+
+    {
+        // Check by `raft` prefix instead of check by `config.has("raft")`,
+        // because when sub keys are set from cli args, `raft` will not exist.
+        Poco::Util::AbstractConfiguration::Keys keys;
+        config.keys("raft", keys);
+        if (keys.empty())
+            return res;
+    }
 
     if (config.has("raft.pd_addr"))
     {
@@ -46,11 +61,11 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
         {
             res.pd_addrs.push_back(string_token);
         }
-        LOG_FMT_INFO(log, "Found pd addrs: {}", pd_service_addrs);
+        LOG_INFO(log, "Found pd addrs: {}", pd_service_addrs);
     }
     else
     {
-        LOG_FMT_INFO(log, "Not found pd addrs.");
+        LOG_INFO(log, "Not found pd addrs.");
     }
 
     if (config.has("raft.ignore_databases"))
@@ -67,7 +82,7 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
                 fb.append(arg);
             },
             ", ");
-        LOG_FMT_INFO(log, "Found ignore databases: {}", fmt_buf.toString());
+        LOG_INFO(log, "Found ignore databases: {}", fmt_buf.toString());
     }
 
     if (config.has("raft.storage_engine"))
@@ -82,50 +97,7 @@ TiFlashRaftConfig TiFlashRaftConfig::parseSettings(Poco::Util::LayeredConfigurat
             res.engine = DEFAULT_ENGINE;
     }
 
-    // just for test
-    if (config.has("raft.enable_compatible_mode"))
-    {
-        res.enable_compatible_mode = config.getBool("raft.enable_compatible_mode");
-    }
-
-    if (config.has("raft.snapshot.method"))
-    {
-        String snapshot_method = config.getString("raft.snapshot.method");
-        std::transform(snapshot_method.begin(), snapshot_method.end(), snapshot_method.begin(), [](char ch) { return std::tolower(ch); });
-        if (snapshot_method == "block")
-        {
-            res.snapshot_apply_method = TiDB::SnapshotApplyMethod::Block;
-        }
-        else if (snapshot_method == "file1")
-        {
-            res.snapshot_apply_method = TiDB::SnapshotApplyMethod::DTFile_Directory;
-        }
-#if 0
-        // Not generally available for this file format
-        else if (snapshot_method == "file2")
-        {
-            res.snapshot_apply_method = TiDB::SnapshotApplyMethod::DTFile_Single;
-        }
-#endif
-    }
-    switch (res.snapshot_apply_method)
-    {
-    case TiDB::SnapshotApplyMethod::DTFile_Directory:
-    case TiDB::SnapshotApplyMethod::DTFile_Single:
-        if (res.engine != TiDB::StorageEngine::DT)
-        {
-            throw Exception(
-                fmt::format("Illegal arguments: can not use DTFile to store snapshot data when the storage engine is not DeltaTree, [engine={}] [snapshot method={}]",
-                            static_cast<Int32>(res.engine),
-                            applyMethodToString(res.snapshot_apply_method)),
-                ErrorCodes::INVALID_CONFIG_PARAMETER);
-        }
-        break;
-    default:
-        break;
-    }
-
-    LOG_FMT_INFO(log, "Default storage engine [type={}] [snapshot.method={}]", static_cast<Int64>(res.engine), applyMethodToString(res.snapshot_apply_method));
+    LOG_INFO(log, "Default storage engine [type={}]", static_cast<Int64>(res.engine));
 
     return res;
 }

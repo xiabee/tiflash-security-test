@@ -13,6 +13,7 @@
 // limitations under the License.
 
 /// Suppress gcc warning: ‘*((void*)&<anonymous> +4)’ may be used uninitialized in this function
+#include <Poco/Environment.h>
 #if !__clang__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
@@ -37,13 +38,13 @@ class StorageConfigTest : public ::testing::Test
 {
 public:
     StorageConfigTest()
-        : log(&Poco::Logger::get("StorageConfigTest"))
+        : log(Logger::get())
     {}
 
     static void SetUpTestCase() {}
 
 protected:
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 TEST_F(StorageConfigTest, SimpleSinglePath)
@@ -72,7 +73,7 @@ dir=["/data0/tiflash"]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -131,7 +132,7 @@ dir=["/data222/kvstore"]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -179,7 +180,7 @@ dir=["/data0/tiflash"]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -228,7 +229,7 @@ dir=["/data0/tiflash", "/data1/tiflash", "/data2/tiflash"]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -282,7 +283,7 @@ dir=["/ssd0/tiflash"]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -368,7 +369,7 @@ dir = "/data0/tiflash,/data1/tiflash"
         R"(
 [storage]
 [storage.main]
-dir = [ "/data0/tiflash", "/data1/tiflash" ] 
+dir = [ "/data0/tiflash", "/data1/tiflash" ]
 [storage.latest]
 dir = "/data0/tiflash"
         )",
@@ -376,7 +377,7 @@ dir = "/data0/tiflash"
         R"(
 [storage]
 [storage.main]
-dir = [ "/data0/tiflash", "/data1/tiflash" ] 
+dir = [ "/data0/tiflash", "/data1/tiflash" ]
 [storage.raft]
 dir = "/data0/tiflash"
         )",
@@ -405,7 +406,7 @@ dir = [1,2,3]
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -449,14 +450,14 @@ dir=["/data0/tiflash"]
 capacity=[ 1024 ]
         )",
     };
-    Poco::Logger * log = &Poco::Logger::get("PathCapacityMetrics_test");
+    auto log = Logger::get();
 
     for (size_t i = 0; i < tests.size(); ++i)
     {
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
@@ -530,7 +531,7 @@ max_bytes_per_sec=1024000
     {
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
         auto [global_capacity_quota, storage] = TiFlashStorageConfig::parseSettings(*config, log);
         std::ignore = global_capacity_quota;
         Strings paths;
@@ -603,7 +604,7 @@ background_read_weight=2
         )",
     };
 
-    Poco::Logger * log = &Poco::Logger::get("StorageIORateLimitConfigTest");
+    auto log = Logger::get();
 
     auto verify_default = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 0);
@@ -706,7 +707,7 @@ background_read_weight=2
         const auto & test_case = tests[i];
         auto config = loadConfigFromString(test_case);
 
-        LOG_FMT_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
         ASSERT_TRUE(config->has("storage.io_rate_limit"));
 
         StorageIORateLimitConfig io_config;
@@ -716,5 +717,207 @@ background_read_weight=2
     }
 }
 CATCH
+
+std::pair<String, String> getS3Env()
+{
+    return {Poco::Environment::get(StorageS3Config::S3_ACCESS_KEY_ID, /*default*/ ""),
+            Poco::Environment::get(StorageS3Config::S3_SECRET_ACCESS_KEY, /*default*/ "")};
+}
+
+void setS3Env(const String & id, const String & key)
+{
+    Poco::Environment::set(StorageS3Config::S3_ACCESS_KEY_ID, id);
+    Poco::Environment::set(StorageS3Config::S3_SECRET_ACCESS_KEY, key);
+}
+
+TEST_F(StorageConfigTest, S3Config)
+try
+{
+    Strings tests = {
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.s3]
+access_key_id = "11111111"
+secret_access_key = "22222222"
+root = "root123"
+        )",
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.s3]
+endpoint = "127.0.0.1:8080"
+bucket = "s3_bucket"
+access_key_id = "33333333"
+secret_access_key = "44444444"
+root = "root123"
+        )",
+    };
+
+    // Save env variables and restore when exit.
+    auto id_key = getS3Env();
+    SCOPE_EXIT({
+        setS3Env(id_key.first, id_key.second);
+    });
+
+
+    const String env_access_key_id{"abcdefgh"};
+    const String env_secret_access_key{"1234567890"};
+    setS3Env(env_access_key_id, env_secret_access_key);
+    // Env variables have been set, we except to use environment variables first.
+    for (size_t i = 0; i < tests.size(); ++i)
+    {
+        const auto & test_case = tests[i];
+        auto config = loadConfigFromString(test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        auto [global_capacity_quota, storage] = TiFlashStorageConfig::parseSettings(*config, log);
+        auto & s3_config = storage.s3_config;
+        ASSERT_EQ(s3_config.access_key_id, env_access_key_id);
+        ASSERT_EQ(s3_config.secret_access_key, env_secret_access_key);
+        ASSERT_EQ(s3_config.root, "root123/");
+        if (i == 0)
+        {
+            ASSERT_TRUE(s3_config.endpoint.empty());
+            ASSERT_TRUE(s3_config.bucket.empty());
+            ASSERT_FALSE(s3_config.isS3Enabled());
+        }
+        else if (i == 1)
+        {
+            ASSERT_EQ(s3_config.endpoint, "127.0.0.1:8080");
+            ASSERT_EQ(s3_config.bucket, "s3_bucket");
+            ASSERT_FALSE(s3_config.isS3Enabled());
+            s3_config.enable(/*check_requirements*/ true, log);
+            ASSERT_TRUE(s3_config.isS3Enabled());
+        }
+        else
+        {
+            throw Exception("Not support");
+        }
+    }
+
+    setS3Env("", "");
+    // Env variables have been cleared, we except to use configuration.
+    for (size_t i = 0; i < tests.size(); ++i)
+    {
+        const auto & test_case = tests[i];
+        auto config = loadConfigFromString(test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        auto [global_capacity_quota, storage] = TiFlashStorageConfig::parseSettings(*config, log);
+        auto & s3_config = storage.s3_config;
+        if (i == 0)
+        {
+            ASSERT_TRUE(s3_config.endpoint.empty());
+            ASSERT_TRUE(s3_config.bucket.empty());
+            ASSERT_FALSE(s3_config.isS3Enabled());
+            ASSERT_EQ(s3_config.access_key_id, "11111111");
+            ASSERT_EQ(s3_config.secret_access_key, "22222222");
+        }
+        else if (i == 1)
+        {
+            ASSERT_EQ(s3_config.endpoint, "127.0.0.1:8080");
+            ASSERT_EQ(s3_config.bucket, "s3_bucket");
+            ASSERT_FALSE(s3_config.isS3Enabled());
+            s3_config.enable(/*check_requirements*/ true, log);
+            ASSERT_TRUE(s3_config.isS3Enabled());
+            ASSERT_EQ(s3_config.access_key_id, "33333333");
+            ASSERT_EQ(s3_config.secret_access_key, "44444444");
+        }
+        else
+        {
+            throw Exception("Not support");
+        }
+    }
+}
+CATCH
+
+TEST_F(StorageConfigTest, RemoteCacheConfig)
+try
+{
+    Strings tests = {
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.remote.cache]
+dir = "/tmp/StorageConfigTest/RemoteCacheConfig/0"
+capacity = 10000000
+dtfile_level = 11
+delta_rate = 0.33
+        )",
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.remote.cache]
+dir = "/tmp/StorageConfigTest/RemoteCacheConfig/0/"
+capacity = 10000000
+dtfile_level = 11
+delta_rate = 0.33
+        )",
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.remote.cache]
+dir = "/tmp/StorageConfigTest/RemoteCacheConfig/1"
+capacity = 10000000
+dtfile_level = 101
+delta_rate = 0.33
+        )",
+        R"(
+[storage]
+[storage.main]
+dir = ["123"]
+[storage.remote.cache]
+dir = "/tmp/StorageConfigTest/RemoteCacheConfig/2"
+capacity = 10000000
+dtfile_level = 11
+delta_rate = 1.1
+        )"};
+
+    for (size_t i = 0; i < tests.size(); ++i)
+    {
+        const auto & test_case = tests[i];
+        auto config = loadConfigFromString(test_case);
+        LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
+        size_t global_capacity_quota;
+        TiFlashStorageConfig storage;
+        try
+        {
+            std::tie(global_capacity_quota, storage) = TiFlashStorageConfig::parseSettings(*config, log);
+            if (i == 2 || i == 3)
+            {
+                FAIL() << test_case; // Parse failed, should not come here.
+            }
+        }
+        catch (...)
+        {
+            continue;
+        }
+
+        const auto & cache_config = storage.remote_cache_config;
+        if (i == 0 || i == 1)
+        {
+            auto target_dir = fmt::format("/tmp/StorageConfigTest/RemoteCacheConfig/0{}", i == 0 ? "" : "/");
+            ASSERT_EQ(cache_config.dir, target_dir);
+            ASSERT_EQ(cache_config.capacity, 10000000);
+            ASSERT_EQ(cache_config.dtfile_level, 11);
+            ASSERT_DOUBLE_EQ(cache_config.delta_rate, 0.33);
+            ASSERT_EQ(cache_config.getDTFileCacheDir(), "/tmp/StorageConfigTest/RemoteCacheConfig/0/dtfile");
+            ASSERT_EQ(cache_config.getPageCacheDir(), "/tmp/StorageConfigTest/RemoteCacheConfig/0/page");
+            ASSERT_EQ(cache_config.getDTFileCapacity() + cache_config.getPageCapacity() + cache_config.getReservedCapacity(), cache_config.capacity);
+            ASSERT_DOUBLE_EQ(cache_config.getDTFileCapacity() * 1.0 / cache_config.capacity, 1.0 - cache_config.delta_rate - cache_config.reserved_rate);
+            ASSERT_TRUE(cache_config.isCacheEnabled());
+        }
+        else
+        {
+            FAIL() << i; // Should not come here.
+        }
+    }
+}
+CATCH
+
 } // namespace tests
 } // namespace DB

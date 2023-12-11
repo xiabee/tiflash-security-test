@@ -18,6 +18,7 @@
 #include <Common/Exception.h>
 #include <Common/Logger.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <DataStreams/SelectionByColumnIdTransformAction.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <common/logger_useful.h>
@@ -36,10 +37,11 @@ static constexpr int DM_VERSION_FILTER_MODE_COMPACT = 1;
 template <int MODE>
 class DMVersionFilterBlockInputStream : public IBlockInputStream
 {
+    static constexpr size_t UNROLL_BATCH = 64;
     static_assert(MODE == DM_VERSION_FILTER_MODE_MVCC || MODE == DM_VERSION_FILTER_MODE_COMPACT);
 
-    constexpr static const char * MVCC_FILTER_NAME = "DMVersionFilterBlockInputStream<MVCC>";
-    constexpr static const char * COMPACT_FILTER_NAME = "DMVersionFilterBlockInputStream<COMPACT>";
+    constexpr static const char * MVCC_FILTER_NAME = "mode=MVCC";
+    constexpr static const char * COMPACT_FILTER_NAME = "mode=COMPACT";
 
 public:
     DMVersionFilterBlockInputStream(const BlockInputStreamPtr & input,
@@ -50,6 +52,7 @@ public:
         : version_limit(version_limit_)
         , is_common_handle(is_common_handle_)
         , header(toEmptyBlock(read_columns))
+        , select_by_colid_action(input->getHeader(), header)
         , log(Logger::get((MODE == DM_VERSION_FILTER_MODE_MVCC ? MVCC_FILTER_NAME : COMPACT_FILTER_NAME),
                           tracing_id))
     {
@@ -62,20 +65,21 @@ public:
         delete_col_pos = input_header.getPositionByName(TAG_COLUMN_NAME);
     }
 
-    ~DMVersionFilterBlockInputStream()
+    ~DMVersionFilterBlockInputStream() override
     {
-        LOG_FMT_DEBUG(log,
-                      "Total rows: {}, pass: {:.2f}%"
-                      ", complete pass: {:.2f}%, complete not pass: {:.2f}%"
-                      ", not clean: {:.2f}%, effective: {:.2f}%"
-                      ", read tso: {}",
-                      total_rows,
-                      passed_rows * 100.0 / total_rows,
-                      complete_passed * 100.0 / total_blocks,
-                      complete_not_passed * 100.0 / total_blocks,
-                      not_clean_rows * 100.0 / passed_rows,
-                      effective_num_rows * 100.0 / passed_rows,
-                      version_limit);
+        LOG_DEBUG(log,
+                  "Total rows: {}, pass: {:.2f}%"
+                  ", complete pass: {:.2f}%, complete not pass: {:.2f}%"
+                  ", not clean: {:.2f}%, is deleted: {:.2f}%, effective: {:.2f}%"
+                  ", read tso: {}",
+                  total_rows,
+                  passed_rows * 100.0 / total_rows,
+                  complete_passed * 100.0 / total_blocks,
+                  complete_not_passed * 100.0 / total_blocks,
+                  not_clean_rows * 100.0 / passed_rows,
+                  deleted_rows * 100.0 / passed_rows,
+                  effective_num_rows * 100.0 / passed_rows,
+                  version_limit);
     }
 
     void readPrefix() override;
@@ -94,6 +98,7 @@ public:
 
     size_t getEffectiveNumRows() const { return effective_num_rows; }
     size_t getNotCleanRows() const { return not_clean_rows; }
+    size_t getDeletedRows() const { return deleted_rows; }
     UInt64 getGCHintVersion() const { return gc_hint_version; }
 
 private:
@@ -113,6 +118,7 @@ private:
             filter[i]
                 = cur_version >= version_limit || ((compare(cur_handle, next_handle) != 0 || next_version > version_limit) && !deleted);
             not_clean[i] = filter[i] && (compare(cur_handle, next_handle) == 0 || deleted);
+            is_deleted[i] = filter[i] && deleted;
             effective[i] = filter[i] && (compare(cur_handle, next_handle) != 0);
             if (filter[i])
                 gc_hint_version = std::min(gc_hint_version, calculateRowGcHintVersion(cur_handle, cur_version, next_handle, true, deleted));
@@ -195,9 +201,26 @@ private:
         return matched ? cur_version : std::numeric_limits<UInt64>::max();
     }
 
+    Block getNewBlock(const Block & block)
+    {
+        if (block.segmentRowIdCol() == nullptr)
+        {
+            return select_by_colid_action.transform(block);
+        }
+        else
+        {
+            // `DMVersionFilterBlockInputStream` is the last stage for generating segment row id.
+            // In the way we use it, the other columns are not used subsequently.
+            Block res;
+            res.setSegmentRowIdCol(block.segmentRowIdCol());
+            return res;
+        }
+    }
+
 private:
     const UInt64 version_limit;
     const bool is_common_handle;
+    // A sample block of `read` get
     const Block header;
 
     size_t handle_col_pos;
@@ -209,12 +232,14 @@ private:
     IColumn::Filter effective{};
     // not_clean = selected & (handle equals with next || deleted)
     IColumn::Filter not_clean{};
+    // is_deleted = selected & deleted
+    IColumn::Filter is_deleted{};
 
     // Calculate per block, when gc_safe_point exceed this version, there must be some data obsolete in this block
     // First calculate the gc_hint_version of every pk according to the following rules,
     //     see the comments in `calculateRowGcHintVersion` to see how to calculate it for every pk
     // Then the block's gc_hint_version is the minimum value of all pk's gc_hint_version
-    UInt64 gc_hint_version;
+    UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
 
     // auxiliary variable for the calculation of gc_hint_version
     bool is_first_oldest_version = true;
@@ -235,6 +260,9 @@ private:
     size_t complete_not_passed = 0;
     size_t not_clean_rows = 0;
     size_t effective_num_rows = 0;
+    size_t deleted_rows = 0;
+
+    SelectionByColumnIdTransformAction select_by_colid_action;
 
     const LoggerPtr log;
 };

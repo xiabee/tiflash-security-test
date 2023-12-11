@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Columns/ColumnConst.h>
 #include <Common/Exception.h>
 #include <Common/MyDuration.h>
 #include <DataTypes/getLeastSupertype.h>
-#include <Functions/FunctionsDateTime.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/convertFieldToType.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -34,19 +31,15 @@ class TestIfNull : public DB::tests::FunctionTest
 protected:
     ColumnWithTypeAndName executeIfNull(const ColumnWithTypeAndName & first_column, const ColumnWithTypeAndName & second_column)
     {
-        auto is_null_column = executeFunction("isNull", first_column);
-        auto not_null_column = executeFunction("assumeNotNull", first_column);
-        return executeFunction("multiIf", is_null_column, second_column, not_null_column);
+        return executeFunction("ifNull", first_column, second_column);
     }
     DataTypePtr getReturnTypeForIfNull(const DataTypePtr & type_1, const DataTypePtr & type_2)
     {
-        const static auto cond_type = std::make_shared<DataTypeUInt8>();
         ColumnsWithTypeAndName input_columns{
-            {nullptr, cond_type, ""},
-            {nullptr, removeNullable(type_1), ""},
+            {nullptr, type_1, ""},
             {nullptr, type_2, ""},
         };
-        return getReturnTypeForFunction(context, "multiIf", input_columns);
+        return getReturnTypeForFunction(*context, "ifNull", input_columns);
     }
     template <class IntegerType>
     ColumnWithTypeAndName createIntegerColumnInternal(const std::vector<Int64> & signed_input, const std::vector<UInt64> unsigned_input, const std::vector<Int32> & null_map)
@@ -150,12 +143,12 @@ try
                 }
                 else
                 {
-                    ASSERT_COLUMN_EQ(col_2.type->isNullable() ? expr_data_2_nullable_vector : expr_data_2_vector, executeIfNull(col_1, col_2));
+                    ASSERT_COLUMN_EQ(expr_data_2_vector, executeIfNull(col_1, col_2));
                 }
             }
             else
             {
-                if (col_2.type->isNullable())
+                if (col_2.column->isNullAt(0))
                 {
                     ASSERT_COLUMN_EQ(expr_data_1_nullable_vector, executeIfNull(col_1, col_2));
                 }
@@ -185,14 +178,7 @@ try
             }
             else
             {
-                if (col_2.type->isNullable())
-                {
-                    ASSERT_COLUMN_EQ(createNullableColumn<Int64>(vector_const_result, {0, 0, 0, 0, 0}), executeIfNull(col_1, col_2));
-                }
-                else
-                {
-                    ASSERT_COLUMN_EQ(createColumn<Int64>(vector_const_result), executeIfNull(col_1, col_2));
-                }
+                ASSERT_COLUMN_EQ(createColumn<Int64>(vector_const_result), executeIfNull(col_1, col_2));
             }
         }
     }

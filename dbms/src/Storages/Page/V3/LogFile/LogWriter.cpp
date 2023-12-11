@@ -14,6 +14,7 @@
 
 #include <Common/Checksum.h>
 #include <Common/Exception.h>
+#include <Common/Logger.h>
 #include <IO/ReadBuffer.h>
 #include <IO/WriteBufferFromFile.h>
 #include <IO/WriteHelpers.h>
@@ -30,13 +31,13 @@ LogWriter::LogWriter(
     const FileProviderPtr & file_provider_,
     Format::LogNumberType log_number_,
     bool recycle_log_files_,
-    bool manual_flush_)
+    bool manual_sync_)
     : path(path_)
     , file_provider(file_provider_)
     , block_offset(0)
     , log_number(log_number_)
     , recycle_log_files(recycle_log_files_)
-    , manual_flush(manual_flush_)
+    , manual_sync(manual_sync_)
     , write_buffer(nullptr, 0)
 {
     log_file = file_provider->newWritableFile(
@@ -46,6 +47,7 @@ LogWriter::LogWriter(
         /*create_new_encryption_info_*/ true);
 
     buffer = static_cast<char *>(alloc(buffer_size));
+    RUNTIME_CHECK_MSG(buffer != nullptr, "LogWriter cannot allocate buffer, size={}", buffer_size);
     write_buffer = WriteBuffer(buffer, buffer_size);
 }
 
@@ -67,21 +69,9 @@ size_t LogWriter::writtenBytes() const
     return written_bytes;
 }
 
-void LogWriter::flush(const WriteLimiterPtr & write_limiter, const bool background)
+void LogWriter::sync()
 {
-    PageUtil::writeFile(log_file,
-                        written_bytes,
-                        write_buffer.buffer().begin(),
-                        write_buffer.offset(),
-                        write_limiter,
-                        /*background=*/background,
-                        /*truncate_if_failed=*/false,
-                        /*enable_failpoint=*/false);
     log_file->fsync();
-    written_bytes += write_buffer.offset();
-
-    // reset the write_buffer
-    resetBuffer();
 }
 
 void LogWriter::close()
@@ -89,43 +79,35 @@ void LogWriter::close()
     log_file->close();
 }
 
-void LogWriter::addRecord(ReadBuffer & payload, const size_t payload_size, const WriteLimiterPtr & write_limiter)
+void LogWriter::addRecord(ReadBuffer & payload, const size_t payload_size, const WriteLimiterPtr & write_limiter, bool background)
 {
     // Header size varies depending on whether we are recycling or not.
-    const int header_size = recycle_log_files ? Format::RECYCLABLE_HEADER_SIZE : Format::HEADER_SIZE;
+    const UInt32 header_size = recycle_log_files ? Format::RECYCLABLE_HEADER_SIZE : Format::HEADER_SIZE;
 
     // Fragment the record if necessary and emit it. Note that if payload is empty,
     // we still want to iterate once to emit a single zero-length record.
     bool begin = true;
     size_t payload_left = payload_size;
-
-    size_t head_sizes = ((payload_size / Format::BLOCK_SIZE) + 1) * Format::RECYCLABLE_HEADER_SIZE;
-    if (payload_size + head_sizes >= buffer_size)
+    // Padding current block if needed
+    block_offset = block_offset % Format::BLOCK_SIZE; // 0 <= block_offset < Format::BLOCK_SIZE
+    size_t leftover = Format::BLOCK_SIZE - block_offset;
+    assert(leftover > 0);
+    if (leftover < header_size)
     {
-        size_t new_buff_size = payload_size + ((head_sizes / Format::BLOCK_SIZE) + 1) * Format::BLOCK_SIZE;
-
-        buffer = static_cast<char *>(realloc(buffer, buffer_size, new_buff_size));
-        buffer_size = new_buff_size;
-        resetBuffer();
+        // Fill the trailer with all zero
+        static constexpr char MAX_ZERO_HEADER[Format::RECYCLABLE_HEADER_SIZE]{'\x00'};
+        if (unlikely(buffer_size - write_buffer.offset() < leftover))
+        {
+            flush(write_limiter, background);
+        }
+        writeString(MAX_ZERO_HEADER, leftover, write_buffer);
+        block_offset = 0;
     }
-
     do
     {
-        const Int64 leftover = Format::BLOCK_SIZE - block_offset;
-        assert(leftover >= 0);
-        if (leftover < header_size)
-        {
-            // Switch to a new block
-            if (leftover > 0)
-            {
-                // Fill the trailer with all zero
-                static constexpr char MAX_ZERO_HEADER[Format::RECYCLABLE_HEADER_SIZE]{'\x00'};
-                writeString(MAX_ZERO_HEADER, leftover, write_buffer);
-            }
-            block_offset = 0;
-        }
+        block_offset = block_offset % Format::BLOCK_SIZE;
         // Invariant: we never leave < header_size bytes in a block.
-        assert(static_cast<Int64>(Format::BLOCK_SIZE - block_offset) >= header_size);
+        assert(Format::BLOCK_SIZE - block_offset >= header_size);
 
         const size_t avail_payload_size = Format::BLOCK_SIZE - block_offset - header_size;
         const size_t fragment_length = (payload_left < avail_payload_size) ? payload_left : avail_payload_size;
@@ -139,15 +121,30 @@ void LogWriter::addRecord(ReadBuffer & payload, const size_t payload_size, const
             type = recycle_log_files ? Format::RecordType::RecyclableLastType : Format::RecordType::LastType;
         else
             type = recycle_log_files ? Format::RecordType::RecyclableMiddleType : Format::RecordType::MiddleType;
-        emitPhysicalRecord(type, payload, fragment_length);
+        // Check available space in write_buffer before writing
+        if (buffer_size - write_buffer.offset() < fragment_length + header_size)
+        {
+            flush(write_limiter, background);
+        }
+        try
+        {
+            emitPhysicalRecord(type, payload, fragment_length);
+        }
+        catch (...)
+        {
+            auto message = getCurrentExceptionMessage(true);
+            LOG_FATAL(Logger::get(), "Write physical record failed with message: {}", message);
+            std::terminate();
+        }
         payload.ignore(fragment_length);
         payload_left -= fragment_length;
         begin = false;
     } while (payload.hasPendingData());
 
-    if (!manual_flush)
+    flush(write_limiter, background);
+    if (!manual_sync)
     {
-        flush(write_limiter, /* background */ false);
+        sync();
     }
 }
 
@@ -202,5 +199,27 @@ void LogWriter::emitPhysicalRecord(Format::RecordType type, ReadBuffer & payload
     writeString(payload.position(), length, write_buffer);
 
     block_offset += header_size + length;
+}
+
+void LogWriter::flush(const WriteLimiterPtr & write_limiter, bool background)
+{
+    if (write_buffer.offset() == 0)
+    {
+        return;
+    }
+
+    PageUtil::writeFile(log_file,
+                        written_bytes,
+                        write_buffer.buffer().begin(),
+                        write_buffer.offset(),
+                        write_limiter,
+                        /*background=*/background,
+                        /*truncate_if_failed=*/false,
+                        /*enable_failpoint=*/false);
+
+    written_bytes += write_buffer.offset();
+
+    // reset the write_buffer
+    resetBuffer();
 }
 } // namespace DB::PS::V3

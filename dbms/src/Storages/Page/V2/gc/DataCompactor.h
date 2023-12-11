@@ -42,7 +42,7 @@ public:
     };
 
 public:
-    DataCompactor(const PageStorage & storage, PageStorage::Config gc_config, const WriteLimiterPtr & write_limiter_, const ReadLimiterPtr & read_limiter_);
+    DataCompactor(const PageStorage & storage, PageStorageConfig gc_config, const WriteLimiterPtr & write_limiter_, const ReadLimiterPtr & read_limiter_);
 
     /**
      * Take a snapshot from PageStorage and try to migrate data if some PageFiles used rate is low.
@@ -60,10 +60,6 @@ public:
     std::tuple<Result, PageEntriesEdit>
     tryMigrate(const PageFileSet & page_files, SnapshotPtr && snapshot, const WritingFilesSnapshot & writing_files);
 
-#ifndef DBMS_PUBLIC_GTEST
-private:
-#endif
-
     /**
      * Collect valid page of snapshot.
      * Return {
@@ -72,6 +68,9 @@ private:
      * }
      */
     static ValidPages collectValidPagesInPageFile(const SnapshotPtr & snapshot);
+#ifndef DBMS_PUBLIC_GTEST
+private:
+#endif
 
     struct CompactCandidates
     {
@@ -120,7 +119,7 @@ private:
     PSDiskDelegatorPtr delegator;
     FileProviderPtr file_provider;
 
-    const PageStorage::Config config;
+    const PageStorageConfig config;
 
     Poco::Logger * log;
     Poco::Logger * page_file_log;

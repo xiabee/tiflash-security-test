@@ -22,10 +22,11 @@
 #include <Parsers/ASTLiteral.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Storages/IManageableStorage.h>
-#include <Storages/Transaction/SchemaSyncService.h>
-#include <Storages/Transaction/SchemaSyncer.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TiDB.h>
+#include <TiDB/Schema/SchemaNameMapper.h>
+#include <TiDB/Schema/SchemaSyncService.h>
+#include <TiDB/Schema/SchemaSyncer.h>
 #include <fmt/core.h>
 
 #include <ext/singleton.h>
@@ -65,7 +66,7 @@ void dbgFuncRefreshSchemas(Context & context, const ASTs &, DBGInvoker::Printer 
     auto schema_syncer = tmt.getSchemaSyncer();
     try
     {
-        schema_syncer->syncSchemas(context);
+        schema_syncer->syncSchemas(context, NullspaceID);
     }
     catch (Exception & e)
     {
@@ -94,7 +95,7 @@ void dbgFuncGcSchemas(Context & context, const ASTs & args, DBGInvoker::Printer 
         gc_safe_point = PDClientHelper::getGCSafePointWithRetry(context.getTMTContext().getPDClient());
     else
         gc_safe_point = safeGet<Timestamp>(typeid_cast<const ASTLiteral &>(*args[0]).value);
-    service->gc(gc_safe_point);
+    service->gc(gc_safe_point, NullspaceID);
 
     output("schemas gc done");
 }
@@ -136,5 +137,6 @@ void dbgFuncIsTombstone(Context & context, const ASTs & args, DBGInvoker::Printe
     }
     output(fmt_buf.toString());
 }
+
 
 } // namespace DB

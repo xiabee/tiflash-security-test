@@ -17,14 +17,16 @@
 #include <Common/nocopyable.h>
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
-#include <Flash/Coprocessor/PushDownFilter.h>
+#include <Flash/Coprocessor/FilterConditions.h>
 #include <Flash/Coprocessor/RemoteRequest.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
+#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
+#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/RegionQueryInfo.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/TableLockHolder.h>
 #include <Storages/Transaction/LearnerRead.h>
-#include <Storages/Transaction/TMTContext.h>
+#include <Storages/Transaction/RegionException.h>
 #include <Storages/Transaction/TMTStorages.h>
 #include <Storages/Transaction/Types.h>
 #include <pingcap/coprocessor/Client.h>
@@ -33,6 +35,7 @@
 
 namespace DB
 {
+class TMTContext;
 using TablesRegionInfoMap = std::unordered_map<Int64, std::reference_wrapper<const RegionInfoMap>>;
 /// DAGStorageInterpreter encapsulates operations around storage during interprete stage.
 /// It's only intended to be used by DAGQueryBlockInterpreter.
@@ -43,7 +46,7 @@ public:
     DAGStorageInterpreter(
         Context & context_,
         const TiDBTableScan & table_scan,
-        const PushDownFilter & push_down_filter_,
+        const FilterConditions & filter_conditions_,
         size_t max_streams_);
 
     DISALLOW_MOVE(DAGStorageInterpreter);
@@ -64,13 +67,24 @@ private:
 
     LearnerReadSnapshot doBatchCopLearnerRead();
 
+    bool checkRetriableForBatchCopOrMPP(
+        const TableID & table_id,
+        const SelectQueryInfo & query_info,
+        const RegionException & e,
+        int num_allow_retry);
+    DM::Remote::DisaggPhysicalTableReadSnapshotPtr
+    buildLocalStreamsForPhysicalTable(
+        const TableID & table_id,
+        const SelectQueryInfo & query_info,
+        DAGPipeline & pipeline,
+        size_t max_block_size);
     void buildLocalStreams(DAGPipeline & pipeline, size_t max_block_size);
 
     std::unordered_map<TableID, StorageWithStructureLock> getAndLockStorages(Int64 query_schema_version);
 
-    std::tuple<Names, NamesAndTypes, std::vector<ExtraCastAfterTSMode>> getColumnsForTableScan(Int64 max_columns_to_read);
+    std::tuple<Names, std::vector<ExtraCastAfterTSMode>> getColumnsForTableScan();
 
-    std::vector<RemoteRequest> buildRemoteRequests();
+    std::vector<RemoteRequest> buildRemoteRequests(const DM::ScanContextPtr & scan_context);
 
     TableLockHolders releaseAlterLocks();
 
@@ -80,13 +94,10 @@ private:
 
     void recordProfileStreams(DAGPipeline & pipeline, const String & key);
 
-    void buildRemoteStreams(std::vector<RemoteRequest> && remote_requests, DAGPipeline & pipeline);
+    std::vector<pingcap::coprocessor::CopTask> buildCopTasks(const std::vector<RemoteRequest> & remote_requests);
+    void buildRemoteStreams(const std::vector<RemoteRequest> & remote_requests, DAGPipeline & pipeline);
 
     void executeCastAfterTableScan(
-        size_t remote_read_streams_start_index,
-        DAGPipeline & pipeline);
-
-    void executePushedDownFilter(
         size_t remote_read_streams_start_index,
         DAGPipeline & pipeline);
 
@@ -103,14 +114,13 @@ private:
 
     Context & context;
     const TiDBTableScan & table_scan;
-    const PushDownFilter & push_down_filter;
-    size_t max_streams;
+    const FilterConditions & filter_conditions;
+    const size_t max_streams;
     LoggerPtr log;
 
     /// derived from other members, doesn't change during DAGStorageInterpreter's lifetime
 
-    TableID logical_table_id;
-    const Settings & settings;
+    const TableID logical_table_id;
     TMTContext & tmt;
 
     /// Intermediate variables shared by multiple member functions
@@ -126,7 +136,6 @@ private:
     std::unordered_map<TableID, StorageWithStructureLock> storages_with_structure_lock;
     ManageableStoragePtr storage_for_logical_table;
     Names required_columns;
-    NamesAndTypes source_columns;
     // For generated column, just need a placeholder, and TiDB will fill this column.
     std::vector<std::tuple<UInt64, String, DataTypePtr>> generated_column_infos;
 };

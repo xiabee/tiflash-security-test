@@ -14,6 +14,7 @@
 
 #include <Common/FailPoint.h>
 #include <Common/FmtUtils.h>
+#include <Common/setThreadName.h>
 #include <Common/typeid_cast.h>
 #include <Debug/MockSSTReader.h>
 #include <Debug/MockTiDB.h>
@@ -31,10 +32,14 @@
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <RaftStoreProxyFFI/ColumnFamily.h>
+#include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
+#include <Storages/IManageableStorage.h>
 #include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/PartitionStreams.h>
 #include <Storages/Transaction/ProxyFFI.h>
 #include <Storages/Transaction/Region.h>
+#include <Storages/Transaction/RegionBlockReader.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TiKVRange.h>
 #include <Storages/Transaction/tests/region_helper.h>
@@ -45,14 +50,16 @@ namespace DB
 namespace FailPoints
 {
 extern const char force_set_sst_to_dtfile_block_size[];
-extern const char force_set_sst_decode_rand[];
 extern const char force_set_safepoint_when_decode_block[];
+extern const char pause_before_apply_raft_snapshot[];
 } // namespace FailPoints
 
 namespace ErrorCodes
 {
 extern const int BAD_ARGUMENTS;
 extern const int UNKNOWN_TABLE;
+extern const int ILLFORMAT_RAFT_ROW;
+extern const int TABLE_IS_DROPPED;
 } // namespace ErrorCodes
 
 // DBGInvoke region_snapshot_data(database_name, table_name, region_id, start, end, handle_id1, tso1, del1, r1_c1, r1_c2, ..., handle_id2, tso2, del2, r2_c1, r2_c2, ... )
@@ -167,7 +174,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotWithData(Context & context, const AST
 
     // Mock to apply a snapshot with data in `region`
     auto & tmt = context.getTMTContext();
-    context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithBlock>(region, tmt);
+    context.getTMTContext().getKVStore()->checkAndApplyPreHandledSnapshot<RegionPtrWithBlock>(region, tmt);
     output(fmt::format("put region #{}, range{} to table #{} with {} records", region_id, range_string, table_id, cnt));
 }
 
@@ -248,6 +255,7 @@ void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args
         SSTViewVec{nullptr, 0},
         MockTiKV::instance().getRaftIndex(region_id),
         RAFT_INIT_LOG_TERM,
+        std::nullopt,
         tmt);
 
     output(fmt::format("put region #{}, range[{}, {}) to table #{} with raft commands", region_id, RecordKVFormat::DecodedTiKVKeyToDebugString<true>(start_decoded_key), RecordKVFormat::DecodedTiKVKeyToDebugString<false>(end_decoded_key), table_id));
@@ -255,42 +263,22 @@ void MockRaftCommand::dbgFuncRegionSnapshot(Context & context, const ASTs & args
 
 std::map<MockSSTReader::Key, MockSSTReader::Data> MockSSTReader::MockSSTData;
 
-SSTReaderPtr fn_get_sst_reader(SSTView v, RaftStoreProxyPtr)
+class RegionMockTest final
 {
-    std::string s(v.path.data, v.path.len);
-    auto iter = MockSSTReader::getMockSSTData().find({s, v.type});
-    if (iter == MockSSTReader::getMockSSTData().end())
-        throw Exception("Can not find data in MockSSTData, [key=" + s + "] [type=" + CFToName(v.type) + "]");
-    auto & d = iter->second;
-    return MockSSTReader::ffi_get_cf_file_reader(d);
-}
-uint8_t fn_remained(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    return reader->ffi_remained();
-}
-BaseBuffView fn_key(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    return reader->ffi_key();
-}
-BaseBuffView fn_value(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    return reader->ffi_val();
-}
-void fn_next(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    reader->ffi_next();
-}
-void fn_gc(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    delete reader;
-}
+public:
+    RegionMockTest(KVStore * kvstore_, RegionPtr region_);
+    ~RegionMockTest();
 
-RegionMockTest::RegionMockTest(KVStorePtr kvstore_, RegionPtr region_)
+    DISALLOW_COPY_AND_MOVE(RegionMockTest);
+
+private:
+    TiFlashRaftProxyHelper mock_proxy_helper{};
+    const TiFlashRaftProxyHelper * ori_proxy_helper{};
+    KVStore * kvstore;
+    RegionPtr region;
+};
+
+RegionMockTest::RegionMockTest(KVStore * kvstore_, RegionPtr region_)
     : kvstore(kvstore_)
     , region(region_)
 {
@@ -299,14 +287,7 @@ RegionMockTest::RegionMockTest(KVStorePtr kvstore_, RegionPtr region_)
         ori_proxy_helper = kvstore->getProxyHelper();
         std::memcpy(&mock_proxy_helper, ori_proxy_helper, sizeof(mock_proxy_helper));
     }
-    mock_proxy_helper.sst_reader_interfaces = SSTReaderInterfaces{
-        .fn_get_sst_reader = fn_get_sst_reader,
-        .fn_remained = fn_remained,
-        .fn_key = fn_key,
-        .fn_value = fn_value,
-        .fn_next = fn_next,
-        .fn_gc = fn_gc,
-    };
+    mock_proxy_helper.sst_reader_interfaces = make_mock_sst_reader_interface();
     kvstore->proxy_helper = &mock_proxy_helper;
     region->proxy_helper = &mock_proxy_helper;
 }
@@ -463,9 +444,8 @@ void MockRaftCommand::dbgFuncIngestSST(Context & context, const ASTs & args, DBG
     auto & kvstore = tmt.getKVStore();
     auto region = kvstore->getRegion(region_id);
 
-    FailPointHelper::enableFailPoint(FailPoints::force_set_sst_decode_rand);
     // Register some mock SST reading methods so that we can decode data in `MockSSTReader::MockSSTData`
-    RegionMockTest mock_test(kvstore, region);
+    RegionMockTest mock_test(kvstore.get(), region);
 
     {
         // Mocking ingest a SST for column family "Write"
@@ -502,7 +482,7 @@ struct GlobalRegionMap
     using Key = std::string;
     using BlockVal = std::pair<RegionPtr, RegionPtrWithBlock::CachePtr>;
     std::unordered_map<Key, BlockVal> regions_block;
-    using SnapPath = std::pair<RegionPtr, std::vector<UInt64>>;
+    using SnapPath = std::pair<RegionPtr, std::vector<DM::ExternalDTFileInfo>>;
     std::unordered_map<Key, SnapPath> regions_snap_files;
     std::mutex mutex;
 
@@ -547,7 +527,102 @@ static GlobalRegionMap GLOBAL_REGION_MAP;
 
 /// Mock to pre-decode snapshot to block then apply
 
-extern RegionPtrWithBlock::CachePtr GenRegionPreDecodeBlockData(const RegionPtr &, Context &);
+/// Pre-decode region data into block cache and remove committed data from `region`
+RegionPtrWithBlock::CachePtr GenRegionPreDecodeBlockData(const RegionPtr & region, Context & context)
+{
+    auto keyspace_id = region->getKeyspaceID();
+    const auto & tmt = context.getTMTContext();
+    {
+        Timestamp gc_safe_point = 0;
+        if (auto pd_client = tmt.getPDClient(); !pd_client->isMock())
+        {
+            gc_safe_point
+                = PDClientHelper::getGCSafePointWithRetry(pd_client, false, context.getSettingsRef().safe_point_update_interval_seconds);
+        }
+        /**
+         * In 5.0.1, feature `compaction filter` is enabled by default. Under such feature tikv will do gc in write & default cf individually.
+         * If some rows were updated and add tiflash replica, tiflash store may receive region snapshot with unmatched data in write & default cf sst files.
+         */
+        region->tryCompactionFilter(gc_safe_point);
+    }
+    std::optional<RegionDataReadInfoList> data_list_read = std::nullopt;
+    try
+    {
+        data_list_read = ReadRegionCommitCache(region, true);
+        if (!data_list_read)
+            return nullptr;
+    }
+    catch (const Exception & e)
+    {
+        if (e.code() == ErrorCodes::ILLFORMAT_RAFT_ROW)
+        {
+            // br or lighting may write illegal data into tikv, skip pre-decode and ingest sst later.
+            LOG_WARNING(Logger::get(__PRETTY_FUNCTION__),
+                        "Got error while reading region committed cache: {}. Skip pre-decode and keep original cache.",
+                        e.displayText());
+            // set data_list_read and let apply snapshot process use empty block
+            data_list_read = RegionDataReadInfoList();
+        }
+        else
+            throw;
+    }
+
+    TableID table_id = region->getMappedTableID();
+    Int64 schema_version = DEFAULT_UNSPECIFIED_SCHEMA_VERSION;
+    Block res_block;
+
+    const auto atomic_decode = [&](bool force_decode) -> bool {
+        Stopwatch watch;
+        auto storage = tmt.getStorages().get(keyspace_id, table_id);
+        if (storage == nullptr || storage->isTombstone())
+        {
+            if (!force_decode) // Need to update.
+                return false;
+            if (storage == nullptr) // Table must have just been GC-ed.
+                return true;
+        }
+
+        /// Get a structure read lock throughout decode, during which schema must not change.
+        TableStructureLockHolder lock;
+        try
+        {
+            lock = storage->lockStructureForShare(getThreadNameAndID());
+        }
+        catch (DB::Exception & e)
+        {
+            // If the storage is physical dropped (but not removed from `ManagedStorages`) when we want to decode snapshot, consider the decode done.
+            if (e.code() == ErrorCodes::TABLE_IS_DROPPED)
+                return true;
+            else
+                throw;
+        }
+
+        DecodingStorageSchemaSnapshotConstPtr decoding_schema_snapshot;
+        std::tie(decoding_schema_snapshot, std::ignore) = storage->getSchemaSnapshotAndBlockForDecoding(lock, false);
+        res_block = createBlockSortByColumnID(decoding_schema_snapshot);
+        auto reader = RegionBlockReader(decoding_schema_snapshot);
+        return reader.read(res_block, *data_list_read, force_decode);
+    };
+
+    /// In TiFlash, the actions between applying raft log and schema changes are not strictly synchronized.
+    /// There could be a chance that some raft logs come after a table gets tombstoned. Take care of it when
+    /// decoding data. Check the test case for more details.
+    FAIL_POINT_PAUSE(FailPoints::pause_before_apply_raft_snapshot);
+
+    if (!atomic_decode(false))
+    {
+        tmt.getSchemaSyncer()->syncSchemas(context, keyspace_id);
+
+        if (!atomic_decode(true))
+            throw Exception("Pre-decode " + region->toString() + " cache to table " + std::to_string(table_id) + " block failed",
+                            ErrorCodes::LOGICAL_ERROR);
+    }
+
+    RemoveRegionCommitCache(region, *data_list_read);
+
+    return std::make_unique<RegionPreDecodeBlockData>(std::move(res_block), schema_version, std::move(*data_list_read));
+}
+
 void MockRaftCommand::dbgFuncRegionSnapshotPreHandleBlock(Context & context, const ASTs & args, DBGInvoker::Printer output)
 {
     FmtBuffer fmt_buf;
@@ -572,7 +647,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotApplyBlock(Context & context, const A
     auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value));
     auto [region, block_cache] = GLOBAL_REGION_MAP.popRegionCache("__snap_" + std::to_string(region_id));
     auto & tmt = context.getTMTContext();
-    context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithBlock>({region, std::move(block_cache)}, tmt);
+    context.getTMTContext().getKVStore()->checkAndApplyPreHandledSnapshot<RegionPtrWithBlock>({region, std::move(block_cache)}, tmt);
 
     output(fmt::format("success apply {} with block cache", region->id()));
 }
@@ -646,7 +721,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFiles(Context & context, c
     RegionPtr new_region = RegionBench::createRegion(table->id(), region_id, start_handle, end_handle + 10000, index);
 
     // Register some mock SST reading methods so that we can decode data in `MockSSTReader::MockSSTData`
-    RegionMockTest mock_test(kvstore, new_region);
+    RegionMockTest mock_test(kvstore.get(), new_region);
 
     std::vector<SSTView> sst_views;
     {
@@ -671,6 +746,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFiles(Context & context, c
         SSTViewVec{sst_views.data(), sst_views.size()},
         index,
         MockTiKV::instance().getRaftTerm(region_id),
+        std::nullopt,
         tmt);
     GLOBAL_REGION_MAP.insertRegionSnap(region_name, {new_region, ingest_ids});
 
@@ -743,7 +819,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles(Context &
     RegionPtr new_region = RegionBench::createRegion(table->id(), region_id, region_start_handle, region_end_handle, index);
 
     // Register some mock SST reading methods so that we can decode data in `MockSSTReader::MockSSTData`
-    RegionMockTest mock_test(kvstore, new_region);
+    RegionMockTest mock_test(kvstore.get(), new_region);
 
     std::vector<SSTView> sst_views;
     {
@@ -768,6 +844,7 @@ void MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles(Context &
         SSTViewVec{sst_views.data(), sst_views.size()},
         index,
         MockTiKV::instance().getRaftTerm(region_id),
+        std::nullopt,
         tmt);
     GLOBAL_REGION_MAP.insertRegionSnap(region_name, {new_region, ingest_ids});
 
@@ -786,10 +863,10 @@ void MockRaftCommand::dbgFuncRegionSnapshotApplyDTFiles(Context & context, const
 
     auto region_id = static_cast<RegionID>(safeGet<UInt64>(typeid_cast<const ASTLiteral &>(*args.front()).value));
     const auto region_name = "__snap_snap_" + std::to_string(region_id);
-    auto [new_region, ingest_ids] = GLOBAL_REGION_MAP.popRegionSnap(region_name);
+    auto [new_region, external_files] = GLOBAL_REGION_MAP.popRegionSnap(region_name);
     auto & tmt = context.getTMTContext();
-    context.getTMTContext().getKVStore()->checkAndApplySnapshot<RegionPtrWithSnapshotFiles>(
-        RegionPtrWithSnapshotFiles{new_region, std::move(ingest_ids)},
+    context.getTMTContext().getKVStore()->checkAndApplyPreHandledSnapshot<RegionPtrWithSnapshotFiles>(
+        RegionPtrWithSnapshotFiles{new_region, std::move(external_files)},
         tmt);
 
     output(fmt::format("success apply region {} with dt files", new_region->id()));

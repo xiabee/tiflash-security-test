@@ -16,7 +16,7 @@
 
 #include <Common/Checksum.h>
 #include <Common/FieldVisitors.h>
-#include <Common/getNumberOfLogicalCPUCores.h>
+#include <Common/getNumberOfCPUCores.h>
 #include <Core/Field.h>
 #include <DataStreams/SizeLimits.h>
 #include <IO/CompressedStream.h>
@@ -34,11 +34,10 @@ extern const int TYPE_MISMATCH;
 extern const int UNKNOWN_LOAD_BALANCING;
 extern const int UNKNOWN_OVERFLOW_MODE;
 extern const int ILLEGAL_OVERFLOW_MODE;
-extern const int UNKNOWN_TOTALS_MODE;
 extern const int UNKNOWN_COMPRESSION_METHOD;
-extern const int UNKNOWN_GLOBAL_SUBQUERIES_METHOD;
 extern const int CANNOT_PARSE_BOOL;
 extern const int INVALID_CONFIG_PARAMETER;
+extern const int BAD_ARGUMENTS;
 } // namespace ErrorCodes
 
 
@@ -167,7 +166,7 @@ public:
 
     static UInt64 getAutoValue()
     {
-        static auto res = getNumberOfLogicalCPUCores();
+        static auto res = getNumberOfPhysicalCPUCores();
         return res;
     }
 
@@ -389,6 +388,41 @@ private:
     std::atomic<float> value;
 };
 
+/// MemoryLimit can either be an UInt64 (means memory limit in bytes),
+/// or be a float-point number (means memory limit ratio of total RAM, from 0.0 to 1.0).
+/// 0 or 0.0 means unlimited.
+struct SettingMemoryLimit
+{
+public:
+    bool changed = false;
+
+    using UInt64OrDouble = std::variant<UInt64, double>;
+    struct ToStringVisitor;
+
+    explicit SettingMemoryLimit(UInt64 bytes = 0);
+    explicit SettingMemoryLimit(double percent = 0.0);
+
+    SettingMemoryLimit(const SettingMemoryLimit & setting);
+    SettingMemoryLimit & operator=(UInt64OrDouble x);
+    SettingMemoryLimit & operator=(const SettingMemoryLimit & setting);
+
+    void set(UInt64OrDouble x);
+    void set(UInt64 x);
+    void set(double x);
+    void set(const Field & x);
+    void set(const String & x);
+    void set(ReadBuffer & buf);
+
+    String toString() const;
+    void write(WriteBuffer & buf) const;
+    UInt64OrDouble get() const;
+
+    UInt64 getActualBytes(UInt64 total_ram) const;
+
+private:
+    UInt64OrDouble value;
+};
+
 struct SettingDouble
 {
 public:
@@ -550,109 +584,6 @@ private:
     LoadBalancing value;
 };
 
-
-/// Which rows should be included in TOTALS.
-enum class TotalsMode
-{
-    /// Count HAVING for all read rows;
-    ///  including those not in max_rows_to_group_by
-    ///  and have not passed HAVING after grouping.
-    BEFORE_HAVING = 0,
-    /// Count on all rows except those that have not passed HAVING;
-    ///  that is, to include in TOTALS all the rows that did not pass max_rows_to_group_by.
-    AFTER_HAVING_INCLUSIVE = 1,
-    /// Include only the rows that passed and max_rows_to_group_by, and HAVING.
-    AFTER_HAVING_EXCLUSIVE = 2,
-    /// Automatically select between INCLUSIVE and EXCLUSIVE,
-    AFTER_HAVING_AUTO = 3,
-};
-
-struct SettingTotalsMode
-{
-public:
-    bool changed = false;
-
-    SettingTotalsMode(TotalsMode x)
-        : value(x)
-    {}
-
-    operator TotalsMode() const { return value; }
-    SettingTotalsMode & operator=(TotalsMode x)
-    {
-        set(x);
-        return *this;
-    }
-
-    static TotalsMode getTotalsMode(const String & s)
-    {
-        if (s == "before_having")
-            return TotalsMode::BEFORE_HAVING;
-        if (s == "after_having_exclusive")
-            return TotalsMode::AFTER_HAVING_EXCLUSIVE;
-        if (s == "after_having_inclusive")
-            return TotalsMode::AFTER_HAVING_INCLUSIVE;
-        if (s == "after_having_auto")
-            return TotalsMode::AFTER_HAVING_AUTO;
-
-        throw Exception("Unknown totals mode: '" + s + "', must be one of 'before_having', 'after_having_exclusive', 'after_having_inclusive', 'after_having_auto'", ErrorCodes::UNKNOWN_TOTALS_MODE);
-    }
-
-    String toString() const
-    {
-        switch (value)
-        {
-        case TotalsMode::BEFORE_HAVING:
-            return "before_having";
-        case TotalsMode::AFTER_HAVING_EXCLUSIVE:
-            return "after_having_exclusive";
-        case TotalsMode::AFTER_HAVING_INCLUSIVE:
-            return "after_having_inclusive";
-        case TotalsMode::AFTER_HAVING_AUTO:
-            return "after_having_auto";
-
-        default:
-            throw Exception("Unknown TotalsMode enum value", ErrorCodes::UNKNOWN_TOTALS_MODE);
-        }
-    }
-
-    void set(TotalsMode x)
-    {
-        value = x;
-        changed = true;
-    }
-
-    void set(const Field & x)
-    {
-        set(safeGet<const String &>(x));
-    }
-
-    void set(const String & x)
-    {
-        set(getTotalsMode(x));
-    }
-
-    void set(ReadBuffer & buf)
-    {
-        String x;
-        readBinary(x, buf);
-        set(x);
-    }
-
-    void write(WriteBuffer & buf) const
-    {
-        writeBinary(toString(), buf);
-    }
-
-    TotalsMode get() const
-    {
-        return value;
-    }
-
-private:
-    TotalsMode value;
-};
-
-
 template <bool enable_mode_any>
 struct SettingOverflowMode
 {
@@ -676,27 +607,20 @@ public:
             return OverflowMode::THROW;
         if (s == "break")
             return OverflowMode::BREAK;
-        if (s == "any")
-            return OverflowMode::ANY;
 
         throw Exception("Unknown overflow mode: '" + s + "', must be one of 'throw', 'break', 'any'", ErrorCodes::UNKNOWN_OVERFLOW_MODE);
     }
 
     static OverflowMode getOverflowMode(const String & s)
     {
-        OverflowMode mode = getOverflowModeForGroupBy(s);
-
-        if (mode == OverflowMode::ANY && !enable_mode_any)
-            throw Exception("Illegal overflow mode: 'any' is only for 'group_by_overflow_mode'", ErrorCodes::ILLEGAL_OVERFLOW_MODE);
-
-        return mode;
+        return getOverflowModeForGroupBy(s);
     }
 
     String toString() const
     {
-        const char * strings[] = {"throw", "break", "any"};
+        const char * strings[] = {"throw", "break"};
 
-        if (value < OverflowMode::THROW || value > OverflowMode::ANY)
+        if (value < OverflowMode::THROW || value > OverflowMode::BREAK)
             throw Exception("Unknown overflow mode", ErrorCodes::UNKNOWN_OVERFLOW_MODE);
 
         return strings[static_cast<size_t>(value)];

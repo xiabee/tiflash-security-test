@@ -94,20 +94,19 @@ private:
 public:
     UnionBlockInputStream(
         BlockInputStreams inputs,
-        BlockInputStreamPtr additional_input_at_end,
+        BlockInputStreams additional_inputs_at_end,
         size_t max_threads,
         const String & req_id,
         ExceptionCallback exception_callback_ = ExceptionCallback())
-        : output_queue(std::min(inputs.size(), max_threads) * 5) // reduce contention
-        , log(Logger::get(NAME, req_id))
+        : output_queue(std::min(std::max(inputs.size(), additional_inputs_at_end.size()), max_threads) * 5) // reduce contention
+        , log(Logger::get(req_id))
         , handler(*this)
-        , processor(inputs, additional_input_at_end, max_threads, handler, log)
+        , processor(inputs, additional_inputs_at_end, max_threads, handler, log)
         , exception_callback(exception_callback_)
     {
         // TODO: assert capacity of output_queue is not less than processor.getMaxThreads()
         children = inputs;
-        if (additional_input_at_end)
-            children.push_back(additional_input_at_end);
+        children.insert(children.end(), additional_inputs_at_end.begin(), additional_inputs_at_end.end());
 
         size_t num_children = children.size();
         if (num_children > 1)
@@ -168,7 +167,7 @@ protected:
         if (!started)
             return;
 
-        LOG_FMT_TRACE(log, "Waiting for threads to finish");
+        LOG_TRACE(log, "Waiting for threads to finish");
 
         std::exception_ptr exception;
         if (!all_read)
@@ -197,7 +196,7 @@ protected:
 
         processor.wait();
 
-        LOG_FMT_TRACE(log, "Waited for threads to finish");
+        LOG_TRACE(log, "Waited for threads to finish");
 
         if (exception)
             std::rethrow_exception(exception);
@@ -256,6 +255,20 @@ protected:
             children[i]->readSuffix();
     }
 
+    uint64_t collectCPUTimeNsImpl(bool /*is_thread_runner*/) override
+    {
+        // `UnionBlockInputStream` does not count its own execute time,
+        // whether `UnionBlockInputStream` is `thread-runner` or not,
+        // because `UnionBlockInputStream` basically does not use cpu, only `condition_cv.wait`.
+        uint64_t cpu_time_ns = 0;
+        forEachChild([&](IBlockInputStream & child) {
+            // Each of `UnionBlockInputStream`'s children is a thread-runner.
+            cpu_time_ns += child.collectCPUTimeNs(true);
+            return false;
+        });
+        return cpu_time_ns;
+    }
+
 private:
     BlockExtraInfo doGetBlockExtraInfo() const
     {
@@ -293,8 +306,8 @@ private:
         /// and the exception is lost.
         output_queue.emplace(exception);
         /// can not cancel itself or the exception might be lost
-        /// kill the processor so ExchangeReceiver will be closed
-        processor.cancel(true);
+        /// use cancel instead of kill to avoid too many useless error message
+        processor.cancel(false);
     }
 
     struct Handler

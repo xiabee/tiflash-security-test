@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/MemoryTracker.h>
-#include <Common/MemoryTrackerSetter.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/Tuple.h>
@@ -64,7 +62,7 @@ protected:
     void SetUp() override
     {
         CurrentMemoryTracker::disableThreshold();
-        memory_tracker = std::make_shared<MemoryTracker>();
+        memory_tracker = MemoryTracker::create();
         memory_tracker_setter.emplace(true, memory_tracker.get());
         ASSERT_EQ(current_memory_tracker->get(), 0);
 
@@ -76,7 +74,7 @@ protected:
     void TearDown() override { DB::FailPointHelper::disableFailPoint(DB::FailPoints::delta_tree_create_node_fail); }
 
     std::unique_ptr<FakeDeltaTree> fake_tree;
-    std::shared_ptr<MemoryTracker> memory_tracker;
+    MemoryTrackerPtr memory_tracker;
     std::optional<MemoryTrackerSetter> memory_tracker_setter;
 };
 

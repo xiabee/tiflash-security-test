@@ -24,6 +24,7 @@
 #include <Functions/FunctionHelpers.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/convertColumnTypeHelpers.h>
+#include <common/types.h>
 
 namespace DB
 {
@@ -315,6 +316,18 @@ bool castNonNullNumericColumn(const DataTypePtr & disk_type_not_null_,
             rows_limit);
         return true;
     }
+    else if (checkDataType<DataTypeMyDateTime>(disk_type_not_null) && checkDataType<DataTypeMyDateTime>(read_type_not_null))
+    {
+        static_assert(std::is_same_v<DataTypeMyDateTime::FieldType, UInt64>, "Ensure the MyDateTime/MyTime is stored as UInt64");
+        insertRangeFromWithNumericTypeCast<UInt64, UInt64>(
+            disk_col_not_null,
+            null_map,
+            read_define,
+            memory_col_not_null,
+            rows_offset,
+            rows_limit);
+        return true;
+    }
     // else is not support
     return false;
 }
@@ -461,9 +474,11 @@ ColumnPtr convertColumnByColumnDefineIfNeed(const DataTypePtr & from_type, Colum
     auto [compatible, need_data_cast] = checkColumnTypeCompatibility(from_type, to_column_define.type);
     if (unlikely(!compatible))
     {
-        throw Exception("Reading mismatch data type pack. Cast from " + from_type->getName() + " to " + to_column_define.type->getName()
-                            + " is NOT supported!",
-                        ErrorCodes::NOT_IMPLEMENTED);
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED,
+                        "Reading mismatch data type pack. Cast from {} to {} is NOT supported, column_id={}",
+                        from_type->getName(),
+                        to_column_define.type->getName(),
+                        to_column_define.id);
     }
     if (unlikely(!need_data_cast))
     {

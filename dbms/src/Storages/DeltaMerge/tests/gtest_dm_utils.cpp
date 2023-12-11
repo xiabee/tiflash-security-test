@@ -14,9 +14,8 @@
 
 #include <Storages/DeltaMerge/RowKeyFilter.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
+#include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <TestUtils/TiFlashTestBasic.h>
-
-#include "dm_basic_include.h"
 
 namespace DB
 {
@@ -24,7 +23,7 @@ namespace DM
 {
 namespace tests
 {
-TEST(RowKeyFilter_test, FilterSortedBlock)
+TEST(RowKeyFilterTest, FilterSortedBlock)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -37,7 +36,7 @@ TEST(RowKeyFilter_test, FilterSortedBlock)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilter_test, FilterUnsortedBlock)
+TEST(RowKeyFilterTest, FilterUnsortedBlock)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -50,7 +49,7 @@ TEST(RowKeyFilter_test, FilterUnsortedBlock)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilter_test, FilterSortedBlockCommonHandle)
+TEST(RowKeyFilterTest, FilterSortedBlockCommonHandle)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;
@@ -71,7 +70,7 @@ TEST(RowKeyFilter_test, FilterSortedBlockCommonHandle)
     ASSERT_EQ(filtered_block.rows(), 70);
 }
 
-TEST(RowKeyFilter_test, FilterUnsortedBlockCommonHandle)
+TEST(RowKeyFilterTest, FilterUnsortedBlockCommonHandle)
 {
     const size_t num_rows_write = 100;
     RowKeyRanges ranges;

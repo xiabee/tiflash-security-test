@@ -15,7 +15,6 @@
 #include <Common/ProfileEvents.h>
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashMetrics.h>
-#include <Interpreters/Context.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/ProxyFFI.h>
 #include <Storages/Transaction/Region.h>
@@ -48,9 +47,9 @@ RegionData::WriteCFIter Region::removeDataByWriteIt(const RegionData::WriteCFIte
     return data.removeDataByWriteIt(write_it);
 }
 
-RegionDataReadInfo Region::readDataByWriteIt(const RegionData::ConstWriteCFIter & write_it, bool need_value) const
+std::optional<RegionDataReadInfo> Region::readDataByWriteIt(const RegionData::ConstWriteCFIter & write_it, bool need_value, bool hard_error)
 {
-    return data.readDataByWriteIt(write_it, need_value);
+    return data.readDataByWriteIt(write_it, need_value, id(), appliedIndex(), hard_error);
 }
 
 DecodedLockCFValuePtr Region::getLockInfo(const RegionLockReadQuery & query) const
@@ -58,20 +57,32 @@ DecodedLockCFValuePtr Region::getLockInfo(const RegionLockReadQuery & query) con
     return data.getLockInfo(query);
 }
 
-void Region::insert(const std::string & cf, TiKVKey && key, TiKVValue && value)
+void Region::insert(const std::string & cf, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
-    return insert(NameToCF(cf), std::move(key), std::move(value));
+    return insert(NameToCF(cf), std::move(key), std::move(value), mode);
 }
 
-void Region::insert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value)
+void Region::insert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    return doInsert(type, std::move(key), std::move(value));
+    return doInsert(type, std::move(key), std::move(value), mode);
 }
 
-void Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value)
+void Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
-    data.insert(type, std::move(key), std::move(value));
+    if (getClusterRaftstoreVer() == RaftstoreVer::V2)
+    {
+        if (type == ColumnFamilyType::Write)
+        {
+            if (orphanKeysInfo().observeKeyFromNormalWrite(key))
+            {
+                // We can't assert the key exists in write_cf here,
+                // since it may be already written into DeltaTree.
+                return;
+            }
+        }
+    }
+    data.insert(type, std::move(key), std::move(value), mode);
 }
 
 void Region::remove(const std::string & cf, const TiKVKey & key)
@@ -96,6 +107,17 @@ UInt64 Region::appliedIndex() const
     return meta.appliedIndex();
 }
 
+UInt64 Region::appliedIndexTerm() const
+{
+    return meta.appliedIndexTerm();
+}
+
+void Region::setApplied(UInt64 index, UInt64 term)
+{
+    std::unique_lock lock(mutex);
+    meta.setApplied(index, term);
+}
+
 RegionPtr Region::splitInto(RegionMeta && meta)
 {
     RegionPtr new_region = std::make_shared<Region>(std::move(meta), proxy_helper);
@@ -112,13 +134,13 @@ void RegionRaftCommandDelegate::execChangePeer(
     const UInt64 index,
     const UInt64 term)
 {
-    LOG_FMT_INFO(log,
-                 "{} execute change peer cmd: {}",
-                 toString(false),
-                 (request.has_change_peer_v2() ? request.change_peer_v2().ShortDebugString()
-                                               : request.change_peer().ShortDebugString()));
+    LOG_INFO(log,
+             "{} execute change peer cmd: {}",
+             toString(false),
+             (request.has_change_peer_v2() ? request.change_peer_v2().ShortDebugString()
+                                           : request.change_peer().ShortDebugString()));
     meta.makeRaftCommandDelegate().execChangePeer(request, response, index, term);
-    LOG_FMT_INFO(log, "After execute change peer cmd, current region info: {}", getDebugString());
+    LOG_INFO(log, "After execute change peer cmd, current region info: {}", getDebugString());
 }
 
 static const metapb::Peer & findPeerByStore(const metapb::Region & region, UInt64 store_id)
@@ -186,7 +208,7 @@ Regions RegionRaftCommandDelegate::execBatchSplit(
             ss << ' ';
         }
         ss << getDebugString();
-        LOG_FMT_INFO(log, "{} split into {}", toString(false), ss.str());
+        LOG_INFO(log, "{} split into {}", toString(false), ss.str());
     }
 
     return split_regions;
@@ -202,11 +224,11 @@ void RegionRaftCommandDelegate::execPrepareMerge(
 
     const auto & target = prepare_merge_request.target();
 
-    LOG_FMT_INFO(log,
-                 "{} execute prepare merge, min_index {}, target [region {}]",
-                 toString(false),
-                 prepare_merge_request.min_index(),
-                 target.id());
+    LOG_INFO(log,
+             "{} execute prepare merge, min_index {}, target [region {}]",
+             toString(false),
+             prepare_merge_request.min_index(),
+             target.id());
 
     meta.makeRaftCommandDelegate().execPrepareMerge(request, response, index, term);
 }
@@ -219,7 +241,7 @@ void RegionRaftCommandDelegate::execRollbackMerge(
 {
     const auto & rollback_request = request.rollback_merge();
 
-    LOG_FMT_INFO(
+    LOG_INFO(
         log,
         "{} execute rollback merge, commit index {}",
         toString(false),
@@ -238,11 +260,11 @@ RegionID RegionRaftCommandDelegate::execCommitMerge(const raft_cmdpb::AdminReque
     auto & meta_delegate = meta.makeRaftCommandDelegate();
     const auto & source_meta = commit_merge_request.source();
     auto source_region = kvstore.getRegion(source_meta.id());
-    LOG_FMT_INFO(log,
-                 "{} execute commit merge, source [region {}], commit index {}",
-                 toString(false),
-                 source_meta.id(),
-                 commit_merge_request.commit());
+    LOG_INFO(log,
+             "{} execute commit merge, source [region {}], commit index {}",
+             toString(false),
+             source_meta.id(),
+             commit_merge_request.commit());
 
     const auto & source_region_meta_delegate = source_region->meta.makeRaftCommandDelegate();
     const auto res = meta_delegate.checkBeforeCommitMerge(request, source_region_meta_delegate);
@@ -289,12 +311,12 @@ void RegionRaftCommandDelegate::handleAdminRaftCmd(const raft_cmdpb::AdminReques
 
     auto type = request.cmd_type();
 
-    LOG_FMT_INFO(log,
-                 "{} execute admin command {} at [term: {}, index: {}]",
-                 toString(),
-                 raft_cmdpb::AdminCmdType_Name(type),
-                 term,
-                 index);
+    LOG_INFO(log,
+             "{} execute admin command {} at [term: {}, index: {}]",
+             toString(),
+             raft_cmdpb::AdminCmdType_Name(type),
+             term,
+             index);
 
     switch (type)
     {
@@ -339,7 +361,7 @@ void RegionRaftCommandDelegate::handleAdminRaftCmd(const raft_cmdpb::AdminReques
     case raft_cmdpb::AdminCmdType::CommitMerge:
     case raft_cmdpb::AdminCmdType::RollbackMerge:
     {
-        LOG_FMT_INFO(log, "After execute merge cmd, current region info: {}", getDebugString());
+        LOG_INFO(log, "After execute merge cmd, current region info: {}", getDebugString());
         break;
     }
     default:
@@ -467,9 +489,9 @@ Timepoint Region::lastCompactLogTime() const
     return last_compact_log_time;
 }
 
-Region::CommittedScanner Region::createCommittedScanner(bool use_lock)
+Region::CommittedScanner Region::createCommittedScanner(bool use_lock, bool need_value)
 {
-    return Region::CommittedScanner(this->shared_from_this(), use_lock);
+    return Region::CommittedScanner(this->shared_from_this(), use_lock, need_value);
 }
 
 Region::CommittedRemover Region::createCommittedRemover(bool use_lock)
@@ -485,6 +507,40 @@ std::string Region::toString(bool dump_status) const
 ImutRegionRangePtr Region::getRange() const
 {
     return meta.getRange();
+}
+
+RaftstoreVer Region::getClusterRaftstoreVer()
+{
+    // In non-debug/test mode, we should assert the proxy_ptr be always not null.
+    if (likely(proxy_helper != nullptr))
+    {
+        if (likely(proxy_helper->fn_get_cluster_raftstore_version))
+        {
+            // Make debug funcs happy.
+            return proxy_helper->fn_get_cluster_raftstore_version(proxy_helper->proxy_ptr, 0, 0);
+        }
+    }
+    return RaftstoreVer::Uncertain;
+}
+
+void Region::beforePrehandleSnapshot(uint64_t region_id, std::optional<uint64_t> deadline_index)
+{
+    if (getClusterRaftstoreVer() == RaftstoreVer::V2)
+    {
+        data.orphan_keys_info.snapshot_index = appliedIndex();
+        data.orphan_keys_info.pre_handling = true;
+        data.orphan_keys_info.deadline_index = deadline_index;
+        data.orphan_keys_info.region_id = region_id;
+    }
+}
+
+void Region::afterPrehandleSnapshot()
+{
+    if (getClusterRaftstoreVer() == RaftstoreVer::V2)
+    {
+        data.orphan_keys_info.pre_handling = false;
+        LOG_INFO(log, "After prehandle, remains {} orphan keys [region_id={}]", data.orphan_keys_info.remainedKeyCount(), id());
+    }
 }
 
 kvrpcpb::ReadIndexRequest GenRegionReadIndexReq(const Region & region, UInt64 start_ts)
@@ -515,43 +571,63 @@ bool Region::checkIndex(UInt64 index) const
     return meta.checkIndex(index);
 }
 
-std::tuple<WaitIndexResult, double> Region::waitIndex(UInt64 index, const UInt64 timeout_ms, std::function<bool(void)> && check_running)
+std::tuple<WaitIndexStatus, double> Region::waitIndex(
+    UInt64 index,
+    const UInt64 timeout_ms,
+    std::function<bool(void)> && check_running,
+    const LoggerPtr & log)
 {
-    if (proxy_helper != nullptr)
+    if (proxy_helper == nullptr) // just for debug
+        return {WaitIndexStatus::Finished, 0};
+
+    if (meta.checkIndex(index))
     {
-        if (!meta.checkIndex(index))
-        {
-            Stopwatch wait_index_watch;
-            LOG_FMT_DEBUG(log,
-                          "{} need to wait learner index {}",
-                          toString(),
-                          index);
-            auto wait_idx_res = meta.waitIndex(index, timeout_ms, std::move(check_running));
-            auto elapsed_secs = wait_index_watch.elapsedSeconds();
-            switch (wait_idx_res)
-            {
-            case WaitIndexResult::Finished:
-            {
-                LOG_FMT_DEBUG(log,
-                              "{} wait learner index {} done",
-                              toString(false),
-                              index);
-                return {wait_idx_res, elapsed_secs};
-            }
-            case WaitIndexResult::Terminated:
-            {
-                return {wait_idx_res, elapsed_secs};
-            }
-            case WaitIndexResult::Timeout:
-            {
-                ProfileEvents::increment(ProfileEvents::RaftWaitIndexTimeout);
-                LOG_FMT_WARNING(log, "{} wait learner index {} timeout", toString(false), index);
-                return {wait_idx_res, elapsed_secs};
-            }
-            }
-        }
+        // already satisfied
+        return {WaitIndexStatus::Finished, 0};
     }
-    return {WaitIndexResult::Finished, 0};
+
+    Stopwatch wait_index_watch;
+    const auto wait_idx_res = meta.waitIndex(index, timeout_ms, std::move(check_running));
+    const auto elapsed_secs = wait_index_watch.elapsedSeconds();
+    const auto & status = wait_idx_res.status;
+    switch (status)
+    {
+    case WaitIndexStatus::Finished:
+    {
+        const auto log_lvl = elapsed_secs < 1.0 ? Poco::Message::PRIO_DEBUG : Poco::Message::PRIO_INFORMATION;
+        LOG_IMPL(
+            log,
+            log_lvl,
+            "{} wait learner index done, prev_index={} curr_index={} to_wait={} elapsed_s={:.3f} timeout_s={:.3f}",
+            toString(false),
+            wait_idx_res.prev_index,
+            wait_idx_res.current_index,
+            index,
+            elapsed_secs,
+            timeout_ms / 1000.0);
+        return {status, elapsed_secs};
+    }
+    case WaitIndexStatus::Terminated:
+    {
+        return {status, elapsed_secs};
+    }
+    case WaitIndexStatus::Timeout:
+    {
+        ProfileEvents::increment(ProfileEvents::RaftWaitIndexTimeout);
+        LOG_WARNING(
+            log,
+            "{} wait learner index timeout, prev_index={} curr_index={} to_wait={} state={}"
+            " elapsed_s={:.3f} timeout_s={:.3f}",
+            toString(false),
+            wait_idx_res.prev_index,
+            wait_idx_res.current_index,
+            index,
+            static_cast<Int32>(peerState()),
+            elapsed_secs,
+            timeout_ms / 1000.0);
+        return {status, elapsed_secs};
+    }
+    }
 }
 
 UInt64 Region::version() const
@@ -569,7 +645,6 @@ void Region::assignRegion(Region && new_region)
     std::unique_lock<std::shared_mutex> lock(mutex);
 
     data.assignRegionData(std::move(new_region.data));
-
     meta.assignRegionMeta(std::move(new_region.meta));
     meta.notifyAll();
 }
@@ -607,10 +682,10 @@ void Region::tryCompactionFilter(const Timestamp safe_point)
     // No need to check default cf. Because tikv will gc default cf before write cf.
     if (del_write)
     {
-        LOG_FMT_INFO(log,
-                     "delete {} records in write cf for region {}",
-                     del_write,
-                     meta.regionId());
+        LOG_INFO(log,
+                 "delete {} records in write cf for region {}",
+                 del_write,
+                 meta.regionId());
     }
 }
 
@@ -620,7 +695,6 @@ EngineStoreApplyRes Region::handleWriteRaftCmd(const WriteCmdsView & cmds, UInt6
     {
         return EngineStoreApplyRes::None;
     }
-
     auto & context = tmt.getContext();
     Stopwatch watch;
     SCOPE_EXIT({ GET_METRIC(tiflash_raft_apply_write_command_duration_seconds, type_write).Observe(watch.elapsedSeconds()); });
@@ -640,13 +714,13 @@ EngineStoreApplyRes Region::handleWriteRaftCmd(const WriteCmdsView & cmds, UInt6
             }
             catch (Exception & e)
             {
-                LOG_FMT_ERROR(log,
-                              "{} catch exception: {}, while applying `CmdType::Put` on [term {}, index {}], CF {}",
-                              toString(),
-                              e.message(),
-                              term,
-                              index,
-                              CFToName(cf));
+                LOG_ERROR(log,
+                          "{} catch exception: {}, while applying `CmdType::Put` on [term {}, index {}], CF {}",
+                          toString(),
+                          e.message(),
+                          term,
+                          index,
+                          CFToName(cf));
                 e.rethrow();
             }
             break;
@@ -660,14 +734,14 @@ EngineStoreApplyRes Region::handleWriteRaftCmd(const WriteCmdsView & cmds, UInt6
             }
             catch (Exception & e)
             {
-                LOG_FMT_ERROR(log,
-                              "{} catch exception: {}, while applying `CmdType::Delete` on [term {}, index {}], key in hex: {}, CF {}",
-                              toString(),
-                              e.message(),
-                              term,
-                              index,
-                              tikv_key.toDebugString(),
-                              CFToName(cf));
+                LOG_ERROR(log,
+                          "{} catch exception: {}, while applying `CmdType::Delete` on [term {}, index {}], key in hex: {}, CF {}",
+                          toString(),
+                          e.message(),
+                          term,
+                          index,
+                          tikv_key.toDebugString(),
+                          CFToName(cf));
                 e.rethrow();
             }
             break;
@@ -720,47 +794,6 @@ EngineStoreApplyRes Region::handleWriteRaftCmd(const WriteCmdsView & cmds, UInt6
     return EngineStoreApplyRes::None;
 }
 
-void Region::handleIngestSSTInMemory(const SSTViewVec snaps, UInt64 index, UInt64 term)
-{
-    if (index <= appliedIndex())
-        return;
-
-    {
-        std::unique_lock<std::shared_mutex> lock(mutex);
-
-        for (UInt64 i = 0; i < snaps.len; ++i)
-        {
-            const auto & snapshot = snaps.views[i];
-            auto sst_reader = SSTReader{proxy_helper, snapshot};
-
-            LOG_FMT_INFO(log,
-                         "{} begin to ingest sst of cf {} at [term: {}, index: {}]",
-                         this->toString(false),
-                         CFToName(snapshot.type),
-                         term,
-                         index);
-
-            uint64_t kv_size = 0;
-            while (sst_reader.remained())
-            {
-                auto key = sst_reader.key();
-                auto value = sst_reader.value();
-                doInsert(snaps.views[i].type, TiKVKey(key.data, key.len), TiKVValue(value.data, value.len));
-                ++kv_size;
-                sst_reader.next();
-            }
-
-            LOG_FMT_INFO(log,
-                         "{} finish to ingest sst of kv count {}",
-                         this->toString(false),
-                         kv_size);
-            GET_METRIC(tiflash_raft_process_keys, type_ingest_sst).Increment(kv_size);
-        }
-        meta.setApplied(index, term);
-    }
-    meta.notifyAll();
-}
-
 void Region::finishIngestSSTByDTFile(RegionPtr && rhs, UInt64 index, UInt64 term)
 {
     if (index <= appliedIndex())
@@ -778,12 +811,12 @@ void Region::finishIngestSSTByDTFile(RegionPtr && rhs, UInt64 index, UInt64 term
 
         meta.setApplied(index, term);
     }
-    LOG_FMT_INFO(log,
-                 "{} finish to ingest sst by DTFile [write_cf_keys={}] [default_cf_keys={}] [lock_cf_keys={}]",
-                 this->toString(false),
-                 data.write_cf.getSize(),
-                 data.default_cf.getSize(),
-                 data.lock_cf.getSize());
+    LOG_INFO(log,
+             "{} finish ingest sst by DTFile [write_cf_keys={}] [default_cf_keys={}] [lock_cf_keys={}]",
+             this->toString(false),
+             data.write_cf.getSize(),
+             data.default_cf.getSize(),
+             data.lock_cf.getSize());
     meta.notifyAll();
 }
 
@@ -806,14 +839,20 @@ Region::Region(RegionMeta && meta_)
 
 Region::Region(DB::RegionMeta && meta_, const TiFlashRaftProxyHelper * proxy_helper_)
     : meta(std::move(meta_))
-    , log(&Poco::Logger::get("Region"))
+    , log(Logger::get())
     , mapped_table_id(meta.getRange()->getMappedTableID())
+    , keyspace_id(meta.getRange()->getKeyspaceID())
     , proxy_helper(proxy_helper_)
 {}
 
 TableID Region::getMappedTableID() const
 {
     return mapped_table_id;
+}
+
+KeyspaceID Region::getKeyspaceID() const
+{
+    return keyspace_id;
 }
 
 void Region::setPeerState(raft_serverpb::PeerState state)
@@ -830,11 +869,19 @@ UInt64 RegionRaftCommandDelegate::appliedIndex()
 {
     return meta.makeRaftCommandDelegate().applyState().applied_index();
 }
-metapb::Region Region::getMetaRegion() const
+metapb::Region Region::cloneMetaRegion() const
+{
+    return meta.cloneMetaRegion();
+}
+const metapb::Region & Region::getMetaRegion() const
 {
     return meta.getMetaRegion();
 }
-raft_serverpb::MergeState Region::getMergeState() const
+raft_serverpb::MergeState Region::cloneMergeState() const
+{
+    return meta.cloneMergeState();
+}
+const raft_serverpb::MergeState & Region::getMergeState() const
 {
     return meta.getMergeState();
 }

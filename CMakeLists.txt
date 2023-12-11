@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-project (TiFlash)
 cmake_minimum_required (VERSION 3.21)
+
+project (TiFlash LANGUAGES C CXX ASM)
+
+cmake_policy(SET CMP0048 NEW)
 
 set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY true)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${TiFlash_SOURCE_DIR}/cmake/Modules/")
@@ -27,28 +30,19 @@ if(CMAKE_PREFIX_PATH)
             "${CMAKE_PREFIX_PATH}/lib:${CMAKE_PREFIX_PATH}/lib/x86_64-unknown-linux-gnu/:${CMAKE_PREFIX_PATH}/lib/aarch64-unknown-linux-gnu/")
 endif()
 
-message (STATUS "Using CXX=${CMAKE_CXX_COMPILER}, ver=${CMAKE_CXX_COMPILER_VERSION};CC=${CMAKE_C_COMPILER}, ver=${CMAKE_C_COMPILER_VERSION}")
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    # Require at least gcc 7
-    if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7 AND NOT CMAKE_VERSION VERSION_LESS 2.8.9)
-        message (FATAL_ERROR "GCC version must be at least 7! For example, if GCC 7 is available under gcc-7, g++-7 names, do the following: export CC=gcc-7 CXX=g++-7; rm -rf CMakeCache.txt CMakeFiles; and re run cmake or ./release.")
-    endif ()
-    set(MOST_DEBUGGABLE_LEVEL -Og)
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # Require at least clang 5
-    if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5)
-        message (FATAL_ERROR "Clang version must be at least 5!")
-    endif ()
-    set(MOST_DEBUGGABLE_LEVEL -O0)
-else ()
-    message (WARNING "You are using an unsupported compiler! Compilation has only been tested with Clang 5+ and GCC 7+.")
-endif ()
+include (cmake/arch.cmake)
+include (cmake/target.cmake)
+include (cmake/tools.cmake)
+include (cmake/find_rust.cmake)
+include (cmake/add_warning.cmake)
+include (cmake/utils.cmake)
+
+option(ENABLE_PCH "Enable `Precompiled header`" OFF)
+
+include (cmake/find_ccache.cmake)
 
 # Write compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
-
-option (USE_CCACHE "Set to OFF to disable ccache" ON)
-include (cmake/find_ccache.cmake)
 
 if (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "None")
     set (CMAKE_BUILD_TYPE "RelWithDebInfo")
@@ -62,79 +56,79 @@ message (STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 # TSan is not supported due to false positive errors in libstdc++ and necessity to rebuild libstdc++ with TSan
 set (CMAKE_CONFIGURATION_TYPES "RelWithDebInfo;Debug;Release;MinSizeRel;ASan;UBSan" CACHE STRING "" FORCE)
 
-include (cmake/arch.cmake)
-
-if (ARCH_AMD64)
-    option(TIFLASH_ENABLE_AVX_SUPPORT "enable AVX and AVX2 support" ON)
-    option(TIFLASH_ENABLE_AVX512_SUPPORT "enable AVX512 support" ON)
-endif ()
-
-if (ARCH_AARCH64)
-    option(TIFLASH_ENABLE_ASIMD_SUPPORT "enable Advanced SIMD support" ON)
-    option(TIFLASH_ENABLE_SVE_SUPPORT "enable Scalable Vector Extension support" OFF)
-endif ()
-
-if (TIFLASH_ENABLE_AVX_SUPPORT)
-    add_definitions(-DTIFLASH_ENABLE_AVX_SUPPORT=1)
-endif ()
-
-if (TIFLASH_ENABLE_AVX512_SUPPORT)
-    add_definitions(-DTIFLASH_ENABLE_AVX512_SUPPORT=1)
-endif ()
-
-if (TIFLASH_ENABLE_ASIMD_SUPPORT)
-    add_definitions(-DTIFLASH_ENABLE_ASIMD_SUPPORT=1)
-endif ()
-
-if (TIFLASH_ENABLE_SVE_SUPPORT)
-    add_definitions(-DTIFLASH_ENABLE_SVE_SUPPORT=1)
-endif ()
-
 if (NOT MSVC)
     set (COMMON_WARNING_FLAGS "${COMMON_WARNING_FLAGS} -Wall")    # -Werror is also added inside directories with our own code.
 endif ()
 
-if (COMPILER_GCC OR COMPILER_CLANG)
-    set (CXX_WARNING_FLAGS "${CXX_WARNING_FLAGS} -Wnon-virtual-dtor")
+set (CXX_WARNING_FLAGS "${CXX_WARNING_FLAGS} -Wnon-virtual-dtor")
+
+option(ENABLE_TIME_TRACES "Enable clang feature time traces" OFF)
+if (ENABLE_TIME_TRACES)
+    set (CLANG_TIME_TRACES_FLAGS "-ftime-trace")
+    message (STATUS "Using clang time traces flag `${CLANG_TIME_TRACES_FLAGS}`. Generates JSON file based on output filename. Results can be analyzed with chrome://tracing or https://www.speedscope.app for flamegraph visualization.")
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
 endif ()
 
-if (COMPILER_CLANG)
-    # Clang doesn't have int128 predefined macros, workaround by manually defining them
-    # Reference: https://stackoverflow.com/questions/41198673/uint128-t-not-working-with-clang-and-libstdc
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__GLIBCXX_BITSIZE_INT_N_0=128 -D__GLIBCXX_TYPE_INT_N_0=__int128")
+# https://clang.llvm.org/docs/ThinLTO.html
+# Applies to clang only.
+option(ENABLE_THINLTO "Clang-specific link time optimization" OFF)
 
-    option(ENABLE_TIME_TRACES "Enable clang feature time traces" OFF)
-    if (ENABLE_TIME_TRACES)
-        set (CLANG_TIME_TRACES_FLAGS "-ftime-trace")
-        message (STATUS "Using clang time traces flag `${CLANG_TIME_TRACES_FLAGS}`. Generates JSON file based on output filename. Results can be analyzed with chrome://tracing or https://www.speedscope.app for flamegraph visualization.")
-        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
+if (ENABLE_THINLTO AND NOT ENABLE_TESTS)
+    # Link time optimization
+    set (THINLTO_JOBS "0" CACHE STRING "ThinLTO compilation parallelism")
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -flto=thin -fvisibility=hidden -fvisibility-inlines-hidden -fsplit-lto-unit")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=thin -fvisibility=hidden -fvisibility-inlines-hidden -fwhole-program-vtables -fsplit-lto-unit")
+    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=thin -flto-jobs=${THINLTO_JOBS} -fvisibility=hidden -fvisibility-inlines-hidden -fwhole-program-vtables -fsplit-lto-unit")
+elseif (ENABLE_THINLTO)
+    message (WARNING "Cannot enable ThinLTO")
+endif ()
+
+option (ENABLE_LLVM_PROFILE_INSTR "Generate instrumented code to collect execution counts" OFF)
+option (ENABLE_LLVM_PGO "Enables flags for Profile Guided Optimization (PGO)" OFF)
+option (ENABLE_LLVM_PGO_USE_SAMPLE "Enables flags for Profile Guided Optimization (PGO) and use sampling profilers" OFF)
+set (USE_LLVM_FDO OFF CACHE BOOL "" FORCE)
+
+if (ENABLE_LLVM_PGO)
+    if (ENABLE_LLVM_PROFILE_INSTR)
+        message (FATAL_ERROR "`ENABLE_LLVM_PROFILE_INSTR` can not be used with `ENABLE_LLVM_PGO`")
     endif ()
+    if (ENABLE_LLVM_PGO_USE_SAMPLE)
 
-    # https://clang.llvm.org/docs/ThinLTO.html
-    # Applies to clang only.
-    option(ENABLE_THINLTO "Clang-specific link time optimization" OFF)
+        # Follow https://clang.llvm.org/docs/UsersManual.html#using-sampling-profilers
+        # Use https://github.com/google/autofdo
 
-    if (ENABLE_THINLTO AND NOT ENABLE_TESTS)
-        # Link time optimization
-        set (THINLTO_JOBS "0" CACHE STRING "ThinLTO compilation parallelism")
-        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -flto=thin -fvisibility=hidden -fvisibility-inlines-hidden -fsplit-lto-unit")
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=thin -fvisibility=hidden -fvisibility-inlines-hidden -fwhole-program-vtables -fsplit-lto-unit")
-        set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=thin -flto-jobs=${THINLTO_JOBS} -fvisibility=hidden -fvisibility-inlines-hidden -fwhole-program-vtables -fsplit-lto-unit")
-    elseif (ENABLE_THINLTO)
-        message (WARNING "Cannot enable ThinLTO")
+        set (_LLVM_PGO_USE_SAMPLE_FLAGS "-gline-tables-only -fdebug-info-for-profiling -funique-internal-linkage-names")
+
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${_LLVM_PGO_USE_SAMPLE_FLAGS}")
+        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${_LLVM_PGO_USE_SAMPLE_FLAGS}")
+        set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--no-rosegment")
+        message (STATUS "Add flags `${_LLVM_PGO_USE_SAMPLE_FLAGS}` for profiling")
+
+        if (NOT "$ENV{TIFLASH_LLVM_PROFDATA}" STREQUAL "")
+            set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-sample-use=$ENV{TIFLASH_LLVM_PROFDATA}")
+            set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-sample-use=$ENV{TIFLASH_LLVM_PROFDATA}")
+            message (STATUS "Use sample profile data `$ENV{TIFLASH_LLVM_PROFDATA}` for profile-guided optimization")
+            set (USE_LLVM_FDO ON CACHE BOOL "" FORCE)
+        else ()
+            message (STATUS "NOT use sample profile data")
+        endif ()
+
+        unset (_LLVM_PGO_USE_SAMPLE_FLAGS)
+    else ()
+        if ("$ENV{TIFLASH_LLVM_PROFDATA}" STREQUAL "")
+            message (FATAL_ERROR "Please set env var `TIFLASH_LLVM_PROFDATA`")
+        endif ()
+
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-use=$ENV{TIFLASH_LLVM_PROFDATA} -Wno-profile-instr-unprofiled")
+        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-instr-use=$ENV{TIFLASH_LLVM_PROFDATA} -Wno-profile-instr-unprofiled")
+        message (STATUS "Use instrumentation data `$ENV{TIFLASH_LLVM_PROFDATA}` for profile-guided optimization")
     endif ()
 endif ()
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # clang: warning: argument unused during compilation: '-stdlib=libc++'
-    # clang: warning: argument unused during compilation: '-specs=/usr/share/dpkg/no-pie-compile.specs' [-Wunused-command-line-argument]
-    set (COMMON_WARNING_FLAGS "${COMMON_WARNING_FLAGS} -Wno-unused-command-line-argument")
-endif ()
-
-if (ARCH_LINUX)
-    set (CXX11_ABI "ENABLE" CACHE STRING "Use C++11 ABI: DEFAULT, ENABLE, DISABLE")
-endif ()
+# clang: warning: argument unused during compilation: '-stdlib=libc++'
+# clang: warning: argument unused during compilation: '-specs=/usr/share/dpkg/no-pie-compile.specs' [-Wunused-command-line-argument]
+set (COMMON_WARNING_FLAGS "${COMMON_WARNING_FLAGS} -Wno-unused-command-line-argument")
 
 option (USE_STATIC_LIBRARIES "Set to FALSE to use shared libraries" ON)
 option (MAKE_STATIC_LIBRARIES "Set to FALSE to make shared libraries" ${USE_STATIC_LIBRARIES})
@@ -150,60 +144,12 @@ if (USE_STATIC_LIBRARIES)
     list(REVERSE CMAKE_FIND_LIBRARY_SUFFIXES)
 endif ()
 
-if (CMAKE_LIBRARY_ARCHITECTURE MATCHES "amd64.*|x86_64.*|AMD64.*")
+if (ARCH_AMD64)
     option (USE_INTERNAL_MEMCPY "Use internal implementation of 'memcpy' function instead of provided by libc. Only for x86_64." ON)
-
-    if (ARCH_LINUX)
-        option (GLIBC_COMPATIBILITY "Set to TRUE to enable compatibility with older glibc libraries. Only for x86_64, Linux. Implies USE_INTERNAL_MEMCPY." ON)
-    endif()
 endif ()
 
-if (GLIBC_COMPATIBILITY)
-    set (USE_INTERNAL_MEMCPY ON)
-endif ()
-
-if (CXX11_ABI STREQUAL ENABLE)
-    set (CXX11_ABI_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")
-elseif (CXX11_ABI STREQUAL DISABLE)
-    set (CXX11_ABI_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=0")
-else ()
-    set (CXX11_ABI_FLAGS "")
-endif ()
-
-set (COMPILER_FLAGS                      "${COMPILER_FLAGS} ${CXX11_ABI_FLAGS}")
-
-string(REGEX MATCH "-?[0-9]+(.[0-9]+)?$" COMPILER_POSTFIX ${CMAKE_CXX_COMPILER})
-
-find_program (LLVM_OBJCOPY_PATH NAMES "llvm-objcopy${COMPILER_POSTFIX}" "llvm-objcopy")
-find_program (LLVM_AR_PATH NAMES "llvm-ar${COMPILER_POSTFIX}" "llvm-ar")
-find_program (LLVM_RANLIB_PATH NAMES "llvm-ranlib${COMPILER_POSTFIX}" "llvm-ranlib")
-
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND LLVM_OBJCOPY_PATH)
-    set(CMAKE_OBJCOPY ${LLVM_OBJCOPY_PATH})
-endif()
-
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND LLVM_AR_PATH)
-    set(CMAKE_AR ${LLVM_AR_PATH})
-endif()
-
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND LLVM_RANLIB_PATH)
-    set(CMAKE_RANLIB ${LLVM_RANLIB_PATH})
-endif()
-
-find_program (LLD_PATH NAMES "lld${COMPILER_POSTFIX}" "lld")
-find_program (GOLD_PATH NAMES "gold")
-
-if (NOT LINKER_NAME)
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND LLD_PATH)
-        set (LINKER_NAME "lld")
-    elseif (GOLD_PATH)
-        set (LINKER_NAME "gold")
-    endif ()
-endif ()
-
-if (LINKER_NAME)
-    message(STATUS "Using linker: ${LINKER_NAME} (selected from: LLD_PATH=${LLD_PATH}; GOLD_PATH=${GOLD_PATH}; COMPILER_POSTFIX=${COMPILER_POSTFIX})")
-    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=${LINKER_NAME}")
+if ((ARCH_AMD64 OR ARCH_AARCH64) AND OS_LINUX)
+    option (GLIBC_COMPATIBILITY "Set to TRUE to enable compatibility with older glibc libraries. Only for x86_64, Linux. Implies USE_INTERNAL_MEMCPY." ON)
 endif ()
 
 option (PIPE "-pipe compiler option [less /tmp usage, more ram usage]" ON)
@@ -211,30 +157,14 @@ if (PIPE)
     set (COMPILER_FLAGS                  "${COMPILER_FLAGS} -pipe")
 endif ()
 
-include (cmake/test_cpu.cmake)
+include (cmake/cpu_features.cmake)
 
-option (ARCHNATIVE "Enable -march=native compiler flag" OFF)
-if (ARCHNATIVE)
-    set (COMPILER_FLAGS                  "${COMPILER_FLAGS} -march=native")
-endif ()
+set (CMAKE_CXX_STANDARD 20)
+set (CMAKE_CXX_EXTENSIONS 1) # https://cmake.org/cmake/help/latest/prop_tgt/CXX_EXTENSIONS.html#prop_tgt:CXX_EXTENSIONS
+set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Special options for better optimized code with clang
-#if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-#    set (CMAKE_CXX_FLAGS_RELWITHDEBINFO  "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -Wno-unused-command-line-argument -mllvm -inline-threshold=10000")
-#endif ()
-
-if (CMAKE_VERSION VERSION_LESS "3.8.0")
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1z")
-else ()
-    set (CMAKE_CXX_STANDARD 17)
-    set (CMAKE_CXX_EXTENSIONS 1) # https://cmake.org/cmake/help/latest/prop_tgt/CXX_EXTENSIONS.html#prop_tgt:CXX_EXTENSIONS
-    set (CMAKE_CXX_STANDARD_REQUIRED ON)
-endif ()
-
-if (NOT ARCH_ARM)
-    set (CMAKE_CXX_FLAGS_RELWITHDEBINFO      "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3")
-    set (CMAKE_C_FLAGS_RELWITHDEBINFO        "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3")
-endif ()
+set (CMAKE_CXX_FLAGS_RELWITHDEBINFO      "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3")
+set (CMAKE_C_FLAGS_RELWITHDEBINFO        "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3")
 
 option (DEBUG_WITHOUT_DEBUG_INFO "Set to ON to build dev target without debug info (remove flag `-g` in order to accelerate compiling speed and reduce target binary size)" OFF)
 if (DEBUG_WITHOUT_DEBUG_INFO)
@@ -255,17 +185,13 @@ set (CMAKE_C_FLAGS                       "${CMAKE_C_FLAGS} ${COMPILER_FLAGS} -fn
 set (CMAKE_C_FLAGS_RELWITHDEBINFO        "${CMAKE_C_FLAGS_RELWITHDEBINFO} ${CMAKE_C_FLAGS_ADD}")
 set (CMAKE_C_FLAGS_DEBUG                 "${CMAKE_C_FLAGS_DEBUG} ${MOST_DEBUGGABLE_LEVEL} -fverbose-asm -fno-inline ${CMAKE_C_FLAGS_ADD}")
 
-if (MAKE_STATIC_LIBRARIES AND NOT APPLE AND NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
-    set (CMAKE_EXE_LINKER_FLAGS          "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
-endif ()
-
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 include (cmake/test_compiler.cmake)
 
-if (ARCH_LINUX AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if (OS_LINUX)
     set (TIFLASH_LLVM_TOOLCHAIN 1)
-    set (CMAKE_EXE_LINKER_FLAGS          "${CMAKE_EXE_LINKER_FLAGS} ${GLIBC_COMPATIBILITY_LINK_FLAGS} ${CXX11_ABI_FLAGS}")
+    set (CMAKE_EXE_LINKER_FLAGS          "${CMAKE_EXE_LINKER_FLAGS} ${GLIBC_COMPATIBILITY_LINK_FLAGS}")
 
     option (USE_LIBCXX "Use libc++ and libc++abi instead of libstdc++ (only make sense on Linux with Clang)" ${HAVE_LIBCXX})
     option (USE_LLVM_LIBUNWIND "Use libunwind from LLVM" OFF)
@@ -315,9 +241,6 @@ if (USE_INCLUDE_WHAT_YOU_USE)
     if (NOT IWYU_PATH)
         message(FATAL_ERROR "Could not find the program include-what-you-use")
     endif()
-    if (${CMAKE_VERSION} VERSION_LESS "3.3.0")
-        message(FATAL_ERROR "include-what-you-use requires CMake version at least 3.3.")
-    endif()
 endif ()
 
 option (UNBUNDLED "Try find all libraries in system (if fail - use bundled from contrib/)" OFF)
@@ -327,7 +250,7 @@ else ()
     set(NOT_UNBUNDLED 1)
 endif ()
 # Using system libs can cause lot of warnings in includes.
-if (UNBUNDLED OR NOT (ARCH_LINUX OR APPLE) OR ARCH_32)
+if (UNBUNDLED OR NOT (OS_LINUX OR OS_DARWIN) OR ARCH_32)
     option (NO_WERROR "Disable -Werror compiler option" ON)
 endif ()
 
@@ -391,12 +314,9 @@ option (ENABLE_UNWIND "Enable libunwind (better stacktraces)" ON)
 include (libs/libdaemon/cmake/find_unwind.cmake)
 
 # Need to process before "contrib" dir:
-include (libs/libcommon/cmake/find_gperftools.cmake)
 include (libs/libcommon/cmake/find_jemalloc.cmake)
 include (libs/libcommon/cmake/find_mimalloc.cmake)
 include (libs/libcommon/cmake/find_cctz.cmake)
-
-include (cmake/print_flags.cmake)
 
 # Enable tests by default when build type is debug
 if (CMAKE_BUILD_TYPE_UC STREQUAL "DEBUG")
@@ -420,24 +340,32 @@ endif()
 option (ENABLE_FAILPOINTS "Enables failpoints injection" ${ENABLE_FAILPOINTS_DEFAULT})
 if (ENABLE_FAILPOINTS)
     message (STATUS "Failpoints are enabled")
-else (ENABLE_FAILPOINTS)
+else ()
     message (STATUS "Failpoints are disabled")
-endif (ENABLE_FAILPOINTS)
+endif ()
 
-# Enable PageStorage V3 test.
-option (ENABLE_V3_PAGESTORAGE "Enables V3 PageStorage" ON)
-
-# Flags for test coverage
-option (TEST_COVERAGE "Enables flags for test coverage" OFF)
-option (TEST_COVERAGE_XML "Output XML report for test coverage" OFF)
-if (TEST_COVERAGE AND CMAKE_BUILD_TYPE_UC STREQUAL "DEBUG")
-    include(CodeCoverage)
-    set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fprofile-arcs -ftest-coverage")
+# Since JEMALLOC_NARENAS_COUNT is introduced for very limited usage, default to -1
+set (JEMALLOC_NARENAS_DEFAULT -1)
+option (JEMALLOC_NARENAS "Set Jemalloc narenas " ${JEMALLOC_NARENAS_DEFAULT})
+if (JEMALLOC_NARENAS LESS_EQUAL 0)
+    message (STATUS "No jemalloc narenas settings")
+else ()
+    message (STATUS "Set jemalloc narenas ${JEMALLOC_NARENAS}")
 endif ()
 
 option (TEST_LLVM_COVERAGE "Enables flags for test coverage" OFF)
 if (TEST_LLVM_COVERAGE AND CMAKE_BUILD_TYPE_UC STREQUAL "DEBUG")
     set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fprofile-instr-generate -fcoverage-mapping -DTIFLASH_LLVM_COVERAGE=1")
+endif ()
+
+# `ENABLE_LLVM_PROFILE_INSTR` will make executable binary generate profile data automatically. Make it only work at modules dbms and libs.
+if (ENABLE_LLVM_PROFILE_INSTR)
+    if (ENABLE_LLVM_PGO)
+        message (FATAL_ERROR "`ENABLE_LLVM_PROFILE_INSTR` can not be used with `ENABLE_LLVM_PGO`")
+    endif ()
+    message (STATUS "Using flag `-fprofile-instr-generate`. Generate instrumented code to collect execution counts into default.profraw file(overridden by '=' form of option or `LLVM_PROFILE_FILE` env var). Follow https://clang.llvm.org/docs/UsersManual.html#profile-guided-optimization.")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate")
+    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-instr-generate")
 endif ()
 
 if (ARCH_AMD64)
@@ -452,7 +380,7 @@ else()
     add_definitions(-DTIFLASH_COMPILER_VPCLMULQDQ_SUPPORT=0)
 endif()
 
-add_subdirectory (libs)
+add_subdirectory (libs EXCLUDE_FROM_ALL)
 add_subdirectory (dbms)
 
 include (cmake/print_include_directories.cmake)
@@ -463,4 +391,6 @@ include (cmake/print_include_directories.cmake)
 # Another way to do so is to use JOB_POOL with single concurrency. However, it is Ninja specific and it seems to have bugs
 # with a large number of threads.
 include (cmake/sequential.cmake)
-build_sequentially (symbolization tiflash_proxy)
+build_sequentially (process_metrics symbolization tiflash_proxy)
+
+print_flags ()

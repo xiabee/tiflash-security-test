@@ -15,9 +15,6 @@
 #pragma once
 
 #include <DataStreams/IProfilingBlockInputStream.h>
-#include <Encryption/FileProvider.h>
-#include <Encryption/ReadBufferFromFileProvider.h>
-#include <IO/CompressedReadBuffer.h>
 #include <Interpreters/Aggregator.h>
 
 namespace DB
@@ -39,13 +36,11 @@ public:
     AggregatingBlockInputStream(
         const BlockInputStreamPtr & input,
         const Aggregator::Params & params_,
-        const FileProviderPtr & file_provider_,
         bool final_,
         const String & req_id)
-        : log(Logger::get(NAME, req_id))
+        : log(Logger::get(req_id))
         , params(params_)
         , aggregator(params, req_id)
-        , file_provider{file_provider_}
         , final(final_)
     {
         children.push_back(input);
@@ -62,23 +57,9 @@ protected:
 
     Aggregator::Params params;
     Aggregator aggregator;
-    FileProviderPtr file_provider;
     bool final;
 
     bool executed = false;
-
-    /// To read the data that was flushed into the temporary data file.
-    struct TemporaryFileStream
-    {
-        FileProviderPtr file_provider;
-        ReadBufferFromFileProvider file_in;
-        CompressedReadBuffer<> compressed_in;
-        BlockInputStreamPtr block_in;
-
-        TemporaryFileStream(const std::string & path, const FileProviderPtr & file_provider_);
-        ~TemporaryFileStream();
-    };
-    std::vector<std::unique_ptr<TemporaryFileStream>> temporary_inputs;
 
     /** From here we will get the completed blocks after the aggregation. */
     std::unique_ptr<IBlockInputStream> impl;

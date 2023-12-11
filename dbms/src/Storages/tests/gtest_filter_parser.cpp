@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/typeid_cast.h>
 #include <Debug/MockTiDB.h>
-#include <Debug/dbgFuncCoprocessor.h>
+#include <Debug/dbgFuncCoprocessorUtils.h>
+#include <Debug/dbgQueryCompiler.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGQueryInfo.h>
 #include <Flash/Coprocessor/DAGQuerySource.h>
+#include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Functions/registerFunctions.h>
 #include <Interpreters/Context.h>
 #include <Storages/AlterCommands.h>
@@ -25,10 +27,10 @@
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/FilterParser/FilterParser.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
-#include <Storages/Transaction/SchemaBuilder-internal.h>
-#include <Storages/Transaction/SchemaNameMapper.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <TestUtils/TiFlashTestBasic.h>
+#include <TiDB/Schema/SchemaBuilder-internal.h>
+#include <TiDB/Schema/SchemaNameMapper.h>
 #include <common/logger_useful.h>
 
 #include <optional>
@@ -54,15 +56,15 @@ public:
     }
 
     FilterParserTest()
-        : log(Logger::get("FilterParserTest"))
+        : log(Logger::get())
         , ctx(TiFlashTestEnv::getContext())
     {
-        default_timezone_info = ctx.getTimezoneInfo();
+        default_timezone_info = ctx->getTimezoneInfo();
     }
 
 protected:
     LoggerPtr log;
-    Context ctx;
+    ContextPtr ctx;
     static TimezoneInfo default_timezone_info;
     DM::RSOperatorPtr generateRsOperator(String table_info_json, const String & query, TimezoneInfo & timezone_info);
 };
@@ -71,43 +73,39 @@ TimezoneInfo FilterParserTest::default_timezone_info;
 
 DM::RSOperatorPtr FilterParserTest::generateRsOperator(const String table_info_json, const String & query, TimezoneInfo & timezone_info = default_timezone_info)
 {
-    const TiDB::TableInfo table_info(table_info_json);
+    const TiDB::TableInfo table_info(table_info_json, NullspaceID);
 
     QueryTasks query_tasks;
     std::tie(query_tasks, std::ignore) = compileQuery(
-        ctx,
+        *ctx,
         query,
         [&](const String &, const String &) {
             return table_info;
         },
         getDAGProperties(""));
     auto & dag_request = *query_tasks[0].dag_request;
-    DAGContext dag_context(dag_request);
-    ctx.setDAGContext(&dag_context);
+    DAGContext dag_context(dag_request, {}, NullspaceID, "", false, log);
+    ctx->setDAGContext(&dag_context);
     // Don't care about regions information in this test
-    DAGQuerySource dag(ctx);
+    DAGQuerySource dag(*ctx);
     auto query_block = *dag.getRootQueryBlock();
-    std::vector<const tipb::Expr *> conditions;
-    if (query_block.children[0]->selection != nullptr)
-    {
-        for (const auto & condition : query_block.children[0]->selection->selection().conditions())
-            conditions.push_back(&condition);
-    }
+    google::protobuf::RepeatedPtrField<tipb::Expr> empty_condition;
+    const google::protobuf::RepeatedPtrField<tipb::Expr> & conditions = query_block.children[0]->selection != nullptr ? query_block.children[0]->selection->selection().conditions() : empty_condition;
 
     std::unique_ptr<DAGQueryInfo> dag_query;
     DM::ColumnDefines columns_to_read;
+    columns_to_read.reserve(table_info.columns.size());
     {
-        NamesAndTypes source_columns;
-        std::tie(source_columns, std::ignore) = parseColumnsFromTableInfo(table_info, log->getLog());
-        dag_query = std::make_unique<DAGQueryInfo>(
-            conditions,
-            DAGPreparedSets(),
-            source_columns,
-            timezone_info);
         for (const auto & column : table_info.columns)
         {
             columns_to_read.push_back(DM::ColumnDefine(column.id, column.name, getDataTypeByColumnInfo(column)));
         }
+        const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters; // don't care pushed down filters
+        dag_query = std::make_unique<DAGQueryInfo>(
+            conditions,
+            pushed_down_filters,
+            table_info.columns,
+            timezone_info);
     }
     auto create_attr_by_column_id = [&columns_to_read](ColumnID column_id) -> DM::Attr {
         auto iter = std::find_if(
@@ -119,6 +117,7 @@ DM::RSOperatorPtr FilterParserTest::generateRsOperator(const String table_info_j
         // Maybe throw an exception? Or check if `type` is nullptr before creating filter?
         return DM::Attr{.col_name = "", .col_id = column_id, .type = DataTypePtr{}};
     };
+
     return DM::FilterParser::parseDAGQuery(*dag_query, columns_to_read, std::move(create_attr_by_column_id), log);
 }
 
@@ -367,6 +366,39 @@ try
         std::regex rx(R"(\{"op":"or","children":\[\{"op":"unsupported",.*\},\{"op":"not","children":\[\{"op":"equal","col":"col_2","value":"666"\}\]\}\]\})");
         EXPECT_TRUE(std::regex_search(rs_operator->toDebugString(), rx));
     }
+
+    {
+        // And with IsNULL
+        auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where col_2 = 789 and col_3 is null");
+        EXPECT_EQ(rs_operator->name(), "and");
+        EXPECT_EQ(rs_operator->getAttrs().size(), 2);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_name, "col_3");
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_id, 3);
+        EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"and\",\"children\":[{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"789\"},{\"op\":\"isnull\",\"col\":\"col_3\"}]}");
+    }
+
+    {
+        // And between col and literal (not supported since And only support when child is ColumnExpr)
+        auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where col_2 and 1");
+        EXPECT_EQ(rs_operator->name(), "and");
+        EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"and\",\"children\":[{\"op\":\"unsupported\",\"reason\":\"child of logical and is not function\",\"content\":\"tp: ColumnRef val: \"\\200\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 8 flag: 4097 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"},{\"op\":\"unsupported\",\"reason\":\"child of logical and is not function\",\"content\":\"tp: Uint64 val: \"\\000\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 1 flag: 4129 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"}]}");
+    }
+
+    std::cout << " do query select * from default.t_111 where col_6 or 1 " << std::endl;
+    {
+        // Or between col and literal (not supported since Or only support when child is ColumnExpr)
+        auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where col_2 or 1");
+        EXPECT_EQ(rs_operator->name(), "or");
+        EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"or\",\"children\":[{\"op\":\"unsupported\",\"reason\":\"child of logical operator is not function\",\"content\":\"tp: ColumnRef val: \"\\200\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 8 flag: 4097 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"},{\"op\":\"unsupported\",\"reason\":\"child of logical operator is not function\",\"content\":\"tp: Uint64 val: \"\\000\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 1 flag: 4129 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"}]}");
+    }
+
+    {
+        // IsNull with FunctionExpr (not supported since IsNull only support when child is ColumnExpr)
+        auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where (col_2 > 1) is null");
+        EXPECT_EQ(rs_operator->name(), "unsupported");
+    }
 }
 CATCH
 
@@ -395,10 +427,10 @@ try
     {
         // Greater between TimeStamp col and Datetime literal, use local timezone
         auto ctx = TiFlashTestEnv::getContext();
-        auto & timezone_info = ctx.getTimezoneInfo();
+        auto & timezone_info = ctx->getTimezoneInfo();
         convertTimeZone(origin_time_stamp, converted_time, *timezone_info.timezone, time_zone_utc);
 
-        auto rs_operator = generateRsOperator(table_info_json, String("select * from default.t_111 where col_timestamp > cast_string_datetime('") + datetime + String("')"));
+        auto rs_operator = generateRsOperator(table_info_json, String("select * from default.t_111 where col_timestamp > cast_string_datetime('") + datetime + String("')"), timezone_info);
         EXPECT_EQ(rs_operator->name(), "greater");
         EXPECT_EQ(rs_operator->getAttrs().size(), 1);
         EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_timestamp");
@@ -409,7 +441,7 @@ try
     {
         // Greater between TimeStamp col and Datetime literal, use Chicago timezone
         auto ctx = TiFlashTestEnv::getContext();
-        auto & timezone_info = ctx.getTimezoneInfo();
+        auto & timezone_info = ctx->getTimezoneInfo();
         timezone_info.resetByTimezoneName("America/Chicago");
         convertTimeZone(origin_time_stamp, converted_time, *timezone_info.timezone, time_zone_utc);
 
@@ -424,7 +456,7 @@ try
     {
         // Greater between TimeStamp col and Datetime literal, use Chicago timezone
         auto ctx = TiFlashTestEnv::getContext();
-        auto & timezone_info = ctx.getTimezoneInfo();
+        auto & timezone_info = ctx->getTimezoneInfo();
         timezone_info.resetByTimezoneOffset(28800);
         convertTimeZoneByOffset(origin_time_stamp, converted_time, false, timezone_info.timezone_offset);
 
@@ -488,6 +520,12 @@ try
     {
         // Greater between col and literal (not supported since the type of col_5 is decimal)
         auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where col_5 > 1");
+        EXPECT_EQ(rs_operator->name(), "unsupported");
+    }
+
+    {
+        // Not with literal (not supported since Not only support when child is ColumnExpr)
+        auto rs_operator = generateRsOperator(table_info_json, "select * from default.t_111 where not 1");
         EXPECT_EQ(rs_operator->name(), "unsupported");
     }
 }

@@ -20,7 +20,6 @@
 #include <DataTypes/DataTypeDecimal.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/IDataType.h>
-#include <Interpreters/Context.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>
@@ -72,6 +71,10 @@ namespace tests
         ::DB::tryLogCurrentException(__PRETTY_FUNCTION__);                             \
         FAIL();                                                                        \
     }
+
+/**
+  * GTest related helper functions
+  */
 
 /// helper functions for comparing DataType
 ::testing::AssertionResult DataTypeCompare(

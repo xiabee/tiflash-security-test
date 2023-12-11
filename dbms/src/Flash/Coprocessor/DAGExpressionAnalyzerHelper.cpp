@@ -248,7 +248,7 @@ String DAGExpressionAnalyzerHelper::buildCastFunctionInternal(
         return result_name;
 
     FunctionBuilderPtr function_builder = FunctionFactory::instance().get(tidb_cast_name, analyzer->getContext());
-    FunctionBuilderTiDBCast * function_builder_tidb_cast = dynamic_cast<FunctionBuilderTiDBCast *>(function_builder.get());
+    auto * function_builder_tidb_cast = dynamic_cast<FunctionBuilderTiDBCast *>(function_builder.get());
     function_builder_tidb_cast->setInUnion(in_union);
     function_builder_tidb_cast->setTiDBFieldType(field_type);
 
@@ -401,6 +401,37 @@ String DAGExpressionAnalyzerHelper::buildRegexpFunction(
     return analyzer->applyFunction(func_name, argument_names, actions, collator);
 }
 
+String DAGExpressionAnalyzerHelper::buildDefaultFunction(
+    DAGExpressionAnalyzer * analyzer,
+    const tipb::Expr & expr,
+    const ExpressionActionsPtr & actions)
+{
+    const String & func_name = getFunctionName(expr);
+    Names argument_names;
+    for (const auto & child : expr.children())
+    {
+        String name = analyzer->getActions(child, actions);
+        argument_names.push_back(name);
+    }
+    return analyzer->applyFunction(func_name, argument_names, actions, getCollatorFromExpr(expr));
+}
+
+String DAGExpressionAnalyzerHelper::buildFunction(
+    DAGExpressionAnalyzer * analyzer,
+    const tipb::Expr & expr,
+    const ExpressionActionsPtr & actions)
+{
+    const String & func_name = getFunctionName(expr);
+    if (function_builder_map.count(func_name) != 0)
+    {
+        return function_builder_map[func_name](analyzer, expr, actions);
+    }
+    else
+    {
+        return buildDefaultFunction(analyzer, expr, actions);
+    }
+}
+
 DAGExpressionAnalyzerHelper::FunctionBuilderMap DAGExpressionAnalyzerHelper::function_builder_map(
     {{"in", DAGExpressionAnalyzerHelper::buildInFunction},
      {"notIn", DAGExpressionAnalyzerHelper::buildInFunction},
@@ -419,6 +450,8 @@ DAGExpressionAnalyzerHelper::FunctionBuilderMap DAGExpressionAnalyzerHelper::fun
      {"bitOr", DAGExpressionAnalyzerHelper::buildBitwiseFunction},
      {"bitXor", DAGExpressionAnalyzerHelper::buildBitwiseFunction},
      {"bitNot", DAGExpressionAnalyzerHelper::buildBitwiseFunction},
+     {"bitShiftLeft", DAGExpressionAnalyzerHelper::buildBitwiseFunction},
+     {"bitShiftRight", DAGExpressionAnalyzerHelper::buildBitwiseFunction},
      {"leftUTF8", DAGExpressionAnalyzerHelper::buildLeftUTF8Function},
      {"date_add", DAGExpressionAnalyzerHelper::buildDateAddOrSubFunction<DateAdd>},
      {"date_sub", DAGExpressionAnalyzerHelper::buildDateAddOrSubFunction<DateSub>},
