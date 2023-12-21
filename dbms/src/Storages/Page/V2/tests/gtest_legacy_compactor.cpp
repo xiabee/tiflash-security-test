@@ -14,7 +14,6 @@
 
 #include <Common/CurrentMetrics.h>
 #include <IO/ReadBufferFromMemory.h>
-#include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/File.h>
@@ -22,11 +21,11 @@
 #include <Poco/Logger.h>
 #include <Poco/PatternFormatter.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/V2/PageDefines.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V2/PageFile.h>
 #include <Storages/Page/V2/gc/LegacyCompactor.h>
 #include <Storages/Page/V2/gc/restoreFromCheckpoints.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/WriteBatch.h>
 #include <Storages/PathPool.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
@@ -37,7 +36,7 @@ TEST(LegacyCompactorTest, WriteMultipleBatchRead)
 try
 {
     PageStorageConfig config;
-    auto log = Logger::get("LegacyCompactor_test");
+    Poco::Logger * log = &Poco::Logger::get("LegacyCompactor_test");
 
     PageEntriesVersionSetWithDelta original_version("test", config.version_set_config, log);
 
@@ -171,8 +170,8 @@ TEST(LegacyCompactorTest, DISABLED_CompactAndRestore)
 try
 {
     auto ctx = DB::tests::TiFlashTestEnv::getContext();
-    const FileProviderPtr file_provider = ctx->getFileProvider();
-    StoragePathPool spool = ctx->getPathPool().withTable("test", "t", false);
+    const FileProviderPtr file_provider = ctx.getFileProvider();
+    StoragePathPool spool = ctx.getPathPool().withTable("test", "t", false);
     auto delegator = spool.getPSDiskDelegatorSingle("meta");
     auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
     PageStorage storage("compact_test", delegator, PageStorageConfig{}, file_provider, *bkg_pool);
@@ -190,18 +189,14 @@ try
     ASSERT_EQ(page_files_compacted.size(), 4UL);
 
     // TODO:
-    PageFile page_file = PageFile::openPageFileForRead(
-        7,
-        0,
-        delegator->defaultPath(),
-        file_provider,
-        PageFile::Type::Checkpoint,
-        storage.page_file_log);
+    PageFile page_file
+        = PageFile::openPageFileForRead(7, 0, delegator->defaultPath(), file_provider, PageFile::Type::Checkpoint, storage.page_file_log);
     ASSERT_TRUE(page_file.isExist());
 
     PageStorage::MetaMergingQueue mergine_queue;
     {
-        if (auto reader = PageFile::MetaMergingReader::createFrom(page_file, ctx->getReadLimiter()); reader->hasNext())
+        if (auto reader = PageFile::MetaMergingReader::createFrom(page_file, ctx.getReadLimiter());
+            reader->hasNext())
         {
             reader->moveNext();
             mergine_queue.push(std::move(reader));

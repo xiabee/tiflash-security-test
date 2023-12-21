@@ -93,7 +93,10 @@ public:
     }
 
     /// The size of the allocated pool in bytes
-    size_t size() const { return pool.size(); }
+    size_t size() const
+    {
+        return pool.size();
+    }
 };
 
 

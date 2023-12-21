@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/TiFlashBuildInfo.h>
 #include <Common/config.h>
 #include <Common/config_version.h>
 #include <common/config_common.h>
@@ -21,54 +20,44 @@
 #include <openssl/opensslconf.h>
 #include <openssl/opensslv.h>
 
+#include <ostream>
+#include <string>
 #include <vector>
 
 namespace TiFlashBuildInfo
 {
-String getName()
+std::string getName()
 {
     return TIFLASH_NAME;
 }
-String getVersion()
+std::string getVersion()
 {
     return TIFLASH_VERSION;
 }
-String getReleaseVersion()
+std::string getReleaseVersion()
 {
     return TIFLASH_RELEASE_VERSION;
 }
-String getEdition()
+std::string getEdition()
 {
     return TIFLASH_EDITION;
 }
-String getGitHash()
+std::string getGitHash()
 {
     return TIFLASH_GIT_HASH;
 }
-String getGitBranch()
+std::string getGitBranch()
 {
     return TIFLASH_GIT_BRANCH;
 }
-String getUTCBuildTime()
+std::string getUTCBuildTime()
 {
     return TIFLASH_UTC_BUILD_TIME;
 }
-UInt32 getMajorVersion()
-{
-    return TIFLASH_VERSION_MAJOR;
-}
-UInt32 getMinorVersion()
-{
-    return TIFLASH_VERSION_MINOR;
-}
-UInt32 getPatchVersion()
-{
-    return TIFLASH_VERSION_PATCH;
-}
 // clang-format off
-String getEnabledFeatures()
+std::string getEnabledFeatures()
 {
-    std::vector<String> features
+    std::vector<std::string> features
     {
 // allocator
 #if USE_JEMALLOC
@@ -142,7 +131,7 @@ String getEnabledFeatures()
     return fmt::format("{}", fmt::join(features.begin(), features.end(), " "));
 }
 // clang-format on
-String getProfile()
+std::string getProfile()
 {
     return TIFLASH_PROFILE;
 }

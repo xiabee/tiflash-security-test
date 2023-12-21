@@ -71,21 +71,10 @@ template <
     typename Hash = DefaultHash<Key>,
     typename Grower = HashTableGrower<>,
     typename Allocator = HashTableAllocator>
-class ClearableHashSet
-    : public HashTable<
-          Key,
-          ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>,
-          Hash,
-          Grower,
-          Allocator>
+class ClearableHashSet : public HashTable<Key, ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>
 {
 public:
-    using Base = HashTable<
-        Key,
-        ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>,
-        Hash,
-        Grower,
-        Allocator>;
+    using Base = HashTable<Key, ClearableHashTableCell<Key, HashTableCell<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>;
     using typename Base::LookupResult;
 
     void clear()
@@ -100,13 +89,7 @@ template <
     typename Hash = DefaultHash<Key>,
     typename Grower = HashTableGrower<>,
     typename Allocator = HashTableAllocator>
-class ClearableHashSetWithSavedHash
-    : public HashTable<
-          Key,
-          ClearableHashTableCell<Key, HashSetCellWithSavedHash<Key, Hash, ClearableHashSetState>>,
-          Hash,
-          Grower,
-          Allocator>
+class ClearableHashSetWithSavedHash : public HashTable<Key, ClearableHashTableCell<Key, HashSetCellWithSavedHash<Key, Hash, ClearableHashSetState>>, Hash, Grower, Allocator>
 {
 public:
     void clear()

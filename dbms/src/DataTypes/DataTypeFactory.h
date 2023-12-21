@@ -59,16 +59,10 @@ public:
     };
 
     /// Register a type family by its name.
-    void registerDataType(
-        const String & family_name,
-        Creator creator,
-        CaseSensitiveness case_sensitiveness = CaseSensitive);
+    void registerDataType(const String & family_name, Creator creator, CaseSensitiveness case_sensitiveness = CaseSensitive);
 
     /// Register a simple data type, that have no parameters.
-    void registerSimpleDataType(
-        const String & name,
-        SimpleCreator creator,
-        CaseSensitiveness case_sensitiveness = CaseSensitive);
+    void registerSimpleDataType(const String & name, SimpleCreator creator, CaseSensitiveness case_sensitiveness = CaseSensitive);
 
 private:
     DataTypesDictionary data_types;

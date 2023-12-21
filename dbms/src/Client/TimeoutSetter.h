@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Poco/Net/StreamSocket.h>
 #include <Poco/Timespan.h>
+#include <Poco/Net/StreamSocket.h>
 
 
 namespace DB
@@ -25,14 +25,9 @@ namespace DB
 /// If "limit_max_timeout" is true, timeouts could be only decreased (maxed by previous value).
 struct TimeoutSetter
 {
-    TimeoutSetter(
-        Poco::Net::StreamSocket & socket_,
-        const Poco::Timespan & send_timeout_,
-        const Poco::Timespan & recieve_timeout_,
-        bool limit_max_timeout = false)
-        : socket(socket_)
-        , send_timeout(send_timeout_)
-        , recieve_timeout(recieve_timeout_)
+    TimeoutSetter(Poco::Net::StreamSocket & socket_, const Poco::Timespan & send_timeout_, const Poco::Timespan & recieve_timeout_,
+                  bool limit_max_timeout = false)
+        : socket(socket_), send_timeout(send_timeout_), recieve_timeout(recieve_timeout_)
     {
         old_send_timeout = socket.getSendTimeout();
         old_receive_timeout = socket.getReceiveTimeout();
@@ -45,8 +40,7 @@ struct TimeoutSetter
     }
 
     TimeoutSetter(Poco::Net::StreamSocket & socket_, const Poco::Timespan & timeout_, bool limit_max_timeout = false)
-        : TimeoutSetter(socket_, timeout_, timeout_, limit_max_timeout)
-    {}
+        : TimeoutSetter(socket_, timeout_, timeout_, limit_max_timeout) {}
 
     ~TimeoutSetter()
     {
@@ -64,4 +58,4 @@ struct TimeoutSetter
 };
 
 
-} // namespace DB
+}

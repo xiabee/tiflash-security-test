@@ -14,13 +14,12 @@
 
 #pragma once
 
-#include <Common/ProfileEvents.h>
-
 #include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+#include <Common/ProfileEvents.h>
 
 
 namespace DB
@@ -39,11 +38,14 @@ class Context;
 class MetricsTransmitter
 {
 public:
-    MetricsTransmitter(Context & context_, const AsynchronousMetrics & async_metrics_, const std::string & config_name_)
+    MetricsTransmitter(Context & context_,
+                       const AsynchronousMetrics & async_metrics_,
+                       const std::string & config_name_)
         : context(context_)
         , async_metrics(async_metrics_)
         , config_name(config_name_)
-    {}
+    {
+    }
     ~MetricsTransmitter();
 
 private:
@@ -65,4 +67,4 @@ private:
     static constexpr auto asynchronous_metrics_path_prefix = "ClickHouse.AsynchronousMetrics.";
 };
 
-} // namespace DB
+}

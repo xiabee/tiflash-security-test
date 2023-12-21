@@ -26,6 +26,8 @@
 #include <string_view>
 #include <utility>
 
+#include "../../libmemcpy/folly/FollyMemcpy.h"
+
 #if defined(TIFLASH_ENABLE_AVX_SUPPORT)
 
 void TestFunc(size_t size)
@@ -98,8 +100,7 @@ TEST(MemUtilsTestOPT, CompareNormal)
     for (size_t size = 0; size < 256; ++size)
     {
         std::string a(size + 50, char(0));
-        auto * start
-            = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
+        auto * start = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
 
         for (size_t first_pos = 0; first_pos < size; ++first_pos)
         {
@@ -116,45 +117,46 @@ TEST(MemUtilsTestOPT, CompareNormal)
     {
         size_t size = 10;
         std::string a(size + 50, char(0));
-        auto * start
-            = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
+        auto * start = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
         start[-5] = 1;
         start[5] = 1;
         start[15] = 1;
         std::string b(2, char(1));
-        ASSERT_EQ(-1, mem_utils::StrFind({start, size}, b));
+        ASSERT_EQ(-1,
+                  mem_utils::StrFind({start, size}, b));
     }
     {
         size_t size = 32 - 10 + 6;
         std::string a(size + 50, char(0));
-        auto * start
-            = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
+        auto * start = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
         start[-5] = 1;
         start[23] = 1;
         start[29] = 1;
         std::string b(2, char(1));
-        ASSERT_EQ(-1, mem_utils::StrFind({start, size}, b));
+        ASSERT_EQ(-1,
+                  mem_utils::StrFind({start, size}, b));
     }
     {
         size_t size = 32 - 10 + 32 + 5;
         std::string a(size + 50, char(0));
-        auto * start
-            = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
+        auto * start = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
         start[23] = 1;
         start[23 + 4] = 1;
         std::string b(2, char(1));
-        ASSERT_EQ(-1, mem_utils::StrFind({start, size}, b));
+        ASSERT_EQ(-1,
+                  mem_utils::StrFind({start, size}, b));
     }
     {
         size_t size = 32 - 10 + 32 * 5 + 5;
         std::string a(size + 50, char(0));
-        auto * start
-            = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
+        auto * start = reinterpret_cast<char *>((size_t(a.data()) + 32 - 1) / 32 * 32 + 10); // start address not aligned
         start[22 + 2 * 32] = 1;
         start[22 + 2 * 32 + 6] = 1;
         std::string b(2, char(1));
-        ASSERT_EQ(-1, mem_utils::StrFind({start, size}, b));
-        ASSERT_EQ(-1, mem_utils::avx2_strstr(start, size, b.data(), b.size()));
+        ASSERT_EQ(-1,
+                  mem_utils::StrFind({start, size}, b));
+        ASSERT_EQ(-1,
+                  mem_utils::avx2_strstr(start, size, b.data(), b.size()));
     }
     {
         std::string a(32, char(0));
@@ -227,28 +229,6 @@ TEST(MemUtilsTestOPT, Memcopy)
     {
         TestMemCopyFunc<0>(size, mem_utils::avx2_inline_memcpy);
         TestMemCopyFunc<0>(size, sse2_inline_memcpy);
-    }
-}
-
-void TestMemByteCount(size_t size)
-{
-    char target = 8;
-    std::string oa(size + 100, target);
-    char * start = oa.data();
-    for (auto * pos = start; pos < start + 32; ++pos)
-    {
-        ASSERT_EQ(mem_utils::avx2_byte_count(pos, size, target), size);
-        std::memset(pos, target - 1, size);
-        ASSERT_EQ(mem_utils::avx2_byte_count(pos, size, target), 0);
-        std::memset(pos, target, size);
-    }
-}
-
-TEST(MemUtilsTestOPT, MemByteCount)
-{
-    for (size_t size = 0; size <= 32 * 6; ++size)
-    {
-        TestMemByteCount(size);
     }
 }
 

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <common/DateLUT.h>
-
 #include <iostream>
+#include <common/DateLUT.h>
 
 
 int main(int argc, char ** argv)

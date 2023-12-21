@@ -27,106 +27,74 @@ namespace RoughCheck
 template <template <typename, typename> class Op>
 using Cmp = ValueComparision<Op>;
 
-#define IS_LEGAL(lef_field, right_value) \
-    (Cmp<EqualsOp>::compare(lef_field, type, right_value) != ValueCompareResult::CanNotCompare)
+#define IS_LEGAL(lef_field, right_value) (Cmp<EqualsOp>::compare(lef_field, type, right_value) != ValueCompareResult::CanNotCompare)
 #define EQUAL(lef_field, right_value) (Cmp<EqualsOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
 #define LESS(lef_field, right_value) (Cmp<LessOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
-#define GREATER(lef_field, right_value) \
-    (Cmp<GreaterOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
-#define LESS_EQ(lef_field, right_value) \
-    (Cmp<LessOrEqualsOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
-#define GREATER_EQ(lef_field, right_value) \
-    (Cmp<GreaterOrEqualsOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
+#define GREATER(lef_field, right_value) (Cmp<GreaterOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
+#define LESS_EQ(lef_field, right_value) (Cmp<LessOrEqualsOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
+#define GREATER_EQ(lef_field, right_value) (Cmp<GreaterOrEqualsOp>::compare(lef_field, type, right_value) == ValueCompareResult::True)
 
 
-struct CheckEqual
+template <typename T>
+inline RSResult checkEqual(const Field & v, const DataTypePtr & type, const T & min, const T & max)
 {
-    template <typename T>
-    static RSResult check(const Field & v, const DataTypePtr & type, const T & min, const T & max)
-    {
-        if (!IS_LEGAL(v, min))
-            return Some;
+    if (!IS_LEGAL(v, min))
+        return Some;
 
-        //    if (min == max && v == min)
-        //        return All;
-        //    else if (v >= min && v <= max)
-        //        return Some;
-        //    else
-        //        return None;
+    //    if (min == max && v == min)
+    //        return All;
+    //    else if (v >= min && v <= max)
+    //        return Some;
+    //    else
+    //        return None;
 
-        if (min == max && EQUAL(v, min))
-            return All;
-        else if (GREATER_EQ(v, min) && LESS_EQ(v, max))
-            return Some;
-        else
-            return None;
-    }
-};
+    if (min == max && EQUAL(v, min))
+        return All;
+    else if (GREATER_EQ(v, min) && LESS_EQ(v, max))
+        return Some;
+    else
+        return None;
+}
 
-struct CheckIn
+template <typename T>
+inline RSResult checkGreater(const Field & v, const DataTypePtr & type, const T & min, const T & max)
 {
-    template <typename T>
-    static RSResult check(const std::vector<Field> & values, const DataTypePtr & type, const T & min, const T & max)
-    {
-        RSResult result = None;
-        for (const auto & v : values)
-        {
-            if (result == All)
-                break;
-            // skip null value
-            if (v.isNull())
-                continue;
-            result = result || CheckEqual::check<T>(v, type, min, max);
-        }
-        return result;
-    }
-};
+    if (!IS_LEGAL(v, min))
+        return Some;
 
-struct CheckGreater
+    //    if (v >= max)
+    //        return None;
+    //    else if (v < min)
+    //        return All;
+    //    return Some;
+
+    if (GREATER_EQ(v, max))
+        return None;
+    else if (LESS(v, min))
+        return All;
+    else
+        return Some;
+}
+
+template <typename T>
+inline RSResult checkGreaterEqual(const Field & v, const DataTypePtr & type, T min, T max)
 {
-    template <typename T>
-    static RSResult check(const Field & v, const DataTypePtr & type, const T & min, const T & max)
-    {
-        if (!IS_LEGAL(v, min))
-            return Some;
+    if (!IS_LEGAL(v, min))
+        return Some;
 
-        //    if (v >= max)
-        //        return None;
-        //    else if (v < min)
-        //        return All;
-        //    return Some;
+    //    if (v > max)
+    //        return None;
+    //    else if (v <= min)
+    //        return All;
+    //    return Some;
 
-        if (GREATER_EQ(v, max))
-            return None;
-        else if (LESS(v, min))
-            return All;
-        else
-            return Some;
-    }
-};
-
-struct CheckGreaterEqual
-{
-    template <typename T>
-    static RSResult check(const Field & v, const DataTypePtr & type, T min, T max)
-    {
-        if (!IS_LEGAL(v, min))
-            return Some;
-
-        //    if (v > max)
-        //        return None;
-        //    else if (v <= min)
-        //        return All;
-        //    return Some;
-
-        if (GREATER(v, max))
-            return None;
-        else if (LESS_EQ(v, min))
-            return All;
-        else
-            return Some;
-    }
-};
+    if (GREATER(v, max))
+        return None;
+    else if (LESS_EQ(v, min))
+        return All;
+    else
+        return Some;
+}
 
 #undef IS_LEGAL
 #undef EQUAL

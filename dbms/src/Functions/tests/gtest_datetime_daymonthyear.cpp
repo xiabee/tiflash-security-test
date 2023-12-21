@@ -16,6 +16,7 @@
 #include <Common/Exception.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionsDateTime.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -32,11 +33,7 @@ protected:
     template <bool isconst, bool nullable>
     void testForDateTime(UInt16 year, UInt8 month, UInt8 day)
     {
-        testFor<isconst, nullable, DataTypeMyDateTime, MyDateTime>(
-            year,
-            month,
-            day,
-            MyDateTime{year, month, day, 0, 0, 0, 0});
+        testFor<isconst, nullable, DataTypeMyDateTime, MyDateTime>(year, month, day, MyDateTime{year, month, day, 0, 0, 0, 0});
     }
 
     template <bool isconst, bool nullable>
@@ -57,15 +54,17 @@ protected:
         testEmptyFor<isconst, nullable, DataTypeMyDate>();
     }
 
-    void assertDayMonthYear(
-        const ColumnWithTypeAndName & column,
-        const ColumnWithTypeAndName & result_day,
-        const ColumnWithTypeAndName & result_month,
-        const ColumnWithTypeAndName & result_year)
+    void assertDayMonthYear(const ColumnWithTypeAndName & column, const ColumnWithTypeAndName & result_day, const ColumnWithTypeAndName & result_month, const ColumnWithTypeAndName & result_year)
     {
-        ASSERT_COLUMN_EQ(result_day, executeFunction(ToDayOfMonthImpl::name, column));
-        ASSERT_COLUMN_EQ(result_month, executeFunction(ToMonthImpl::name, column));
-        ASSERT_COLUMN_EQ(result_year, executeFunction(ToYearImpl::name, column));
+        ASSERT_COLUMN_EQ(
+            result_day,
+            executeFunction(ToDayOfMonthImpl::name, column));
+        ASSERT_COLUMN_EQ(
+            result_month,
+            executeFunction(ToMonthImpl::name, column));
+        ASSERT_COLUMN_EQ(
+            result_year,
+            executeFunction(ToYearImpl::name, column));
     }
 
     template <bool isconst, bool nullable, typename DT, typename V>
@@ -78,7 +77,9 @@ protected:
             if constexpr (nullable)
             {
                 column = ColumnWithTypeAndName(
-                    createConstColumn<Nullable<typename DT::FieldType>>(1, {raw_input.toPackedUInt()}).column,
+                    createConstColumn<Nullable<typename DT::FieldType>>(1,
+                                                                        {raw_input.toPackedUInt()})
+                        .column,
                     makeNullable(std::make_shared<DT>()),
                     "result");
                 result_day = createConstColumn<UInt8>(1, {day});
@@ -88,7 +89,9 @@ protected:
             else
             {
                 column = ColumnWithTypeAndName(
-                    createConstColumn<typename DT::FieldType>(1, {raw_input.toPackedUInt()}).column,
+                    createConstColumn<typename DT::FieldType>(1,
+                                                              {raw_input.toPackedUInt()})
+                        .column,
                     std::make_shared<DT>(),
                     "result");
                 result_day = createConstColumn<UInt8>(1, {day});
@@ -101,7 +104,9 @@ protected:
             if constexpr (nullable)
             {
                 column = ColumnWithTypeAndName(
-                    createColumn<Nullable<typename DT::FieldType>>({raw_input.toPackedUInt()}).column,
+                    createColumn<Nullable<typename DT::FieldType>>(
+                        {raw_input.toPackedUInt()})
+                        .column,
                     makeNullable(std::make_shared<DT>()),
                     "result");
                 result_day = createColumn<Nullable<UInt8>>({day});
@@ -111,7 +116,9 @@ protected:
             else
             {
                 column = ColumnWithTypeAndName(
-                    createColumn<typename DT::FieldType>({raw_input.toPackedUInt()}).column,
+                    createColumn<typename DT::FieldType>(
+                        {raw_input.toPackedUInt()})
+                        .column,
                     std::make_shared<DT>(),
                     "result");
                 result_day = createColumn<UInt8>({day});
@@ -135,7 +142,9 @@ protected:
             if constexpr (nullable)
             {
                 column = ColumnWithTypeAndName(
-                    createConstColumn<Nullable<typename DT::FieldType>>(1, {}).column,
+                    createConstColumn<Nullable<typename DT::FieldType>>(1,
+                                                                        {})
+                        .column,
                     makeNullable(std::make_shared<DT>()),
                     "result");
                 result_day = createConstColumn<Nullable<UInt8>>(1, {});
@@ -145,7 +154,9 @@ protected:
             else
             {
                 column = ColumnWithTypeAndName(
-                    createConstColumn<typename DT::FieldType>(1, {}).column,
+                    createConstColumn<typename DT::FieldType>(1,
+                                                              {})
+                        .column,
                     std::make_shared<DT>(),
                     "result");
                 result_day = createConstColumn<UInt8>(1, {});
@@ -158,7 +169,9 @@ protected:
             if constexpr (nullable)
             {
                 column = ColumnWithTypeAndName(
-                    createColumn<Nullable<typename DT::FieldType>>({{}}).column,
+                    createColumn<Nullable<typename DT::FieldType>>(
+                        {{}})
+                        .column,
                     makeNullable(std::make_shared<DT>()),
                     "result");
                 result_day = createColumn<Nullable<UInt8>>({{}});
@@ -168,7 +181,9 @@ protected:
             else
             {
                 column = ColumnWithTypeAndName(
-                    createColumn<typename DT::FieldType>({{}}).column,
+                    createColumn<typename DT::FieldType>(
+                        {{}})
+                        .column,
                     std::make_shared<DT>(),
                     "result");
                 result_day = createColumn<UInt8>({{}});
@@ -185,14 +200,24 @@ TEST_F(TestDateTimeDayMonthYear, dayMonthYearTest)
 try
 {
     //NULL cases
-    ASSERT_COLUMN_EQ(createOnlyNullColumnConst(5), executeFunction(ToDayOfMonthImpl::name, createOnlyNullColumn(5)));
-    ASSERT_COLUMN_EQ(createOnlyNullColumnConst(5), executeFunction(ToMonthImpl::name, createOnlyNullColumn(5)));
-    ASSERT_COLUMN_EQ(createOnlyNullColumnConst(5), executeFunction(ToYearImpl::name, createOnlyNullColumn(5)));
+    ASSERT_COLUMN_EQ(
+        createOnlyNullColumnConst(5),
+        executeFunction(ToDayOfMonthImpl::name, createOnlyNullColumn(5)));
+    ASSERT_COLUMN_EQ(
+        createOnlyNullColumnConst(5),
+        executeFunction(ToMonthImpl::name, createOnlyNullColumn(5)));
+    ASSERT_COLUMN_EQ(
+        createOnlyNullColumnConst(5),
+        executeFunction(ToYearImpl::name, createOnlyNullColumn(5)));
     ASSERT_COLUMN_EQ(
         createOnlyNullColumnConst(5),
         executeFunction(ToDayOfMonthImpl::name, createOnlyNullColumnConst(5)));
-    ASSERT_COLUMN_EQ(createOnlyNullColumnConst(5), executeFunction(ToMonthImpl::name, createOnlyNullColumnConst(5)));
-    ASSERT_COLUMN_EQ(createOnlyNullColumnConst(5), executeFunction(ToYearImpl::name, createOnlyNullColumnConst(5)));
+    ASSERT_COLUMN_EQ(
+        createOnlyNullColumnConst(5),
+        executeFunction(ToMonthImpl::name, createOnlyNullColumnConst(5)));
+    ASSERT_COLUMN_EQ(
+        createOnlyNullColumnConst(5),
+        executeFunction(ToYearImpl::name, createOnlyNullColumnConst(5)));
 
     testEmptyForDate<true, true>();
     testEmptyForDate<true, false>();

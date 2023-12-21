@@ -20,6 +20,7 @@
 #include <Core/Field.h>
 #include <Core/Types.h>
 #include <DataTypes/IDataType.h>
+#include <Flash/Coprocessor/DAGContext.h>
 
 namespace DB
 {
@@ -29,9 +30,6 @@ tipb::Expr columnsToTiPBExpr(
     const String & func_name,
     const ColumnNumbers & argument_column_number,
     const ColumnsWithTypeAndName & columns,
-    const TiDB::TiDBCollatorPtr & collator,
-    const String & val);
-
-tipb::Expr columnToTiPBExpr(const ColumnWithTypeAndName & column, size_t index);
+    const TiDB::TiDBCollatorPtr & collator);
 } // namespace tests
 } // namespace DB

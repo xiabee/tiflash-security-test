@@ -46,9 +46,11 @@ int main(int, char **)
 
         watch.stop();
         rows = strings.size();
-        std::cerr << std::fixed << std::setprecision(2) << "Read " << rows << " rows, " << bytes / 1000000.0 << " MB"
-                  << ", elapsed: " << watch.elapsedSeconds() << " (" << rows / watch.elapsedSeconds() << " rows/sec., "
-                  << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)" << std::endl;
+        std::cerr << std::fixed << std::setprecision(2)
+                  << "Read " << rows << " rows, " << bytes / 1000000.0 << " MB"
+                  << ", elapsed: " << watch.elapsedSeconds()
+                  << " (" << rows / watch.elapsedSeconds() << " rows/sec., " << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)"
+                  << std::endl;
     }
 
     Hashes hashes(16 * rows);
@@ -58,17 +60,18 @@ int main(int, char **)
 
         for (size_t i = 0; i < rows; ++i)
         {
-            *reinterpret_cast<UInt64 *>(&hashes[i * 16])
-                = CityHash_v1_0_2::CityHash64(strings[i].data(), strings[i].size());
+            *reinterpret_cast<UInt64 *>(&hashes[i * 16]) = CityHash_v1_0_2::CityHash64(strings[i].data(), strings[i].size());
         }
 
         watch.stop();
 
         UInt64 check = CityHash_v1_0_2::CityHash64(&hashes[0], hashes.size());
 
-        std::cerr << std::fixed << std::setprecision(2) << "CityHash64 (check = " << check << ")"
-                  << ", elapsed: " << watch.elapsedSeconds() << " (" << rows / watch.elapsedSeconds() << " rows/sec., "
-                  << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)" << std::endl;
+        std::cerr << std::fixed << std::setprecision(2)
+                  << "CityHash64 (check = " << check << ")"
+                  << ", elapsed: " << watch.elapsedSeconds()
+                  << " (" << rows / watch.elapsedSeconds() << " rows/sec., " << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)"
+                  << std::endl;
     }
 
     /*    {
@@ -110,9 +113,11 @@ int main(int, char **)
 
         UInt64 check = CityHash_v1_0_2::CityHash64(&hashes[0], hashes.size());
 
-        std::cerr << std::fixed << std::setprecision(2) << "SipHash, stream (check = " << check << ")"
-                  << ", elapsed: " << watch.elapsedSeconds() << " (" << rows / watch.elapsedSeconds() << " rows/sec., "
-                  << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)" << std::endl;
+        std::cerr << std::fixed << std::setprecision(2)
+                  << "SipHash, stream (check = " << check << ")"
+                  << ", elapsed: " << watch.elapsedSeconds()
+                  << " (" << rows / watch.elapsedSeconds() << " rows/sec., " << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)"
+                  << std::endl;
     }
 
     {
@@ -130,9 +135,11 @@ int main(int, char **)
 
         UInt64 check = CityHash_v1_0_2::CityHash64(&hashes[0], hashes.size());
 
-        std::cerr << std::fixed << std::setprecision(2) << "MD5 (check = " << check << ")"
-                  << ", elapsed: " << watch.elapsedSeconds() << " (" << rows / watch.elapsedSeconds() << " rows/sec., "
-                  << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)" << std::endl;
+        std::cerr << std::fixed << std::setprecision(2)
+                  << "MD5 (check = " << check << ")"
+                  << ", elapsed: " << watch.elapsedSeconds()
+                  << " (" << rows / watch.elapsedSeconds() << " rows/sec., " << bytes / 1000000.0 / watch.elapsedSeconds() << " MB/sec.)"
+                  << std::endl;
     }
 
     return 0;

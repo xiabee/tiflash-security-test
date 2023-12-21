@@ -16,9 +16,9 @@
 #include <Columns/ColumnsNumber.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionHelpers.h>
+#include <Storages/Transaction/JsonBinary.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
-#include <TiDB/Decode/JsonBinary.h>
 
 #include <string>
 #include <vector>
@@ -129,17 +129,8 @@ try
     col_null_map = ColumnUInt8::create(1, 1);
     json_col = ColumnNullable::create(std::move(null_json), std::move(col_null_map));
     auto const_null_json_col = ColumnConst::create(std::move(json_col), 3);
-    auto const_null_input_col
-        = ColumnWithTypeAndName(std::move(const_null_json_col), nullable_string_type_ptr, "input0");
+    auto const_null_input_col = ColumnWithTypeAndName(std::move(const_null_json_col), nullable_string_type_ptr, "input0");
     res = executeFunction(func_name, {const_null_input_col, path_col});
-    ASSERT_TRUE(res.column->size() == 3);
-    expect_string_vec = {"", "", ""};
-    expect_null_vec = {1, 1, 1};
-    checkResult(res.column, expect_null_vec, expect_string_vec);
-
-    /// JsonBinary only null
-    auto const_null_only_col = createOnlyNullColumnConst(3);
-    res = executeFunction(func_name, {const_null_only_col, path_col});
     ASSERT_TRUE(res.column->size() == 3);
     expect_string_vec = {"", "", ""};
     expect_null_vec = {1, 1, 1};
@@ -158,13 +149,6 @@ try
     expect_null_vec = {0, 0, 0};
     checkResult(res.column, expect_null_vec, expect_string_vec);
 
-    /// One of Paths is only null
-    res = executeFunction(func_name, {non_null_input_col, non_null_path_col, const_null_only_col});
-    ASSERT_TRUE(res.column->size() == 3);
-    expect_string_vec = {"", "", ""};
-    expect_null_vec = {1, 1, 1};
-    checkResult(res.column, expect_null_vec, expect_string_vec);
-
     /// ColumnConst(non-null)
     non_null_str_col = ColumnString::create();
     non_null_str_col->insertData(reinterpret_cast<const char *>(bj2), sizeof(bj2) / sizeof(UInt8));
@@ -181,8 +165,7 @@ try
     col_null_map = ColumnUInt8::create(3, 0);
     json_col = ColumnNullable::create(std::move(nested_str_col), std::move(col_null_map));
     auto const_json_col = ColumnConst::create(std::move(json_col), 3);
-    auto const_nullable_input_col
-        = ColumnWithTypeAndName(std::move(const_json_col), nullable_string_type_ptr, "input0");
+    auto const_nullable_input_col = ColumnWithTypeAndName(std::move(const_json_col), nullable_string_type_ptr, "input0");
     res = executeFunction(func_name, {const_nullable_input_col, path_col});
     ASSERT_TRUE(res.column->size() == 3);
     expect_string_vec = {"[2, 3]", "[2, 3]", "[2, 3]"};

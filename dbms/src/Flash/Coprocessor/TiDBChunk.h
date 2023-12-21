@@ -16,7 +16,7 @@
 
 #include <DataStreams/IBlockInputStream.h>
 #include <Flash/Coprocessor/TiDBColumn.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/TiDB.h>
 
 namespace DB
 {

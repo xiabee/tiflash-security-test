@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Core/ColumnWithTypeAndName.h>
-#include <Interpreters/Context_fwd.h>
+#include <Interpreters/Context.h>
 
 
 namespace DB

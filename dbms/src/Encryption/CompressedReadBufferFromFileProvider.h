@@ -31,7 +31,7 @@ struct CompressedSeekableReaderBuffer : public BufferWithOwnMemory<ReadBuffer>
 {
     virtual void setProfileCallback(
         const ReadBufferFromFileBase::ProfileCallback & profile_callback_,
-        clockid_t clock_type_)
+        clockid_t clock_type_ = CLOCK_MONOTONIC_COARSE)
         = 0;
 
     virtual void seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block) = 0;
@@ -83,20 +83,13 @@ public:
         ChecksumAlgo checksum_algorithm,
         size_t checksum_frame_size);
 
-
-    CompressedReadBufferFromFileProvider(
-        String && data,
-        const String & file_name,
-        size_t estimated_size,
-        ChecksumAlgo checksum_algorithm,
-        size_t checksum_frame_size);
-
     void seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block) override;
 
     size_t readBig(char * to, size_t n) override;
 
-    void setProfileCallback(const ReadBufferFromFileBase::ProfileCallback & profile_callback_, clockid_t clock_type_)
-        override
+    void setProfileCallback(
+        const ReadBufferFromFileBase::ProfileCallback & profile_callback_,
+        clockid_t clock_type_ = CLOCK_MONOTONIC_COARSE) override
     {
         file_in.setProfileCallback(profile_callback_, clock_type_);
     }

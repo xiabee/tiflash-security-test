@@ -20,7 +20,6 @@
 #endif
 #include <Common/ProfileEvents.h>
 #include <IO/ChecksumBuffer.h>
-#include <Storages/S3/MemoryRandomAccessFile.h>
 
 namespace DB
 {
@@ -60,7 +59,8 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvid
     }
 }
 
-std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvider(
+std::unique_ptr<ReadBufferFromFileBase>
+createReadBufferFromFileBaseByFileProvider(
     const FileProviderPtr & file_provider,
     const std::string & filename_,
     const EncryptionPath & encryption_path_,
@@ -71,32 +71,6 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvid
     int flags_)
 {
     auto file = file_provider->newRandomAccessFile(filename_, encryption_path_, read_limiter, flags_);
-    auto allocation_size = std::min(estimated_size, checksum_frame_size);
-    switch (checksum_algorithm)
-    {
-    case ChecksumAlgo::None:
-        return std::make_unique<FramedChecksumReadBuffer<Digest::None>>(file, allocation_size);
-    case ChecksumAlgo::CRC32:
-        return std::make_unique<FramedChecksumReadBuffer<Digest::CRC32>>(file, allocation_size);
-    case ChecksumAlgo::CRC64:
-        return std::make_unique<FramedChecksumReadBuffer<Digest::CRC64>>(file, allocation_size);
-    case ChecksumAlgo::City128:
-        return std::make_unique<FramedChecksumReadBuffer<Digest::City128>>(file, allocation_size);
-    case ChecksumAlgo::XXH3:
-        return std::make_unique<FramedChecksumReadBuffer<Digest::XXH3>>(file, allocation_size);
-    }
-    throw Exception("error creating framed checksum buffer instance: checksum unrecognized");
-}
-
-
-std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromData(
-    String && data,
-    const String & file_name,
-    size_t estimated_size,
-    ChecksumAlgo checksum_algorithm,
-    size_t checksum_frame_size)
-{
-    auto file = std::make_shared<MemoryRandomAccessFile>(file_name, std::forward<String>(data));
     auto allocation_size = std::min(estimated_size, checksum_frame_size);
     switch (checksum_algorithm)
     {

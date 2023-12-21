@@ -36,4 +36,5 @@ protected:
     size_t field_number = 0;
 };
 
-} // namespace DB
+}
+

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/LimitReadBuffer.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/copyData.h>
-
 #include <sstream>
+
+#include <IO/LimitReadBuffer.h>
+#include <IO/copyData.h>
+#include <IO/WriteBufferFromString.h>
+#include <IO/ReadHelpers.h>
 
 
 int main(int, char **)

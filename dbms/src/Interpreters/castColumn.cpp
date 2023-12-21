@@ -20,11 +20,7 @@
 
 namespace DB
 {
-ColumnPtr castColumnImpl(
-    const ColumnWithTypeAndName & arg,
-    const DataTypePtr & type,
-    const Context & context,
-    const String & func_name)
+ColumnPtr castColumnImpl(const ColumnWithTypeAndName & arg, const DataTypePtr & type, const Context & context, const String & func_name)
 {
     if (arg.type->equals(*type))
         return arg.column;
@@ -34,7 +30,9 @@ ColumnPtr castColumnImpl(
         {DataTypeString().createColumnConst(arg.column->size(), type->getName()),
          std::make_shared<DataTypeString>(),
          ""},
-        {nullptr, type, ""}};
+        {nullptr,
+         type,
+         ""}};
 
     FunctionBuilderPtr func_builder_cast = FunctionFactory::instance().get(func_name, context);
 

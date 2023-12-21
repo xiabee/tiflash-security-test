@@ -78,7 +78,10 @@ public:
             ret += entry.second.regionCount();
         return ret;
     }
-    UInt64 tableCount() const { return table_regions_info_map.size(); }
+    UInt64 tableCount() const
+    {
+        return table_regions_info_map.size();
+    }
 
 private:
     bool is_single_table;

@@ -29,7 +29,7 @@ namespace DM
 /// ======================================================
 /// Helper methods.
 /// ======================================================
-std::pair<size_t, size_t> copyColumnsData(
+size_t copyColumnsData(
     const Columns & from,
     const ColumnPtr & pk_col,
     MutableColumns & to,
@@ -46,20 +46,19 @@ std::pair<size_t, size_t> copyColumnsData(
             {
                 for (size_t col_index = 0; col_index < to.size(); ++col_index)
                     to[col_index]->insertFrom(*from[col_index], rows_offset);
-                return {rows_offset, 1};
+                return 1;
             }
             else
             {
-                return {rows_offset, 0};
+                return 0;
             }
         }
         else
         {
-            auto [actual_offset, actual_limit]
-                = RowKeyFilter::getPosRangeOfSorted(*range, pk_col, rows_offset, rows_limit);
+            auto [actual_offset, actual_limit] = RowKeyFilter::getPosRangeOfSorted(*range, pk_col, rows_offset, rows_limit);
             for (size_t col_index = 0; col_index < to.size(); ++col_index)
                 to[col_index]->insertRangeFrom(*from[col_index], actual_offset, actual_limit);
-            return {actual_offset, actual_limit};
+            return actual_limit;
         }
     }
     else
@@ -74,7 +73,7 @@ std::pair<size_t, size_t> copyColumnsData(
             for (size_t col_index = 0; col_index < to.size(); ++col_index)
                 to[col_index]->insertRangeFrom(*from[col_index], rows_offset, rows_limit);
         }
-        return {rows_offset, rows_limit};
+        return rows_limit;
     }
 }
 

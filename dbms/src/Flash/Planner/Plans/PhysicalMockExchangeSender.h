@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Planner/Plans/PhysicalUnary.h>
+#include <Flash/Planner/plans/PhysicalUnary.h>
 #include <tipb/executor.pb.h>
 #include <tipb/select.pb.h>
 
@@ -31,10 +31,9 @@ public:
     PhysicalMockExchangeSender(
         const String & executor_id_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const PhysicalPlanNodePtr & child_)
-        : PhysicalUnary(executor_id_, PlanType::MockExchangeSender, schema_, fine_grained_shuffle_, req_id, child_)
+        : PhysicalUnary(executor_id_, PlanType::MockExchangeSender, schema_, req_id, child_)
     {}
 
     void finalize(const Names & parent_require) override;
@@ -42,13 +41,6 @@ public:
     const Block & getSampleBlock() const override;
 
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & /*exec_status*/,
-        PipelineExecGroupBuilder & /*group_builder*/,
-        Context & /*context*/,
-        size_t /*concurrency*/) override
-    {}
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 };
 } // namespace DB

@@ -64,16 +64,15 @@ protected:
         UInt64 count = 0;
 
         FmtBuffer fmt_buffer;
-        fmt_buffer.append("SpaceMap entries: [");
-        fmt_buffer.joinStr(
-            free_map.begin(),
-            free_map.end(),
-            [&count](const auto & it, FmtBuffer & fb) {
-                fb.fmtAppend(R"({{"index":{},"start":{},"size":{}}})", count, it.first, it.second);
-                count += 1;
-            },
-            ",");
-        fmt_buffer.append("]");
+        fmt_buffer.append("    STD-Map entries status: \n");
+
+        // Need use `count`,so can't use `joinStr` here.
+        for (auto it = free_map.begin(); it != free_map.end(); it++)
+        {
+            fmt_buffer.fmtAppend("      Space: {} start: {} size : {}\n", count, it->first, it->second);
+            count++;
+        }
+
         return fmt_buffer.toString();
     }
 
@@ -167,13 +166,7 @@ protected:
 
         if (length > it->second || it->first + it->second < offset + length)
         {
-            LOG_WARNING(
-                Logger::get(),
-                "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]",
-                offset,
-                length,
-                it->first,
-                it->second);
+            LOG_WARNING(log, "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]", offset, length, it->first, it->second);
             return false;
         }
 
@@ -221,16 +214,14 @@ protected:
     {
         if (unlikely(free_map.empty()))
         {
-            LOG_ERROR(Logger::get(), "Current space map is full");
+            LOG_ERROR(log, "Current space map is full");
             return std::make_tuple(UINT64_MAX, 0, false);
         }
-        RUNTIME_CHECK_MSG(
-            !free_map_invert_index.empty(),
-            "Invalid state: free_map is empty but invert index is not empty");
+        RUNTIME_CHECK_MSG(!free_map_invert_index.empty(), "Invalid state: free_map is empty but invert index is not empty");
         auto iter = free_map_invert_index.lower_bound(size);
         if (unlikely(iter == free_map_invert_index.end()))
         {
-            LOG_ERROR(Logger::get(), "Can't found any place to insert for size {}", size);
+            LOG_ERROR(log, "Can't found any place to insert for size {}", size);
             return std::make_tuple(UINT64_MAX, free_map_invert_index.rbegin()->first, false);
         }
         auto length = iter->first;
@@ -267,12 +258,6 @@ protected:
             return true;
         }
 
-        // for an empty blob, no new free block is created, just skip
-        if (length == 0)
-        {
-            return true;
-        }
-
         bool meanless = false;
         std::tie(it, meanless) = free_map.insert({offset, length});
         insertIntoInvertIndex(length, offset);
@@ -291,13 +276,7 @@ protected:
             it_prev--;
             if (it_prev->first + it_prev->second > it->first)
             {
-                LOG_WARNING(
-                    Logger::get(),
-                    "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]",
-                    it->first,
-                    it->second,
-                    it_prev->first,
-                    it_prev->second);
+                LOG_WARNING(log, "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]", it->first, it->second, it_prev->first, it_prev->second);
                 free_map.erase(it);
                 deleteFromInvertIndex(length, offset);
                 return false;
@@ -309,13 +288,7 @@ protected:
         {
             if (it->first + it->second > it_next->first)
             {
-                LOG_WARNING(
-                    Logger::get(),
-                    "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]",
-                    it->first,
-                    it->second,
-                    it_next->first,
-                    it_next->second);
+                LOG_WARNING(log, "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]", it->first, it->second, it_next->first, it_next->second);
                 free_map.erase(it);
                 deleteFromInvertIndex(length, offset);
                 return false;
@@ -372,11 +345,7 @@ private:
     inline void deleteFromInvertIndex(UInt64 length, UInt64 offset)
     {
         auto index_iter = free_map_invert_index.find(length);
-        RUNTIME_CHECK_MSG(
-            index_iter != free_map_invert_index.end(),
-            "Fail to find length {} offset {} in free_map_invert_index",
-            length,
-            offset);
+        RUNTIME_CHECK_MSG(index_iter != free_map_invert_index.end(), "Fail to find length {} offset {} in free_map_invert_index", length, offset);
         auto & offsets = index_iter->second;
         offsets.erase(offset);
         if (offsets.empty())
