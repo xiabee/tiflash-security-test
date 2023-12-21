@@ -13,62 +13,27 @@
 // limitations under the License.
 
 #include <DataStreams/MockExchangeReceiverInputStream.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/MockSourceStream.h>
+#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/plans/PhysicalMockExchangeReceiver.h>
+#include <Flash/Planner/Plans/PhysicalMockExchangeReceiver.h>
 #include <Interpreters/Context.h>
+#include <Operators/BlockInputStreamSourceOp.h>
 
 namespace DB
 {
-namespace
-{
-std::pair<NamesAndTypes, BlockInputStreams> mockSchemaAndStreams(
-    Context & context,
-    const String & executor_id,
-    const LoggerPtr & log,
-    const tipb::ExchangeReceiver & exchange_receiver)
-{
-    NamesAndTypes schema;
-    BlockInputStreams mock_streams;
-
-    auto & dag_context = *context.getDAGContext();
-    size_t max_streams = dag_context.initialize_concurrency;
-    assert(max_streams > 0);
-
-    if (!context.mockStorage().exchangeExists(executor_id))
-    {
-        /// build with default blocks.
-        for (size_t i = 0; i < max_streams; ++i)
-            // use max_block_size / 10 to determine the mock block's size
-            mock_streams.push_back(std::make_shared<MockExchangeReceiverInputStream>(exchange_receiver, context.getSettingsRef().max_block_size, context.getSettingsRef().max_block_size / 10));
-        for (const auto & col : mock_streams.back()->getHeader())
-            schema.emplace_back(col.name, col.type);
-    }
-    else
-    {
-        /// build from user input blocks.
-        auto [names_and_types, mock_exchange_streams] = mockSourceStream<MockExchangeReceiverInputStream>(context, max_streams, log, executor_id);
-        schema = std::move(names_and_types);
-        mock_streams.insert(mock_streams.end(), mock_exchange_streams.begin(), mock_exchange_streams.end());
-    }
-
-    assert(!schema.empty());
-    assert(!mock_streams.empty());
-
-    return {std::move(schema), std::move(mock_streams)};
-}
-} // namespace
-
 PhysicalMockExchangeReceiver::PhysicalMockExchangeReceiver(
     const String & executor_id_,
     const NamesAndTypes & schema_,
+    const FineGrainedShuffle & fine_grained_shuffle_,
     const String & req_id,
     const Block & sample_block_,
     const BlockInputStreams & mock_streams_,
     size_t source_num_)
-    : PhysicalLeaf(executor_id_, PlanType::MockExchangeReceiver, schema_, req_id)
+    : PhysicalLeaf(executor_id_, PlanType::MockExchangeReceiver, schema_, fine_grained_shuffle_, req_id)
     , sample_block(sample_block_)
     , mock_streams(mock_streams_)
     , source_num(source_num_)
@@ -78,15 +43,20 @@ PhysicalPlanNodePtr PhysicalMockExchangeReceiver::build(
     Context & context,
     const String & executor_id,
     const LoggerPtr & log,
-    const tipb::ExchangeReceiver & exchange_receiver)
+    const tipb::ExchangeReceiver & exchange_receiver,
+    const FineGrainedShuffle & fine_grained_shuffle)
 {
-    assert(context.isExecutorTest());
-
-    auto [schema, mock_streams] = mockSchemaAndStreams(context, executor_id, log, exchange_receiver);
+    auto [schema, mock_streams] = mockSchemaAndStreamsForExchangeReceiver(
+        context,
+        executor_id,
+        log,
+        exchange_receiver,
+        fine_grained_shuffle.stream_count);
 
     auto physical_mock_exchange_receiver = std::make_shared<PhysicalMockExchangeReceiver>(
         executor_id,
         schema,
+        fine_grained_shuffle,
         log->identifier(),
         Block(schema),
         mock_streams,
@@ -94,10 +64,24 @@ PhysicalPlanNodePtr PhysicalMockExchangeReceiver::build(
     return physical_mock_exchange_receiver;
 }
 
-void PhysicalMockExchangeReceiver::transformImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/)
+void PhysicalMockExchangeReceiver::buildBlockInputStreamImpl(
+    DAGPipeline & pipeline,
+    Context & /*context*/,
+    size_t /*max_streams*/)
 {
-    assert(pipeline.streams.empty() && pipeline.streams_with_non_joined_data.empty());
+    RUNTIME_CHECK(pipeline.streams.empty());
     pipeline.streams.insert(pipeline.streams.end(), mock_streams.begin(), mock_streams.end());
+}
+
+void PhysicalMockExchangeReceiver::buildPipelineExecGroupImpl(
+    PipelineExecutorContext & exec_context,
+    PipelineExecGroupBuilder & group_builder,
+    Context & /*context*/,
+    size_t /*concurrency*/)
+{
+    for (auto & mock_stream : mock_streams)
+        group_builder.addConcurrency(
+            std::make_unique<BlockInputStreamSourceOp>(exec_context, log->identifier(), mock_stream));
 }
 
 void PhysicalMockExchangeReceiver::finalize(const Names & parent_require)

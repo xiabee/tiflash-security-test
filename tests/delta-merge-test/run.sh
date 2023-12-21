@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 source ../docker/util.sh
 
 set_branch
@@ -22,11 +21,7 @@ set -xe
 
 check_env
 
-# We need to separate mock-test for dt and tmt, since this behavior
-# is different in some tests
-# * "tmt" engine ONLY support disable_bg_flush = false.
-# * "dt"  engine ONLY support disable_bg_flush = true.
-# (only tics0 up) (for engine DetlaTree)
+# (only tics0 up)
 docker-compose -f mock-test-dt.yaml down
 clean_data_log
 

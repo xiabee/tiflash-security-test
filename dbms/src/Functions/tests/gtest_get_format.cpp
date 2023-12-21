@@ -17,7 +17,6 @@
 #include <DataTypes/DataTypeString.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionHelpers.h>
-#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -108,7 +107,8 @@ try
     // time_type: DATETIME
     // all locations
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"%Y-%m-%d %H.%i.%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H.%i.%s", "%Y%m%d%H%i%s"}),
+        createColumn<Nullable<String>>(
+            {"%Y-%m-%d %H.%i.%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H.%i.%s", "%Y%m%d%H%i%s"}),
         executeFunction(
             funcName,
             createConstColumn<Nullable<String>>(5, "DATETIME"),
@@ -117,7 +117,8 @@ try
     // time_type: TIMESTAMP
     // all locations
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"%Y-%m-%d %H.%i.%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H.%i.%s", "%Y%m%d%H%i%s"}),
+        createColumn<Nullable<String>>(
+            {"%Y-%m-%d %H.%i.%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %H.%i.%s", "%Y%m%d%H%i%s"}),
         executeFunction(
             funcName,
             createConstColumn<Nullable<String>>(5, "TIMESTAMP"),
