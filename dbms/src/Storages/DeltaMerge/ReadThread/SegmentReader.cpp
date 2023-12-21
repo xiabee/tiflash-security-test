@@ -11,8 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-#include <Common/Logger.h>
 #include <Common/setThreadName.h>
 #include <Storages/DeltaMerge/ReadThread/CPU.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReadTaskScheduler.h>
@@ -31,7 +29,7 @@ public:
     SegmentReader(WorkQueue<MergedTaskPtr> & task_queue_, const std::vector<int> & cpus_)
         : task_queue(task_queue_)
         , stop(false)
-        , log(Logger::get())
+        , log(&Poco::Logger::get(name))
         , cpus(cpus_)
     {
         t = std::thread(&SegmentReader::run, this);
@@ -44,8 +42,9 @@ public:
 
     ~SegmentReader()
     {
+        LOG_DEBUG(log, "Stop begin");
         t.join();
-        LOG_DEBUG(log, "Stopped");
+        LOG_DEBUG(log, "Stop end");
     }
 
     std::thread::id getId() const
@@ -156,7 +155,7 @@ private:
 
     WorkQueue<MergedTaskPtr> & task_queue;
     std::atomic<bool> stop;
-    LoggerPtr log;
+    Poco::Logger * log;
     std::thread t;
     std::vector<int> cpus;
 };
@@ -172,7 +171,7 @@ void SegmentReaderPool::addTask(MergedTaskPtr && task)
 }
 
 SegmentReaderPool::SegmentReaderPool(int thread_count, const std::vector<int> & cpus)
-    : log(Logger::get())
+    : log(&Poco::Logger::get("SegmentReaderPool"))
 {
     LOG_INFO(log, "Create start, thread_count={} cpus={}", thread_count, cpus);
     for (int i = 0; i < thread_count; i++)
@@ -204,24 +203,23 @@ std::vector<std::thread::id> SegmentReaderPool::getReaderIds() const
 // ===== SegmentReaderPoolManager ===== //
 
 SegmentReaderPoolManager::SegmentReaderPoolManager()
-    : log(Logger::get())
+    : log(&Poco::Logger::get("SegmentReaderPoolManager"))
 {}
 
 SegmentReaderPoolManager::~SegmentReaderPoolManager() = default;
 
-void SegmentReaderPoolManager::init(UInt32 logical_cpu_cores, double read_thread_count_scale)
+void SegmentReaderPoolManager::init(const ServerInfo & server_info)
 {
-    double total_thread_count = logical_cpu_cores * read_thread_count_scale;
     auto numa_nodes = getNumaNodes(log);
-    RUNTIME_CHECK(!numa_nodes.empty());
-    UInt32 thread_count_per_node = std::ceil(total_thread_count / numa_nodes.size());
+    LOG_INFO(log, "numa_nodes {} => {}", numa_nodes.size(), numa_nodes);
     for (const auto & node : numa_nodes)
     {
-        reader_pools.push_back(std::make_unique<SegmentReaderPool>(thread_count_per_node, node));
+        int thread_count = node.empty() ? server_info.cpu_info.logical_cores : node.size();
+        reader_pools.push_back(std::make_unique<SegmentReaderPool>(thread_count, node));
         auto ids = reader_pools.back()->getReaderIds();
         reader_ids.insert(ids.begin(), ids.end());
     }
-    LOG_INFO(log, "numa_nodes={} number_of_readers={}", numa_nodes, reader_ids.size());
+    LOG_INFO(log, "num_readers={}", reader_ids.size());
 }
 
 void SegmentReaderPoolManager::addTask(MergedTaskPtr && task)

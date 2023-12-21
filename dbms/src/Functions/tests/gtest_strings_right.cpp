@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <DataTypes/DataTypeNullable.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 

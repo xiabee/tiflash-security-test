@@ -95,15 +95,11 @@ elseif (ARCH_AMD64)
     # so we do not set the flags to avoid core dump in old machines
     option (TIFLASH_ENABLE_AVX_SUPPORT "Use AVX/AVX2 instructions on x86_64" ON)
     option (TIFLASH_ENABLE_AVX512_SUPPORT "Use AVX512 instructions on x86_64" ON)
-    
-    # `haswell` was released since 2013 with cpu feature avx2, bmi2. It's a practical arch for optimizer
-    option (TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT "Use instructions based on architecture `haswell` on x86_64" ON)
 
-    option (NO_AVX_OR_HIGHER "Disable AVX or higher on x86_64 for maximum compatibility with older/embedded hardware." OFF)
-    if (NO_AVX_OR_HIGHER)
+    option (NO_SSE42_OR_HIGHER "Disable SSE42 or higher on x86_64 for maximum compatibility with older/embedded hardware." OFF)
+    if (NO_SSE42_OR_HIGHER)
         SET(TIFLASH_ENABLE_AVX_SUPPORT OFF)
         SET(TIFLASH_ENABLE_AVX512_SUPPORT OFF)
-        SET (TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT OFF)
     endif()
 
     set (TEST_FLAG "-mssse3")
@@ -175,8 +171,7 @@ elseif (ARCH_AMD64)
         set (COMPILER_FLAGS "${COMPILER_FLAGS} ${TEST_FLAG}")
     endif ()
 
-    set (TIFLASH_COMPILER_AVX2_FLAG "-mavx2")
-    set (TEST_FLAG "${TIFLASH_COMPILER_AVX2_FLAG}")
+    set (TEST_FLAG "-mavx -mavx2")
     set (CMAKE_REQUIRED_FLAGS "${TEST_FLAG} -O0")
     check_cxx_source_compiles("
         #include <immintrin.h>
@@ -213,11 +208,6 @@ elseif (ARCH_AMD64)
         add_definitions(-DTIFLASH_ENABLE_AVX512_SUPPORT=1)
     endif ()
 
-    set (TIFLASH_COMPILER_ARCH_HASWELL_FLAG "-march=haswell")
-    check_cxx_compiler_flag("${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}" COMPILER_SUPPORT_ARCH_HASWELL)
-    if (NOT COMPILER_SUPPORT_ARCH_HASWELL)
-        set (TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT OFF)
-    endif ()
 else ()
     # ignore all other platforms
 endif ()

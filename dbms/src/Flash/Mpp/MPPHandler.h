@@ -24,12 +24,12 @@ class MPPHandler
 {
     const mpp::DispatchTaskRequest & task_request;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
 public:
-    explicit MPPHandler(const mpp::DispatchTaskRequest & task_request_)
+    MPPHandler(const mpp::DispatchTaskRequest & task_request_)
         : task_request(task_request_)
-        , log(Logger::get())
+        , log(&Poco::Logger::get("MPPHandler"))
     {}
     grpc::Status execute(const ContextPtr & context, mpp::DispatchTaskResponse * response);
     void handleError(const MPPTaskPtr & task, String error);

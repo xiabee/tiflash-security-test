@@ -68,7 +68,6 @@ static const char GC_FENCE_PREFIX = 'F';
 static const char LAST_CHANGE_PREFIX = 'l';
 static const char TXN_SOURCE_PREFIX_FOR_WRITE = 'S';
 static const char TXN_SOURCE_PREFIX_FOR_LOCK = 's';
-static const char PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX = 'F';
 
 static const size_t SHORT_VALUE_MAX_LEN = 64;
 
@@ -215,8 +214,7 @@ inline Timestamp getTs(const TiKVKey & key)
     return decodeUInt64Desc(read<UInt64>(key.data() + key.dataSize() - 8));
 }
 
-template <typename T>
-inline TableID getTableId(const T & key)
+inline TableID getTableId(const DecodedTiKVKey & key)
 {
     return decodeInt64(read<UInt64>(key.data() + 1));
 }
@@ -226,17 +224,10 @@ inline HandleID getHandle(const DecodedTiKVKey & key)
     return decodeInt64(read<UInt64>(key.data() + RAW_KEY_NO_HANDLE_SIZE));
 }
 
-inline std::string_view getRawTiDBPKView(const DecodedTiKVKey & key)
-{
-    auto user_key = key.getUserKey();
-    return std::string_view(user_key.data() + RAW_KEY_NO_HANDLE_SIZE, user_key.size() - RAW_KEY_NO_HANDLE_SIZE);
-}
-
 inline RawTiDBPK getRawTiDBPK(const DecodedTiKVKey & key)
 {
-    return std::make_shared<const std::string>(getRawTiDBPKView(key));
+    return std::make_shared<const std::string>(key.begin() + RAW_KEY_NO_HANDLE_SIZE, key.end());
 }
-
 
 inline TableID getTableId(const TiKVKey & key)
 {

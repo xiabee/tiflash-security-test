@@ -58,7 +58,13 @@ static void throwIfReadOnly(Context & context)
 {
     if (context.getSettingsRef().readonly)
     {
-        throw Exception("Cannot execute query in readonly mode", ErrorCodes::READONLY);
+        const auto & client_info = context.getClientInfo();
+        if (client_info.interface == ClientInfo::Interface::HTTP && client_info.http_method == ClientInfo::HTTPMethod::GET)
+            throw Exception("Cannot execute query in readonly mode. "
+                            "For queries over HTTP, method GET implies readonly. You should use method POST for modifying queries.",
+                            ErrorCodes::READONLY);
+        else
+            throw Exception("Cannot execute query in readonly mode", ErrorCodes::READONLY);
     }
 }
 
@@ -76,7 +82,8 @@ std::unique_ptr<IInterpreter> InterpreterFactory::get(ASTPtr & query, Context & 
     else if (typeid_cast<ASTInsertQuery *>(query.get()))
     {
         /// readonly is checked inside InterpreterInsertQuery
-        return std::make_unique<InterpreterInsertQuery>(query, context, false);
+        bool allow_materialized = static_cast<bool>(context.getSettingsRef().insert_allow_materialized_columns);
+        return std::make_unique<InterpreterInsertQuery>(query, context, allow_materialized);
     }
     else if (typeid_cast<ASTCreateQuery *>(query.get()))
     {

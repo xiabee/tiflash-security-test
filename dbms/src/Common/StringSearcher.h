@@ -21,7 +21,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <bit>
 #include <ext/range.h>
 
 #if __SSE2__
@@ -249,7 +248,7 @@ public:
                 const auto v_against_u = _mm_cmpeq_epi8(v_haystack, patu);
                 const auto v_against_l_or_u = _mm_or_si128(v_against_l, v_against_u);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_l_or_u);
+                const auto mask = _mm_movemask_epi8(v_against_l_or_u);
 
                 if (mask == 0)
                 {
@@ -258,7 +257,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))
@@ -445,7 +444,7 @@ public:
                 const auto v_against_u = _mm_cmpeq_epi8(v_haystack, patu);
                 const auto v_against_l_or_u = _mm_or_si128(v_against_l, v_against_u);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_l_or_u);
+                const auto mask = _mm_movemask_epi8(v_against_l_or_u);
 
                 if (mask == 0)
                 {
@@ -453,7 +452,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))
@@ -623,7 +622,7 @@ public:
                 const auto v_haystack = _mm_loadu_si128(reinterpret_cast<const __m128i *>(haystack));
                 const auto v_against_pattern = _mm_cmpeq_epi8(v_haystack, pattern);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_pattern);
+                const auto mask = _mm_movemask_epi8(v_against_pattern);
 
                 /// first character not present in 16 octets starting at `haystack`
                 if (mask == 0)
@@ -632,7 +631,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))

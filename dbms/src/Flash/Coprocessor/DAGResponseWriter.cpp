@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 
 namespace DB
@@ -32,7 +31,7 @@ DAGResponseWriter::DAGResponseWriter(
         && dag_context.encode_type != tipb::EncodeType::TypeDefault)
     {
         throw TiFlashException(
-            "Only Default/Arrow/CHBlock encode type is supported in DAGResponseWriter.",
+            "Only Default/Arrow/CHBlock encode type is supported in DAGBlockOutputStream.",
             Errors::Coprocessor::Unimplemented);
     }
 }

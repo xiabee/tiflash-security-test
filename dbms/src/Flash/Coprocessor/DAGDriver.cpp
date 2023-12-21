@@ -17,12 +17,12 @@
 #include <DataStreams/BlockIO.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/copyData.h>
-#include <Flash/Coprocessor/DAGContext.h>
+#include <Flash/Coprocessor/DAGBlockOutputStream.h>
 #include <Flash/Coprocessor/DAGDriver.h>
+#include <Flash/Coprocessor/ExecutionSummaryCollector.h>
 #include <Flash/Coprocessor/StreamWriter.h>
 #include <Flash/Coprocessor/StreamingDAGResponseWriter.h>
 #include <Flash/Coprocessor/UnaryDAGResponseWriter.h>
-#include <Flash/Statistics/ExecutorStatisticsCollector.h>
 #include <Flash/executeQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ProcessList.h>
@@ -55,7 +55,7 @@ DAGDriver<false>::DAGDriver(
     , dag_response(dag_response_)
     , writer(nullptr)
     , internal(internal_)
-    , log(Logger::get("DAGDriver"))
+    , log(&Poco::Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -75,7 +75,7 @@ DAGDriver<true>::DAGDriver(
     , dag_response(nullptr)
     , writer(writer_)
     , internal(internal_)
-    , log(Logger::get("DAGDriver"))
+    , log(&Poco::Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -91,9 +91,9 @@ try
     auto start_time = Clock::now();
     DAGContext & dag_context = *context.getDAGContext();
 
-    auto query_executor = queryExecute(context, internal);
-    if (!query_executor)
-        // Only query is allowed, so query_executor must not be null
+    BlockIO streams = executeQuery(context, internal);
+    if (!streams.in || streams.out)
+        // Only query is allowed, so streams.in must not be null and streams.out must be null
         throw TiFlashException("DAG is not query.", Errors::Coprocessor::Internal);
 
     auto end_time = Clock::now();
@@ -104,19 +104,16 @@ try
     BlockOutputStreamPtr dag_output_stream = nullptr;
     if constexpr (!batch)
     {
-        auto response_writer = std::make_unique<UnaryDAGResponseWriter>(
+        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<UnaryDAGResponseWriter>(
             dag_response,
             context.getSettingsRef().dag_records_per_chunk,
             dag_context);
-        response_writer->prepare(query_executor->getSampleBlock());
-        query_executor->execute([&response_writer](const Block & block) { response_writer->write(block); }).verify();
-        response_writer->flush();
-
+        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
+        copyData(*streams.in, *dag_output_stream);
         if (dag_context.collect_execution_summaries)
         {
-            ExecutorStatisticsCollector statistics_collector(log->identifier());
-            statistics_collector.initialize(&dag_context);
-            statistics_collector.fillExecuteSummaries(*dag_response);
+            ExecutionSummaryCollector summary_collector(dag_context);
+            summary_collector.addExecuteSummaries(*dag_response);
         }
     }
     else
@@ -136,34 +133,20 @@ try
 
         auto streaming_writer = std::make_shared<StreamWriter>(writer);
         TiDB::TiDBCollators collators;
-        auto response_writer = std::make_unique<StreamingDAGResponseWriter<StreamWriterPtr>>(
+
+        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<StreamingDAGResponseWriter<StreamWriterPtr>>(
             streaming_writer,
             context.getSettingsRef().dag_records_per_chunk,
             context.getSettingsRef().batch_send_min_limit,
             dag_context);
-        response_writer->prepare(query_executor->getSampleBlock());
-        query_executor->execute([&response_writer](const Block & block) { response_writer->write(block); }).verify();
-        response_writer->flush();
-
+        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
+        copyData(*streams.in, *dag_output_stream);
         if (dag_context.collect_execution_summaries)
         {
-            ExecutorStatisticsCollector statistics_collector(log->identifier());
-            statistics_collector.initialize(&dag_context);
-            auto execution_summary_response = statistics_collector.genExecutionSummaryResponse();
+            ExecutionSummaryCollector summary_collector(dag_context);
+            auto execution_summary_response = summary_collector.genExecutionSummaryResponse();
             streaming_writer->write(execution_summary_response);
         }
-    }
-
-    auto ru = query_executor->collectRequestUnit();
-    if constexpr (!batch)
-    {
-        LOG_INFO(log, "cop finish with request unit: {}", ru);
-        GET_METRIC(tiflash_compute_request_unit, type_cop).Increment(ru);
-    }
-    else
-    {
-        LOG_INFO(log, "batch cop finish with request unit: {}", ru);
-        GET_METRIC(tiflash_compute_request_unit, type_batch).Increment(ru);
     }
 
     if (auto throughput = dag_context.getTableScanThroughput(); throughput.first)
@@ -183,13 +166,24 @@ try
         }
     }
 
-    auto runtime_statistics = query_executor->getRuntimeStatistics();
-    LOG_DEBUG(
-        log,
-        "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
-        runtime_statistics.execution_time_ns / static_cast<double>(1000000000),
-        runtime_statistics.rows,
-        runtime_statistics.bytes);
+    if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(streams.in.get()))
+    {
+        LOG_DEBUG(
+            log,
+            "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
+            p_stream->getProfileInfo().execution_time / (double)1000000000,
+            p_stream->getProfileInfo().rows,
+            p_stream->getProfileInfo().bytes);
+
+        if constexpr (!batch)
+        {
+            // Under some test cases, there may be dag response whose size is bigger than INT_MAX, and GRPC can not limit it.
+            // Throw exception to prevent receiver from getting wrong response.
+            if (accurate::greaterOp(p_stream->getProfileInfo().bytes, std::numeric_limits<int>::max()))
+                throw TiFlashException("DAG response is too big, please check config about region size or region merge scheduler",
+                                       Errors::Coprocessor::Internal);
+        }
+    }
 }
 catch (const RegionException & e)
 {

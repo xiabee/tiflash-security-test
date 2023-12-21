@@ -125,8 +125,7 @@ public:
         setDescription();
     }
 
-    virtual ~Connection() = default;
-    ;
+    virtual ~Connection(){};
 
     /// Set throttler of network traffic. One throttler could be used for multiple connections to limit total traffic.
     void setThrottler(const ThrottlerPtr & throttler_)
@@ -269,7 +268,7 @@ private:
     class LoggerWrapper
     {
     public:
-        explicit LoggerWrapper(Connection & parent_)
+        LoggerWrapper(Connection & parent_)
             : log(nullptr)
             , parent(parent_)
         {

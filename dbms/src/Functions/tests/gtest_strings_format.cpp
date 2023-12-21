@@ -14,6 +14,7 @@
 
 #include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/DAGContext.h>
+#include <Interpreters/Context.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 

@@ -14,14 +14,11 @@
 
 #include <Common/Logger.h>
 #include <DataStreams/LimitBlockInputStream.h>
-#include <DataStreams/LimitTransformAction.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
-#include <Flash/Planner/Plans/PhysicalLimit.h>
+#include <Flash/Planner/plans/PhysicalLimit.h>
 #include <Interpreters/Context.h>
-#include <Operators/LimitTransformOp.h>
 
 namespace DB
 {
@@ -35,36 +32,22 @@ PhysicalPlanNodePtr PhysicalLimit::build(
     auto physical_limit = std::make_shared<PhysicalLimit>(
         executor_id,
         child->getSchema(),
-        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         limit.limit());
     return physical_limit;
 }
 
-void PhysicalLimit::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalLimit::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->buildBlockInputStream(pipeline, context, max_streams);
+    child->transform(pipeline, context, max_streams);
 
-    pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier()); });
+    pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, 0, log->identifier(), false); });
     if (pipeline.hasMoreThanOneStream())
     {
         executeUnion(pipeline, max_streams, log, false, "for partial limit");
-        pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier()); });
+        pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, 0, log->identifier(), false); });
     }
-}
-
-void PhysicalLimit::buildPipelineExecGroup(
-    PipelineExecutorStatus & exec_status,
-    PipelineExecGroupBuilder & group_builder,
-    Context & /*context*/,
-    size_t /*concurrency*/)
-{
-    auto input_header = group_builder.getCurrentHeader();
-    auto global_limit = std::make_shared<GlobalLimitTransformAction>(input_header, limit);
-    group_builder.transform([&](auto & builder) {
-        builder.appendTransformOp(std::make_unique<LimitTransformOp<GlobalLimitPtr>>(exec_status, log->identifier(), global_limit));
-    });
 }
 
 void PhysicalLimit::finalize(const Names & parent_require)

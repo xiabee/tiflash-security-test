@@ -101,7 +101,7 @@ private:
     ReportCollector report;
     std::unique_ptr<LogWriter> writer;
     std::unique_ptr<LogReader> reader;
-    LoggerPtr log;
+    Poco::Logger * log;
 
 protected:
     String path;
@@ -115,11 +115,11 @@ protected:
 
 public:
     LogFileRWTest()
-        : log(Logger::get())
+        : log(&Poco::Logger::get("LogFileRWTest"))
         , recyclable_log(std::get<0>(GetParam()))
         , allow_retry_read(std::get<1>(GetParam()))
     {
-        provider = TiFlashTestEnv::getDefaultFileProvider();
+        provider = TiFlashTestEnv::getContext().getFileProvider();
         path = TiFlashTestEnv::getTemporaryPath("LogFileRWTest");
         DB::tests::TiFlashTestEnv::tryRemovePath(path);
 
@@ -812,7 +812,7 @@ INSTANTIATE_TEST_CASE_P(
 
 TEST(LogFileRWTest2, ManuallySync)
 {
-    auto provider = TiFlashTestEnv::getDefaultFileProvider();
+    auto provider = TiFlashTestEnv::getContext().getFileProvider();
     auto path = TiFlashTestEnv::getTemporaryPath("LogFileRWTest2");
     DB::tests::TiFlashTestEnv::tryRemovePath(path);
 

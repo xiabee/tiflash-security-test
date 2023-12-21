@@ -16,7 +16,6 @@
 
 #include <Storages/Transaction/RegionDataRead.h>
 #include <Storages/Transaction/RegionManager.h>
-#include <Storages/Transaction/RegionRangeKeys.h>
 #include <Storages/Transaction/StorageEngineType.h>
 
 namespace TiDB
@@ -74,19 +73,17 @@ class ReadIndexStressTest;
 struct FileUsageStatistics;
 class PathPool;
 class RegionPersister;
-struct CheckpointInfo;
-using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
 
 /// TODO: brief design document.
 class KVStore final : private boost::noncopyable
 {
 public:
-    explicit KVStore(Context & context);
+    KVStore(Context & context, TiDB::SnapshotApplyMethod snapshot_apply_method_);
     void restore(PathPool & path_pool, const TiFlashRaftProxyHelper *);
 
     RegionPtr getRegion(RegionID region_id) const;
 
-    using RegionRange = RegionRangeKeys::RegionRange;
+    using RegionRange = std::pair<TiKVRangeKey, TiKVRangeKey>;
 
     RegionMap getRegionsByRangeOverlap(const RegionRange & range) const;
 
@@ -94,25 +91,24 @@ public:
 
     void gcRegionPersistedCache(Seconds gc_persist_period = Seconds(60 * 5));
 
-    void tryPersistRegion(RegionID region_id);
+    void tryPersist(RegionID region_id);
 
     static bool tryFlushRegionCacheInStorage(TMTContext & tmt, const Region & region, const LoggerPtr & log, bool try_until_succeed = true);
 
     size_t regionSize() const;
-    EngineStoreApplyRes handleAdminRaftCmd(
-        raft_cmdpb::AdminRequest && request,
-        raft_cmdpb::AdminResponse && response,
-        UInt64 region_id,
-        UInt64 index,
-        UInt64 term,
-        TMTContext & tmt);
+    EngineStoreApplyRes handleAdminRaftCmd(raft_cmdpb::AdminRequest && request,
+                                           raft_cmdpb::AdminResponse && response,
+                                           UInt64 region_id,
+                                           UInt64 index,
+                                           UInt64 term,
+                                           TMTContext & tmt);
     EngineStoreApplyRes handleWriteRaftCmd(
         raft_cmdpb::RaftCmdRequest && request,
         UInt64 region_id,
         UInt64 index,
         UInt64 term,
-        TMTContext & tmt) const;
-    EngineStoreApplyRes handleWriteRaftCmd(const WriteCmdsView & cmds, UInt64 region_id, UInt64 index, UInt64 term, TMTContext & tmt) const;
+        TMTContext & tmt);
+    EngineStoreApplyRes handleWriteRaftCmd(const WriteCmdsView & cmds, UInt64 region_id, UInt64 index, UInt64 term, TMTContext & tmt);
 
     bool needFlushRegionData(UInt64 region_id, TMTContext & tmt);
     bool tryFlushRegionData(UInt64 region_id, bool force_persist, bool try_until_succeed, TMTContext & tmt, UInt64 index, UInt64 term);
@@ -120,18 +116,13 @@ public:
     /**
      * Only used in tests. In production we will call preHandleSnapshotToFiles + applyPreHandledSnapshot.
      */
-    void handleApplySnapshot(metapb::Region && region, uint64_t peer_id, SSTViewVec, uint64_t index, uint64_t term, std::optional<uint64_t>, TMTContext & tmt);
+    void handleApplySnapshot(metapb::Region && region, uint64_t peer_id, SSTViewVec, uint64_t index, uint64_t term, TMTContext & tmt);
 
-    void handleIngestCheckpoint(RegionPtr region, CheckpointInfoPtr checkpoint_info, TMTContext & tmt);
-
-    // For Raftstore V2, there could be some orphan keys in the write column family being left to `new_region` after pre-handled.
-    // All orphan write keys are asserted to be replayed before reaching `deadline_index`.
     std::vector<DM::ExternalDTFileInfo> preHandleSnapshotToFiles(
         RegionPtr new_region,
         SSTViewVec,
         uint64_t index,
         uint64_t term,
-        std::optional<uint64_t> deadline_index,
         TMTContext & tmt);
     template <typename RegionPtrWrap>
     void applyPreHandledSnapshot(const RegionPtrWrap &, TMTContext & tmt);
@@ -144,15 +135,15 @@ public:
     // Exported only for tests.
     TiFlashRaftProxyHelper * mutProxyHelperUnsafe() { return const_cast<TiFlashRaftProxyHelper *>(proxy_helper); }
 
+    TiDB::SnapshotApplyMethod applyMethod() const { return snapshot_apply_method; }
+
     void addReadIndexEvent(Int64 f) { read_index_event_flag += f; }
     Int64 getReadIndexEvent() const { return read_index_event_flag; }
 
     void setStore(metapb::Store);
 
     // May return 0 if uninitialized
-    StoreID getStoreID(std::memory_order = std::memory_order_relaxed) const;
-
-    metapb::Store getStoreMeta() const;
+    uint64_t getStoreID(std::memory_order = std::memory_order_relaxed) const;
 
     BatchReadIndexRes batchReadIndex(const std::vector<kvrpcpb::ReadIndexRequest> & req, uint64_t timeout_ms) const;
 
@@ -195,13 +186,10 @@ private:
     friend class ReadIndexStressTest;
     struct StoreMeta
     {
-        mutable std::mutex mu;
-
         using Base = metapb::Store;
         Base base;
         std::atomic_uint64_t store_id{0};
         void update(Base &&);
-        Base getMeta() const;
         friend class KVStore;
     };
     StoreMeta & getStore();
@@ -233,9 +221,9 @@ private:
     void mockRemoveRegion(RegionID region_id, RegionTable & region_table);
     KVStoreTaskLock genTaskLock() const;
 
-    RegionManager::RegionReadLock genRegionMgrReadLock() const;
+    RegionManager::RegionReadLock genRegionReadLock() const;
 
-    RegionManager::RegionWriteLock genRegionMgrWriteLock(const KVStoreTaskLock &);
+    RegionManager::RegionWriteLock genRegionWriteLock(const KVStoreTaskLock &);
 
     EngineStoreApplyRes handleUselessAdminRaftCmd(
         raft_cmdpb::AdminCmdType cmd_type,
@@ -250,7 +238,7 @@ private:
     bool canFlushRegionDataImpl(const RegionPtr & curr_region_ptr, UInt8 flush_if_possible, bool try_until_succeed, TMTContext & tmt, const RegionTaskLock & region_task_lock, UInt64 index, UInt64 term);
     bool forceFlushRegionDataImpl(Region & curr_region, bool try_until_succeed, TMTContext & tmt, const RegionTaskLock & region_task_lock, UInt64 index, UInt64 term);
 
-    void persistRegion(const Region & region, std::optional<const RegionTaskLock *> region_task_lock, const char * caller);
+    void persistRegion(const Region & region, const RegionTaskLock & region_task_lock, const char * caller);
     void releaseReadIndexWorkers();
     void handleDestroy(UInt64 region_id, TMTContext & tmt, const KVStoreTaskLock &);
 
@@ -267,6 +255,8 @@ private:
 
     // raft_cmd_res stores the result of applying raft cmd. It must be protected by task_mutex.
     std::unique_ptr<RaftCommandResult> raft_cmd_res;
+
+    TiDB::SnapshotApplyMethod snapshot_apply_method;
 
     LoggerPtr log;
 

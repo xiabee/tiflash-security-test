@@ -42,6 +42,7 @@ using LearnerReadSnapshot = std::unordered_map<RegionID, RegionLearnerReadSnapsh
 doLearnerRead(
     const TiDB::TableID table_id,
     MvccQueryInfo & mvcc_query_info,
+    size_t num_streams,
     bool for_batch_cop,
     Context & context,
     const LoggerPtr & log);

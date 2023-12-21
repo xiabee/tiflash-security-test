@@ -21,7 +21,6 @@
 #include <DataStreams/SquashingBlockOutputStream.h>
 #include <DataStreams/copyData.h>
 #include <IO/ConcatReadBuffer.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/InterpreterInsertQuery.h>
 #include <Interpreters/InterpreterSelectWithUnionQuery.h>
 #include <Parsers/ASTFunction.h>
@@ -129,7 +128,7 @@ BlockIO InterpreterInsertQuery::execute()
 
     /// Do not squash blocks if it is a sync INSERT into Distributed, since it lead to double bufferization on client and server side.
     /// Client-side bufferization might cause excessive timeouts (especially in case of big blocks).
-    if (table->getName() != "Distributed")
+    if (!(context.getSettingsRef().insert_distributed_sync && table->getName() == "Distributed"))
     {
         out = std::make_shared<SquashingBlockOutputStream>(
             out,

@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSetSnapshot.h>
-#include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 
 namespace DB
 {
@@ -56,9 +55,7 @@ public:
 
     // Use for DeltaMergeBlockInputStream to read rows from MemTableSet to do full compaction with other layer.
     // This method will check whether offset and limit are valid. It only return those valid rows.
-    // The returned rows is not continuous, since records may be filtered by `range`. When `row_ids` is not null,
-    // this function will fill corresponding offset of each row into `*row_ids`.
-    size_t readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range, std::vector<UInt32> * row_ids = nullptr);
+    size_t readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range);
 
     void getPlaceItems(BlockOrDeletes & place_items, size_t rows_begin, size_t deletes_begin, size_t rows_end, size_t deletes_end, size_t place_rows_offset = 0);
 
@@ -68,7 +65,7 @@ public:
                      size_t placed_rows);
 };
 
-class ColumnFileSetInputStream : public SkippableBlockInputStream
+class ColumnFileSetInputStream : public IBlockInputStream
 {
 private:
     ColumnFileSetReader reader;
@@ -90,34 +87,6 @@ public:
 
     String getName() const override { return "ColumnFileSet"; }
     Block getHeader() const override { return toEmptyBlock(*(reader.col_defs)); }
-
-    bool getSkippedRows(size_t &) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
-
-    size_t skipNextBlock() override
-    {
-        while (cur_column_file_reader || next_file_index < column_files_count)
-        {
-            if (!cur_column_file_reader)
-            {
-                if (column_files[next_file_index]->isDeleteRange())
-                {
-                    ++next_file_index;
-                    continue;
-                }
-                else
-                {
-                    cur_column_file_reader = reader.column_file_readers[next_file_index];
-                    ++next_file_index;
-                }
-            }
-            size_t skipped_rows = cur_column_file_reader->skipNextBlock();
-            if (skipped_rows > 0)
-                return skipped_rows;
-            else
-                cur_column_file_reader = {};
-        }
-        return 0;
-    }
 
     Block read() override
     {
@@ -144,8 +113,6 @@ public:
         }
         return {};
     }
-
-    Block readWithFilter(const IColumn::Filter &) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
 };
 } // namespace DM
 } // namespace DB

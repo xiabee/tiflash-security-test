@@ -37,15 +37,13 @@ class BackgroundService : boost::noncopyable
 public:
     explicit BackgroundService(TMTContext &);
 
-    void shutdown();
-
     ~BackgroundService();
 
 private:
     TMTContext & tmt;
     BackgroundProcessingPool & background_pool;
 
-    LoggerPtr log;
+    Poco::Logger * log;
 
     BackgroundProcessingPool::TaskHandle single_thread_task_handle;
     BackgroundProcessingPool::TaskHandle storage_gc_handle;

@@ -63,9 +63,10 @@ try
         " Expression: <final projection>\n"
         "  Expression: <expr after aggregation>\n"
         "   Aggregating\n"
-        "    Expression: <before aggregation>\n"
-        "     Filter\n"
-        "      MockTableScan",
+        "    Concat\n"
+        "     Expression: <before aggregation>\n"
+        "      Filter\n"
+        "       MockTableScan",
         "MockExchangeSender\n"
         " Expression: <final projection>\n"
         "  MergeSorting, limit = 10\n"
@@ -74,7 +75,8 @@ try
         "     Filter\n"
         "      Expression: <expr after aggregation>\n"
         "       Aggregating\n"
-        "        MockExchangeReceiver"};
+        "        Concat\n"
+        "         MockExchangeReceiver"};
     for (size_t i = 0; i < task_size; ++i)
     {
         ASSERT_BLOCKINPUTSTREAM_EQAUL(streams[i], tasks[i].dag_request, 1);
@@ -124,7 +126,7 @@ try
         "   MergeSorting, limit = 2\n"
         "    PartialSorting: limit = 2\n"
         "     Expression: <remove useless column after join>\n"
-        "      HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>\n"
+        "      HashJoinProbe: <join probe, join_executor_id = Join_2>\n"
         "       Expression: <final projection>\n"
         "        MockExchangeReceiver"};
     for (size_t i = 0; i < task_size; ++i)

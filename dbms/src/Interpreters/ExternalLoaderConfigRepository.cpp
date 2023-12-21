@@ -49,7 +49,7 @@ ExternalLoaderConfigRepository::Files ExternalLoaderConfigRepository::list(
         Poco::Glob::glob(pattern, files, 0);
     }
 
-    for (auto it = files.begin(); it != files.end();)
+    for (Files::iterator it = files.begin(); it != files.end();)
     {
         if (ConfigProcessor::isPreprocessedFile(*it))
             files.erase(it++);
@@ -76,6 +76,7 @@ Poco::AutoPtr<Poco::Util::AbstractConfiguration> ExternalLoaderConfigRepository:
 {
     ConfigProcessor config_processor{config_file};
     ConfigProcessor::LoadedConfig preprocessed = config_processor.loadConfig();
+    config_processor.savePreprocessedConfig(preprocessed);
     return preprocessed.configuration;
 }
 

@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Debug/MockExecutor/AstToPB.h>
 #include <Debug/MockExecutor/ExecutorBinder.h>
-#include <Debug/MockExecutor/FuncSigMap.h>
 #include <Debug/MockExecutor/WindowBinder.h>
-#include <Parsers/ASTFunction.h>
 
 namespace DB::mock
 {

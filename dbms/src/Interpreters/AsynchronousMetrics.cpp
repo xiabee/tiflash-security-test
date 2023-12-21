@@ -15,22 +15,15 @@
 #include <Common/Allocator.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
-#include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Common/typeid_cast.h>
-#include <Core/TiFlashDisaggregatedMode.h>
 #include <Databases/IDatabase.h>
 #include <IO/UncompressedCache.h>
 #include <Interpreters/AsynchronousMetrics.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/MarkCache.h>
 #include <Storages/Page/FileUsage.h>
-#include <Storages/Page/PageConstants.h>
-#include <Storages/Page/PageStorage.h>
-#include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/TMTContext.h>
@@ -89,8 +82,8 @@ void AsynchronousMetrics::run()
 
     /// Next minute + 30 seconds. To be distant with moment of transmission of metrics, see MetricsTransmitter.
     const auto get_next_minute = [] {
-        return std::chrono::time_point_cast<std::chrono::minutes, std::chrono::steady_clock>(
-                   std::chrono::steady_clock::now() + std::chrono::minutes(1))
+        return std::chrono::time_point_cast<std::chrono::minutes, std::chrono::system_clock>(
+                   std::chrono::system_clock::now() + std::chrono::minutes(1))
             + std::chrono::seconds(30);
     };
 
@@ -114,7 +107,7 @@ void AsynchronousMetrics::run()
 template <typename Max, typename T>
 static void calculateMax(Max & max, T x)
 {
-    if (static_cast<Max>(x) > max)
+    if (Max(x) > max)
         max = x;
 }
 
@@ -122,70 +115,28 @@ template <typename Max, typename Sum, typename T>
 static void calculateMaxAndSum(Max & max, Sum & sum, T x)
 {
     sum += x;
-    if (static_cast<Max>(x) > max)
+    if (Max(x) > max)
         max = x;
 }
 
 FileUsageStatistics AsynchronousMetrics::getPageStorageFileUsage()
 {
-    FileUsageStatistics usage;
-    switch (context.getSharedContextDisagg()->disaggregated_mode)
-    {
-    case DisaggregatedMode::None:
-    {
-        if (auto uni_ps = context.tryGetWriteNodePageStorage(); uni_ps != nullptr)
-        {
-            /// When format_version=5 is enabled, then all data are stored in the `uni_ps`
-            usage.merge(uni_ps->getFileUsageStatistics());
-        }
-        else
-        {
-            /// When format_version < 5, then there are multiple PageStorage instances
+    // Get from RegionPersister
+    auto & tmt = context.getTMTContext();
+    auto & kvstore = tmt.getKVStore();
+    FileUsageStatistics usage = kvstore->getFileUsageStatistics();
 
-            // Get from RegionPersister
-            auto & tmt = context.getTMTContext();
-            auto & kvstore = tmt.getKVStore();
-            usage = kvstore->getFileUsageStatistics();
-
-            // Get the blob file status from all PS V3 instances
-            if (auto global_storage_pool = context.getGlobalStoragePool(); global_storage_pool != nullptr)
-            {
-                const auto log_usage = global_storage_pool->log_storage->getFileUsageStatistics();
-                const auto meta_usage = global_storage_pool->meta_storage->getFileUsageStatistics();
-                const auto data_usage = global_storage_pool->data_storage->getFileUsageStatistics();
-
-                usage.merge(log_usage)
-                    .merge(meta_usage)
-                    .merge(data_usage);
-            }
-        }
-        break;
-    }
-    case DisaggregatedMode::Storage:
+    // Get the blob file status from all PS V3 instances
+    if (auto global_storage_pool = context.getGlobalStoragePool(); global_storage_pool != nullptr)
     {
-        // disagg write node, all data are stored in the `uni_ps`
-        if (auto uni_ps = context.getWriteNodePageStorage(); uni_ps != nullptr)
-        {
-            usage.merge(uni_ps->getFileUsageStatistics());
-        }
-        break;
-    }
-    case DisaggregatedMode::Compute:
-    {
-        // disagg compute node without auto-scaler, the proxy data are stored in the `uni_ps`
-        if (auto uni_ps = context.tryGetWriteNodePageStorage(); uni_ps != nullptr)
-        {
-            usage.merge(uni_ps->getFileUsageStatistics());
-        }
-        // disagg compute node, all cache page data are stored in the `ps_cache`
-        if (auto ps_cache = context.getSharedContextDisagg()->rn_page_cache_storage; ps_cache != nullptr)
-        {
-            usage.merge(ps_cache->getUniversalPageStorage()->getFileUsageStatistics());
-        }
-        break;
-    }
-    }
+        const auto log_usage = global_storage_pool->log_storage->getFileUsageStatistics();
+        const auto meta_usage = global_storage_pool->meta_storage->getFileUsageStatistics();
+        const auto data_usage = global_storage_pool->data_storage->getFileUsageStatistics();
 
+        usage.merge(log_usage)
+            .merge(meta_usage)
+            .merge(data_usage);
+    }
     return usage;
 }
 
@@ -236,7 +187,7 @@ void AsynchronousMetrics::update()
                 {
                     if (auto store = dt_storage->getStoreIfInited(); store)
                     {
-                        auto stat = store->getStoreStats();
+                        const auto stat = store->getStoreStats();
                         if (context.getPageStorageRunMode() == PageStorageRunMode::ONLY_V2)
                         {
                             calculateMax(
@@ -278,16 +229,6 @@ void AsynchronousMetrics::update()
             }
             break;
         }
-        case PageStorageRunMode::UNI_PS:
-        {
-            if (auto uni_ps = context.tryGetWriteNodePageStorage(); uni_ps != nullptr)
-            {
-                // Only set delta snapshot lifetime when UniPS is enabled
-                const auto snap_stat = uni_ps->getSnapshotsStat();
-                set("MaxDTDeltaOldestSnapshotLifetime", snap_stat.longest_living_seconds);
-            }
-            break;
-        }
         }
 
         set("MaxDTBackgroundTasksLength", max_dt_background_tasks_length);
@@ -301,15 +242,6 @@ void AsynchronousMetrics::update()
         set("LogNums", usage.total_log_file_num);
         set("LogDiskBytes", usage.total_log_disk_size);
         set("PagesInMem", usage.num_pages);
-    }
-
-    if (context.getSharedContextDisagg()->isDisaggregatedStorageMode())
-    {
-        auto & tmt = context.getTMTContext();
-        if (auto s3_gc_owner = tmt.getS3GCOwnerManager(); s3_gc_owner->isOwner())
-        {
-            GET_METRIC(tiflash_storage_s3_gc_status, type_owner).Set(1.0);
-        }
     }
 
 #if USE_MIMALLOC
@@ -351,7 +283,7 @@ void AsynchronousMetrics::update()
     M("background_thread.num_runs", uint64_t)  \
     M("background_thread.run_interval", uint64_t)
 
-#define GET_JEMALLOC_METRIC(NAME, TYPE)                    \
+#define GET_METRIC(NAME, TYPE)                             \
     do                                                     \
     {                                                      \
         TYPE value{};                                      \
@@ -360,9 +292,9 @@ void AsynchronousMetrics::update()
         set("jemalloc." NAME, value);                      \
     } while (0);
 
-        FOR_EACH_METRIC(GET_JEMALLOC_METRIC);
+        FOR_EACH_METRIC(GET_METRIC);
 
-#undef GET_JEMALLOC_METRIC
+#undef GET_METRIC
 #undef FOR_EACH_METRIC
     }
 #endif

@@ -73,6 +73,16 @@ public:
     /// Get information about execution speed.
     const BlockStreamProfileInfo & getProfileInfo() const { return info; }
 
+    /** Get "total" values.
+      * The default implementation takes them from itself or from the first child source in which they are.
+      * The overridden method can perform some calculations. For example, apply an expression to the `totals` of the child source.
+      * There can be no total values - then an empty block is returned.
+      *
+      * Call this method only after all the data has been retrieved with `read`,
+      *  otherwise there will be problems if any data at the same time is computed in another thread.
+      */
+    virtual Block getTotals();
+
     /// The same for minimums and maximums.
     Block getExtremes();
 
@@ -188,6 +198,8 @@ protected:
 
     /// Additional information that can be generated during the work process.
 
+    /// Total values during aggregation.
+    Block totals;
     /// Minimums and maximums. The first row of the block - minimums, the second - the maximums.
     Block extremes;
 
@@ -197,8 +209,6 @@ protected:
         std::unique_lock lock(children_mutex);
         children.push_back(child);
     }
-
-    uint64_t collectCPUTimeNsImpl(bool is_thread_runner) override;
 
 private:
     bool enabled_extremes = false;
@@ -232,7 +242,7 @@ private:
     /** Check limits and quotas.
       * But only those that can be checked within each separate stream.
       */
-    bool checkTimeLimit() const;
+    bool checkTimeLimit();
     void checkQuota(Block & block);
 
 

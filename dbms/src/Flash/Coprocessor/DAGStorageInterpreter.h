@@ -17,11 +17,9 @@
 #include <Common/nocopyable.h>
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
-#include <Flash/Coprocessor/FilterConditions.h>
+#include <Flash/Coprocessor/PushDownFilter.h>
 #include <Flash/Coprocessor/RemoteRequest.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
-#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/RegionQueryInfo.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/TableLockHolder.h>
@@ -46,7 +44,7 @@ public:
     DAGStorageInterpreter(
         Context & context_,
         const TiDBTableScan & table_scan,
-        const FilterConditions & filter_conditions_,
+        const PushDownFilter & push_down_filter_,
         size_t max_streams_);
 
     DISALLOW_MOVE(DAGStorageInterpreter);
@@ -72,8 +70,7 @@ private:
         const SelectQueryInfo & query_info,
         const RegionException & e,
         int num_allow_retry);
-    DM::Remote::DisaggPhysicalTableReadSnapshotPtr
-    buildLocalStreamsForPhysicalTable(
+    void buildLocalStreamsForPhysicalTable(
         const TableID & table_id,
         const SelectQueryInfo & query_info,
         DAGPipeline & pipeline,
@@ -82,9 +79,9 @@ private:
 
     std::unordered_map<TableID, StorageWithStructureLock> getAndLockStorages(Int64 query_schema_version);
 
-    std::tuple<Names, std::vector<ExtraCastAfterTSMode>> getColumnsForTableScan();
+    std::tuple<Names, NamesAndTypes, std::vector<ExtraCastAfterTSMode>> getColumnsForTableScan(Int64 max_columns_to_read);
 
-    std::vector<RemoteRequest> buildRemoteRequests(const DM::ScanContextPtr & scan_context);
+    std::vector<RemoteRequest> buildRemoteRequests();
 
     TableLockHolders releaseAlterLocks();
 
@@ -94,10 +91,16 @@ private:
 
     void recordProfileStreams(DAGPipeline & pipeline, const String & key);
 
-    std::vector<pingcap::coprocessor::CopTask> buildCopTasks(const std::vector<RemoteRequest> & remote_requests);
+    std::vector<pingcap::coprocessor::copTask> buildCopTasks(const std::vector<RemoteRequest> & remote_requests);
     void buildRemoteStreams(const std::vector<RemoteRequest> & remote_requests, DAGPipeline & pipeline);
 
     void executeCastAfterTableScan(
+        size_t remote_read_streams_start_index,
+        DAGPipeline & pipeline);
+
+    // before_where, filter_column_name, after_where
+    std::tuple<ExpressionActionsPtr, String, ExpressionActionsPtr> buildPushDownFilter();
+    void executePushedDownFilter(
         size_t remote_read_streams_start_index,
         DAGPipeline & pipeline);
 
@@ -114,13 +117,14 @@ private:
 
     Context & context;
     const TiDBTableScan & table_scan;
-    const FilterConditions & filter_conditions;
-    const size_t max_streams;
+    const PushDownFilter & push_down_filter;
+    size_t max_streams;
     LoggerPtr log;
 
     /// derived from other members, doesn't change during DAGStorageInterpreter's lifetime
 
-    const TableID logical_table_id;
+    TableID logical_table_id;
+    const Settings & settings;
     TMTContext & tmt;
 
     /// Intermediate variables shared by multiple member functions
@@ -136,6 +140,7 @@ private:
     std::unordered_map<TableID, StorageWithStructureLock> storages_with_structure_lock;
     ManageableStoragePtr storage_for_logical_table;
     Names required_columns;
+    NamesAndTypes source_columns;
     // For generated column, just need a placeholder, and TiDB will fill this column.
     std::vector<std::tuple<UInt64, String, DataTypePtr>> generated_column_infos;
 };

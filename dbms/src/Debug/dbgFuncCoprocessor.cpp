@@ -15,11 +15,7 @@
 #include <Debug/dbgFuncCoprocessor.h>
 #include <Debug/dbgFuncCoprocessorUtils.h>
 #include <Debug/dbgNaturalDag.h>
-#include <Debug/dbgQueryExecutor.h>
-#include <Interpreters/Context.h>
-#include <Parsers/ASTLiteral.h>
 #include <Storages/IManageableStorage.h>
-#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {

@@ -47,12 +47,6 @@ public:
     MutableColumnPtr cloneResized(size_t s_) const override { return cloneDummy(s_); }
     size_t size() const override { return s; }
     void insertDefault() override { ++s; }
-
-    void insertManyDefaults(size_t length) override
-    {
-        s += length;
-    }
-
     void popBack(size_t n) override { s -= n; }
     size_t byteSize() const override { return 0; }
     size_t allocatedBytes() const override { return 0; }
@@ -101,16 +95,6 @@ public:
         ++s;
     }
 
-    void insertManyFrom(const IColumn &, size_t, size_t length) override
-    {
-        s += length;
-    }
-
-    void insertDisjunctFrom(const IColumn &, const std::vector<size_t> & position_vec) override
-    {
-        s += position_vec.size();
-    }
-
     void insertRangeFrom(const IColumn & /*src*/, size_t /*start*/, size_t length) override
     {
         s += length;
@@ -136,14 +120,13 @@ public:
             res[i] = i;
     }
 
-    ColumnPtr replicateRange(size_t /*start_row*/, size_t end_row, const IColumn::Offsets & offsets) const override
+    ColumnPtr replicate(const Offsets & offsets) const override
     {
         if (s != offsets.size())
             throw Exception("Size of offsets doesn't match size of column.", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
-        assert(end_row <= s);
-        return cloneDummy(s == 0 ? 0 : offsets[end_row - 1]);
-    }
 
+        return cloneDummy(s == 0 ? 0 : offsets.back());
+    }
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override
     {

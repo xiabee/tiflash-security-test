@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Columns/ColumnNullable.h>
 #include <Columns/ColumnUtils.h>
-#include <DataTypes/DataTypeNullable.h>
 
 namespace DB
 {
@@ -31,11 +29,5 @@ bool columnEqual(const ColumnPtr & expected, const ColumnPtr & actual, String & 
         }
     }
     return true;
-}
-void convertColumnToNullable(ColumnWithTypeAndName & column)
-{
-    column.type = makeNullable(column.type);
-    if (column.column)
-        column.column = makeNullable(column.column);
 }
 } // namespace DB

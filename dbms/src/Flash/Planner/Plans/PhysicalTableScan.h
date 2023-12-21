@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Coprocessor/FilterConditions.h>
+#include <Flash/Coprocessor/PushDownFilter.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Planner/Plans/PhysicalLeaf.h>
+#include <Flash/Planner/plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
@@ -38,18 +38,17 @@ public:
 
     const Block & getSampleBlock() const override;
 
-    bool setFilterConditions(const String & filter_executor_id, const tipb::Selection & selection);
+    bool pushDownFilter(const String & filter_executor_id, const tipb::Selection & selection);
 
-    bool hasFilterConditions() const;
+    bool hasPushDownFilter() const;
 
-    const String & getFilterConditionsId() const;
-
-private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-    void buildProjection(DAGPipeline & pipeline, const NamesAndTypes & storage_schema);
+    const String & getPushDownFilterId() const;
 
 private:
-    FilterConditions filter_conditions;
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
+private:
+    PushDownFilter push_down_filter;
 
     TiDBTableScan tidb_table_scan;
 

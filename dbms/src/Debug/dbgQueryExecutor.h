@@ -18,8 +18,7 @@
 namespace DB
 {
 using MockServerConfig = tests::MockServerConfig;
-struct DecodedTiKVKey;
-using DecodedTiKVKeyPtr = std::shared_ptr<DecodedTiKVKey>;
+using TiFlashTestEnv = tests::TiFlashTestEnv;
 
 BlockInputStreamPtr executeQuery(Context & context, RegionID region_id, const DAGProperties & properties, QueryTasks & query_tasks, MakeResOutputStream & func_wrap_output_stream);
 BlockInputStreamPtr executeMPPQuery(Context & context, const DAGProperties & properties, QueryTasks & query_tasks);
@@ -28,7 +27,7 @@ std::vector<BlockInputStreamPtr> executeMPPQueryWithMultipleContext(const DAGPro
 
 tipb::SelectResponse executeDAGRequest(
     Context & context,
-    tipb::DAGRequest & dag_request,
+    const tipb::DAGRequest & dag_request,
     RegionID region_id,
     UInt64 region_version,
     UInt64 region_conf_version,

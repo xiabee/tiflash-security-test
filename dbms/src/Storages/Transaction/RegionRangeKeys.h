@@ -40,11 +40,6 @@ struct TiKVRangeKey : boost::noncopyable
 
     TiKVRangeKey copy() const;
     TiKVRangeKey & operator=(TiKVRangeKey &&);
-    std::string toDebugString() const;
-    std::string toString() const
-    {
-        return key.toString();
-    }
 
     State state;
     TiKVKey key;
@@ -57,22 +52,15 @@ public:
     using RegionRange = std::pair<TiKVRangeKey, TiKVRangeKey>;
 
     const RegionRange & comparableKeys() const;
-    static RegionRange cloneRange(const RegionRange & from);
     static RegionRange makeComparableKeys(TiKVKey && start_key, TiKVKey && end_key);
     const std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr> & rawKeys() const;
     explicit RegionRangeKeys(TiKVKey && start_key, TiKVKey && end_key);
-    explicit RegionRangeKeys(RegionRange && range)
-        : RegionRangeKeys(std::move(range.first.key), std::move(range.second.key))
-    {}
     TableID getMappedTableID() const;
-    KeyspaceID getKeyspaceID() const;
-    std::string toDebugString() const;
 
 private:
     RegionRange ori;
     std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr> raw;
-    TableID mapped_table_id = InvalidTableID;
-    KeyspaceID keyspace_id = NullspaceID;
+    TableID mapped_table_id;
 };
 
 } // namespace DB

@@ -14,41 +14,20 @@
 
 #pragma once
 
-#include <Encryption/FileProvider_fwd.h>
-#include <Interpreters/Context_fwd.h>
-#include <Poco/Environment.h>
+#include <Interpreters/Context.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>
-#include <Storages/Page/PageConstants.h>
+#include <Storages/Page/PageStorage.h>
 #include <TestUtils/TiFlashTestException.h>
 #include <fmt/core.h>
 
-
-namespace DB
-{
-struct Settings;
-class DAGContext;
-class MockStorage;
-namespace S3
-{
-class TiFlashS3Client;
-}
-} // namespace DB
-
 namespace DB::tests
 {
-enum class TestType
-{
-    EXECUTOR_TEST,
-    INTERPRETER_TEST,
-};
 class TiFlashTestEnv
 {
 public:
-    static String getTemporaryPath(std::string_view test_case = "", bool get_abs = true);
-
-    static void tryCreatePath(const std::string & path);
+    static String getTemporaryPath(const std::string_view test_case = "", bool get_abs = true);
 
     static void tryRemovePath(const std::string & path, bool recreate = false);
 
@@ -64,7 +43,6 @@ public:
     }
 
     static void setupLogger(const String & level = "trace", std::ostream & os = std::cerr);
-    static void setUpTestContext(Context & context, DAGContext * dag_context, MockStorage * mock_storage, const TestType & test_type);
 
     // If you want to run these tests, you should set this envrionment variablle
     // For example:
@@ -76,7 +54,7 @@ public:
         const static std::vector<String> SEARCH_PATH = {"../tests/testdata/", "/tests/testdata/"};
         for (const auto & prefix : SEARCH_PATH)
         {
-            String path = Poco::Path{prefix + name}.absolute().toString();
+            String path = prefix + name;
             if (auto f = Poco::File(path); f.exists() && f.isDirectory())
             {
                 Strings paths;
@@ -89,15 +67,10 @@ public:
         throw Exception("Can not find testdata with name[" + name + "]");
     }
 
-    static ContextPtr getContext();
-
-    /// Returns a fresh ContextPtr.
-    static ContextPtr getContext(const DB::Settings & settings, Strings testdata_path = {});
-
-    static FileProviderPtr getDefaultFileProvider();
+    static Context getContext(const DB::Settings & settings = DB::Settings(), Strings testdata_path = {});
 
     static void initializeGlobalContext(Strings testdata_path = {}, PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3, uint64_t bg_thread_count = 2);
-    static void addGlobalContext(const DB::Settings & settings, Strings testdata_path = {}, PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3, uint64_t bg_thread_count = 2);
+    static void addGlobalContext(Strings testdata_path = {}, PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3, uint64_t bg_thread_count = 2);
     static Context & getGlobalContext() { return *global_contexts[0]; }
     static Context & getGlobalContext(int idx) { return *global_contexts[idx]; }
     static int globalContextSize() { return global_contexts.size(); }
@@ -105,15 +78,9 @@ public:
 
     static FileProviderPtr getMockFileProvider();
 
-    static void setIsMockedS3Client(bool mock) { is_mocked_s3_client = mock; }
-    static bool isMockedS3Client() { return is_mocked_s3_client; }
-    static bool createBucketIfNotExist(::DB::S3::TiFlashS3Client & s3_client);
-    static void deleteBucket(::DB::S3::TiFlashS3Client & s3_client);
-
-    TiFlashTestEnv() = delete; // no instance allow
+    TiFlashTestEnv() = delete;
 
 private:
-    static std::vector<ContextPtr> global_contexts;
-    static bool is_mocked_s3_client;
+    static std::vector<std::shared_ptr<Context>> global_contexts;
 };
 } // namespace DB::tests

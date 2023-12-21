@@ -24,7 +24,6 @@
 #include <IO/Progress.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
-#include <Interpreters/Context.h>
 #include <Poco/Net/TCPServerConnection.h>
 #include <Storages/Transaction/RegionLockInfo.h>
 
@@ -154,6 +153,7 @@ private:
     void sendProgress();
     void sendEndOfStream();
     void sendProfileInfo();
+    void sendTotals();
     void sendExtremes();
 
     /// Creates state.block_in/block_out for blocks read/write, depending on whether compression is enabled.

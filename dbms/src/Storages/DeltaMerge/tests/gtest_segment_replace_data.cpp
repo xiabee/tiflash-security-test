@@ -18,7 +18,6 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
 #include <Storages/DeltaMerge/tests/gtest_segment_test_basic.h>
 #include <TestUtils/InputStreamTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -41,7 +40,8 @@ extern DMFilePtr writeIntoNewDMFile(DMContext & dm_context,
                                     const ColumnDefinesPtr & schema_snap,
                                     const BlockInputStreamPtr & input_stream,
                                     UInt64 file_id,
-                                    const String & parent_path);
+                                    const String & parent_path,
+                                    DMFileBlockOutputStream::Flags flags);
 
 namespace tests
 {
@@ -80,12 +80,14 @@ try
     flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);
     ASSERT_EQ(replace_to_rows, getSegmentRowNum(DELTA_MERGE_FIRST_SEGMENT_ID));
 
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1); // 1 DMFile
-
-    PageIdU64 replaced_stable_id{};
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr);
+    storage_pool->log_storage_v3->gc(/* not_skip */ true);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+    ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1); // 1 DMFile
+    PageId replaced_stable_id{};
     {
-        auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+        auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
         ASSERT_EQ(1, stable_page_ids.size());
         replaced_stable_id = *stable_page_ids.begin();
     }
@@ -98,13 +100,15 @@ try
     mergeSegmentDelta(DELTA_MERGE_FIRST_SEGMENT_ID);
     ASSERT_EQ(47 + replace_to_rows, getSegmentRowNum(DELTA_MERGE_FIRST_SEGMENT_ID));
 
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1);
+    storage_pool->log_storage_v3->gc(/* not_skip */ true);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+    ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1);
 
     auto const stable_files = segments[DELTA_MERGE_FIRST_SEGMENT_ID]->getStable()->getDMFiles();
     {
         // Only the new stable DMFile is alive (and we should have a different DMFile).
-        auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+        auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
         ASSERT_EQ(1, stable_page_ids.size());
         ASSERT_TRUE(stable_page_ids.count(stable_files[0]->fileId()));
         ASSERT_FALSE(stable_page_ids.count(replaced_stable_id));
@@ -117,7 +121,8 @@ try
     }
     ASSERT_EQ(replace_to_rows, getSegmentRowNum(DELTA_MERGE_FIRST_SEGMENT_ID));
     {
-        auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+        storage_pool->data_storage_v3->gc(/* not_skip */ true);
+        auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
         ASSERT_EQ(1, stable_page_ids.size());
         // The stable before replaceData should be not alive anymore.
         ASSERT_FALSE(stable_page_ids.count(stable_files[0]->fileId()));
@@ -161,7 +166,7 @@ class SegmentReplaceDataSimpleTest : public SegmentTestBasic
 TEST_F(SegmentReplaceDataSimpleTest, DMFileGCIsUnchanged)
 try
 {
-    WriteBatches ingest_wbs(*dm_context->storage_pool, dm_context->getWriteLimiter());
+    WriteBatches ingest_wbs(dm_context->storage_pool, dm_context->getWriteLimiter());
 
     auto delegator = storage_path_pool->getStableDiskDelegator();
     auto file_id = storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
@@ -171,7 +176,8 @@ try
         table_columns,
         input_stream,
         file_id,
-        delegator.choosePath());
+        delegator.choosePath(),
+        DMFileBlockOutputStream::Flags{});
 
     ingest_wbs.data.putExternal(file_id, /* tag */ 0);
     ingest_wbs.writeLogAndData();
@@ -185,7 +191,7 @@ try
     // Note: we have not yet enabled GC for the dmfile here.
     ASSERT_FALSE(dm_file->canGC());
     {
-        auto stable_page_ids = getAliveExternalPageIdsWithoutGC(NAMESPACE_ID);
+        auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
         ASSERT_TRUE(stable_page_ids.count(dm_file->fileId()));
     }
 
@@ -196,7 +202,8 @@ try
     // Even when the stable is replaced, the DMFile should not be marked as GCable.
     ASSERT_FALSE(dm_file->canGC());
     {
-        auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+        storage_pool->data_storage_v3->gc(/* not_skip */ true);
+        auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
         ASSERT_EQ(1, stable_page_ids.size());
         ASSERT_FALSE(stable_page_ids.count(dm_file->fileId()));
     }
@@ -222,7 +229,9 @@ try
         writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID);
     }
 
-    auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
     ASSERT_EQ(1, stable_page_ids.size());
 }
 CATCH
@@ -250,9 +259,12 @@ try
     mergeSegment({DELTA_MERGE_FIRST_SEGMENT_ID, *seg_right_id});
     ASSERT_EQ(110, getSegmentRowNumWithoutMVCC(DELTA_MERGE_FIRST_SEGMENT_ID));
 
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Log, NAMESPACE_ID), 0);
-    ASSERT_EQ(getPageNumAfterGC(StorageType::Data, NAMESPACE_ID), 1);
-    auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr);
+    storage_pool->log_storage_v3->gc(/* not_skip */ true);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    ASSERT_EQ(storage_pool->log_storage_v3->getNumberOfPages(), 0);
+    ASSERT_EQ(storage_pool->data_storage_v3->getNumberOfPages(), 1);
+    auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
     ASSERT_EQ(1, stable_page_ids.size());
 }
 CATCH
@@ -276,7 +288,9 @@ try
     auto shared_dm_files = segments[*seg_right_id]->getStable()->getDMFiles();
 
     // As stable is shared in logical split, we should only have 1 alive external file.
-    auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    ASSERT_TRUE(storage_pool->log_storage_v3 != nullptr);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
 
     // Now let's replace one segment.
     auto block = prepareWriteBlock(0, 300);
@@ -286,7 +300,8 @@ try
     ASSERT_EQ(400, getSegmentRowNumWithoutMVCC(*seg_right_id));
 
     // The previously-shared stable should be still valid.
-    stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
     ASSERT_EQ(2, stable_page_ids.size());
     ASSERT_TRUE(stable_page_ids.count(shared_dm_files[0]->fileId()));
 }
@@ -309,7 +324,8 @@ try
     replaceSegmentData(DELTA_MERGE_FIRST_SEGMENT_ID, block);
 
     // There is a snapshot alive, so we should have 2 stables.
-    auto stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    auto stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
     ASSERT_EQ(2, stable_page_ids.size());
 
     // Continue the read
@@ -320,7 +336,8 @@ try
 
     // Snapshot is dropped.
     in_stream = {};
-    stable_page_ids = getAliveExternalPageIdsAfterGC(NAMESPACE_ID);
+    storage_pool->data_storage_v3->gc(/* not_skip */ true);
+    stable_page_ids = storage_pool->data_storage_v3->getAliveExternalPageIds(NAMESPACE_ID);
     ASSERT_EQ(1, stable_page_ids.size());
 }
 CATCH

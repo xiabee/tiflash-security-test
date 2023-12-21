@@ -25,14 +25,7 @@ SSTReaderPtr fn_get_sst_reader(SSTView v, RaftStoreProxyPtr)
     if (iter == MockSSTReader::getMockSSTData().end())
         throw Exception("Can not find data in MockSSTData, [key=" + s + "] [type=" + CFToName(v.type) + "]");
     auto & d = iter->second;
-    if (v.path.data[0] == '!')
-    {
-        return MockSSTReader::ffi_get_cf_file_reader(d, SSTFormatKind::KIND_TABLET);
-    }
-    else
-    {
-        return MockSSTReader::ffi_get_cf_file_reader(d, SSTFormatKind::KIND_SST);
-    }
+    return MockSSTReader::ffi_get_cf_file_reader(d);
 }
 uint8_t fn_remained(SSTReaderPtr ptr, ColumnFamilyType)
 {
@@ -59,16 +52,6 @@ void fn_gc(SSTReaderPtr ptr, ColumnFamilyType)
     auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
     delete reader;
 }
-SSTFormatKind fn_kind(SSTReaderPtr ptr, ColumnFamilyType)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    return reader->ffi_kind();
-}
-void fn_seek(SSTReaderPtr ptr, ColumnFamilyType ct, EngineIteratorSeekType et, BaseBuffView bf)
-{
-    auto * reader = reinterpret_cast<MockSSTReader *>(ptr.inner);
-    reader->ffi_seek(ptr, ct, et, bf);
-}
 
 SSTReaderInterfaces make_mock_sst_reader_interface()
 {
@@ -79,8 +62,6 @@ SSTReaderInterfaces make_mock_sst_reader_interface()
         .fn_value = fn_value,
         .fn_next = fn_next,
         .fn_gc = fn_gc,
-        .fn_kind = fn_kind,
-        .fn_seek = fn_seek,
     };
 }
 } // namespace DB

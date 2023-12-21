@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Storages/Transaction/RegionRangeKeys.h>
 #include <Storages/Transaction/TiKVKeyValue.h>
 
 #include <map>
@@ -23,14 +22,8 @@ namespace DB
 {
 
 struct TiKVRangeKey;
-using RegionRange = RegionRangeKeys::RegionRange;
+using RegionRange = std::pair<TiKVRangeKey, TiKVRangeKey>;
 using RegionDataRes = size_t;
-
-enum class DupCheck
-{
-    Deny,
-    AllowSame,
-};
 
 template <typename Trait>
 struct RegionCFDataBase
@@ -46,7 +39,7 @@ struct RegionCFDataBase
 
     static const TiKVValue & getTiKVValue(const Value & val);
 
-    RegionDataRes insert(TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
+    RegionDataRes insert(TiKVKey && key, TiKVValue && value);
 
     static size_t calcTiKVKeyValueSize(const Value & value);
 
@@ -77,7 +70,7 @@ struct RegionCFDataBase
 
 private:
     static bool shouldIgnoreRemove(const Value & value);
-    RegionDataRes insert(std::pair<Key, Value> && kv_pair, DupCheck mode = DupCheck::Deny);
+    RegionDataRes insert(std::pair<Key, Value> && kv_pair);
 
 private:
     Data data;

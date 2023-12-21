@@ -79,6 +79,8 @@ public:
         const ASTPtr & query_ptr_,
         const Context & context_);
 
+    void ignoreWithTotals();
+
 private:
     struct Pipeline
     {
@@ -89,6 +91,12 @@ private:
           */
         BlockInputStreams streams;
 
+        /** When executing FULL or RIGHT JOIN, there will be a data stream from which you can read "not joined" rows.
+          * It has a special meaning, since reading from it should be done after reading from the main streams.
+          * It is appended to the main streams in UnionBlockInputStream or ParallelAggregatingBlockInputStream.
+          */
+        BlockInputStreams streams_with_non_joined_data;
+
         BlockInputStreamPtr & firstStream() { return streams.at(0); }
 
         template <typename Transform>
@@ -96,11 +104,14 @@ private:
         {
             for (auto & stream : streams)
                 transform(stream);
+
+            for (auto & stream : streams_with_non_joined_data)
+                transform(stream);
         }
 
         bool hasMoreThanOneStream() const
         {
-            return streams.size();
+            return streams.size() + streams_with_non_joined_data.size() > 1;
         }
     };
 
@@ -163,8 +174,9 @@ private:
     QueryProcessingStage::Enum executeFetchColumns(Pipeline & pipeline, bool dry_run);
 
     void executeWhere(Pipeline & pipeline, const ExpressionActionsPtr & expression);
-    void executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, bool final);
-    void executeMergeAggregated(Pipeline & pipeline, bool final);
+    void executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, const FileProviderPtr & file_provider, bool overflow_row, bool final);
+    void executeMergeAggregated(Pipeline & pipeline, bool overflow_row, bool final);
+    void executeTotalsAndHaving(Pipeline & pipeline, bool has_having, const ExpressionActionsPtr & expression, bool overflow_row);
     void executeHaving(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeExpression(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeOrder(Pipeline & pipeline);

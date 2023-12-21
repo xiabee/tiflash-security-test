@@ -168,6 +168,8 @@ public:
     /* The offset range managed by this SpaceMap. The range is [left, right). */
     UInt64 start;
     UInt64 end;
+
+    Poco::Logger * log;
 };
 
 

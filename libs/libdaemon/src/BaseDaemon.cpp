@@ -48,6 +48,7 @@
 #include <Common/UnifiedLogFormatter.h>
 #include <Common/getMultipleKeysFromConfig.h>
 #include <Common/setThreadName.h>
+#include <Flash/Mpp/getMPPTaskTracingLog.h>
 #include <IO/ReadBufferFromFileDescriptor.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteBufferFromFileDescriptor.h>
@@ -695,14 +696,6 @@ static std::string normalize(const std::string & log_level)
 
 void BaseDaemon::reloadConfiguration()
 {
-    // when config-file is not specified and config.toml does not exist, we do not load config.
-    if (!config().has("config-file"))
-    {
-        Poco::File f("config.toml");
-        if (!f.exists())
-            return;
-    }
-
     /** If the program is not run in daemon mode and 'config-file' is not specified,
       *  then we use config from 'config.toml' file in current directory,
       *  but will log to console (or use parameters --log-file, --errorlog-file from command line)
@@ -757,12 +750,12 @@ void BaseDaemon::wakeup()
 
 void BaseDaemon::buildLoggers(Poco::Util::AbstractConfiguration & config)
 {
-    auto current_logger = config.getString("logger", "(null)");
+    auto current_logger = config.getString("logger");
     if (config_logger == current_logger)
         return;
     config_logger = current_logger;
 
-    bool is_daemon = config.getBool("application.runAsDaemon", false);
+    bool is_daemon = config.getBool("application.runAsDaemon", true);
 
     // Split log, error log and tracing log.
     Poco::AutoPtr<Poco::ReloadableSplitterChannel> split = new Poco::ReloadableSplitterChannel;
@@ -775,7 +768,7 @@ void BaseDaemon::buildLoggers(Poco::Util::AbstractConfiguration & config)
         std::cerr << "Logging " << log_level << " to " << log_path << std::endl;
 
         // Set up two channel chains.
-        Poco::AutoPtr<Poco::Formatter> pf = new DB::UnifiedLogFormatter<false>();
+        Poco::AutoPtr<DB::UnifiedLogFormatter> pf = new DB::UnifiedLogFormatter();
         Poco::AutoPtr<FormattingChannel> log = new FormattingChannel(pf);
         log_file = new Poco::TiFlashLogFileChannel;
         log_file->setProperty(Poco::FileChannel::PROP_PATH, Poco::Path(log_path).absolute().toString());
@@ -798,7 +791,7 @@ void BaseDaemon::buildLoggers(Poco::Util::AbstractConfiguration & config)
         std::cerr << "Logging errors to " << errorlog_path << std::endl;
         Poco::AutoPtr<Poco::LevelFilterChannel> level = new Poco::LevelFilterChannel;
         level->setLevel(Message::PRIO_NOTICE);
-        Poco::AutoPtr<Poco::Formatter> pf = new DB::UnifiedLogFormatter<false>();
+        Poco::AutoPtr<DB::UnifiedLogFormatter> pf = new DB::UnifiedLogFormatter();
         Poco::AutoPtr<FormattingChannel> errorlog = new FormattingChannel(pf);
         error_log_file = new Poco::TiFlashLogFileChannel;
         error_log_file->setProperty(Poco::FileChannel::PROP_PATH, Poco::Path(errorlog_path).absolute().toString());
@@ -823,7 +816,7 @@ void BaseDaemon::buildLoggers(Poco::Util::AbstractConfiguration & config)
         /// to filter the tracing log.
         Poco::AutoPtr<Poco::SourceFilterChannel> source = new Poco::SourceFilterChannel;
         source->setSource(DB::tracing_log_source);
-        Poco::AutoPtr<Poco::Formatter> pf = new DB::UnifiedLogFormatter<false>();
+        Poco::AutoPtr<DB::UnifiedLogFormatter> pf = new DB::UnifiedLogFormatter();
         Poco::AutoPtr<FormattingChannel> tracing_log = new FormattingChannel(pf);
         tracing_log_file = new Poco::TiFlashLogFileChannel;
         tracing_log_file->setProperty(Poco::FileChannel::PROP_PATH, Poco::Path(tracing_log_path).absolute().toString());
@@ -854,20 +847,14 @@ void BaseDaemon::buildLoggers(Poco::Util::AbstractConfiguration & config)
         syslog_channel->open();
     }
 
-    bool should_log_to_console = isatty(STDIN_FILENO) || isatty(STDERR_FILENO);
-    bool enable_colors = isatty(STDERR_FILENO);
-
-    if (config.getBool("logger.console", false)
-        || (!config.hasProperty("logger.console") && !is_daemon && should_log_to_console))
+    if (config.getBool("logger.console", false) || (!config.hasProperty("logger.console") && !is_daemon && (isatty(STDIN_FILENO) || isatty(STDERR_FILENO))))
     {
         Poco::AutoPtr<ConsoleChannel> file = new ConsoleChannel;
-        Poco::AutoPtr<Poco::Formatter> pf;
-        if (enable_colors)
-            pf = new DB::UnifiedLogFormatter<true>();
-        else
-            pf = new DB::UnifiedLogFormatter<false>();
+        Poco::AutoPtr<OwnPatternFormatter> pf = new OwnPatternFormatter(this);
+        pf->setProperty("times", "local");
         Poco::AutoPtr<FormattingChannel> log = new FormattingChannel(pf);
         log->setChannel(file);
+        logger().warning("Logging " + log_level + " to console");
         split->addChannel(log);
     }
 
@@ -1015,6 +1002,8 @@ void BaseDaemon::initialize(Application & self)
 
         umask(umask_num);
     }
+
+    ConfigProcessor(config_path).savePreprocessedConfig(loaded_config);
 
     /// Write core dump on crash.
     {
@@ -1168,12 +1157,11 @@ void BaseDaemon::initialize(Application & self)
 
 void BaseDaemon::logRevision() const
 {
-    auto * log = &Logger::root();
-    LOG_INFO(log, "Welcome to TiFlash");
-    LOG_INFO(log, "Starting daemon with revision " + Poco::NumberFormatter::format(ClickHouseRevision::get()));
+    Logger::root().information("Welcome to TiFlash");
+    Logger::root().information("Starting daemon with revision " + Poco::NumberFormatter::format(ClickHouseRevision::get()));
     std::stringstream ss;
     TiFlashBuildInfo::outputDetail(ss);
-    LOG_INFO(log, "TiFlash build info: {}", ss.str());
+    Logger::root().information("TiFlash build info: " + ss.str());
 }
 
 /// Used for exitOnTaskError()

@@ -16,7 +16,6 @@
 #include <Common/ThreadFactory.h>
 #include <Common/ThreadManager.h>
 #include <Common/wrapInvocable.h>
-#include <common/ThreadPool.h>
 
 namespace DB
 {
@@ -126,7 +125,7 @@ public:
     }
 
 protected:
-    legacy::ThreadPool pool;
+    ThreadPool pool;
 };
 } // namespace
 

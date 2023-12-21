@@ -24,7 +24,6 @@ struct ConnectionTimeouts
     Poco::Timespan connection_timeout;
     Poco::Timespan send_timeout;
     Poco::Timespan receive_timeout;
-    Poco::Timespan http_keep_alive_timeout{0};
 
     ConnectionTimeouts() = default;
 
@@ -62,6 +61,11 @@ struct ConnectionTimeouts
     static ConnectionTimeouts getTCPTimeoutsWithFailover(const Settings & settings)
     {
         return ConnectionTimeouts(settings.connect_timeout_with_failover_ms, settings.send_timeout, settings.receive_timeout);
+    }
+
+    static ConnectionTimeouts getHTTPTimeouts(const Settings & settings)
+    {
+        return ConnectionTimeouts(settings.http_connection_timeout, settings.http_send_timeout, settings.http_receive_timeout);
     }
 };
 

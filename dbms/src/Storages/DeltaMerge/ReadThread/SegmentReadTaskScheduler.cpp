@@ -19,7 +19,7 @@ namespace DB::DM
 {
 SegmentReadTaskScheduler::SegmentReadTaskScheduler()
     : stop(false)
-    , log(Logger::get())
+    , log(&Poco::Logger::get("SegmentReadTaskScheduler"))
 {
     sched_thread = std::thread(&SegmentReadTaskScheduler::schedLoop, this);
 }

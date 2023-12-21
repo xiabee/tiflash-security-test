@@ -47,7 +47,7 @@ public:
         , inited(false)
         , cur_idx(-1)
         , finished_count(0)
-        , log(Logger::get())
+        , log(&Poco::Logger::get("MergedTask"))
     {
         passive_merged_segments.fetch_add(units.size() - 1, std::memory_order_relaxed);
         GET_METRIC(tiflash_storage_read_thread_gauge, type_merged_task).Increment();
@@ -142,7 +142,7 @@ private:
     bool inited;
     int cur_idx;
     size_t finished_count;
-    LoggerPtr log;
+    Poco::Logger * log;
     Stopwatch sw;
     inline static std::atomic<int64_t> passive_merged_segments{0};
 };
@@ -156,7 +156,7 @@ class MergedTaskPool
 {
 public:
     MergedTaskPool()
-        : log(Logger::get())
+        : log(&Poco::Logger::get("MergedTaskPool"))
     {}
 
     MergedTaskPtr pop(uint64_t pool_id);
@@ -166,6 +166,6 @@ public:
 private:
     std::mutex mtx;
     std::list<MergedTaskPtr> merged_task_pool;
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 } // namespace DB::DM

@@ -233,4 +233,11 @@ BlockIO InterpreterSelectWithUnionQuery::execute()
     return res;
 }
 
+
+void InterpreterSelectWithUnionQuery::ignoreWithTotals()
+{
+    for (auto & interpreter : nested_interpreters)
+        interpreter->ignoreWithTotals();
+}
+
 } // namespace DB

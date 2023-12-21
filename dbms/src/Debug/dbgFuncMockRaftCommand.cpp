@@ -171,7 +171,7 @@ void MockRaftCommand::dbgFuncPrepareMerge(Context & context, const ASTs & args, 
             prepare_merge->set_min_index(min_index);
 
             metapb::Region * target = prepare_merge->mutable_target();
-            *target = target_region->cloneMetaRegion();
+            *target = target_region->getMetaRegion();
         }
     }
 
@@ -207,7 +207,7 @@ void MockRaftCommand::dbgFuncCommitMerge(Context & context, const ASTs & args, D
         auto * commit_merge = request.mutable_commit_merge();
         {
             commit_merge->set_commit(source_region->appliedIndex());
-            *commit_merge->mutable_source() = source_region->cloneMetaRegion();
+            *commit_merge->mutable_source() = source_region->getMetaRegion();
         }
     }
 
@@ -241,7 +241,7 @@ void MockRaftCommand::dbgFuncRollbackMerge(Context & context, const ASTs & args,
 
         auto * rollback_merge = request.mutable_rollback_merge();
         {
-            auto merge_state = region->cloneMergeState();
+            auto merge_state = region->getMergeState();
             rollback_merge->set_commit(merge_state.commit());
         }
     }

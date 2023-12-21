@@ -16,7 +16,6 @@
 #include <DataTypes/DataTypeFactory.h>
 #include <IO/ReadBufferFromFile.h>
 #include <IO/copyData.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/InterpreterAlterQuery.h>
 #include <Parsers/ASTAlterQuery.h>
 #include <Parsers/ASTCreateQuery.h>
@@ -157,7 +156,7 @@ void InterpreterAlterQuery::parseAlter(
             else
             {
                 if (params.clear_column)
-                    throw Exception(R"("ALTER TABLE table CLEAR COLUMN column" queries are not supported yet. Use "CLEAR COLUMN column IN PARTITION".)", ErrorCodes::NOT_IMPLEMENTED);
+                    throw Exception("\"ALTER TABLE table CLEAR COLUMN column\" queries are not supported yet. Use \"CLEAR COLUMN column IN PARTITION\".", ErrorCodes::NOT_IMPLEMENTED);
 
                 AlterCommand command;
                 command.type = AlterCommand::DROP_COLUMN;

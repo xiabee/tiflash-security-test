@@ -16,7 +16,7 @@
 
 #include <Core/Types.h>
 #include <Interpreters/SettingsCommon.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 
 namespace DB
 {
@@ -85,14 +85,6 @@ struct PageStorageConfig
 
     MVCC::VersionSetConfig version_set_config;
 
-    // Use a more easy gc config for v2 when all of its data will be transformed to v3.
-    static PageStorageConfig getEasyGCConfig()
-    {
-        PageStorageConfig gc_config;
-        gc_config.file_roll_size = PAGE_FILE_SMALL_SIZE;
-        return gc_config;
-    }
-
     //==========================================================================================
     // V3 config
     //==========================================================================================
@@ -131,7 +123,7 @@ struct PageStorageConfig
     String toDebugStringV2() const
     {
         return fmt::format(
-            "PageStorageConfig V2 {{gc_min_files: {}, gc_min_bytes:{}, gc_force_hardlink_rate: {:.3f}, gc_max_valid_rate: {:.3f}, "
+            "PageStorageConfig {{gc_min_files: {}, gc_min_bytes:{}, gc_force_hardlink_rate: {:.3f}, gc_max_valid_rate: {:.3f}, "
             "gc_min_legacy_num: {}, gc_max_expect_legacy: {}, gc_max_valid_rate_bound: {:.3f}, prob_do_gc_when_write_is_low: {}, "
             "open_file_max_idle_time: {}}}",
             gc_min_files,
@@ -148,7 +140,7 @@ struct PageStorageConfig
     String toDebugStringV3() const
     {
         return fmt::format(
-            "PageStorageConfig {{"
+            "PageStorageConfig V3 {{"
             "blob_file_limit_size: {}, blob_spacemap_type: {}, "
             "blob_heavy_gc_valid_rate: {:.3f}, blob_block_alignment_bytes: {}, "
             "wal_roll_size: {}, wal_max_persisted_log_files: {}}}",

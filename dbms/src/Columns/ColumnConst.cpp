@@ -55,18 +55,16 @@ ColumnPtr ColumnConst::filter(const Filter & filt, ssize_t /*result_size_hint*/)
     return ColumnConst::create(data, countBytesInFilter(filt));
 }
 
-ColumnPtr ColumnConst::replicateRange(size_t /*start_row*/, size_t end_row, const IColumn::Offsets & offsets) const
+ColumnPtr ColumnConst::replicate(const Offsets & offsets) const
 {
     if (s != offsets.size())
         throw Exception(
             fmt::format("Size of offsets ({}) doesn't match size of column ({})", offsets.size(), s),
             ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
 
-    assert(end_row <= s);
-    size_t replicated_size = 0 == s ? 0 : (offsets[end_row - 1]);
+    size_t replicated_size = 0 == s ? 0 : offsets.back();
     return ColumnConst::create(data, replicated_size);
 }
-
 
 ColumnPtr ColumnConst::permute(const Permutation & perm, size_t limit) const
 {
