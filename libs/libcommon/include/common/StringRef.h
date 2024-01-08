@@ -15,6 +15,7 @@
 #pragma once
 
 #include <city.h>
+#include <common/defines.h>
 #include <common/mem_utils.h>
 #include <common/mem_utils_opt.h>
 #include <common/types.h>
@@ -60,7 +61,7 @@ struct StringRef
         : data(s.data())
         , size(s.size())
     {}
-    constexpr explicit StringRef(std::string_view s)
+    constexpr StringRef(std::string_view s) // NOLINT(google-explicit-constructor)
         : data(s.data())
         , size(s.size())
     {}
@@ -70,14 +71,12 @@ struct StringRef
     constexpr StringRef() = default;
 
     std::string toString() const { return std::string(data, size); }
+    std::string_view toStringView() const { return std::string_view(data, size); }
 
     explicit operator std::string() const { return toString(); }
     constexpr explicit operator std::string_view() const { return {data, size}; }
 
-    ALWAYS_INLINE inline int compare(const StringRef & tar) const
-    {
-        return mem_utils::CompareStrView({*this}, {tar});
-    }
+    ALWAYS_INLINE inline int compare(const StringRef & tar) const { return mem_utils::CompareStrView({*this}, {tar}); }
 };
 
 /// Here constexpr doesn't implicate inline, see https://www.viva64.com/en/w/v1043/
@@ -254,3 +253,8 @@ inline void set(StringRef & x)
 
 
 std::ostream & operator<<(std::ostream & os, const StringRef & str);
+
+ALWAYS_INLINE inline auto format_as(StringRef ref)
+{
+    return ref.toStringView();
+}

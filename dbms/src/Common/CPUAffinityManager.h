@@ -24,7 +24,6 @@
 
 namespace Poco
 {
-class Logger;
 namespace Util
 {
 class LayeredConfiguration;
@@ -33,10 +32,13 @@ class LayeredConfiguration;
 
 namespace DB
 {
+class Logger;
+using LoggerPtr = std::shared_ptr<Logger>;
 namespace tests
 {
 class CPUAffinityManagerTest_CPUAffinityManager_Test;
-}
+} // namespace tests
+
 struct CPUAffinityConfig
 {
     CPUAffinityConfig()
@@ -47,10 +49,9 @@ struct CPUAffinityConfig
     int query_cpu_percent;
     int cpu_cores;
     // query_threads are the {thread name prefix}.
-    // cop-pool and batch-cop-pool are the thread name of thread-pool that handle coprocessor request.
     // grpcpp_sync_ser is the thread name of grpc sync request thread-pool. However, this thread-pool is resize dynamically and we set these threads' cpu affinity in FlashService for simplicity.
     // Query threads of MPP tasks are created dynamiccally and we set these threads' cpu affinity when they are created.
-    std::vector<std::string> query_threads = {"cop-pool", "batch-cop-pool", "grpcpp_sync_ser"};
+    std::vector<std::string> query_threads = {"grpcpp_sync_ser"};
 };
 
 // CPUAffinityManager is a singleton.
@@ -80,8 +81,7 @@ public:
 
     void bindThreadCPUAffinity() const;
 #else
-    void init(const CPUAffinityConfig &)
-    {}
+    void init(const CPUAffinityConfig &) {}
 
     void bindQueryThread(pid_t) const {}
     void bindOtherThread(pid_t) const {}
@@ -90,10 +90,7 @@ public:
     void bindSelfOtherThread() const {}
     void bindSelfGrpcThread() const {}
 
-    static std::string toString()
-    {
-        return "Not Support";
-    }
+    static std::string toString() { return "Not Support"; }
 
     void bindThreadCPUAffinity() const {}
 #endif
@@ -132,7 +129,7 @@ private:
     MAYBE_UNUSED_MEMBER int cpu_cores;
 
     std::vector<std::string> query_threads;
-    Poco::Logger * log;
+    LoggerPtr log;
 
     CPUAffinityManager();
     // Disable copy and move

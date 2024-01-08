@@ -19,8 +19,11 @@
 #include <Poco/File.h>
 #include <Poco/FileChannel.h>
 #include <Poco/FormattingChannel.h>
+#include <Poco/Logger.h>
 #include <Poco/PatternFormatter.h>
+#include <common/StringRef.h>
 #include <common/logger_useful.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <iomanip>
@@ -42,7 +45,8 @@ public:
     {
         Poco::AutoPtr<Poco::ConsoleChannel> channel = new Poco::ConsoleChannel(std::cout);
         // Poco::AutoPtr<Poco::FileChannel> channel(new Poco::FileChannel("/tmp/logger_test"));
-        Poco::AutoPtr<Poco::PatternFormatter> formatter(new Poco::PatternFormatter("[%H:%M:%S.%i %Z] [%p] [%U(%u)]: %t"));
+        Poco::AutoPtr<Poco::PatternFormatter> formatter(
+            new Poco::PatternFormatter("[%H:%M:%S.%i %Z] [%p] [%U(%u)]: %t"));
         Poco::AutoPtr<Poco::FormattingChannel> formatting_channel(new Poco::FormattingChannel(formatter, channel));
         Poco::Logger::root().setChannel(formatting_channel);
         Poco::Logger::root().setLevel(Poco::Message::PRIO_TRACE);
@@ -65,6 +69,14 @@ TEST_F(LoggerUsefulTest, Log)
     std::string msg_in_log;
     msg_in_log = "hello tiflash";
     LOG_DEBUG(log, msg_in_log);
+}
+
+TEST(FmtTest, StringRef)
+{
+    const char * str = "abcdefg\0\0\0\0";
+    ASSERT_EQ("abc", fmt::format("{}", StringRef(str, 3)));
+    ASSERT_EQ("abcdefg", fmt::format("{}", StringRef(str, 7)));
+    ASSERT_EQ(std::string_view("abcdefg\0", 8), fmt::format("{}", StringRef(str, 8)));
 }
 
 } // namespace tests

@@ -47,15 +47,9 @@ struct Memory
         alloc();
     }
 
-    ~Memory()
-    {
-        dealloc();
-    }
+    ~Memory() { dealloc(); }
 
-    Memory(Memory && rhs) noexcept
-    {
-        *this = std::move(rhs);
-    }
+    Memory(Memory && rhs) noexcept { *this = std::move(rhs); }
 
     Memory & operator=(Memory && rhs) noexcept
     {
@@ -69,15 +63,16 @@ struct Memory
 
     size_t size() const { return m_size; }
     const char & operator[](size_t i) const { return m_data[i]; }
-    char & operator[](size_t i) { return m_data[i]; }
+    char & operator[](size_t i) { return m_data[i]; } // NOLINT(readability-make-member-function-const)
     const char * data() const { return m_data; }
-    char * data() { return m_data; }
+    char * data() { return m_data; } // NOLINT(readability-make-member-function-const)
 
     void resize(size_t new_size)
     {
         if (0 == m_capacity)
         {
-            m_size = m_capacity = new_size;
+            m_capacity = new_size;
+            m_size = new_size;
             alloc();
         }
         else if (new_size <= m_capacity)
@@ -139,7 +134,10 @@ protected:
 
 public:
     /// If non-nullptr 'existing_memory' is passed, then buffer will not create its own memory and will use existing_memory without ownership.
-    explicit BufferWithOwnMemory(size_t size = DBMS_DEFAULT_BUFFER_SIZE, char * existing_memory = nullptr, size_t alignment = 0)
+    explicit BufferWithOwnMemory(
+        size_t size = DBMS_DEFAULT_BUFFER_SIZE,
+        char * existing_memory = nullptr,
+        size_t alignment = 0)
         : Base(nullptr, 0)
         , memory(existing_memory ? 0 : size, alignment)
     {

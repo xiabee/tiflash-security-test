@@ -110,25 +110,14 @@ public:
      * Sanity check for correctness
      */
     using CheckerFunc = std::function<bool(size_t idx, UInt64 start, UInt64 end)>;
-    virtual bool check(CheckerFunc /*checker*/, size_t /*size*/)
-    {
-        return true;
-    }
-
-    /**
-     * Log the status of space map
-     */
-    void logDebugString();
+    virtual bool check(CheckerFunc /*checker*/, size_t /*size*/) { return true; }
 
     /**
      * return the status of space map
      */
     virtual String toDebugString() = 0;
 
-    SpaceMapType getType() const
-    {
-        return type;
-    }
+    SpaceMapType getType() const { return type; }
 
     static String typeToString(SpaceMapType type)
     {
@@ -141,10 +130,10 @@ public:
         }
     }
 
+    virtual ~SpaceMap() = default;
+
 protected:
     SpaceMap(UInt64 start_, UInt64 end_, SpaceMapType type_);
-
-    virtual ~SpaceMap() = default;
 
     // Return true if space [offset, offset+size) are all free
     virtual bool isMarkUnused(UInt64 offset, size_t size) = 0;
@@ -168,8 +157,6 @@ public:
     /* The offset range managed by this SpaceMap. The range is [left, right). */
     UInt64 start;
     UInt64 end;
-
-    Poco::Logger * log;
 };
 
 

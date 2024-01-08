@@ -16,6 +16,8 @@
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
 #include <Storages/DeltaMerge/ScanContext.h>
 
+#include <utility>
+
 namespace DB::DM
 {
 DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & context)
@@ -29,14 +31,23 @@ DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & con
     setFromSettings(context.getSettingsRef());
 }
 
-DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr & dmfile, const ColumnDefines & read_columns, const RowKeyRanges & rowkey_ranges, const ScanContextPtr & scan_context)
+DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
+    const DMFilePtr & dmfile,
+    const ColumnDefines & read_columns,
+    const RowKeyRanges & rowkey_ranges,
+    const ScanContextPtr & scan_context)
 {
-    RUNTIME_CHECK(dmfile->getStatus() == DMFile::Status::READABLE, dmfile->fileId(), DMFile::statusString(dmfile->getStatus()));
+    RUNTIME_CHECK(
+        dmfile->getStatus() == DMFile::Status::READABLE,
+        dmfile->fileId(),
+        magic_enum::enum_name(dmfile->getStatus()));
 
     // if `rowkey_ranges` is empty, we unconditionally read all packs
     // `rowkey_ranges` and `is_common_handle`  will only be useful in clean read mode.
     // It is safe to ignore them here.
-    RUNTIME_CHECK_MSG(!(rowkey_ranges.empty() && enable_handle_clean_read), "rowkey ranges shouldn't be empty with clean-read enabled");
+    RUNTIME_CHECK_MSG(
+        !(rowkey_ranges.empty() && enable_handle_clean_read),
+        "rowkey ranges shouldn't be empty with clean-read enabled");
 
     bool is_common_handle = !rowkey_ranges.empty() && rowkey_ranges[0].is_common_handle;
 
@@ -53,6 +64,20 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
         tracing_id);
 
     bool enable_read_thread = SegmentReaderPoolManager::instance().isSegmentReader();
+
+    if (!enable_read_thread || max_sharing_column_bytes_for_all <= 0)
+    {
+        // Disable data sharing.
+        max_sharing_column_count = 0;
+    }
+    else if (
+        shared_column_data_mem_tracker != nullptr
+        && std::cmp_greater_equal(shared_column_data_mem_tracker->get(), max_sharing_column_bytes_for_all))
+    {
+        // The memory used reaches the limitation by running queries, disable the data sharing for this DMFile
+        max_sharing_column_count = 0;
+        GET_METRIC(tiflash_storage_read_thread_counter, type_add_cache_total_bytes_limit).Increment();
+    }
 
     DMFileReader reader(
         dmfile,
@@ -73,9 +98,9 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
         rows_threshold_per_read,
         read_one_pack_every_time,
         tracing_id,
-        enable_read_thread,
+        max_sharing_column_count,
         scan_context);
 
-    return std::make_shared<DMFileBlockInputStream>(std::move(reader), enable_read_thread);
+    return std::make_shared<DMFileBlockInputStream>(std::move(reader), max_sharing_column_count > 0);
 }
 } // namespace DB::DM

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <DataStreams/OneBlockInputStream.h>
+#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
 #include <Storages/DeltaMerge/Segment.h>
@@ -29,12 +30,12 @@ extern const char skip_check_segment_update[];
 namespace DM
 {
 
-extern DMFilePtr writeIntoNewDMFile(DMContext & dm_context,
-                                    const ColumnDefinesPtr & schema_snap,
-                                    const BlockInputStreamPtr & input_stream,
-                                    UInt64 file_id,
-                                    const String & parent_path,
-                                    DMFileBlockOutputStream::Flags flags);
+extern DMFilePtr writeIntoNewDMFile(
+    DMContext & dm_context,
+    const ColumnDefinesPtr & schema_snap,
+    const BlockInputStreamPtr & input_stream,
+    UInt64 file_id,
+    const String & parent_path);
 
 namespace tests
 {
@@ -44,29 +45,33 @@ void SimplePKTestBasic::reload()
 
     version = 0;
 
-    auto cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
-    store = std::make_shared<DeltaMergeStore>(*db_context,
-                                              false,
-                                              "test",
-                                              DB::base::TiFlashStorageTestBasic::getCurrentFullTestName(),
-                                              101,
-                                              true,
-                                              *cols,
-                                              (*cols)[0],
-                                              is_common_handle,
-                                              1,
-                                              DeltaMergeStore::Settings());
-    dm_context = store->newDMContext(*db_context, db_context->getSettingsRef(), DB::base::TiFlashStorageTestBasic::getCurrentFullTestName());
+    auto cols = DMTestEnv::getDefaultColumns(
+        is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
+    store = std::make_shared<DeltaMergeStore>(
+        *db_context,
+        false,
+        "test",
+        DB::base::TiFlashStorageTestBasic::getCurrentFullTestName(),
+        NullspaceID,
+        101,
+        true,
+        *cols,
+        (*cols)[0],
+        is_common_handle,
+        1,
+        DeltaMergeStore::Settings());
+    dm_context = store->newDMContext(
+        *db_context,
+        db_context->getSettingsRef(),
+        DB::base::TiFlashStorageTestBasic::getCurrentFullTestName());
     db_context->dropMinMaxIndexCache();
 }
 
 SegmentPtr SimplePKTestBasic::getSegmentAt(Int64 key) const
 {
     auto row_key = buildRowKey(key);
+    auto [segment, is_empty] = store->getSegmentByStartKey(row_key.toRowKeyValueRef(), true, true);
     std::shared_lock lock(store->read_write_mutex);
-    auto segment_it = store->segments.upper_bound(row_key.toRowKeyValueRef());
-    RUNTIME_CHECK(segment_it != store->segments.end());
-    auto segment = segment_it->second;
     RUNTIME_CHECK(store->isSegmentValid(lock, segment));
     return segment;
 }
@@ -85,19 +90,18 @@ void SimplePKTestBasic::ensureSegmentBreakpoints(const std::vector<Int64> & brea
 
         while (true)
         {
-            SegmentPtr segment;
-            {
-                std::shared_lock lock(store->read_write_mutex);
-
-                auto segment_it = store->segments.upper_bound(bp_key.toRowKeyValueRef());
-                RUNTIME_CHECK(segment_it != store->segments.end());
-                segment = segment_it->second;
-            }
+            auto [segment, is_empty] = store->getSegmentByStartKey(bp_key.toRowKeyValueRef(), true, true);
             // The segment is already break at the boundary
             if (compare(segment->getRowKeyRange().getStart(), bp_key.toRowKeyValueRef()) == 0)
                 break;
-            auto split_mode = use_logical_split ? DeltaMergeStore::SegmentSplitMode::Logical : DeltaMergeStore::SegmentSplitMode::Physical;
-            auto [left, right] = store->segmentSplit(*dm_context, segment, DeltaMergeStore::SegmentSplitReason::ForegroundWrite, bp_key, split_mode);
+            auto split_mode = use_logical_split ? DeltaMergeStore::SegmentSplitMode::Logical
+                                                : DeltaMergeStore::SegmentSplitMode::Physical;
+            auto [left, right] = store->segmentSplit(
+                *dm_context,
+                segment,
+                DeltaMergeStore::SegmentSplitReason::ForegroundWrite,
+                bp_key,
+                split_mode);
             if (left)
                 break;
         }
@@ -108,6 +112,10 @@ std::vector<Int64> SimplePKTestBasic::getSegmentBreakpoints() const
 {
     std::vector<Int64> breakpoints;
     std::unique_lock lock(store->read_write_mutex);
+    if (store->segments.empty())
+    {
+        return breakpoints;
+    }
     for (auto it = std::next(store->segments.cbegin()); it != store->segments.cend(); it++)
     {
         auto [start, end] = parseRange(it->second->getRowKeyRange());
@@ -192,11 +200,7 @@ Block SimplePKTestBasic::fillBlock(const FillBlockOptions & options)
 
 void SimplePKTestBasic::fill(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "fill [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "fill [{}, {})", start_key, end_key);
 
     auto block = fillBlock({.range = {start_key, end_key}});
     store->write(*db_context, db_context->getSettingsRef(), block);
@@ -204,11 +208,7 @@ void SimplePKTestBasic::fill(Int64 start_key, Int64 end_key)
 
 void SimplePKTestBasic::fillDelete(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "fillDelete [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "fillDelete [{}, {})", start_key, end_key);
 
     auto block = fillBlock({.range = {start_key, end_key}, .is_deleted = true});
     store->write(*db_context, db_context->getSettingsRef(), block);
@@ -216,11 +216,7 @@ void SimplePKTestBasic::fillDelete(Int64 start_key, Int64 end_key)
 
 void SimplePKTestBasic::flush(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "flush [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "flush [{}, {})", start_key, end_key);
 
     auto range = buildRowRange(start_key, end_key);
     store->flushCache(*db_context, range, true);
@@ -228,9 +224,7 @@ void SimplePKTestBasic::flush(Int64 start_key, Int64 end_key)
 
 void SimplePKTestBasic::flush()
 {
-    LOG_INFO(
-        logger_op,
-        "flushAll");
+    LOG_INFO(logger_op, "flushAll");
 
     auto range = RowKeyRange::newAll(is_common_handle, 1);
     store->flushCache(*db_context, range, true);
@@ -238,11 +232,7 @@ void SimplePKTestBasic::flush()
 
 void SimplePKTestBasic::mergeDelta(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "mergeDelta [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "mergeDelta [{}, {})", start_key, end_key);
 
     auto range = buildRowRange(start_key, end_key);
     while (!range.none())
@@ -255,9 +245,7 @@ void SimplePKTestBasic::mergeDelta(Int64 start_key, Int64 end_key)
 
 void SimplePKTestBasic::mergeDelta()
 {
-    LOG_INFO(
-        logger_op,
-        "mergeDeltaAll");
+    LOG_INFO(logger_op, "mergeDeltaAll");
 
     flush(); // as mergeDeltaBySegment always flush, so we also flush here.
     store->mergeDeltaAll(*db_context);
@@ -265,11 +253,7 @@ void SimplePKTestBasic::mergeDelta()
 
 bool SimplePKTestBasic::merge(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "merge [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "merge [{}, {})", start_key, end_key);
 
     std::vector<SegmentPtr> to_merge;
     auto range = buildRowRange(start_key, end_key);
@@ -277,9 +261,7 @@ bool SimplePKTestBasic::merge(Int64 start_key, Int64 end_key)
         std::shared_lock lock(store->read_write_mutex);
         while (!range.none())
         {
-            auto segment_it = store->segments.upper_bound(range.getStart());
-            RUNTIME_CHECK(segment_it != store->segments.end());
-            const auto & segment = segment_it->second;
+            auto [segment, is_empty] = store->getSegmentByStartKey(range.getStart(), true, true);
             to_merge.emplace_back(segment);
             range.setStart(segment->getRowKeyRange().end);
         }
@@ -294,11 +276,7 @@ bool SimplePKTestBasic::merge(Int64 start_key, Int64 end_key)
 
 void SimplePKTestBasic::deleteRange(Int64 start_key, Int64 end_key)
 {
-    LOG_INFO(
-        logger_op,
-        "deleteRange [{}, {})",
-        start_key,
-        end_key);
+    LOG_INFO(logger_op, "deleteRange [{}, {})", start_key, end_key);
 
     auto range = buildRowRange(start_key, end_key);
     store->deleteRange(*db_context, db_context->getSettingsRef(), range);
@@ -314,8 +292,7 @@ ExternalDTFileInfo genDMFile(DeltaMergeStorePtr store, DMContext & context, cons
         std::make_shared<ColumnDefines>(store->getTableColumns()),
         input_stream,
         file_id,
-        store_path,
-        /* flags */ {});
+        store_path);
 
     store->preIngestFile(store_path, file_id, dmfile->getBytesOnDisk());
 
@@ -360,6 +337,8 @@ size_t SimplePKTestBasic::getRowsN() const
         /* num_streams= */ 1,
         /* max_version= */ std::numeric_limits<UInt64>::max(),
         EMPTY_FILTER,
+        std::vector<RuntimeFilterPtr>{},
+        0,
         "",
         /* keep_order= */ false,
         /* is_fast_scan= */ false,
@@ -377,6 +356,8 @@ size_t SimplePKTestBasic::getRowsN(Int64 start_key, Int64 end_key) const
         /* num_streams= */ 1,
         /* max_version= */ std::numeric_limits<UInt64>::max(),
         EMPTY_FILTER,
+        std::vector<RuntimeFilterPtr>{},
+        0,
         "",
         /* keep_order= */ false,
         /* is_fast_scan= */ false,
@@ -434,7 +415,7 @@ try
         reload();
 
         {
-            ASSERT_EQ(store->segments.size(), 1);
+            ASSERT_EQ(store->segments.size(), 0);
             auto bps = getSegmentBreakpoints();
             ASSERT_EQ(bps.size(), 0);
         }

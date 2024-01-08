@@ -16,14 +16,11 @@
 
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
-#include <Common/TiFlashException.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Statistics/ExecutorStatisticsBase.h>
-#include <Flash/Statistics/traverseExecutors.h>
+#include <Flash/Statistics/transformProfiles.h>
 #include <common/types.h>
-#include <fmt/core.h>
-#include <fmt/format.h>
 #include <tipb/executor.pb.h>
 
 #include <memory>
@@ -38,34 +35,35 @@ public:
     ExecutorStatistics(const tipb::Executor * executor, DAGContext & dag_context_)
         : dag_context(dag_context_)
     {
-        RUNTIME_CHECK(executor->has_executor_id());
+        assert(executor->has_executor_id());
         executor_id = executor->executor_id();
 
         type = ExecutorImpl::type;
-
-        getChildren(*executor).forEach([&](const tipb::Executor & child) {
-            RUNTIME_CHECK(child.has_executor_id());
-            children.push_back(child.executor_id());
-        });
     }
 
-    virtual String toJson() const override
+    void setChild(const String & child_id) override { children.push_back(child_id); }
+
+    void setChildren(const std::vector<String> & children_) override
+    {
+        children.insert(children.end(), children_.begin(), children_.end());
+    }
+
+    String toJson() const override
     {
         FmtBuffer fmt_buffer;
-        fmt_buffer.fmtAppend(
-            R"({{"id":"{}","type":"{}","children":[)",
-            executor_id,
-            type);
+        fmt_buffer.fmtAppend(R"({{"id":"{}","type":"{}","children":[)", executor_id, type);
         fmt_buffer.joinStr(
             children.cbegin(),
             children.cend(),
             [](const String & child, FmtBuffer & bf) { bf.fmtAppend(R"("{}")", child); },
             ",");
         fmt_buffer.fmtAppend(
-            R"(],"outbound_rows":{},"outbound_blocks":{},"outbound_bytes":{},"execution_time_ns":{})",
+            R"(],"outbound_rows":{},"outbound_blocks":{},"outbound_bytes":{},"outbound_allocated_bytes":{},"concurrency":{},"execution_time_ns":{})",
             base.rows,
             base.blocks,
             base.bytes,
+            base.allocated_bytes,
+            base.concurrency,
             base.execution_time_ns);
         if constexpr (ExecutorImpl::has_extra_info)
         {
@@ -78,29 +76,31 @@ public:
 
     void collectRuntimeDetail() override
     {
-        const auto & profile_streams_map = dag_context.getProfileStreamsMap();
-        auto it = profile_streams_map.find(executor_id);
-        if (it != profile_streams_map.end())
+        switch (dag_context.getExecutionMode())
         {
-            for (const auto & input_stream : it->second)
-            {
-                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(input_stream.get()); p_stream)
-                {
-                    const auto & profile_info = p_stream->getProfileInfo();
-                    base.append(profile_info);
-                }
-            }
+        case ExecutionMode::None:
+            break;
+        case ExecutionMode::Stream:
+            transformProfileForStream(dag_context, executor_id, [&](const IProfilingBlockInputStream & p_stream) {
+                base.append(p_stream.getProfileInfo());
+            });
+            // Special handling of join build time is only required for streams.
+            collectJoinBuildTime();
+            break;
+        case ExecutionMode::Pipeline:
+            transformProfileForPipeline(dag_context, executor_id, [&](const OperatorProfileInfo & profile_info) {
+                base.append(profile_info);
+            });
+            break;
         }
+
         if constexpr (ExecutorImpl::has_extra_info)
         {
             collectExtraRuntimeDetail();
         }
     }
 
-    static bool isMatch(const tipb::Executor * executor)
-    {
-        return ExecutorImpl::isMatch(executor);
-    }
+    static bool isMatch(const tipb::Executor * executor) { return ExecutorImpl::isMatch(executor); }
 
 protected:
     String executor_id;
@@ -113,5 +113,32 @@ protected:
     virtual void appendExtraJson(FmtBuffer &) const {}
 
     virtual void collectExtraRuntimeDetail() {}
+
+    void collectJoinBuildTime()
+    {
+        /// for join need to add the build time
+        /// In TiFlash, a hash join's build side is finished before probe side starts,
+        /// so the join probe side's running time does not include hash table's build time,
+        /// when construct Execution Summaries, we need add the build cost to probe executor
+        auto all_join_id_it = dag_context.getExecutorIdToJoinIdMap().find(executor_id);
+        if (all_join_id_it != dag_context.getExecutorIdToJoinIdMap().end())
+        {
+            for (const auto & join_executor_id : all_join_id_it->second)
+            {
+                auto it = dag_context.getJoinExecuteInfoMap().find(join_executor_id);
+                if (it != dag_context.getJoinExecuteInfoMap().end())
+                {
+                    UInt64 time = 0;
+                    for (const auto & join_build_stream : it->second.join_build_streams)
+                    {
+                        if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(join_build_stream.get());
+                            p_stream)
+                            time = std::max(time, p_stream->getProfileInfo().execution_time);
+                    }
+                    process_time_for_join_build += time;
+                }
+            }
+        }
+    }
 };
 } // namespace DB
