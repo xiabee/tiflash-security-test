@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Common/FieldVisitors.h>
 #include <Core/Field.h>
+#include <Common/FieldVisitors.h>
 #include <Parsers/ASTWithAlias.h>
 
 
@@ -29,9 +29,7 @@ class ASTLiteral : public ASTWithAlias
 public:
     Field value;
 
-    ASTLiteral(const Field & value_)
-        : value(value_)
-    {}
+    ASTLiteral(const Field & value_) : value(value_) {}
 
     /** Get the text that identifies this element. */
     String getID() const override { return "Literal_" + applyVisitor(FieldVisitorDump(), value); }
@@ -47,4 +45,4 @@ protected:
     String getColumnNameImpl() const override;
 };
 
-} // namespace DB
+}

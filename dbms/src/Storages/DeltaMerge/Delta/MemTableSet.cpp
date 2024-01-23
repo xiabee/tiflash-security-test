@@ -19,7 +19,7 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/MemTableSet.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
 #include <Storages/PathPool.h>
 
 namespace DB
@@ -28,6 +28,25 @@ namespace DM
 {
 void MemTableSet::appendColumnFileInner(const ColumnFilePtr & column_file)
 {
+    // If this column file's schema is identical to last_schema, then use the last_schema instance (instead of the one in `column_file`),
+    // so that we don't have to serialize my_schema instance.
+    if (auto * m_file = column_file->tryToInMemoryFile(); m_file)
+    {
+        auto my_schema = m_file->getSchema();
+        if (last_schema && my_schema && last_schema != my_schema && isSameSchema(*my_schema, *last_schema))
+            m_file->resetIdenticalSchema(last_schema);
+        else
+            last_schema = my_schema;
+    }
+    else if (auto * t_file = column_file->tryToTinyFile(); t_file)
+    {
+        auto my_schema = t_file->getSchema();
+        if (last_schema && my_schema && last_schema != my_schema && isSameSchema(*my_schema, *last_schema))
+            t_file->resetIdenticalSchema(last_schema);
+        else
+            last_schema = my_schema;
+    }
+
     if (!column_files.empty())
     {
         // As we are now appending a new column file (which can be used for new appends),
@@ -156,8 +175,7 @@ std::pair</* New */ ColumnFiles, /* Flushed */ ColumnFiles> MemTableSet::diffCol
         /* new */ std::vector<ColumnFilePtr>( //
             column_files.begin() + unflushed_n,
             column_files.end()),
-        /* flushed */
-        std::vector<ColumnFilePtr>( //
+        /* flushed */ std::vector<ColumnFilePtr>( //
             column_files_in_snapshot.begin(),
             column_files_in_snapshot.begin() + flushed_n),
     };
@@ -194,10 +212,9 @@ void MemTableSet::appendToCache(DMContext & context, const Block & block, size_t
 
     if (!success)
     {
-        auto schema = getSharedBlockSchemas(context)->getOrCreate(block);
-
         // Create a new column file.
-        auto new_column_file = std::make_shared<ColumnFileInMemory>(schema);
+        auto my_schema = (last_schema && isSameSchema(block, *last_schema)) ? last_schema : std::make_shared<Block>(block.cloneEmpty());
+        auto new_column_file = std::make_shared<ColumnFileInMemory>(my_schema);
         // Must append the empty `new_column_file` to `column_files` before appending data to it,
         // because `appendColumnFileInner` will update stats related to `column_files` but we will update stats relate to `new_column_file` here.
         appendColumnFileInner(new_column_file);
@@ -215,10 +232,7 @@ void MemTableSet::appendDeleteRange(const RowKeyRange & delete_range)
     appendColumnFileInner(f);
 }
 
-void MemTableSet::ingestColumnFiles(
-    const RowKeyRange & range,
-    const ColumnFiles & new_column_files,
-    bool clear_data_in_range)
+void MemTableSet::ingestColumnFiles(const RowKeyRange & range, const ColumnFiles & new_column_files, bool clear_data_in_range)
 {
     for (const auto & f : new_column_files)
         RUNTIME_CHECK(f->isBigFile());
@@ -234,16 +248,14 @@ void MemTableSet::ingestColumnFiles(
         appendColumnFileInner(f);
 }
 
-ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(
-    const IColumnFileDataProviderPtr & data_provider,
-    bool disable_sharing)
+ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(const StorageSnapshotPtr & storage_snap, bool disable_sharing)
 {
     // Disable append, so that new writes will not touch the content of this snapshot.
     // This could lead to more fragmented IOs, so we don't do it for all snapshots.
     if (disable_sharing && !column_files.empty() && column_files.back()->isAppendable())
         column_files.back()->disableAppend();
 
-    auto snap = std::make_shared<ColumnFileSetSnapshot>(data_provider);
+    auto snap = std::make_shared<ColumnFileSetSnapshot>(storage_snap);
     snap->rows = rows;
     snap->bytes = bytes;
     snap->deletes = deletes;
@@ -282,11 +294,7 @@ ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(
     return snap;
 }
 
-ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(
-    DMContext & context,
-    size_t rows_offset,
-    size_t deletes_offset,
-    size_t flush_version)
+ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(DMContext & context, size_t rows_offset, size_t deletes_offset, size_t flush_version)
 {
     if (column_files.empty())
         return nullptr;
@@ -314,15 +322,7 @@ ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(
     }
     if (unlikely(flush_task->getFlushRows() != rows || flush_task->getFlushDeletes() != deletes))
     {
-        LOG_ERROR(
-            log,
-            "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Column "
-            "Files: {}",
-            flush_task->getFlushRows(),
-            flush_task->getFlushDeletes(),
-            rows.load(),
-            deletes.load(),
-            columnFilesToString(column_files));
+        LOG_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Column Files: {}", flush_task->getFlushRows(), flush_task->getFlushDeletes(), rows.load(), deletes.load(), columnFilesToString(column_files));
         throw Exception("Rows and deletes check failed.", ErrorCodes::LOGICAL_ERROR);
     }
 

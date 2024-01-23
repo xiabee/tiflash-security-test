@@ -26,9 +26,9 @@ struct EngineStoreServerWrap;
 class DataKeyManager : public KeyManager
 {
 public:
-    explicit DataKeyManager(EngineStoreServerWrap * tiflash_instance_wrap_);
+    DataKeyManager(EngineStoreServerWrap * tiflash_instance_wrap_);
 
-    ~DataKeyManager() override = default;
+    ~DataKeyManager() = default;
 
     FileEncryptionInfo getFile(const String & fname) override;
 

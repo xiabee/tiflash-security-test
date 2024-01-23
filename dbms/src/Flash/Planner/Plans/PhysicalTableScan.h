@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
-
-#include <Flash/Coprocessor/DAGStorageInterpreter.h>
-#include <Flash/Coprocessor/FilterConditions.h>
+#include <Flash/Coprocessor/PushDownFilter.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Planner/Plans/PhysicalLeaf.h>
+#include <Flash/Planner/plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
 {
-
 class PhysicalTableScan : public PhysicalLeaf
 {
 public:
@@ -38,37 +34,24 @@ public:
         const TiDBTableScan & tidb_table_scan_,
         const Block & sample_block_);
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
-    bool setFilterConditions(const String & filter_executor_id, const tipb::Selection & selection);
+    bool pushDownFilter(const String & filter_executor_id, const tipb::Selection & selection);
 
-    bool hasFilterConditions() const;
+    bool hasPushDownFilter() const;
 
-    const String & getFilterConditionsId() const;
-
-    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
+    const String & getPushDownFilterId() const;
 
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & /*exec_status*/,
-        PipelineExecGroupBuilder & group_builder,
-        Context & /*context*/,
-        size_t /*concurrency*/) override;
-
-    void buildProjection(DAGPipeline & pipeline);
-    void buildProjection(PipelineExecutorContext & exec_context, PipelineExecGroupBuilder & group_builder);
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
 private:
-    FilterConditions filter_conditions;
+    PushDownFilter push_down_filter;
 
     TiDBTableScan tidb_table_scan;
 
     Block sample_block;
-
-    PipelineExecGroupBuilder pipeline_exec_builder;
 };
 } // namespace DB

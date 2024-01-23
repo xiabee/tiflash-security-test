@@ -14,13 +14,13 @@
 
 #pragma once
 
-#include <Common/Exception.h>
-#include <Core/Types.h>
-#include <Parsers/StringRange.h>
-
+#include <set>
 #include <memory>
 #include <ostream>
-#include <set>
+
+#include <Core/Types.h>
+#include <Common/Exception.h>
+#include <Parsers/StringRange.h>
 
 
 class SipHash;
@@ -31,11 +31,11 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int NOT_A_COLUMN;
-extern const int UNKNOWN_TYPE_OF_AST_NODE;
-extern const int UNKNOWN_ELEMENT_IN_AST;
-extern const int LOGICAL_ERROR;
-} // namespace ErrorCodes
+    extern const int NOT_A_COLUMN;
+    extern const int UNKNOWN_TYPE_OF_AST_NODE;
+    extern const int UNKNOWN_ELEMENT_IN_AST;
+    extern const int LOGICAL_ERROR;
+}
 
 using IdentifierNameSet = std::set<String>;
 
@@ -60,10 +60,7 @@ public:
     virtual ~IAST() = default;
 
     /** Get the canonical name of the column if the element is a column */
-    virtual String getColumnName() const
-    {
-        throw Exception("Trying to get name of not a column: " + getID(), ErrorCodes::NOT_A_COLUMN);
-    }
+    virtual String getColumnName() const { throw Exception("Trying to get name of not a column: " + getID(), ErrorCodes::NOT_A_COLUMN); }
 
     /** Get the alias, if any, or the canonical name of the column, if it is not. */
     virtual String getAliasOrColumnName() const { return getColumnName(); }
@@ -103,7 +100,10 @@ public:
       * If max_depth is specified and the depth is greater - throw an exception.
       * Returns the depth of the tree.
       */
-    size_t checkDepth(size_t max_depth) const { return checkDepthImpl(max_depth, 0); }
+    size_t checkDepth(size_t max_depth) const
+    {
+        return checkDepthImpl(max_depth, 0);
+    }
 
     /** Same for the total number of tree elements.
       */
@@ -118,7 +118,7 @@ public:
     }
 
     template <typename T>
-    void set(T *& field, const ASTPtr & child)
+    void set(T * & field, const ASTPtr & child)
     {
         if (!child)
             return;
@@ -132,7 +132,7 @@ public:
     }
 
     template <typename T>
-    void replace(T *& field, const ASTPtr & child)
+    void replace(T * & field, const ASTPtr & child)
     {
         if (!child)
             throw Exception("Trying to replace AST subtree with nullptr", ErrorCodes::LOGICAL_ERROR);
@@ -166,9 +166,7 @@ public:
         char nl_or_ws;
 
         FormatSettings(std::ostream & ostr_, bool hilite_, bool one_line_)
-            : ostr(ostr_)
-            , hilite(hilite_)
-            , one_line(one_line_)
+            : ostr(ostr_), hilite(hilite_), one_line(one_line_)
         {
             nl_or_ws = one_line ? ' ' : '\n';
         }
@@ -197,14 +195,12 @@ public:
         formatImpl(settings, state, FormatStateStacked());
     }
 
-    virtual void formatImpl(const FormatSettings & /*settings*/, FormatState & /*state*/, FormatStateStacked /*frame*/)
-        const
+    virtual void formatImpl(const FormatSettings & /*settings*/, FormatState & /*state*/, FormatStateStacked /*frame*/) const
     {
-        throw Exception(
-            "Unknown element in AST: " + getID()
-                + ((range.first && (range.second > range.first))
-                       ? " '" + std::string(range.first, range.second - range.first) + "'"
-                       : ""),
+        throw Exception("Unknown element in AST: " + getID()
+            + ((range.first && (range.second > range.first))
+                ? " '" + std::string(range.first, range.second - range.first) + "'"
+                : ""),
             ErrorCodes::UNKNOWN_ELEMENT_IN_AST);
     }
 
@@ -228,4 +224,4 @@ private:
 String backQuoteIfNeed(const String & x);
 
 
-} // namespace DB
+}

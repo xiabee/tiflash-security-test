@@ -194,15 +194,11 @@ struct ParserAliasBase
 };
 
 template <typename ParserIdentifier>
-class ParserAliasImpl
-    : public IParserBase
-    , ParserAliasBase
+class ParserAliasImpl : public IParserBase, ParserAliasBase
 {
 public:
     ParserAliasImpl(bool allow_alias_without_as_keyword_)
-        : allow_alias_without_as_keyword(allow_alias_without_as_keyword_)
-    {}
-
+        : allow_alias_without_as_keyword(allow_alias_without_as_keyword_) {}
 protected:
     bool allow_alias_without_as_keyword;
 
@@ -236,15 +232,9 @@ template <typename ParserAlias>
 class ParserWithOptionalAliasImpl : public IParserBase
 {
 public:
-    ParserWithOptionalAliasImpl(
-        ParserPtr && elem_parser_,
-        bool allow_alias_without_as_keyword_,
-        bool prefer_alias_to_column_name_ = false)
-        : elem_parser(std::move(elem_parser_))
-        , allow_alias_without_as_keyword(allow_alias_without_as_keyword_)
-        , prefer_alias_to_column_name(prefer_alias_to_column_name_)
-    {}
-
+    ParserWithOptionalAliasImpl(ParserPtr && elem_parser_, bool allow_alias_without_as_keyword_, bool prefer_alias_to_column_name_ = false)
+    : elem_parser(std::move(elem_parser_)), allow_alias_without_as_keyword(allow_alias_without_as_keyword_),
+      prefer_alias_to_column_name(prefer_alias_to_column_name_) {}
 protected:
     ParserPtr elem_parser;
     bool allow_alias_without_as_keyword;
@@ -272,4 +262,4 @@ protected:
     bool parseImpl(Pos & pos, ASTPtr & node, Expected & expected);
 };
 
-} // namespace DB
+}

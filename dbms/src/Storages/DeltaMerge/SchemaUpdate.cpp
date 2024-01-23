@@ -18,7 +18,7 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTLiteral.h>
 #include <Storages/DeltaMerge/SchemaUpdate.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/TiDB.h>
 #include <common/logger_useful.h>
 
 namespace DB
@@ -62,10 +62,7 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
             }
             else
             {
-                throw Exception(fmt::format(
-                    "Unknown float number literal: {}, value type: {}",
-                    applyVisitor(FieldVisitorToString(), value),
-                    value.getTypeName()));
+                throw Exception(fmt::format("Unknown float number literal: {}, value type: {}", applyVisitor(FieldVisitorToString(), value), value.getTypeName()));
             }
         }
         case TypeIndex::String:
@@ -120,10 +117,10 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
         }
         case TypeIndex::Enum16:
         {
-            // According to `Storages/KVStore/TiDB.h` and MySQL 5.7
+            // According to `Storages/Transaction/TiDB.h` and MySQL 5.7
             // document(https://dev.mysql.com/doc/refman/5.7/en/enum.html),
             // enum support 65,535 distinct value at most, so only Enum16 is supported here.
-            // Default value of Enum should be store as a Int64 Field (Storages/KVStore/Datum.cpp)
+            // Default value of Enum should be store as a Int64 Field (Storages/Transaction/Datum.cpp)
             Int64 res = applyVisitor(FieldVisitorConvertToNumber<Int64>(), value);
             return toField(res);
         }
@@ -144,9 +141,8 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
             return cast_default_value(value, nested_type); // Recursive call on nested type
         }
         default:
-            throw Exception(
-                "Unsupported to setColumnDefineDefaultValue with data type: " + type->getName()
-                + " value: " + applyVisitor(FieldVisitorToString(), value) + ", type: " + value.getTypeName());
+            throw Exception("Unsupported to setColumnDefineDefaultValue with data type: " + type->getName()
+                            + " value: " + applyVisitor(FieldVisitorToString(), value) + ", type: " + value.getTypeName());
         }
     };
 
@@ -162,8 +158,7 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
             {
                 define.default_value = default_literal->value;
             }
-            else if (const auto * default_cast_expr
-                     = typeid_cast<const ASTFunction *>(command.default_expression.get());
+            else if (const auto * default_cast_expr = typeid_cast<const ASTFunction *>(command.default_expression.get());
                      default_cast_expr && default_cast_expr->name == "CAST" /* ParserCastExpression::name */)
             {
                 // eg. CAST('1.234' AS Float32); CAST(999 AS Int32)
@@ -172,8 +167,7 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
                     throw Exception("Unknown CAST expression in default expr", ErrorCodes::NOT_IMPLEMENTED);
                 }
 
-                const auto * default_literal_in_cast
-                    = typeid_cast<const ASTLiteral *>(default_cast_expr->arguments->children[0].get());
+                const auto * default_literal_in_cast = typeid_cast<const ASTLiteral *>(default_cast_expr->arguments->children[0].get());
                 if (default_literal_in_cast)
                 {
                     Field default_value = cast_default_value(default_literal_in_cast->value, define.type);
@@ -191,26 +185,19 @@ void setColumnDefineDefaultValue(const AlterCommand & command, ColumnDefine & de
         }
         catch (DB::Exception & e)
         {
-            e.addMessage(fmt::format(
-                "(in setColumnDefineDefaultValue for default_expression: {})",
-                astToDebugString(command.default_expression.get())));
+            e.addMessage(fmt::format("(in setColumnDefineDefaultValue for default_expression: {})", astToDebugString(command.default_expression.get())));
             throw;
         }
         catch (const Poco::Exception & e)
         {
             DB::Exception ex(e);
-            ex.addMessage(fmt::format(
-                "(in setColumnDefineDefaultValue for default_expression: {})",
-                astToDebugString(command.default_expression.get())));
+            ex.addMessage(fmt::format("(in setColumnDefineDefaultValue for default_expression: {})", astToDebugString(command.default_expression.get())));
             throw ex; // NOLINT
         }
         catch (std::exception & e)
         {
             DB::Exception ex(
-                fmt::format(
-                    "std::exception: {} (in setColumnDefineDefaultValue for default_expression: {})",
-                    e.what(),
-                    astToDebugString(command.default_expression.get())),
+                fmt::format("std::exception: {} (in setColumnDefineDefaultValue for default_expression: {})", e.what(), astToDebugString(command.default_expression.get())),
                 ErrorCodes::LOGICAL_ERROR);
             throw ex; // NOLINT
         }
@@ -226,14 +213,15 @@ void setColumnDefineDefaultValue(const TiDB::TableInfo & table_info, ColumnDefin
     define.default_value = col_info.defaultValueToField();
 }
 
-void applyAlter(
-    ColumnDefines & table_columns,
-    const AlterCommand & command,
-    const OptionTableInfoConstRef table_info,
-    ColumnID & max_column_id_used)
+void applyAlter(ColumnDefines & table_columns,
+                const AlterCommand & command,
+                const OptionTableInfoConstRef table_info,
+                ColumnID & max_column_id_used)
 {
     /// Caller should ensure the command is legal.
     /// eg. The column to modify/drop/rename must exist, the column to add must not exist, the new column name of rename must not exists.
+
+    Poco::Logger * log = &Poco::Logger::get("SchemaUpdate");
 
     if (command.type == AlterCommand::MODIFY_COLUMN)
     {
@@ -260,7 +248,7 @@ void applyAlter(
         {
             // Fall back to find column by name, this path should only call by tests.
             LOG_WARNING(
-                Logger::get(),
+                log,
                 "Try to apply alter to column: {}, id: {},"
                 " but not found by id, fall back locating col by name.",
                 command.column_name,
@@ -277,9 +265,7 @@ void applyAlter(
             }
             if (unlikely(!exist_column))
             {
-                throw Exception(
-                    fmt::format("Alter column: {} is not exists.", command.column_name),
-                    ErrorCodes::LOGICAL_ERROR);
+                throw Exception(fmt::format("Alter column: {} is not exists.", command.column_name), ErrorCodes::LOGICAL_ERROR);
             }
         }
     }
@@ -305,10 +291,7 @@ void applyAlter(
     else if (command.type == AlterCommand::DROP_COLUMN)
     {
         table_columns.erase(
-            std::remove_if(
-                table_columns.begin(),
-                table_columns.end(),
-                [&](const ColumnDefine & c) { return c.id == command.column_id; }),
+            std::remove_if(table_columns.begin(), table_columns.end(), [&](const ColumnDefine & c) { return c.id == command.column_id; }),
             table_columns.end());
     }
     else if (command.type == AlterCommand::RENAME_COLUMN)
@@ -328,7 +311,7 @@ void applyAlter(
     }
     else
     {
-        LOG_WARNING(Logger::get(), "receive unknown alter command, type: {}", static_cast<Int32>(command.type));
+        LOG_WARNING(log, "receive unknown alter command, type: {}", static_cast<Int32>(command.type));
     }
 }
 

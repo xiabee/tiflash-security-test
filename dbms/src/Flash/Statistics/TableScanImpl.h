@@ -51,13 +51,10 @@ public:
 
 private:
     TableScanDetail local_table_scan_detail{true};
-    TableScanDetail remote_table_scan_detail{false};
+    TableScanDetail cop_table_scan_detail{false};
 
 protected:
     void appendExtraJson(FmtBuffer &) const override;
     void collectExtraRuntimeDetail() override;
-
-private:
-    void updateTableScanDetail(const std::vector<ConnectionProfileInfo> & connection_profile_infos);
 };
 } // namespace DB

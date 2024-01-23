@@ -15,30 +15,21 @@
 #pragma once
 
 #include <Common/Logger.h>
-#include <Common/UniThreadPool.h>
 #include <Core/Defines.h>
 #include <Core/SortDescription.h>
-#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
-#include <Storages/DeltaMerge/Filter/PushDownFilter.h>
-#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
-#include <Storages/DeltaMerge/ScanContext_fwd.h>
+#include <Storages/DeltaMerge/Filter/RSOperator.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
-#include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
+#include <Storages/Transaction/TiDB.h>
 
 #include <ext/shared_ptr_helper.h>
 
 namespace DB
 {
-struct CheckpointInfo;
-using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 namespace DM
 {
 struct RowKeyRange;
@@ -48,9 +39,6 @@ using DeltaMergeStorePtr = std::shared_ptr<DeltaMergeStore>;
 using RowKeyRanges = std::vector<RowKeyRange>;
 struct ExternalDTFileInfo;
 struct GCOptions;
-class Segment;
-using SegmentPtr = std::shared_ptr<Segment>;
-using Segments = std::vector<SegmentPtr>;
 } // namespace DM
 
 class StorageDeltaMerge
@@ -65,7 +53,6 @@ public:
     String getName() const override;
     String getTableName() const override;
     String getDatabaseName() const override;
-    KeyspaceID getKeyspaceID() const { return _store->getKeyspaceID(); }
 
     void clearData() override;
 
@@ -79,25 +66,20 @@ public:
         size_t max_block_size,
         unsigned num_streams) override;
 
-    void read(
-        PipelineExecutorContext & exec_context_,
-        PipelineExecGroupBuilder & group_builder,
+    /// use scan_context to record the performance metrics during read.
+    BlockInputStreams read(
         const Names & column_names,
         const SelectQueryInfo & query_info,
         const Context & context,
+        QueryProcessingStage::Enum & processed_stage,
         size_t max_block_size,
-        unsigned num_streams) override;
-
-    DM::Remote::DisaggPhysicalTableReadSnapshotPtr writeNodeBuildRemoteReadSnapshot(
-        const Names & column_names,
-        const SelectQueryInfo & query_info,
-        const Context & context,
-        unsigned num_streams);
+        unsigned num_streams,
+        const DM::ScanContextPtr & scan_context);
 
     BlockOutputStreamPtr write(const ASTPtr & query, const Settings & settings) override;
 
     /// Write from raft layer.
-    DM::WriteResult write(Block & block, const Settings & settings);
+    void write(Block & block, const Settings & settings);
 
     void flushCache(const Context & context) override;
 
@@ -117,25 +99,10 @@ public:
 
     void deleteRange(const DM::RowKeyRange & range_to_delete, const Settings & settings);
 
-    // If the "ingest" has been aborted, we use this method to
-    // clean the generated external files on the fly.
-    void cleanPreIngestFiles(const std::vector<DM::ExternalDTFileInfo> & external_files, const Settings & settings);
-
-    /// Return the 'ingtested bytes'.
-    UInt64 ingestFiles(
+    void ingestFiles(
         const DM::RowKeyRange & range,
         const std::vector<DM::ExternalDTFileInfo> & external_files,
         bool clear_data_in_range,
-        const Settings & settings);
-
-    DM::Segments buildSegmentsFromCheckpointInfo(
-        const DM::RowKeyRange & range,
-        CheckpointInfoPtr checkpoint_info,
-        const Settings & settings);
-
-    void ingestSegmentsFromCheckpointInfo(
-        const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info,
         const Settings & settings);
 
     UInt64 onSyncGc(Int64, const DM::GCOptions &) override;
@@ -155,19 +122,13 @@ public:
         const String & table_name,
         const Context & context) override;
 
-    void updateTombstone(
+    // Apply AlterCommands synced from TiDB should use `alterFromTiDB` instead of `alter(...)`
+    void alterFromTiDB(
         const TableLockHolder &,
         const AlterCommands & commands,
         const String & database_name,
         const TiDB::TableInfo & table_info,
         const SchemaNameMapper & name_mapper,
-        const Context & context) override;
-
-    void alterSchemaChange(
-        const TableLockHolder &,
-        TiDB::TableInfo & table_info,
-        const String & database_name,
-        const String & table_name,
         const Context & context) override;
 
     void setTableInfo(const TiDB::TableInfo & table_info_) override { tidb_table_info = table_info_; }
@@ -191,31 +152,27 @@ public:
     void checkStatus(const Context & context) override;
     void deleteRows(const Context &, size_t rows) override;
 
-    const DM::DeltaMergeStorePtr & getStore() { return getAndMaybeInitStore(); }
+    const DM::DeltaMergeStorePtr & getStore()
+    {
+        return getAndMaybeInitStore();
+    }
 
-    DM::DeltaMergeStorePtr getStoreIfInited() const;
+    DM::DeltaMergeStorePtr getStoreIfInited();
 
     bool isCommonHandle() const override { return is_common_handle; }
 
     size_t getRowKeyColumnSize() const override { return rowkey_column_size; }
 
-    std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
-        const TableStructureLockHolder & table_structure_lock,
-        bool /* need_block */) override;
+    std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(const TableStructureLockHolder & table_structure_lock, bool /* need_block */) override;
 
-    void releaseDecodingBlock(Int64 block_decoding_schema_epoch, BlockUPtr block) override;
+    void releaseDecodingBlock(Int64 block_decoding_schema_version, BlockUPtr block) override;
 
-    bool initStoreIfDataDirExist(ThreadPool * thread_pool) override;
+    bool initStoreIfDataDirExist() override;
 
-    DM::DMConfigurationOpt createChecksumConfig() const { return DM::DMChecksumConfig::fromDBContext(global_context); }
-
-    static DM::PushDownFilterPtr buildPushDownFilter(
-        const DM::RSOperatorPtr & rs_operator,
-        const ColumnInfos & table_scan_column_info,
-        const google::protobuf::RepeatedPtrField<tipb::Expr> & pushed_down_filters,
-        const DM::ColumnDefines & columns_to_read,
-        const Context & context,
-        const LoggerPtr & tracing_logger);
+    DM::DMConfigurationOpt createChecksumConfig(bool is_single_file) const
+    {
+        return DM::DMChecksumConfig::fromDBContext(global_context, is_single_file);
+    }
 
 #ifndef DBMS_PUBLIC_GTEST
 protected:
@@ -225,7 +182,7 @@ protected:
         const String & db_engine,
         const String & db_name_,
         const String & name_,
-        DM::OptionTableInfoConstRef table_info_,
+        const DM::OptionTableInfoConstRef table_info_,
         const ColumnsDescription & columns_,
         const ASTPtr & primary_expr_ast_,
         Timestamp tombstone,
@@ -241,39 +198,31 @@ private:
         const AlterCommands & commands,
         const String & database_name,
         const String & table_name,
+        const DB::DM::OptionTableInfoConstRef table_info_,
         const Context & context);
 
     DataTypePtr getPKTypeImpl() const override;
 
-    DM::DeltaMergeStorePtr & getAndMaybeInitStore(ThreadPool * thread_pool = nullptr);
-    bool storeInited() const { return store_inited.load(std::memory_order_acquire); }
+    DM::DeltaMergeStorePtr & getAndMaybeInitStore();
+    bool storeInited() const
+    {
+        return store_inited.load(std::memory_order_acquire);
+    }
     void updateTableColumnInfo();
-    ColumnsDescription getNewColumnsDescription(const TiDB::TableInfo & table_info);
-    DM::ColumnDefines getStoreColumnDefines() const override;
+    DM::ColumnDefines getStoreColumnDefines() const;
     bool dataDirExist();
     void shutdownImpl();
 
-    DM::RSOperatorPtr buildRSOperator(
-        const std::unique_ptr<DAGQueryInfo> & dag_query,
-        const DM::ColumnDefines & columns_to_read,
-        const Context & context,
-        const LoggerPtr & tracing_logger);
-    /// Get filters from query to construct rough set operation and push down filters.
-    DM::PushDownFilterPtr parsePushDownFilter(
-        const SelectQueryInfo & query_info,
-        const DM::ColumnDefines & columns_to_read,
-        const Context & context,
-        const LoggerPtr & tracing_logger);
+    /// Get Rough set filter from query
+    DM::RSOperatorPtr parseRoughSetFilter(const SelectQueryInfo & query_info,
+                                          const DM::ColumnDefines & columns_to_read,
+                                          const Context & context,
+                                          const LoggerPtr & tracing_logger);
 
-    DM::RowKeyRanges parseMvccQueryInfo(
-        const DB::MvccQueryInfo & mvcc_query_info,
-        unsigned num_streams,
-        const Context & context,
-        const String & req_id,
-        const LoggerPtr & tracing_logger);
-
-    RuntimeFilteList parseRuntimeFilterList(const SelectQueryInfo & query_info, const Context & db_context) const;
-
+    DM::RowKeyRanges parseMvccQueryInfo(const DB::MvccQueryInfo & mvcc_query_info,
+                                        unsigned num_streams,
+                                        const Context & context,
+                                        const LoggerPtr & tracing_logger);
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #endif
@@ -298,7 +247,7 @@ private:
 
     std::unique_ptr<TableColumnInfo> table_column_info; // After create DeltaMergeStore object, it is deprecated.
     std::atomic<bool> store_inited;
-    DM::DeltaMergeStorePtr _store; // NOLINT(readability-identifier-naming)
+    DM::DeltaMergeStorePtr _store;
 
     Strings pk_column_names; // TODO: remove it. Only use for debug from ch-client.
     bool is_common_handle = false;
@@ -313,8 +262,8 @@ private:
     DecodingStorageSchemaSnapshotPtr decoding_schema_snapshot;
     // The following two members must be used under the protection of table structure lock
     bool decoding_schema_changed = false;
-    // internal epoch for `decoding_schema_snapshot`
-    Int64 decoding_schema_epoch = 1;
+    // internal version for `decoding_schema_snapshot`
+    Int64 decoding_schema_version = 1;
 
     // avoid creating block every time when decoding row
     std::vector<BlockUPtr> cache_blocks;

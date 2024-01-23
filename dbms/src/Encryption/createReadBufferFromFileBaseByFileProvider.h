@@ -34,7 +34,8 @@ namespace DB
   * Otherwise, the read operations are performed asynchronously.
   */
 
-std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvider(
+std::unique_ptr<ReadBufferFromFileBase>
+createReadBufferFromFileBaseByFileProvider(
     FileProviderPtr & file_provider,
     const std::string & filename_,
     const EncryptionPath & encryption_path_,
@@ -48,7 +49,8 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvid
 
 /// @attention: estimated_size should be at least DBMS_DEFAULT_BUFFER_SIZE if one want to do seeking; however, if one knows that target file
 /// only consists of a single small frame, one can use a smaller estimated_size to reduce memory footprint.
-std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvider(
+std::unique_ptr<ReadBufferFromFileBase>
+createReadBufferFromFileBaseByFileProvider(
     const FileProviderPtr & file_provider,
     const std::string & filename_,
     const EncryptionPath & encryption_path_,
@@ -57,12 +59,4 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBaseByFileProvid
     ChecksumAlgo checksum_algorithm,
     size_t checksum_frame_size,
     int flags_ = -1);
-
-
-std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromData(
-    String && data,
-    const String & file_name,
-    size_t estimated_size,
-    ChecksumAlgo checksum_algorithm,
-    size_t checksum_frame_size);
 } // namespace DB

@@ -59,11 +59,13 @@ inline bool endsWith(const std::string & s, const char * suffix)
 template <typename T>
 std::string getOrdinalSuffix(T n)
 {
-    static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "Unsigned integer value required");
+    static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>,
+                  "Unsigned integer value required");
 
     const auto last_digit = n % 10;
 
-    if ((last_digit < 1 || last_digit > 3) || ((n > 10) && (((n / 10) % 10) == 1)))
+    if ((last_digit < 1 || last_digit > 3)
+        || ((n > 10) && (((n / 10) % 10) == 1)))
         return "th";
 
     switch (last_digit)
@@ -86,19 +88,10 @@ inline bool isASCII(char c)
     return static_cast<unsigned char>(c) < 0x80;
 }
 
-inline bool isUpperAlphaASCII(char c)
-{
-    return (c >= 'A' && c <= 'Z');
-}
-
-inline bool isLowerAplhaASCII(char c)
-{
-    return (c >= 'a' && c <= 'z');
-}
-
 inline bool isAlphaASCII(char c)
 {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    return (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z');
 }
 
 inline bool isNumericASCII(char c)
@@ -108,22 +101,27 @@ inline bool isNumericASCII(char c)
 
 inline bool isHexDigit(char c)
 {
-    return isNumericASCII(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    return isNumericASCII(c)
+        || (c >= 'a' && c <= 'f')
+        || (c >= 'A' && c <= 'F');
 }
 
 inline bool isAlphaNumericASCII(char c)
 {
-    return isAlphaASCII(c) || isNumericASCII(c);
+    return isAlphaASCII(c)
+        || isNumericASCII(c);
 }
 
 inline bool isWordCharASCII(char c)
 {
-    return isAlphaNumericASCII(c) || c == '_';
+    return isAlphaNumericASCII(c)
+        || c == '_';
 }
 
 inline bool isValidIdentifierBegin(char c)
 {
-    return isAlphaASCII(c) || c == '_';
+    return isAlphaASCII(c)
+        || c == '_';
 }
 
 inline bool isWhitespaceASCII(char c)

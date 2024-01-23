@@ -16,7 +16,9 @@
 
 #include <stdint.h>
 
+#include <cstddef>
 #include <memory>
+#include <string>
 
 namespace DB
 {
@@ -27,6 +29,9 @@ class BlockAccessCipherStream
 {
 public:
     virtual ~BlockAccessCipherStream() = default;
+
+    // BlockSize returns the size of each block supported by this cipher stream.
+    virtual size_t blockSize() = 0;
 
     // Encrypt one or more (partial) blocks of data at the file offset.
     // Length of data is given in dataSize.

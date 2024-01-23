@@ -36,7 +36,7 @@ private:
     void nextImpl() override;
 
 public:
-    explicit CompressedWriteBuffer(
+    CompressedWriteBuffer(
         WriteBuffer & out_,
         CompressionSettings compression_settings = CompressionSettings(),
         size_t buf_size = DBMS_DEFAULT_BUFFER_SIZE);
@@ -49,7 +49,10 @@ public:
     }
 
     /// How many uncompressed bytes were written to the buffer
-    size_t getUncompressedBytes() { return count(); }
+    size_t getUncompressedBytes()
+    {
+        return count();
+    }
 
     /// How many bytes are in the buffer (not yet compressed)
     size_t getRemainingBytes()

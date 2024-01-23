@@ -31,7 +31,7 @@ class FinalizeRule : public Rule
 public:
     PhysicalPlanNodePtr apply(const Context &, PhysicalPlanNodePtr plan, const LoggerPtr &) override
     {
-        plan->finalize(toNames(plan->getSchema()));
+        plan->finalize();
         return plan;
     }
 
@@ -40,12 +40,12 @@ public:
 
 PhysicalPlanNodePtr optimize(const Context & context, PhysicalPlanNodePtr plan, const LoggerPtr & log)
 {
-    RUNTIME_CHECK(plan);
+    assert(plan);
     static std::vector<RulePtr> rules{FinalizeRule::create()};
     for (const auto & rule : rules)
     {
         plan = rule->apply(context, plan, log);
-        RUNTIME_CHECK(plan);
+        assert(plan);
     }
     return plan;
 }

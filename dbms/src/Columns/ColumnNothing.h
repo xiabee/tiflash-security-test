@@ -23,7 +23,10 @@ class ColumnNothing final : public COWPtrHelper<IColumnDummy, ColumnNothing>
 private:
     friend class COWPtrHelper<IColumnDummy, ColumnNothing>;
 
-    explicit ColumnNothing(size_t s_) { s = s_; }
+    explicit ColumnNothing(size_t s_)
+    {
+        s = s_;
+    }
 
     ColumnNothing(const ColumnNothing &) = default;
 

@@ -15,4 +15,3 @@
 include_directories (${CMAKE_CURRENT_BINARY_DIR})
 
 add_subdirectory (PageCtl EXCLUDE_FROM_ALL)
-add_subdirectory (Checkpoint EXCLUDE_FROM_ALL)

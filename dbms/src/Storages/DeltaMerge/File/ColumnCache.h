@@ -16,7 +16,7 @@
 
 #include <Core/Block.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 #include <common/logger_useful.h>
 
 #include <cstddef>
@@ -30,8 +30,7 @@ using ColId = DB::ColumnID;
 using PackId = size_t;
 using PackRange = std::pair<PackId, PackId>;
 using PackRanges = std::vector<PackRange>;
-class ColumnCache
-    : public std::enable_shared_from_this<ColumnCache>
+class ColumnCache : public std::enable_shared_from_this<ColumnCache>
     , private boost::noncopyable
 {
 public:
@@ -52,8 +51,6 @@ public:
 
     using ColumnCacheElement = std::pair<ColumnPtr, std::pair<size_t, size_t>>;
     ColumnCacheElement getColumn(size_t pack_id, ColId column_id);
-
-    void clear() { column_caches.clear(); }
 
 private:
     bool isPackInCache(PackId pack_id, ColId column_id);

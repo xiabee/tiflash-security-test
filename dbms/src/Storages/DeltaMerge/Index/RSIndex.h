@@ -45,7 +45,8 @@ struct RSIndex
         : type(type_)
         , minmax(minmax_)
         , equal(equal_)
-    {}
+    {
+    }
 };
 
 using ColumnIndexes = std::unordered_map<ColId, RSIndex>;

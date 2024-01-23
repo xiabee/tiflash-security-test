@@ -44,11 +44,7 @@ void MergedTask::initOnce()
         auto & [pool, task, stream] = units[cur_idx];
         if (!pool->valid())
         {
-            setUnitFinish(cur_idx);
-            continue;
-        }
-        if (pool->isRUExhausted())
-        {
+            setStreamFinished(cur_idx);
             continue;
         }
         stream = pool->buildInputStream(task);
@@ -65,7 +61,7 @@ int MergedTask::readOneBlock()
     int read_block_count = 0;
     for (cur_idx = 0; cur_idx < static_cast<int>(units.size()); cur_idx++)
     {
-        if (units[cur_idx].isFinished())
+        if (isStreamFinished(cur_idx))
         {
             continue;
         }
@@ -74,27 +70,22 @@ int MergedTask::readOneBlock()
 
         if (!pool->valid())
         {
-            setUnitFinish(cur_idx);
+            setStreamFinished(cur_idx);
             continue;
         }
 
-        if (pool->getFreeBlockSlots() <= 0 || pool->isRUExhausted())
+        if (pool->getFreeBlockSlots() <= 0)
         {
             continue;
         }
 
-        if (stream == nullptr)
-        {
-            stream = pool->buildInputStream(task);
-        }
-
-        if (pool->readOneBlock(stream, task))
+        if (pool->readOneBlock(stream, task->segment))
         {
             read_block_count++;
         }
         else
         {
-            setUnitFinish(cur_idx);
+            setStreamFinished(cur_idx);
         }
     }
     return read_block_count;
@@ -102,25 +93,29 @@ int MergedTask::readOneBlock()
 
 void MergedTask::setException(const DB::Exception & e)
 {
-    std::for_each(units.begin(), units.end(), [&e](auto & u) {
-        if (u.pool != nullptr)
-            u.pool->setException(e);
-    });
+    for (auto & unit : units)
+    {
+        if (unit.pool != nullptr)
+        {
+            unit.pool->setException(e);
+        }
+    }
 }
 
 MergedTaskPtr MergedTaskPool::pop(uint64_t pool_id)
 {
     std::lock_guard lock(mtx);
-    auto itr = std::find_if(merged_task_pool.begin(), merged_task_pool.end(), [pool_id](const auto & merged_task) {
-        return merged_task->containPool(pool_id);
-    });
-    if (itr != merged_task_pool.end())
+    MergedTaskPtr target;
+    for (auto itr = merged_task_pool.begin(); itr != merged_task_pool.end(); ++itr)
     {
-        auto target = *itr;
-        merged_task_pool.erase(itr);
-        return target;
+        if ((*itr)->containPool(pool_id))
+        {
+            target = *itr;
+            merged_task_pool.erase(itr);
+            break;
+        }
     }
-    return nullptr; // Not Found.
+    return target;
 }
 
 void MergedTaskPool::push(const MergedTaskPtr & t)
@@ -132,8 +127,13 @@ void MergedTaskPool::push(const MergedTaskPtr & t)
 bool MergedTaskPool::has(UInt64 pool_id)
 {
     std::lock_guard lock(mtx);
-    return std::any_of(merged_task_pool.begin(), merged_task_pool.end(), [pool_id](const auto & merged_task) {
-        return merged_task->containPool(pool_id);
-    });
+    for (const auto & t : merged_task_pool)
+    {
+        if (t->containPool(pool_id))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 } // namespace DB::DM

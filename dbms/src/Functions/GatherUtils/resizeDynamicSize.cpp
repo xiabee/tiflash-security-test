@@ -31,11 +31,7 @@ struct ArrayResizeDynamic : public ArrayAndValueSourceSelectorBySink<ArrayResize
 };
 
 
-void resizeDynamicSize(
-    IArraySource & array_source,
-    IValueSource & value_source,
-    IArraySink & sink,
-    const IColumn & size_column)
+void resizeDynamicSize(IArraySource & array_source, IValueSource & value_source, IArraySink & sink, const IColumn & size_column)
 {
     ArrayResizeDynamic::select(sink, array_source, value_source, size_column);
 }

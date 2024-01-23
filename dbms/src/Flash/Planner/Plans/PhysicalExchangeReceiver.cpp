@@ -14,17 +14,14 @@
 
 #include <Common/TiFlashException.h>
 #include <DataStreams/TiRemoteBlockInputStream.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/FineGrainedShuffle.h>
 #include <Flash/Coprocessor/GenSchemaAndColumn.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/Plans/PhysicalExchangeReceiver.h>
+#include <Flash/Planner/plans/PhysicalExchangeReceiver.h>
 #include <Interpreters/Context.h>
-#include <Operators/ExchangeReceiverSourceOp.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
 #include <fmt/format.h>
 
 namespace DB
@@ -32,11 +29,10 @@ namespace DB
 PhysicalExchangeReceiver::PhysicalExchangeReceiver(
     const String & executor_id_,
     const NamesAndTypes & schema_,
-    const FineGrainedShuffle & fine_grained_shuffle,
     const String & req_id,
     const Block & sample_block_,
     const std::shared_ptr<ExchangeReceiver> & mpp_exchange_receiver_)
-    : PhysicalLeaf(executor_id_, PlanType::ExchangeReceiver, schema_, fine_grained_shuffle, req_id)
+    : PhysicalLeaf(executor_id_, PlanType::ExchangeReceiver, schema_, req_id)
     , sample_block(sample_block_)
     , mpp_exchange_receiver(mpp_exchange_receiver_)
 {}
@@ -44,8 +40,7 @@ PhysicalExchangeReceiver::PhysicalExchangeReceiver(
 PhysicalPlanNodePtr PhysicalExchangeReceiver::build(
     const Context & context,
     const String & executor_id,
-    const LoggerPtr & log,
-    const FineGrainedShuffle & fine_grained_shuffle)
+    const LoggerPtr & log)
 {
     auto mpp_exchange_receiver = context.getDAGContext()->getMPPExchangeReceiver(executor_id);
     if (unlikely(mpp_exchange_receiver == nullptr))
@@ -57,63 +52,42 @@ PhysicalPlanNodePtr PhysicalExchangeReceiver::build(
     auto physical_exchange_receiver = std::make_shared<PhysicalExchangeReceiver>(
         executor_id,
         schema,
-        fine_grained_shuffle,
         log->identifier(),
         Block(schema),
         mpp_exchange_receiver);
     return physical_exchange_receiver;
 }
 
-void PhysicalExchangeReceiver::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalExchangeReceiver::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    RUNTIME_CHECK(pipeline.streams.empty());
+    assert(pipeline.streams.empty() && pipeline.streams_with_non_joined_data.empty());
 
     auto & dag_context = *context.getDAGContext();
     // todo choose a more reasonable stream number
     auto & exchange_receiver_io_input_streams = dag_context.getInBoundIOInputStreamsMap()[executor_id];
 
+    const bool enable_fine_grained_shuffle = enableFineGrainedShuffle(mpp_exchange_receiver->getFineGrainedShuffleStreamCount());
     String extra_info = "squashing after exchange receiver";
     size_t stream_count = max_streams;
-    if (fine_grained_shuffle.enable())
+    if (enable_fine_grained_shuffle)
     {
         extra_info += ", " + String(enableFineGrainedShuffleExtraInfo);
-        stream_count = std::min(max_streams, fine_grained_shuffle.stream_count);
+        stream_count = std::min(max_streams, mpp_exchange_receiver->getFineGrainedShuffleStreamCount());
     }
 
     for (size_t i = 0; i < stream_count; ++i)
     {
-        BlockInputStreamPtr stream = std::make_shared<ExchangeReceiverInputStream>(
-            mpp_exchange_receiver,
-            log->identifier(),
-            execId(),
-            /*stream_id=*/fine_grained_shuffle.enable() ? i : 0);
+        BlockInputStreamPtr stream = std::make_shared<ExchangeReceiverInputStream>(mpp_exchange_receiver,
+                                                                                   log->identifier(),
+                                                                                   execId(),
+                                                                                   /*stream_id=*/enable_fine_grained_shuffle ? i : 0);
         exchange_receiver_io_input_streams.push_back(stream);
         stream->setExtraInfo(extra_info);
         pipeline.streams.push_back(stream);
     }
 }
 
-void PhysicalExchangeReceiver::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    Context & context,
-    size_t concurrency)
-{
-    if (fine_grained_shuffle.enable())
-        concurrency = std::min(concurrency, fine_grained_shuffle.stream_count);
-
-    for (size_t partition_id = 0; partition_id < concurrency; ++partition_id)
-    {
-        group_builder.addConcurrency(std::make_unique<ExchangeReceiverSourceOp>(
-            exec_context,
-            log->identifier(),
-            mpp_exchange_receiver,
-            /*stream_id=*/fine_grained_shuffle.enable() ? partition_id : 0));
-    }
-    context.getDAGContext()->addInboundIOProfileInfos(executor_id, group_builder.getCurIOProfileInfos());
-}
-
-void PhysicalExchangeReceiver::finalizeImpl(const Names & parent_require)
+void PhysicalExchangeReceiver::finalize(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
 }

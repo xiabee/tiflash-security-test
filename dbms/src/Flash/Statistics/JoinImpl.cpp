@@ -20,18 +20,18 @@ namespace DB
 void JoinStatistics::appendExtraJson(FmtBuffer & fmt_buffer) const
 {
     fmt_buffer.fmtAppend(
-        R"("peak_build_bytes_usage":{},"build_side_child":"{}","is_spill_enabled":{},"is_spilled":{},)"
-        R"("join_build_inbound_rows":{},"join_build_inbound_blocks":{},"join_build_inbound_bytes":{},)"
-        R"("join_build_inbound_allocated_bytes":{},"join_build_concurrency":{},"join_build_execution_time_ns":{})",
-        peak_build_bytes_usage,
+        R"("hash_table_bytes":{},"build_side_child":"{}",)"
+        R"("non_joined_outbound_rows":{},"non_joined_outbound_blocks":{},"non_joined_outbound_bytes":{},"non_joined_execution_time_ns":{},)"
+        R"("join_build_inbound_rows":{},"join_build_inbound_blocks":{},"join_build_inbound_bytes":{},"join_build_execution_time_ns":{})",
+        hash_table_bytes,
         build_side_child,
-        is_spill_enabled,
-        is_spilled,
+        non_joined_base.rows,
+        non_joined_base.blocks,
+        non_joined_base.bytes,
+        non_joined_base.execution_time_ns,
         join_build_base.rows,
         join_build_base.blocks,
         join_build_base.bytes,
-        join_build_base.allocated_bytes,
-        join_build_base.concurrency,
         join_build_base.execution_time_ns);
 }
 
@@ -42,25 +42,23 @@ void JoinStatistics::collectExtraRuntimeDetail()
     if (it != join_execute_info_map.end())
     {
         const auto & join_execute_info = it->second;
-        peak_build_bytes_usage = join_execute_info.join_profile_info->peak_build_bytes_usage;
+        hash_table_bytes = join_execute_info.join_ptr->getTotalByteCount();
         build_side_child = join_execute_info.build_side_root_executor_id;
-        is_spill_enabled = join_execute_info.join_profile_info->is_spill_enabled;
-        is_spilled = join_execute_info.join_profile_info->is_spilled;
-        switch (dag_context.getExecutionMode())
+        for (const auto & non_joined_stream : join_execute_info.non_joined_streams)
         {
-        case ExecutionMode::None:
-            break;
-        case ExecutionMode::Stream:
-            for (const auto & join_build_stream : join_execute_info.join_build_streams)
+            if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(non_joined_stream.get()); p_stream)
             {
-                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(join_build_stream.get()); p_stream)
-                    join_build_base.append(p_stream->getProfileInfo());
+                const auto & profile_info = p_stream->getProfileInfo();
+                non_joined_base.append(profile_info);
             }
-            break;
-        case ExecutionMode::Pipeline:
-            for (const auto & join_build_profile_info : join_execute_info.join_build_profile_infos)
-                join_build_base.append(*join_build_profile_info);
-            break;
+        }
+        for (const auto & join_build_stream : join_execute_info.join_build_streams)
+        {
+            if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(join_build_stream.get()); p_stream)
+            {
+                const auto & profile_info = p_stream->getProfileInfo();
+                join_build_base.append(profile_info);
+            }
         }
     }
 }

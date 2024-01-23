@@ -16,7 +16,8 @@
 
 #include <Common/Exception.h>
 #include <Common/Logger.h>
-#include <Flash/Executor/QueryExecutor.h>
+#include <Flash/Coprocessor/DAGContext.h>
+#include <Flash/Executor/QueryExecutorHolder.h>
 #include <Flash/Mpp/MPPReceiverSet.h>
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/MPPTaskScheduleEntry.h>
@@ -24,7 +25,7 @@
 #include <Flash/Mpp/MPPTunnel.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
 #include <Flash/Mpp/TaskStatus.h>
-#include <Interpreters/Context_fwd.h>
+#include <Interpreters/Context.h>
 #include <common/logger_useful.h>
 #include <common/types.h>
 #include <kvproto/mpp.pb.h>
@@ -37,10 +38,6 @@
 namespace DB
 {
 class MPPTaskManager;
-using MPPTaskManagerPtr = std::shared_ptr<MPPTaskManager>;
-class DAGContext;
-class ProcessListEntry;
-class QueryOperatorSpillContexts;
 
 enum class AbortType
 {
@@ -49,24 +46,7 @@ enum class AbortType
     ONERROR,
 };
 
-// This struct notify the MPPTaskManager that this MPPTask is completed destructed
-class MPPTaskMonitorHelper
-{
-public:
-    MPPTaskMonitorHelper() = default;
-
-    ~MPPTaskMonitorHelper();
-
-    void initAndAddself(MPPTaskManager * manager_, const String & task_unique_id_);
-
-private:
-    MPPTaskManager * manager = nullptr;
-    String task_unique_id;
-    bool added_to_monitor = false;
-};
-
-class MPPTask
-    : public std::enable_shared_from_this<MPPTask>
+class MPPTask : public std::enable_shared_from_this<MPPTask>
     , private boost::noncopyable
 {
 public:
@@ -79,18 +59,9 @@ public:
         return Ptr(new MPPTask(std::forward<Args>(args)...));
     }
 
-    /// Ensure all MPPTasks are allocated as std::shared_ptr
-    template <typename... Args>
-    static Ptr newTaskForTest(Args &&... args)
-    {
-        auto ret = Ptr(new MPPTask(std::forward<Args>(args)...));
-        ret->initForTest();
-        return ret;
-    }
-
     const MPPTaskId & getId() const { return id; }
 
-    bool isRootMPPTask() const;
+    bool isRootMPPTask() const { return dag_context->isRootMPPTask(); }
 
     TaskStatus getStatus() const { return status.load(); }
 
@@ -114,8 +85,6 @@ private:
 
     void runImpl();
 
-    void initForTest();
-
     void unregisterTask();
 
     // abort the mpp task, note this function should be non-blocking, it just set some flags
@@ -123,7 +92,7 @@ private:
 
     void abortTunnels(const String & message, bool wait_sender_finish);
     void abortReceivers();
-    void abortQueryExecutor();
+    void abortDataStreams(AbortType abort_type);
 
     void finishWrite();
 
@@ -137,38 +106,8 @@ private:
 
     void registerTunnels(const mpp::DispatchTaskRequest & task_request);
 
-    void initProcessListEntry(const std::shared_ptr<ProcessListEntry> & query_process_list_entry);
-
-    void initQueryOperatorSpillContexts(
-        const std::shared_ptr<QueryOperatorSpillContexts> & mpp_query_operator_spill_contexts);
-
     void initExchangeReceivers();
 
-    String getErrString() const;
-    void setErrString(const String & message);
-
-    MemoryTracker * getMemoryTracker() const;
-
-    void reportStatus(const String & err_msg);
-
-    String getResourceGroupName() const { return meta.resource_group_name(); }
-
-private:
-    struct ProcessListEntryHolder
-    {
-        std::shared_ptr<ProcessListEntry> process_list_entry;
-        ~ProcessListEntryHolder()
-        {
-            /// Because MemoryTracker is now saved in `MPPQuery` and shared by all the mpp tasks belongs to the same mpp query,
-            /// it may not be destructed when MPPTask is destructed, so need to manually reset current_memory_tracker to nullptr at the
-            /// end of the destructor of MPPTask, otherwise, current_memory_tracker may point to a invalid memory tracker
-            current_memory_tracker = nullptr;
-        }
-    };
-    // We must ensure this member variable is put at this place to be destructed at proper time
-    MPPTaskMonitorHelper mpp_task_monitor_helper;
-
-    // To make sure dag_req is not destroyed before the mpp task ends.
     tipb::DAGRequest dag_req;
     mpp::TaskMeta meta;
     MPPTaskId id;
@@ -176,23 +115,22 @@ private:
     ContextPtr context;
 
     MPPTaskManager * manager;
-    std::atomic<bool> is_registered{false};
+    std::atomic<bool> registered{false};
 
     MPPTaskScheduleEntry schedule_entry;
 
-    ProcessListEntryHolder process_list_entry_holder;
     // `dag_context` holds inputstreams which could hold ref to `context` so it should be destructed
     // before `context`.
     std::unique_ptr<DAGContext> dag_context;
 
+    std::shared_ptr<ProcessListEntry> process_list_entry;
+
     QueryExecutorHolder query_executor_holder;
 
     std::atomic<TaskStatus> status{INITIALIZING};
-
-    /// Used to protect concurrent access to `err_string`, `tunnel_set`, and `receiver_set`.
-    mutable std::mutex mtx;
-
     String err_string;
+
+    std::mutex tunnel_and_receiver_mu;
 
     MPPTunnelSetPtr tunnel_set;
 

@@ -64,8 +64,7 @@ public:
     /// Implicit memory allocation for query_id is done here
     LockHolderImpl(const String & query_id_, Type type)
         : query_id{query_id_}
-        , active_client_increment{
-              type == Type::Read ? CurrentMetrics::RWLockActiveReaders : CurrentMetrics::RWLockActiveWriters}
+        , active_client_increment{type == Type::Read ? CurrentMetrics::RWLockActiveReaders : CurrentMetrics::RWLockActiveWriters}
     {}
 
     ~LockHolderImpl()
@@ -122,11 +121,9 @@ RWLock::LockHolder RWLock::getLock(
     CurrentMetrics::Increment waiting_client_increment(
         (type == Read) ? CurrentMetrics::RWLockWaitingReaders : CurrentMetrics::RWLockWaitingWriters);
     auto finalize_metrics = [type, &watch]() {
+        ProfileEvents::increment((type == Read) ? ProfileEvents::RWLockAcquiredReadLocks : ProfileEvents::RWLockAcquiredWriteLocks);
         ProfileEvents::increment(
-            (type == Read) ? ProfileEvents::RWLockAcquiredReadLocks : ProfileEvents::RWLockAcquiredWriteLocks);
-        ProfileEvents::increment(
-            (type == Read) ? ProfileEvents::RWLockReadersWaitMilliseconds
-                           : ProfileEvents::RWLockWritersWaitMilliseconds,
+            (type == Read) ? ProfileEvents::RWLockReadersWaitMilliseconds : ProfileEvents::RWLockWritersWaitMilliseconds,
             watch.elapsedMilliseconds());
     };
 
@@ -142,15 +139,12 @@ RWLock::LockHolder RWLock::getLock(
         if (const auto owner_query_it = owner_queries.find(query_id); owner_query_it != owner_queries.end())
         {
             if (wrlock_owner != writers_queue.end())
-                throw Exception(
-                    fmt::format("RWLock::getLock(): RWLock is already locked in exclusive mode, query_id:{}", query_id),
-                    ErrorCodes::LOGICAL_ERROR);
+                throw Exception("RWLock::getLock(): RWLock is already locked in exclusive mode", ErrorCodes::LOGICAL_ERROR);
+
             /// Lock upgrading is not supported
             if (type == Write)
                 throw Exception(
-                    fmt::format(
-                        "RWLock::getLock(): Cannot acquire exclusive lock while RWLock is already locked, query_id:{}",
-                        query_id),
+                    "RWLock::getLock(): Cannot acquire exclusive lock while RWLock is already locked",
                     ErrorCodes::LOGICAL_ERROR);
 
             /// N.B. Type is Read here, query_id is not empty and owner_query_it is a valid iterator
@@ -166,16 +160,14 @@ RWLock::LockHolder RWLock::getLock(
     {
         writers_queue.emplace_back(type); /// SM1: may throw (nothing to roll back)
     }
-    else if (
-        readers_queue.empty()
-        || (rdlock_owner == readers_queue.begin() && readers_queue.size() == 1 && !writers_queue.empty()))
+    else if (readers_queue.empty() || (rdlock_owner == readers_queue.begin() && readers_queue.size() == 1 && !writers_queue.empty()))
     {
         // 1. If there are no readers, create a new read group
         // 2. If now this lock is acquired by a reader thread, and there is waiting writer(s), and no existing reader group except the `rdlock_owner`, create a new reader group for waiting
         // 3. Otherwise, join the previous reader group for waiting (so that reader won't be blocked by another reader)
         readers_queue.emplace_back(type); /// SM1: may throw (nothing to roll back)
     }
-    auto it_group = (type == Type::Write) ? std::prev(writers_queue.end()) : std::prev(readers_queue.end());
+    GroupsContainer::iterator it_group = (type == Type::Write) ? std::prev(writers_queue.end()) : std::prev(readers_queue.end());
 
     /// Lock is free to acquire
     if (rdlock_owner == readers_queue.end() && wrlock_owner == writers_queue.end())

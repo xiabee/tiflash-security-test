@@ -28,10 +28,7 @@ class Context;
 class FileDictionarySource final : public IDictionarySource
 {
 public:
-    FileDictionarySource(
-        const std::string & filename,
-        const std::string & format,
-        Block & sample_block,
+    FileDictionarySource(const std::string & filename, const std::string & format, Block & sample_block,
         const Context & context);
 
     FileDictionarySource(const FileDictionarySource & other);
@@ -48,8 +45,8 @@ public:
         throw Exception{"Method loadIds is unsupported for FileDictionarySource", ErrorCodes::NOT_IMPLEMENTED};
     }
 
-    BlockInputStreamPtr loadKeys(const Columns & /*key_columns*/, const std::vector<size_t> & /*requested_rows*/)
-        override
+    BlockInputStreamPtr loadKeys(
+        const Columns & /*key_columns*/, const std::vector<size_t> & /*requested_rows*/) override
     {
         throw Exception{"Method loadKeys is unsupported for FileDictionarySource", ErrorCodes::NOT_IMPLEMENTED};
     }
@@ -74,4 +71,4 @@ private:
     Poco::Timestamp last_modification;
 };
 
-} // namespace DB
+}

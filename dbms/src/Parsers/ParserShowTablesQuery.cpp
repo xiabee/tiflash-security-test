@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/typeid_cast.h>
-#include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTShowTablesQuery.h>
+
 #include <Parsers/CommonParsers.h>
-#include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/ParserShowTablesQuery.h>
+#include <Parsers/ExpressionElementParsers.h>
+
+#include <Common/typeid_cast.h>
 
 
 namespace DB
@@ -88,4 +90,4 @@ bool ParserShowTablesQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
 }
 
 
-} // namespace DB
+}

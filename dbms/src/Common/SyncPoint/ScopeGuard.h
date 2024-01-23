@@ -24,7 +24,10 @@ class SyncPointScopeGuard
 public:
     explicit SyncPointScopeGuard(const char * name_);
 
-    ~SyncPointScopeGuard() { disable(); }
+    ~SyncPointScopeGuard()
+    {
+        disable();
+    }
 
     /**
      * Disable this sync point beforehand, instead of at the moment when

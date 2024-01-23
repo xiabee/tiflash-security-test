@@ -47,7 +47,7 @@ protected:
 
 public:
     /// 'compressed_in' could be initialized lazily, but before first call of 'readCompressedData'.
-    explicit CompressedReadBufferBase(ReadBuffer * in = nullptr);
+    CompressedReadBufferBase(ReadBuffer * in = nullptr);
     ~CompressedReadBufferBase();
 
     /** Disable checksums.

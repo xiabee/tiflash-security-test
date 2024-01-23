@@ -74,7 +74,10 @@ int main(int /*argc*/, char ** argv)
     const int count = atoi(argv[1]);
     const int round = atoi(argv[2]);
 
-    std::cerr << "Count: " << count << ", Round: " << round << "Start" << std::endl << std::endl;
+    std::cerr << "Count: " << count
+              << ", Round: " << round
+              << "Start" << std::endl
+              << std::endl;
 
     setAffinity();
 
@@ -90,7 +93,8 @@ int main(int /*argc*/, char ** argv)
         std::cerr << ", Time: " << duration.count() << " us." << std::endl;
     }
 
-    std::cerr << std::endl << "End" << std::endl;
+    std::cerr << std::endl
+              << "End" << std::endl;
 
     return 0;
 }

@@ -15,17 +15,10 @@
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <Flash/Coprocessor/RequestUtils.h>
 #include <Flash/Coprocessor/collectOutputFieldTypes.h>
 #include <Flash/Mpp/ExchangeReceiver.h>
-#include <Flash/Statistics/transformProfiles.h>
 #include <Flash/Statistics/traverseExecutors.h>
-#include <Storages/DeltaMerge/ScanContext.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <kvproto/disaggregated.pb.h>
-#include <tipb/executor.pb.h>
-
-#include <mutex>
+#include <Storages/Transaction/TMTContext.h>
 
 namespace DB
 {
@@ -37,152 +30,9 @@ extern const int DIVIDED_BY_ZERO;
 extern const int INVALID_TIME;
 } // namespace ErrorCodes
 
-namespace
-{
 bool strictSqlMode(UInt64 sql_mode)
 {
     return sql_mode & TiDBSQLMode::STRICT_ALL_TABLES || sql_mode & TiDBSQLMode::STRICT_TRANS_TABLES;
-}
-} // namespace
-
-// for non-mpp(Cop/CopStream/BatchCop)
-DAGContext::DAGContext(
-    tipb::DAGRequest & dag_request_,
-    TablesRegionsInfo && tables_regions_info_,
-    KeyspaceID keyspace_id_,
-    const String & tidb_host_,
-    DAGRequestKind kind_,
-    const String & resource_group_name_,
-    UInt64 connection_id_,
-    const String & connection_alias_,
-    LoggerPtr log_)
-    : dag_request(&dag_request_)
-    , dummy_query_string(dag_request->ShortDebugString())
-    , dummy_ast(makeDummyQuery())
-    , tidb_host(tidb_host_)
-    , collect_execution_summaries(
-          dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
-    , kind(kind_)
-    , is_root_mpp_task(false)
-    , tables_regions_info(std::move(tables_regions_info_))
-    , log(std::move(log_))
-    , operator_spill_contexts(std::make_shared<TaskOperatorSpillContexts>())
-    , flags(dag_request->flags())
-    , sql_mode(dag_request->sql_mode())
-    , max_recorded_error_count(getMaxErrorCount(*dag_request))
-    , warnings(max_recorded_error_count)
-    , warning_count(0)
-    , keyspace_id(keyspace_id_)
-    , resource_group_name(resource_group_name_)
-    , connection_id(connection_id_)
-    , connection_alias(connection_alias_)
-{
-    RUNTIME_ASSERT(kind != DAGRequestKind::MPP, log, "DAGContext non-mpp constructor get a mpp kind");
-    initOutputInfo();
-}
-
-// for mpp
-DAGContext::DAGContext(tipb::DAGRequest & dag_request_, const mpp::TaskMeta & meta_, bool is_root_mpp_task_)
-    : dag_request(&dag_request_)
-    , dummy_query_string(dag_request->ShortDebugString())
-    , dummy_ast(makeDummyQuery())
-    , collect_execution_summaries(
-          dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
-    , kind(DAGRequestKind::MPP)
-    , is_root_mpp_task(is_root_mpp_task_)
-    , operator_spill_contexts(std::make_shared<TaskOperatorSpillContexts>())
-    , flags(dag_request->flags())
-    , sql_mode(dag_request->sql_mode())
-    , mpp_task_meta(meta_)
-    , mpp_task_id(mpp_task_meta)
-    , max_recorded_error_count(getMaxErrorCount(*dag_request))
-    , warnings(max_recorded_error_count)
-    , warning_count(0)
-    , keyspace_id(RequestUtils::deriveKeyspaceID(meta_))
-    , resource_group_name(meta_.resource_group_name())
-    , connection_id(meta_.connection_id())
-    , connection_alias(meta_.connection_alias())
-{
-    // only mpp task has join executor.
-    initExecutorIdToJoinIdMap();
-    initOutputInfo();
-}
-
-// for disaggregated task on write node
-DAGContext::DAGContext(
-    tipb::DAGRequest & dag_request_,
-    const disaggregated::DisaggTaskMeta & task_meta_,
-    TablesRegionsInfo && tables_regions_info_,
-    const String & compute_node_host_,
-    LoggerPtr log_)
-    : dag_request(&dag_request_)
-    , dummy_query_string(dag_request->ShortDebugString())
-    , dummy_ast(makeDummyQuery())
-    , tidb_host(compute_node_host_)
-    , collect_execution_summaries(
-          dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
-    , kind(DAGRequestKind::Cop)
-    , is_root_mpp_task(false)
-    , is_disaggregated_task(true)
-    , tables_regions_info(std::move(tables_regions_info_))
-    , log(std::move(log_))
-    , operator_spill_contexts(std::make_shared<TaskOperatorSpillContexts>())
-    , flags(dag_request->flags())
-    , sql_mode(dag_request->sql_mode())
-    , disaggregated_id(std::make_unique<DM::DisaggTaskId>(task_meta_))
-    , max_recorded_error_count(getMaxErrorCount(*dag_request))
-    , warnings(max_recorded_error_count)
-    , warning_count(0)
-    , keyspace_id(RequestUtils::deriveKeyspaceID(task_meta_))
-    , connection_id(task_meta_.connection_id())
-    , connection_alias(task_meta_.connection_alias())
-{
-    initOutputInfo();
-}
-
-// for test
-DAGContext::DAGContext(UInt64 max_error_count_)
-    : dag_request(nullptr)
-    , dummy_ast(makeDummyQuery())
-    , collect_execution_summaries(false)
-    , kind(DAGRequestKind::Cop)
-    , is_root_mpp_task(false)
-    , operator_spill_contexts(std::make_shared<TaskOperatorSpillContexts>())
-    , flags(0)
-    , sql_mode(0)
-    , max_recorded_error_count(max_error_count_)
-    , warnings(max_recorded_error_count)
-    , warning_count(0)
-    , connection_id(0)
-{}
-
-// for tests need to run query tasks.
-DAGContext::DAGContext(tipb::DAGRequest & dag_request_, String log_identifier, size_t concurrency)
-    : dag_request(&dag_request_)
-    , dummy_query_string(dag_request->ShortDebugString())
-    , dummy_ast(makeDummyQuery())
-    , initialize_concurrency(concurrency)
-    , collect_execution_summaries(
-          dag_request->has_collect_execution_summaries() && dag_request->collect_execution_summaries())
-    , kind(DAGRequestKind::Cop)
-    , is_root_mpp_task(false)
-    , log(Logger::get(log_identifier))
-    , operator_spill_contexts(std::make_shared<TaskOperatorSpillContexts>())
-    , flags(dag_request->flags())
-    , sql_mode(dag_request->sql_mode())
-    , max_recorded_error_count(getMaxErrorCount(*dag_request))
-    , warnings(max_recorded_error_count)
-    , warning_count(0)
-    , connection_id(0)
-{
-    query_operator_spill_contexts
-        = std::make_shared<QueryOperatorSpillContexts>(MPPQueryId(0, 0, 0, 0, "", 0, ""), 100);
-    initOutputInfo();
-}
-
-DAGContext::~DAGContext()
-{
-    operator_spill_contexts->finish();
 }
 
 void DAGContext::initOutputInfo()
@@ -195,40 +45,12 @@ void DAGContext::initOutputInfo()
         output_offsets.push_back(i);
         if (unlikely(i >= output_field_types.size()))
             throw TiFlashException(
-                fmt::format(
-                    "{}: Invalid output offset(schema has {} columns, access index {}",
-                    __PRETTY_FUNCTION__,
-                    output_field_types.size(),
-                    i),
+                fmt::format("{}: Invalid output offset(schema has {} columns, access index {}", __PRETTY_FUNCTION__, output_field_types.size(), i),
                 Errors::Coprocessor::BadRequest);
         result_field_types.push_back(output_field_types[i]);
     }
-    encode_type = analyzeDAGEncodeType();
-    keep_session_timezone_info
-        = encode_type == tipb::EncodeType::TypeChunk || encode_type == tipb::EncodeType::TypeCHBlock;
-}
-
-tipb::EncodeType DAGContext::analyzeDAGEncodeType() const
-{
-    const tipb::EncodeType request_encode_type = dag_request->encode_type();
-    if (isMPPTask() && !isRootMPPTask())
-    {
-        /// always use CHBlock encode type for data exchange between TiFlash nodes
-        return tipb::EncodeType::TypeCHBlock;
-    }
-    if (dag_request->has_force_encode_type() && dag_request->force_encode_type())
-    {
-        assert(request_encode_type == tipb::EncodeType::TypeCHBlock);
-        return request_encode_type;
-    }
-    if (isUnsupportedEncodeType(result_field_types, request_encode_type))
-        return tipb::EncodeType::TypeDefault;
-    if (request_encode_type == tipb::EncodeType::TypeChunk && dag_request->has_chunk_memory_layout()
-        && dag_request->chunk_memory_layout().has_endian()
-        && dag_request->chunk_memory_layout().endian() == tipb::Endian::BigEndian)
-        // todo support BigEndian encode for chunk encode type
-        return tipb::EncodeType::TypeDefault;
-    return request_encode_type;
+    encode_type = analyzeDAGEncodeType(*this);
+    keep_session_timezone_info = encode_type == tipb::EncodeType::TypeChunk || encode_type == tipb::EncodeType::TypeCHBlock;
 }
 
 bool DAGContext::allowZeroInDate() const
@@ -253,58 +75,6 @@ std::unordered_map<String, BlockInputStreams> & DAGContext::getProfileStreamsMap
     return profile_streams_map;
 }
 
-std::unordered_map<String, OperatorProfileInfos> & DAGContext::getOperatorProfileInfosMap()
-{
-    return operator_profile_infos_map;
-}
-
-void DAGContext::addOperatorProfileInfos(
-    const String & executor_id,
-    OperatorProfileInfos && profile_infos,
-    bool is_append)
-{
-    if (profile_infos.empty())
-        return;
-    std::lock_guard lock(operator_profile_infos_map_mu);
-    if (is_append)
-    {
-        auto & elem = operator_profile_infos_map[executor_id];
-        elem.insert(elem.end(), profile_infos.begin(), profile_infos.end());
-    }
-    else
-    {
-        /// The profiles of some operators has been recorded.
-        /// For example, `DAGStorageInterpreter` records the profiles of PhysicalTableScan.
-        if (operator_profile_infos_map.find(executor_id) == operator_profile_infos_map.end())
-            operator_profile_infos_map[executor_id] = std::move(profile_infos);
-    }
-}
-
-void DAGContext::addInboundIOProfileInfos(
-    const String & executor_id,
-    IOProfileInfos && io_profile_infos,
-    bool is_append)
-{
-    if (io_profile_infos.empty())
-        return;
-    std::lock_guard lock(operator_profile_infos_map_mu);
-    if (is_append)
-    {
-        auto & elem = inbound_io_profile_infos_map[executor_id];
-        elem.insert(elem.end(), io_profile_infos.begin(), io_profile_infos.end());
-    }
-    else
-    {
-        if (inbound_io_profile_infos_map.find(executor_id) == inbound_io_profile_infos_map.end())
-            inbound_io_profile_infos_map[executor_id] = std::move(io_profile_infos);
-    }
-}
-
-std::unordered_map<String, IOProfileInfos> & DAGContext::getInboundIOProfileInfosMap()
-{
-    return inbound_io_profile_infos_map;
-}
-
 void DAGContext::updateFinalConcurrency(size_t cur_streams_size, size_t streams_upper_limit)
 {
     final_concurrency = std::min(std::max(final_concurrency, cur_streams_size), streams_upper_limit);
@@ -318,7 +88,7 @@ void DAGContext::initExecutorIdToJoinIdMap()
         return;
 
     executor_id_to_join_id_map.clear();
-    dag_request.traverseReverse([&](const tipb::Executor & executor) {
+    traverseExecutorsReverse(dag_request, [&](const tipb::Executor & executor) {
         std::vector<String> all_join_id;
         // for mpp, dag_request.has_root_executor() == true, can call `getChildren` directly.
         getChildren(executor).forEach([&](const tipb::Executor & child) {
@@ -389,8 +159,7 @@ void DAGContext::handleInvalidTime(const String & msg, const TiFlashError & erro
         throw TiFlashException(msg, error);
     }
     handleTruncateError(msg);
-    if (strictSqlMode(sql_mode)
-        && (flags & TiDBSQLFlags::IN_INSERT_STMT || flags & TiDBSQLFlags::IN_UPDATE_OR_DELETE_STMT))
+    if (strictSqlMode(sql_mode) && (flags & TiDBSQLFlags::IN_INSERT_STMT || flags & TiDBSQLFlags::IN_UPDATE_OR_DELETE_STMT))
     {
         throw TiFlashException(msg, error);
     }
@@ -417,23 +186,22 @@ std::pair<bool, double> DAGContext::getTableScanThroughput()
     // collect table scan metrics
     UInt64 time_processed_ns = 0;
     UInt64 num_produced_bytes = 0;
-    switch (getExecutionMode())
+    for (auto & p : getProfileStreamsMap())
     {
-    case ExecutionMode::None:
-        break;
-    case ExecutionMode::Stream:
-        transformProfileForStream(*this, table_scan_executor_id, [&](const IProfilingBlockInputStream & p_stream) {
-            time_processed_ns = std::max(time_processed_ns, p_stream.getProfileInfo().execution_time);
-            num_produced_bytes += p_stream.getProfileInfo().bytes;
-        });
-        break;
-    case ExecutionMode::Pipeline:
-        transformProfileForPipeline(*this, table_scan_executor_id, [&](const OperatorProfileInfo & profile_info) {
-            time_processed_ns = std::max(time_processed_ns, profile_info.execution_time);
-            num_produced_bytes += profile_info.bytes;
-        });
-        break;
+        if (p.first == table_scan_executor_id)
+        {
+            for (auto & stream_ptr : p.second)
+            {
+                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream_ptr.get()))
+                {
+                    time_processed_ns = std::max(time_processed_ns, p_stream->getProfileInfo().execution_time);
+                    num_produced_bytes += p_stream->getProfileInfo().bytes;
+                }
+            }
+            break;
+        }
     }
+
     // convert to bytes per second
     return std::make_pair(true, num_produced_bytes / (static_cast<double>(time_processed_ns) / 1000000000ULL));
 }
@@ -467,16 +235,4 @@ const SingleTableRegions & DAGContext::getTableRegionsInfoByTableID(Int64 table_
 {
     return tables_regions_info.getTableRegionInfoByTableID(table_id);
 }
-
-RU DAGContext::getReadRU() const
-{
-    UInt64 read_bytes = 0;
-    for (const auto & [id, sc] : scan_context_map)
-    {
-        (void)id; // Disable unused variable warnning.
-        read_bytes += sc->user_read_bytes;
-    }
-    return bytesToRU(read_bytes);
-}
-
 } // namespace DB

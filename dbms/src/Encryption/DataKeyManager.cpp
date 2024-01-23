@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <Encryption/DataKeyManager.h>
-#include <Storages/KVStore/FFI/FileEncryption.h>
-#include <Storages/KVStore/FFI/ProxyFFI.h>
+#include <Storages/Transaction/FileEncryption.h>
+#include <Storages/Transaction/ProxyFFI.h>
 
 namespace DB
 {
@@ -25,13 +25,9 @@ DataKeyManager::DataKeyManager(EngineStoreServerWrap * tiflash_instance_wrap_)
 FileEncryptionInfo DataKeyManager::getFile(const String & fname)
 {
     auto r = tiflash_instance_wrap->proxy_helper->getFile(Poco::Path(fname).toString());
-    if (unlikely(!r.isValid()))
+    if (unlikely(r.res != FileEncryptionRes::Ok && r.res != FileEncryptionRes::Disabled))
     {
-        throw DB::TiFlashException(
-            Errors::Encryption::Internal,
-            "Get encryption info for file: {} meet error: {}",
-            fname,
-            r.getErrorMsg());
+        throw DB::TiFlashException("Get encryption info for file: " + fname + " meet error: " + *r.error_msg, Errors::Encryption::Internal);
     }
     return r;
 }
@@ -39,13 +35,11 @@ FileEncryptionInfo DataKeyManager::getFile(const String & fname)
 FileEncryptionInfo DataKeyManager::newFile(const String & fname)
 {
     auto r = tiflash_instance_wrap->proxy_helper->newFile(Poco::Path(fname).toString());
-    if (unlikely(!r.isValid()))
+    if (unlikely(r.res != FileEncryptionRes::Ok && r.res != FileEncryptionRes::Disabled))
     {
         throw DB::TiFlashException(
-            Errors::Encryption::Internal,
-            "Create encryption info for file: {} meet error: {}",
-            fname,
-            r.getErrorMsg());
+            "Create encryption info for file: " + fname + " meet error: " + *r.error_msg,
+            Errors::Encryption::Internal);
     }
     return r;
 }
@@ -53,29 +47,21 @@ FileEncryptionInfo DataKeyManager::newFile(const String & fname)
 void DataKeyManager::deleteFile(const String & fname, bool throw_on_error)
 {
     auto r = tiflash_instance_wrap->proxy_helper->deleteFile(Poco::Path(fname).toString());
-    if (unlikely(!r.isValid() && throw_on_error))
+    if (unlikely(r.res != FileEncryptionRes::Ok && r.res != FileEncryptionRes::Disabled && throw_on_error))
     {
         throw DB::TiFlashException(
-            Errors::Encryption::Internal,
-            "Delete encryption info for file: {} meet error: {}",
-            fname,
-            r.getErrorMsg());
+            "Delete encryption info for file: " + fname + " meet error: " + *r.error_msg,
+            Errors::Encryption::Internal);
     }
 }
 
 void DataKeyManager::linkFile(const String & src_fname, const String & dst_fname)
 {
-    auto r = tiflash_instance_wrap->proxy_helper->linkFile(
-        Poco::Path(src_fname).toString(),
-        Poco::Path(dst_fname).toString());
-    if (unlikely(!r.isValid()))
+    auto r = tiflash_instance_wrap->proxy_helper->linkFile(Poco::Path(src_fname).toString(), Poco::Path(dst_fname).toString());
+    if (unlikely(r.res != FileEncryptionRes::Ok && r.res != FileEncryptionRes::Disabled))
     {
-        throw DB::TiFlashException(
-            Errors::Encryption::Internal,
-            "Link encryption info from file: {} to {} meet error: {}",
-            src_fname,
-            dst_fname,
-            r.getErrorMsg());
+        throw DB::TiFlashException("Link encryption info from file: " + src_fname + " to " + dst_fname + " meet error: " + *r.error_msg,
+                                   Errors::Encryption::Internal);
     }
 }
 

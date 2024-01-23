@@ -24,8 +24,7 @@ namespace DB
 class Context;
 
 
-class StorageSystemDTTables
-    : public ext::SharedPtrHelper<StorageSystemDTTables>
+class StorageSystemDTTables : public ext::SharedPtrHelper<StorageSystemDTTables>
     , public IStorage
 {
 public:

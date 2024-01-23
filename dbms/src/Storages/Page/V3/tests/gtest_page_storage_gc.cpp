@@ -21,7 +21,6 @@
 #include <Storages/Page/V3/WAL/WALConfig.h>
 #include <Storages/Page/V3/WAL/serialize.h>
 #include <Storages/Page/V3/tests/gtest_page_storage.h>
-#include <Storages/Page/WriteBatchImpl.h>
 #include <common/defines.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
@@ -47,7 +46,8 @@ struct FullGCParam
     explicit FullGCParam(const std::tuple<bool, bool> & t)
         : keep_snap(std::get<0>(t))
         , has_ref(std::get<1>(t))
-    {}
+    {
+    }
 };
 
 class PageStorageFullGCTest
@@ -57,9 +57,13 @@ class PageStorageFullGCTest
 public:
     PageStorageFullGCTest()
         : test_param(GetParam())
-    {}
+    {
+    }
 
-    void SetUp() override { PageStorageTest::SetUp(); }
+    void SetUp() override
+    {
+        PageStorageTest::SetUp();
+    }
 
 protected:
     FullGCParam test_param;
@@ -73,8 +77,8 @@ try
     new_config.blob_heavy_gc_valid_rate = 1.0;
     page_storage->reloadSettings(new_config);
 
-    PageIdU64 page_id1 = 101;
-    PageIdU64 ref_page_id = 102;
+    PageId page_id1 = 101;
+    PageId ref_page_id = 102;
     {
         WriteBatch batch;
         batch.putPage(page_id1, default_tag, getDefaultBuffer(), buf_sz);
@@ -99,7 +103,7 @@ try
             snap = page_storage->getSnapshot("");
 
         // let's compact the WAL logs
-        auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, /* force */ true);
+        auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, /* force */ true);
         ASSERT_TRUE(done_snapshot);
 
         // let's try full gc, this will not trigger full gc
@@ -109,7 +113,12 @@ try
 }
 CATCH
 
-INSTANTIATE_TEST_CASE_P(Group, PageStorageFullGCTest, ::testing::Combine(::testing::Bool(), ::testing::Bool()));
+INSTANTIATE_TEST_CASE_P(
+    Group,
+    PageStorageFullGCTest,
+    ::testing::Combine(
+        ::testing::Bool(),
+        ::testing::Bool()));
 
 ///////
 /// PageStorageFullGCConcurrentTest
@@ -128,9 +137,13 @@ class PageStorageFullGCConcurrentTest
 public:
     PageStorageFullGCConcurrentTest()
         : timing(GetParam())
-    {}
+    {
+    }
 
-    void SetUp() override { PageStorageTest::SetUp(); }
+    void SetUp() override
+    {
+        PageStorageTest::SetUp();
+    }
 
     SyncPointScopeGuard getSyncPoint() const
     {
@@ -173,7 +186,7 @@ try
     new_config.blob_heavy_gc_valid_rate = 1.0;
     page_storage->reloadSettings(new_config);
 
-    PageIdU64 page_id1 = 101;
+    PageId page_id1 = 101;
     {
         WriteBatch batch;
         batch.putPage(page_id1, default_tag, getDefaultBuffer(), buf_sz);
@@ -201,7 +214,7 @@ try
     th_gc.get();
 
     // wal compact again
-    page_storage->page_directory->tryDumpSnapshot(nullptr, true);
+    page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, true);
 
     LOG_INFO(log, "close and restore WAL from disk");
     page_storage.reset();
@@ -212,10 +225,10 @@ try
     size_t num_entries_on_wal = 0;
     while (reader->remained())
     {
-        auto [_, s] = reader->next();
+        auto s = reader->next();
         if (s.has_value())
         {
-            auto e = u128::Serializer::deserializeFrom(s.value(), nullptr);
+            auto e = ser::deserializeFrom(s.value());
             num_entries_on_wal += e.size();
             EXPECT_TRUE(e.empty());
         }
@@ -232,10 +245,10 @@ try
     new_config.blob_heavy_gc_valid_rate = 1.0;
     page_storage->reloadSettings(new_config);
 
-    PageIdU64 page_id1 = 101;
-    PageIdU64 ref_page_id2 = 102;
-    PageIdU64 ref_page_id3 = 103;
-    PageIdU64 ref_page_id4 = 104;
+    PageId page_id1 = 101;
+    PageId ref_page_id2 = 102;
+    PageId ref_page_id3 = 103;
+    PageId ref_page_id4 = 104;
     {
         WriteBatch batch;
         batch.putPage(page_id1, default_tag, getDefaultBuffer(), buf_sz);
@@ -255,32 +268,29 @@ try
     }
 
     FailPointHelper::enableFailPoint(FailPoints::force_ps_wal_compact);
+    auto sp_gc = getSyncPoint();
+    auto th_gc = std::async([&]() {
+        auto done_full_gc = page_storage->gcImpl(/* not_skip */ true, nullptr, nullptr);
+        ASSERT_EQ(expectFullGCExecute(), done_full_gc);
+    });
+    // let's compact the WAL logs
+    sp_gc.waitAndPause();
+
     {
-        auto sp_gc = getSyncPoint();
-        auto th_gc = std::async([&]() {
-            auto done_full_gc = page_storage->gcImpl(/* not_skip */ true, nullptr, nullptr);
-            ASSERT_EQ(expectFullGCExecute(), done_full_gc);
-        });
-        // let's compact the WAL logs
-        sp_gc.waitAndPause();
-
-        {
-            // the delete timing is decide by `sp_gc`
-            WriteBatch batch;
-            batch.delPage(ref_page_id2);
-            batch.delPage(ref_page_id3);
-            batch.delPage(ref_page_id4);
-            page_storage->write(std::move(batch));
-        }
-
-        // let's try full gc
-        sp_gc.next();
-        th_gc.get();
+        // the delete timing is decide by `sp_gc`
+        WriteBatch batch;
+        batch.delPage(ref_page_id2);
+        batch.delPage(ref_page_id3);
+        batch.delPage(ref_page_id4);
+        page_storage->write(std::move(batch));
     }
 
+    // let's try full gc
+    sp_gc.next();
+    th_gc.get();
+
     // wal compact again
-    page_storage->gcImpl(/* not_skip */ true, nullptr, nullptr);
-    page_storage->page_directory->tryDumpSnapshot(nullptr, true);
+    page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, true);
 
     LOG_INFO(log, "close and restore WAL from disk");
     page_storage.reset();
@@ -291,10 +301,10 @@ try
     size_t num_entries_on_wal = 0;
     while (reader->remained())
     {
-        auto [_, s] = reader->next();
+        auto s = reader->next();
         if (s.has_value())
         {
-            auto e = u128::Serializer::deserializeFrom(s.value(), nullptr);
+            auto e = ser::deserializeFrom(s.value());
             num_entries_on_wal += e.size();
             EXPECT_TRUE(e.empty());
         }
@@ -334,9 +344,13 @@ class PageStorageFullGCConcurrentTest2
 public:
     PageStorageFullGCConcurrentTest2()
         : timing(GetParam())
-    {}
+    {
+    }
 
-    void SetUp() override { PageStorageTest::SetUp(); }
+    void SetUp() override
+    {
+        PageStorageTest::SetUp();
+    }
 
     SyncPointScopeGuard getSyncPoint() const
     {
@@ -363,10 +377,10 @@ try
     new_config.blob_heavy_gc_valid_rate = 1.0;
     page_storage->reloadSettings(new_config);
 
-    PageIdU64 page_id1 = 101;
-    PageIdU64 ref_page_id2 = 102;
-    PageIdU64 ref_page_id3 = 103;
-    PageIdU64 ref_page_id4 = 104;
+    PageId page_id1 = 101;
+    PageId ref_page_id2 = 102;
+    PageId ref_page_id3 = 103;
+    PageId ref_page_id4 = 104;
     {
         WriteBatch batch;
         batch.putPage(page_id1, default_tag, getDefaultBuffer(), buf_sz);
@@ -414,7 +428,7 @@ try
     th_foreground_write.get();
 
     // wal compact again
-    page_storage->page_directory->tryDumpSnapshot(nullptr, true);
+    page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, true);
 
     LOG_INFO(log, "close and restore WAL from disk");
     page_storage.reset();
@@ -428,10 +442,10 @@ try
     bool exist_id4_normal_entry = false;
     while (reader->remained())
     {
-        auto [_, s] = reader->next();
+        auto s = reader->next();
         if (s.has_value())
         {
-            auto e = u128::Serializer::deserializeFrom(s.value(), nullptr);
+            auto e = ser::deserializeFrom(s.value());
             num_entries_on_wal += e.size();
             for (const auto & r : e.getRecords())
             {
@@ -442,7 +456,7 @@ try
                     else if (r.page_id.low == ref_page_id4)
                         exist_id4_normal_entry = true;
                 }
-                LOG_INFO(log, "{}", r);
+                LOG_INFO(log, PageEntriesEdit::toDebugString(r));
             }
         }
     }

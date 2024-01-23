@@ -17,71 +17,41 @@
 
 namespace DB
 {
-MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(
-    const tipb::ExchangeReceiver & receiver,
-    size_t max_block_size,
-    size_t rows_)
-    : max_block_size(max_block_size)
+MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(const tipb::ExchangeReceiver & receiver, size_t max_block_size, size_t rows_)
+    : output_index(0)
+    , max_block_size(max_block_size)
     , rows(rows_)
     , source_num(static_cast<size_t>(receiver.encoded_task_meta_size()))
 {
-    ColumnsWithTypeAndName columns;
-    assert(receiver.field_types_size() > 0);
     for (int i = 0; i < receiver.field_types_size(); ++i)
     {
         columns.emplace_back(
             getDataTypeByColumnInfoForComputingLayer(TiDB::fieldTypeToColumnInfo(receiver.field_types(i))),
             fmt::format("exchange_receiver_{}", i));
     }
-    columns_vector.push_back(std::move(columns));
 }
 
-void MockExchangeReceiverInputStream::initTotalRows()
-{
-    rows = 0;
-    for (const auto & columns : columns_vector)
-    {
-        size_t current_rows = 0;
-        for (const auto & elem : columns)
-        {
-            if (elem.column)
-            {
-                assert(current_rows == 0 || current_rows == elem.column->size());
-                current_rows = elem.column->size();
-            }
-        }
-        rows += current_rows;
-    }
-}
-
-MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(
-    const ColumnsWithTypeAndName & columns,
-    size_t max_block_size)
-    : max_block_size(max_block_size)
-{
-    assert(!columns.empty());
-    columns_vector.push_back(columns);
-    initTotalRows();
-}
-
-MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(
-    const std::vector<ColumnsWithTypeAndName> & columns_vector_,
-    size_t max_block_size)
-    : columns_vector(columns_vector_)
+MockExchangeReceiverInputStream::MockExchangeReceiverInputStream(ColumnsWithTypeAndName columns, size_t max_block_size)
+    : columns(columns)
+    , output_index(0)
     , max_block_size(max_block_size)
 {
-    assert(!columns_vector.empty() && !columns_vector[0].empty());
-    initTotalRows();
+    rows = 0;
+    for (const auto & elem : columns)
+    {
+        if (elem.column)
+        {
+            assert(rows == 0 || rows == elem.column->size());
+            rows = elem.column->size();
+        }
+    }
 }
 
 ColumnPtr MockExchangeReceiverInputStream::makeColumn(ColumnWithTypeAndName elem) const
 {
     auto column = elem.type->createColumn();
     size_t row_count = 0;
-    size_t current_output_rows = output_rows;
-    for (size_t i = output_index_in_current_columns;
-         current_output_rows < rows && i < elem.column->size() && row_count < max_block_size;
-         ++i, ++current_output_rows)
+    for (size_t i = output_index; (i < rows) & (row_count < max_block_size); ++i)
     {
         column->insert((*elem.column)[i]);
         ++row_count;
@@ -91,22 +61,14 @@ ColumnPtr MockExchangeReceiverInputStream::makeColumn(ColumnWithTypeAndName elem
 
 Block MockExchangeReceiverInputStream::readImpl()
 {
-    if (output_rows >= rows)
+    if (output_index >= rows)
         return {};
     ColumnsWithTypeAndName output_columns;
-    assert(columns_vector.size() > output_columns_index);
-    for (const auto & elem : columns_vector[output_columns_index])
+    for (const auto & elem : columns)
     {
         output_columns.push_back({makeColumn(elem), elem.type, elem.name, elem.column_id});
     }
-    size_t return_rows = output_columns[0].column->size();
-    output_rows += return_rows;
-    output_index_in_current_columns += return_rows;
-    if (output_index_in_current_columns == columns_vector[output_columns_index][0].column->size())
-    {
-        ++output_columns_index;
-        output_index_in_current_columns = 0;
-    }
+    output_index += max_block_size;
     return Block(output_columns);
 }
 } // namespace DB

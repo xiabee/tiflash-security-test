@@ -13,7 +13,4 @@
 // limitations under the License.
 
 int mainEntryClickHouseServer(int argc, char ** argv);
-int main(int argc_, char ** argv_)
-{
-    return mainEntryClickHouseServer(argc_, argv_);
-}
+int main(int argc_, char ** argv_) { return mainEntryClickHouseServer(argc_, argv_); }

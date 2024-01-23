@@ -15,22 +15,26 @@
 #pragma once
 
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/Index/RSResult.h>
-#include <Storages/KVStore/Types.h>
-#include <tipb/executor.pb.h>
+#include <Storages/Transaction/Types.h>
 #include <tipb/expression.pb.h>
 
 #include <functional>
+#include <memory>
 #include <unordered_map>
 
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB
 {
+class ASTSelectQuery;
+
 struct DAGQueryInfo;
 
 namespace DM
 {
-
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
@@ -38,22 +42,12 @@ class FilterParser
 {
 public:
     /// From dag.
-    using AttrCreatorByColumnID = std::function<Attr(const DB::ColumnID)>;
+    using AttrCreatorByColumnID = std::function<Attr(const ColumnID)>;
     static RSOperatorPtr parseDAGQuery(
         const DAGQueryInfo & dag_info,
         const ColumnDefines & columns_to_read,
         AttrCreatorByColumnID && creator,
         const LoggerPtr & log);
-
-    // only for runtime filter in predicate
-    static RSOperatorPtr parseRFInExpr(
-        tipb::RuntimeFilterType rf_type,
-        const tipb::Expr & target_expr,
-        const ColumnDefines & columns_to_read,
-        const std::set<Field> & setElements,
-        const TimezoneInfo & timezone_info);
-
-    static bool isRSFilterSupportType(Int32 field_type);
 
     /// Some helper structure
 
@@ -74,10 +68,10 @@ public:
         LessEqual,
 
         In,
-        // NotIn, TiDB will convert it to Not(In）
+        NotIn,
 
         Like,
-        // NotLike, TiDB will convert it to Not(Like)
+        NotLike,
 
         IsNull,
     };

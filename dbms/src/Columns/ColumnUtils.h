@@ -15,10 +15,8 @@
 #pragma once
 
 #include <Columns/IColumn.h>
-#include <Core/ColumnWithTypeAndName.h>
 
 namespace DB
 {
 bool columnEqual(const ColumnPtr & expected, const ColumnPtr & actual, String & unequal_msg);
-void convertColumnToNullable(ColumnWithTypeAndName & column);
 } // namespace DB
