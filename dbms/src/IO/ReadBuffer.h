@@ -97,10 +97,7 @@ public:
       *
       * Try to read after the end should throw an exception.
       */
-    bool ALWAYS_INLINE eof()
-    {
-        return !hasPendingData() && !next();
-    }
+    bool ALWAYS_INLINE eof() { return !hasPendingData() && !next(); }
 
     void ignore()
     {
@@ -138,6 +135,15 @@ public:
         return bytes_ignored;
     }
 
+    /** Peeks a single byte. */
+    bool ALWAYS_INLINE peek(char & c)
+    {
+        if (eof())
+            return false;
+        c = *pos;
+        return true;
+    }
+
     /** Reads as many as there are, no more than n bytes. */
     size_t read(char * to, size_t n)
     {
@@ -167,10 +173,7 @@ public:
       * By default - the same as read.
       * Don't use for small reads.
       */
-    virtual size_t readBig(char * to, size_t n)
-    {
-        return read(to, n);
-    }
+    virtual size_t readBig(char * to, size_t n) { return read(to, n); }
 
 protected:
     /// The number of bytes to ignore from the initial position of `working_buffer` buffer.
@@ -187,5 +190,12 @@ private:
 
 using ReadBufferPtr = std::shared_ptr<ReadBuffer>;
 
+/// Due to inconsistencies in ReadBuffer-family interfaces:
+///  - some require to fully wrap underlying buffer and own it,
+///  - some just wrap the reference without ownership,
+/// we need to be able to wrap reference-only buffers with movable transparent proxy-buffer.
+/// The uniqueness of such wraps is responsibility of the code author.
+std::unique_ptr<ReadBuffer> wrapReadBufferReference(ReadBuffer & ref);
+std::unique_ptr<ReadBuffer> wrapReadBufferPointer(ReadBufferPtr ptr);
 
 } // namespace DB

@@ -22,7 +22,7 @@ namespace DB
 class ReadBuffer;
 
 /** Basic functionality for implementation of
-  *  CompressedReadBuffer, CompressedReadBufferFromFile and CachedCompressedReadBuffer.
+  *  CompressedReadBuffer and CompressedReadBufferFromFile.
   */
 template <bool has_checksum = true>
 class CompressedReadBufferBase
@@ -47,7 +47,7 @@ protected:
 
 public:
     /// 'compressed_in' could be initialized lazily, but before first call of 'readCompressedData'.
-    CompressedReadBufferBase(ReadBuffer * in = nullptr);
+    explicit CompressedReadBufferBase(ReadBuffer * in = nullptr);
     ~CompressedReadBufferBase();
 
     /** Disable checksums.

@@ -43,17 +43,11 @@ public:
         , snapshot_v3(snapshot_v3_)
     {}
 
-    ~PageStorageSnapshotMixed() = default;
+    ~PageStorageSnapshotMixed() override = default;
 
-    PageStorageSnapshotPtr getV2Snapshot()
-    {
-        return snapshot_v2;
-    }
+    PageStorageSnapshotPtr getV2Snapshot() { return snapshot_v2; }
 
-    PageStorageSnapshotPtr getV3Snapshot()
-    {
-        return snapshot_v3;
-    }
+    PageStorageSnapshotPtr getV3Snapshot() { return snapshot_v3; }
 
 private:
     PageStorageSnapshotPtr snapshot_v2;
@@ -61,8 +55,7 @@ private:
 };
 using PageStorageSnapshotMixedPtr = std::shared_ptr<PageStorageSnapshotMixed>;
 
-inline PageStorageSnapshotMixedPtr
-toConcreteMixedSnapshot(const PageStorageSnapshotPtr & ptr)
+inline PageStorageSnapshotMixedPtr toConcreteMixedSnapshot(const PageStorageSnapshotPtr & ptr)
 {
     return std::static_pointer_cast<PageStorageSnapshotMixed>(ptr);
 }

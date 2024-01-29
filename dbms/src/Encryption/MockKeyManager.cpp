@@ -15,11 +15,10 @@
 #include <Common/Exception.h>
 #include <Common/Logger.h>
 #include <Encryption/MockKeyManager.h>
-#include <Storages/Transaction/FileEncryption.h>
+#include <Storages/KVStore/FFI/FileEncryption.h>
 #include <common/logger_useful.h>
 #include <fmt/core.h>
 
-#include <iostream>
 
 namespace DB
 {
@@ -29,15 +28,23 @@ extern const int LOGICAL_ERROR;
 }
 
 const EncryptionMethod MockKeyManager::default_method = EncryptionMethod::Aes256Ctr;
-const unsigned char MockKeyManager::default_key[]
-    = "\xe4\x3e\x8e\xca\x2a\x83\xe1\x88\xfb\xd8\x02\xdc\xf3\x62\x65\x3e\x00\xee\x31\x39\xe7\xfd\x1d\x92\x20\xb1\x62\xae\xb2\xaf\x0f\x1a";
+const unsigned char MockKeyManager::default_key[] = "\xe4\x3e\x8e\xca\x2a\x83\xe1\x88\xfb\xd8\x02\xdc\xf3\x62\x65\x3e"
+                                                    "\x00\xee\x31\x39\xe7\xfd\x1d\x92\x20\xb1\x62\xae\xb2\xaf\x0f\x1a";
 const unsigned char MockKeyManager::default_iv[] = "\x77\x9b\x82\x72\x26\xb5\x76\x50\xf7\x05\xd2\xd6\xb8\xaa\xa9\x2c";
 
 MockKeyManager::MockKeyManager(bool encryption_enabled_)
-    : MockKeyManager(default_method, String(reinterpret_cast<const char *>(default_key), 32), String(reinterpret_cast<const char *>(default_iv), 16), encryption_enabled_)
+    : MockKeyManager(
+        default_method,
+        String(reinterpret_cast<const char *>(default_key), 32),
+        String(reinterpret_cast<const char *>(default_iv), 16),
+        encryption_enabled_)
 {}
 
-MockKeyManager::MockKeyManager(EncryptionMethod method_, const String & key_, const String & iv, bool encryption_enabled_)
+MockKeyManager::MockKeyManager(
+    EncryptionMethod method_,
+    const String & key_,
+    const String & iv,
+    bool encryption_enabled_)
     : method{method_}
     , key{key_}
     , iv{iv}
@@ -45,18 +52,20 @@ MockKeyManager::MockKeyManager(EncryptionMethod method_, const String & key_, co
     , logger(DB::Logger::get())
 {}
 
-FileEncryptionInfo MockKeyManager::newFile(const String & fname)
+FileEncryptionInfo MockKeyManager::newInfo(const EncryptionPath & ep)
 {
+    const auto & fname = ep.full_path;
     if (encryption_enabled)
     {
         LOG_TRACE(logger, "Create mock encryption [file={}]", fname);
         files.emplace_back(fname);
     }
-    return getFile(fname);
+    return getInfo(ep);
 }
 
-void MockKeyManager::deleteFile(const String & fname, bool throw_on_error)
+void MockKeyManager::deleteInfo(const EncryptionPath & ep, bool throw_on_error)
 {
+    const auto & fname = ep.full_path;
     std::ignore = throw_on_error;
     if (encryption_enabled)
     {
@@ -76,14 +85,17 @@ void MockKeyManager::deleteFile(const String & fname, bool throw_on_error)
     }
 }
 
-void MockKeyManager::linkFile(const String & src_fname, const String & dst_fname)
+void MockKeyManager::linkInfo(const EncryptionPath & src_ep, const EncryptionPath & dst_ep)
 {
-    std::ignore = dst_fname;
+    const auto & src_fname = src_ep.full_path;
+    const auto & dst_fname = dst_ep.full_path;
     if (encryption_enabled)
     {
         if (!fileExist(src_fname))
         {
-            throw DB::Exception(fmt::format("Can't find file which name is {}", src_fname), DB::ErrorCodes::LOGICAL_ERROR);
+            throw DB::Exception(
+                fmt::format("Can't find file which name is {}", src_fname),
+                DB::ErrorCodes::LOGICAL_ERROR);
         }
         LOG_TRACE(logger, "Link mock encryption file [src_file={}] [dst_file={}]", src_fname, dst_fname);
         files.emplace_back(dst_fname);
@@ -108,9 +120,9 @@ bool MockKeyManager::fileExist(const String & fname) const
     return false;
 }
 
-FileEncryptionInfo MockKeyManager::getFile(const String & fname)
+FileEncryptionInfo MockKeyManager::getInfo(const EncryptionPath & ep)
 {
-    std::ignore = fname;
+    const auto & fname = ep.full_path;
     if (encryption_enabled)
     {
         auto * file_key = RawCppString::New(key);
@@ -135,4 +147,11 @@ FileEncryptionInfo MockKeyManager::getFile(const String & fname)
         };
     }
 }
+
+bool MockKeyManager::isEncryptionEnabled(KeyspaceID /*keyspace_id*/)
+{
+    // for simplicity, we just return encryption_enabled
+    return encryption_enabled;
+}
+
 } // namespace DB

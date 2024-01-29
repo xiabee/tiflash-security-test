@@ -19,7 +19,6 @@
 #include <Storages/Page/V2/PageFile.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
-
 namespace DB::PS::V2::tests
 {
 TEST(PageFileTest, Compare)
@@ -28,8 +27,8 @@ TEST(PageFileTest, Compare)
     const String path = DB::tests::TiFlashTestEnv::getTemporaryPath("pageFileCompare");
     DB::tests::TiFlashTestEnv::tryRemovePath(path);
 
-    const auto file_provider = DB::tests::TiFlashTestEnv::getContext().getFileProvider();
-    Poco::Logger * log = &Poco::Logger::get("PageFile");
+    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
+    auto log = Logger::get("PageFile");
 
     {
         // Create files for tests
@@ -68,7 +67,8 @@ TEST(PageFileTest, Compare)
     ASSERT_TRUE(pf_set.rbegin()->isExist());
 
     // Test `isPageFileExist`
-    ASSERT_TRUE(PageFile::isPageFileExist(checkpoint_pf.fileIdLevel(), path, file_provider, PageFile::Type::Checkpoint, log));
+    ASSERT_TRUE(
+        PageFile::isPageFileExist(checkpoint_pf.fileIdLevel(), path, file_provider, PageFile::Type::Checkpoint, log));
     ASSERT_TRUE(PageFile::isPageFileExist(pf0.fileIdLevel(), path, file_provider, PageFile::Type::Formal, log));
     ASSERT_TRUE(PageFile::isPageFileExist(pf1.fileIdLevel(), path, file_provider, PageFile::Type::Formal, log));
     ASSERT_FALSE(PageFile::isPageFileExist(pf1.fileIdLevel(), path, file_provider, PageFile::Type::Legacy, log));
@@ -86,8 +86,8 @@ TEST(Page_test, GetField)
     for (size_t i = 0; i < buf_sz; ++i)
         c_buff[i] = i % 0xff;
 
-    Page page;
-    page.data = ByteBuffer(c_buff, c_buff + buf_sz);
+    Page page{1};
+    page.data = std::string_view(c_buff, buf_sz);
     std::set<FieldOffsetInsidePage> fields{// {field_index, data_offset}
                                            {2, 0},
                                            {3, 20},
@@ -178,13 +178,13 @@ TEST(PageEntry_test, GetFieldInfo)
 
 TEST(PageFileTest, PageFileLink)
 {
-    Poco::Logger * log = &Poco::Logger::get("PageFileLink");
+    auto log = Logger::get("PageFileLink");
     PageId page_id = 55;
     UInt64 tag = 0;
     const String path = DB::tests::TiFlashTestEnv::getTemporaryPath("PageFileLink/");
     DB::tests::TiFlashTestEnv::tryRemovePath(path);
 
-    const auto file_provider = DB::tests::TiFlashTestEnv::getGlobalContext().getFileProvider();
+    const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
     PageFile pf0 = PageFile::newPageFile(page_id, 0, path, file_provider, PageFile::Type::Formal, log);
     auto writer = pf0.createWriter(true, true);
 
@@ -227,7 +227,7 @@ TEST(PageFileTest, PageFileLink)
 
 TEST(PageFileTest, EncryptedPageFileLink)
 {
-    Poco::Logger * log = &Poco::Logger::get("EncryptedPageFileLink");
+    auto log = Logger::get("EncryptedPageFileLink");
     PageId page_id = 55;
     UInt64 tag = 0;
     const String path = DB::tests::TiFlashTestEnv::getTemporaryPath("EncryptedPageFileLink/");

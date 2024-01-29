@@ -96,17 +96,14 @@ public:
     /// offset in bytes of the cursor from the beginning of the buffer
     inline size_t offset() const { return pos - working_buffer.begin(); }
 
+    /// How many bytes are available for read/write
+    inline size_t available() const { return static_cast<size_t>(working_buffer.end() - pos); }
+
     /** How many bytes have been read/written, counting those that are still in the buffer. */
-    size_t count() const
-    {
-        return bytes + offset();
-    }
+    size_t count() const { return bytes + offset(); }
 
     /** Check that there is more bytes in buffer after cursor. */
-    bool ALWAYS_INLINE hasPendingData() const
-    {
-        return pos != working_buffer.end();
-    }
+    bool ALWAYS_INLINE hasPendingData() const { return pos != working_buffer.end(); }
 
 protected:
     /// Read/write position.

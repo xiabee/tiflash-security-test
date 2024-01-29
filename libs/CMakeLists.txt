@@ -20,7 +20,6 @@ endif ()
 add_subdirectory (libcommon)
 add_subdirectory (libpocoext)
 add_subdirectory (libdaemon)
-
 add_subdirectory (libmemcpy)
 
 if (GLIBC_COMPATIBILITY)
@@ -28,3 +27,4 @@ if (GLIBC_COMPATIBILITY)
 endif ()
 
 add_subdirectory (libsymbolization)
+add_subdirectory (libprocess_metrics)
