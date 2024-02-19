@@ -206,16 +206,14 @@ grpc::Status FlashService::Coprocessor(
         request->context().region_id(),
         request->context().region_epoch().conf_ver(),
         request->context().region_epoch().version());
-    LOG_INFO(
+    auto log_level = is_remote_read ? Poco::Message::PRIO_INFORMATION : Poco::Message::PRIO_DEBUG;
+    LOG_IMPL(
         log,
-        "Handling coprocessor request, is_remote_read: {}, start ts: {}, region info: {}, resource_group: {}, conn_id: "
-        "{}, conn_alias: {}",
+        log_level,
+        "Handling coprocessor request, is_remote_read: {}, start ts: {}, region info: {}",
         is_remote_read,
         request->start_ts(),
-        region_info,
-        request->context().resource_control_context().resource_group_name(),
-        request->connection_id(),
-        request->connection_alias());
+        region_info);
 
     auto check_result = checkGrpcContext(grpc_context);
     if (!check_result.ok())
@@ -257,7 +255,6 @@ grpc::Status FlashService::Coprocessor(
         }
     }
 
-    auto log_level = is_remote_read ? Poco::Message::PRIO_INFORMATION : Poco::Message::PRIO_DEBUG;
     auto exec_func = [&]() -> grpc::Status {
         auto wait_ms = watch.elapsedMilliseconds();
         if (wait_ms > 1000)
@@ -282,10 +279,11 @@ grpc::Status FlashService::Coprocessor(
         });
         CoprocessorContext cop_context(*db_context, request->context(), *grpc_context);
         auto request_identifier = fmt::format(
-            "Coprocessor, is_remote_read: {}, start_ts: {}, region_info: {}",
+            "Coprocessor, is_remote_read: {}, start_ts: {}, region_info: {}, resource_group: {}",
             is_remote_read,
             request->start_ts(),
-            region_info);
+            region_info,
+            request->context().resource_control_context().resource_group_name());
         CoprocessorHandler<false> cop_handler(cop_context, request, response, request_identifier);
         return cop_handler.execute();
     };
@@ -302,12 +300,7 @@ grpc::Status FlashService::Coprocessor(
     };
     grpc::Status ret = cop_limiter->executeFor(std::move(exec_func), max_queued_duration_ms, std::move(timeout_func));
 
-    LOG_IMPL(
-        log,
-        log_level,
-        "Handle coprocessor request done: {}, {}",
-        magic_enum::enum_name(ret.error_code()),
-        ret.error_message());
+    LOG_IMPL(log, log_level, "Handle coprocessor request done: {}, {}", ret.error_code(), ret.error_message());
     return ret;
 }
 
@@ -317,13 +310,7 @@ grpc::Status FlashService::BatchCoprocessor(
     grpc::ServerWriter<coprocessor::BatchResponse> * writer)
 {
     CPUAffinityManager::getInstance().bindSelfGrpcThread();
-    LOG_INFO(
-        log,
-        "Handling batch coprocessor request, start ts: {}, resource_group: {}, conn_id: {}, conn_alias: {}",
-        request->start_ts(),
-        request->context().resource_control_context().resource_group_name(),
-        request->connection_id(),
-        request->connection_alias());
+    LOG_INFO(log, "Handling batch coprocessor request, start ts: {}", request->start_ts());
 
     auto check_result = checkGrpcContext(grpc_context);
     if (!check_result.ok())
@@ -347,16 +334,15 @@ grpc::Status FlashService::BatchCoprocessor(
             return status;
         }
         CoprocessorContext cop_context(*db_context, request->context(), *grpc_context);
-        auto request_identifier = fmt::format("BatchCoprocessor, start_ts: {}", request->start_ts());
+        auto request_identifier = fmt::format(
+            "BatchCoprocessor, start_ts: {}, resource_group: {}",
+            request->start_ts(),
+            request->context().resource_control_context().resource_group_name());
         BatchCoprocessorHandler cop_handler(cop_context, request, writer, request_identifier);
         return cop_handler.execute();
     });
 
-    LOG_INFO(
-        log,
-        "Handle batch coprocessor request done: {}, {}",
-        magic_enum::enum_name(ret.error_code()),
-        ret.error_message());
+    LOG_INFO(log, "Handle batch coprocessor request done: {}, {}", ret.error_code(), ret.error_message());
     return ret;
 }
 
@@ -372,16 +358,14 @@ grpc::Status FlashService::CoprocessorStream(
         request->context().region_id(),
         request->context().region_epoch().conf_ver(),
         request->context().region_epoch().version());
-    LOG_INFO(
+    auto log_level = is_remote_read ? Poco::Message::PRIO_INFORMATION : Poco::Message::PRIO_DEBUG;
+    LOG_IMPL(
         log,
-        "Handling coprocessor stream request, is_remote_read: {}, start ts: {}, region info: {}, resource_group: {}, "
-        "conn_id: {}, conn_alias: {}",
+        log_level,
+        "Handling coprocessor stream request, is_remote_read: {}, start ts: {}, region info: {}",
         is_remote_read,
         request->start_ts(),
-        region_info,
-        request->context().resource_control_context().resource_group_name(),
-        request->connection_id(),
-        request->connection_alias());
+        region_info);
 
     auto check_result = checkGrpcContext(grpc_context);
     if (!check_result.ok())
@@ -427,7 +411,6 @@ grpc::Status FlashService::CoprocessorStream(
         }
     }
 
-    auto log_level = is_remote_read ? Poco::Message::PRIO_INFORMATION : Poco::Message::PRIO_DEBUG;
     auto exec_func = [&]() -> grpc::Status {
         auto wait_ms = watch.elapsedMilliseconds();
         if (wait_ms > 1000)
@@ -452,10 +435,11 @@ grpc::Status FlashService::CoprocessorStream(
         });
         CoprocessorContext cop_context(*db_context, request->context(), *grpc_context);
         auto request_identifier = fmt::format(
-            "Coprocessor(stream), is_remote_read: {}, start_ts: {}, region_info: {}",
+            "Coprocessor(stream), is_remote_read: {}, start_ts: {}, region_info: {}, resource_group: {}",
             is_remote_read,
             request->start_ts(),
-            region_info);
+            region_info,
+            request->context().resource_control_context().resource_group_name());
         CoprocessorHandler<true> cop_handler(cop_context, request, writer, request_identifier);
         return cop_handler.execute();
     };
@@ -475,12 +459,7 @@ grpc::Status FlashService::CoprocessorStream(
     grpc::Status ret
         = cop_stream_limiter->executeFor(std::move(exec_func), max_queued_duration_ms, std::move(timeout_func));
 
-    LOG_IMPL(
-        log,
-        log_level,
-        "Handle coprocessor stream request done: {}, {}",
-        magic_enum::enum_name(ret.error_code()),
-        ret.error_message());
+    LOG_IMPL(log, log_level, "Handle coprocessor stream request done: {}, {}", ret.error_code(), ret.error_message());
     return ret;
 }
 
@@ -490,14 +469,7 @@ grpc::Status FlashService::DispatchMPPTask(
     mpp::DispatchTaskResponse * response)
 {
     CPUAffinityManager::getInstance().bindSelfGrpcThread();
-    const auto & task_meta = request->meta();
-    LOG_INFO(
-        log,
-        "Handling mpp dispatch request, task: {}, resource_group: {}, conn_id: {}, conn_alias: {}",
-        MPPTaskId(task_meta).toString(),
-        task_meta.resource_group_name(),
-        task_meta.connection_id(),
-        task_meta.connection_alias());
+    LOG_INFO(log, "Handling mpp dispatch request, task meta: {}", request->meta().DebugString());
     auto check_result = checkGrpcContext(grpc_context);
     if (!check_result.ok())
         return check_result;
@@ -624,20 +596,7 @@ grpc::Status FlashService::EstablishMPPConnection(
     CPUAffinityManager::getInstance().bindSelfGrpcThread();
     // Establish a pipe for data transferring. The pipes have registered by the task in advance.
     // We need to find it out and bind the grpc stream with it.
-    const auto & receiver_meta = request->receiver_meta();
-    const auto & sender_meta = request->sender_meta();
-    assert(receiver_meta.resource_group_name() == sender_meta.resource_group_name());
-    assert(receiver_meta.connection_id() == sender_meta.connection_id());
-    assert(receiver_meta.connection_alias() == receiver_meta.connection_alias());
-    LOG_INFO(
-        log,
-        "Handling establish mpp connection request, receiver: {}, sender: {}, resource_group: {}, conn_id: {}, "
-        "conn_alias: {}",
-        MPPTaskId(receiver_meta).toString(),
-        MPPTaskId(sender_meta).toString(),
-        receiver_meta.resource_group_name(),
-        receiver_meta.connection_id(),
-        receiver_meta.connection_alias());
+    LOG_INFO(log, "Handling establish mpp connection request: {}", request->DebugString());
 
     auto check_result = checkGrpcContext(grpc_context);
     if (!check_result.ok())
@@ -1109,12 +1068,12 @@ grpc::Status FlashService::FetchDisaggPages(
         for (auto page_id : request->page_ids())
             read_ids.emplace_back(page_id);
 
-        auto stream_writer = std::make_unique<WNFetchPagesStreamWriter>(
-            [sync_writer](const disaggregated::PagesPacket & packet) { sync_writer->Write(packet); },
-            task.seg_task,
+        auto stream_writer = WNFetchPagesStreamWriter::build(
+            task,
             read_ids,
-            context->getSettingsRef());
-        stream_writer->syncWrite();
+            context->getSettingsRef().dt_fetch_pages_packet_limit_size);
+        stream_writer->pipeTo(sync_writer);
+        stream_writer.reset();
 
         LOG_INFO(logger, "FetchDisaggPages respond finished, task_id={}", task_id);
         return grpc::Status::OK;

@@ -43,7 +43,7 @@ public:
         , before_filter_actions(before_filter_actions_)
     {}
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 

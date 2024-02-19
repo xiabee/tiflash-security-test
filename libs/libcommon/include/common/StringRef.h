@@ -15,7 +15,6 @@
 #pragma once
 
 #include <city.h>
-#include <common/defines.h>
 #include <common/mem_utils.h>
 #include <common/mem_utils_opt.h>
 #include <common/types.h>
@@ -71,7 +70,6 @@ struct StringRef
     constexpr StringRef() = default;
 
     std::string toString() const { return std::string(data, size); }
-    std::string_view toStringView() const { return std::string_view(data, size); }
 
     explicit operator std::string() const { return toString(); }
     constexpr explicit operator std::string_view() const { return {data, size}; }
@@ -253,8 +251,3 @@ inline void set(StringRef & x)
 
 
 std::ostream & operator<<(std::ostream & os, const StringRef & str);
-
-ALWAYS_INLINE inline auto format_as(StringRef ref)
-{
-    return ref.toStringView();
-}

@@ -18,7 +18,6 @@
 #include <boost_wrapper/string.h>
 
 #include <boost/algorithm/string/predicate.hpp>
-#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -366,11 +365,7 @@ LogIterator::~LogIterator()
 {
     if (err_info.has_value())
     {
-        LOG_DEBUG(
-            log,
-            "LogIterator search end with error {} at line {}.",
-            magic_enum::enum_name(err_info->second),
-            err_info->first);
+        LOG_DEBUG(log, "LogIterator search end with error {} at line {}.", err_info->second, err_info->first);
     }
 }
 

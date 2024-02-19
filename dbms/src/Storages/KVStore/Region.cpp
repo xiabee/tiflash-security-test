@@ -57,16 +57,16 @@ DecodedLockCFValuePtr Region::getLockInfo(const RegionLockReadQuery & query) con
 
 void Region::insert(const std::string & cf, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
-    insert(NameToCF(cf), std::move(key), std::move(value), mode);
+    return insert(NameToCF(cf), std::move(key), std::move(value), mode);
 }
 
 void Region::insert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    doInsert(type, std::move(key), std::move(value), mode);
+    return doInsert(type, std::move(key), std::move(value), mode);
 }
 
-size_t Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
+void Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
     if (getClusterRaftstoreVer() == RaftstoreVer::V2)
     {
@@ -76,12 +76,11 @@ size_t Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && valu
             {
                 // We can't assert the key exists in write_cf here,
                 // since it may be already written into DeltaTree.
-                return 0;
+                return;
             }
         }
     }
-    auto ans = data.insert(type, std::move(key), std::move(value), mode);
-    return ans;
+    data.insert(type, std::move(key), std::move(value), mode);
 }
 
 void Region::remove(const std::string & cf, const TiKVKey & key)
@@ -342,11 +341,6 @@ Region::Region(DB::RegionMeta && meta_, const TiFlashRaftProxyHelper * proxy_hel
     , mapped_table_id(meta.getRange()->getMappedTableID())
     , proxy_helper(proxy_helper_)
 {}
-
-Region::~Region()
-{
-    data.reportDealloc(data.cf_data_size);
-}
 
 TableID Region::getMappedTableID() const
 {

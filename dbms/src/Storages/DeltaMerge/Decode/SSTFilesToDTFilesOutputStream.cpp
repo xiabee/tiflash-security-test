@@ -185,8 +185,7 @@ bool SSTFilesToDTFilesOutputStream<ChildStream>::newDTFileStream()
         parent_path,
         storage->createChecksumConfig(),
         context.getGlobalContext().getSettingsRef().dt_small_file_size_threshold,
-        context.getGlobalContext().getSettingsRef().dt_merged_file_max_size,
-        storage->getKeyspaceID());
+        context.getGlobalContext().getSettingsRef().dt_merged_file_max_size);
     dt_stream = std::make_unique<DMFileBlockOutputStream>(context, dt_file, *(schema_snap->column_defines));
     dt_stream->writePrefix();
     ingest_files.emplace_back(dt_file);
@@ -251,7 +250,7 @@ void SSTFilesToDTFilesOutputStream<ChildStream>::write()
     size_t cur_deleted_rows = 0;
     while (true)
     {
-        if (prehandle_task->isAbort())
+        if (prehandle_task->abort_flag.load(std::memory_order_seq_cst))
         {
             break;
         }

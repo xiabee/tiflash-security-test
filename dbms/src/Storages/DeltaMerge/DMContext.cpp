@@ -19,11 +19,11 @@ namespace DB::DM
 {
 WriteLimiterPtr DMContext::getWriteLimiter() const
 {
-    return global_context.getWriteLimiter();
+    return db_context.getWriteLimiter();
 }
 ReadLimiterPtr DMContext::getReadLimiter() const
 {
-    return global_context.getReadLimiter();
+    return db_context.getReadLimiter();
 }
 
 } // namespace DB::DM

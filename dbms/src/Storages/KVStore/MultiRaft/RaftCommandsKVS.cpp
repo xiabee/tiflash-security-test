@@ -14,6 +14,7 @@
 
 #include <Common/FmtUtils.h>
 #include <Common/Stopwatch.h>
+#include <Common/SyncPoint/SyncPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Interpreters/Context.h>
@@ -134,7 +135,7 @@ EngineStoreApplyRes KVStore::handleUselessAdminRaftCmd(
             curr_region,
             region_task_lock,
             PersistRegionReason::UselessAdminCommand,
-            raft_cmdpb::AdminCmdType_Name(cmd_type).c_str());
+            fmt::format("{}", cmd_type).c_str());
         return EngineStoreApplyRes::Persist;
     }
     return EngineStoreApplyRes::None;

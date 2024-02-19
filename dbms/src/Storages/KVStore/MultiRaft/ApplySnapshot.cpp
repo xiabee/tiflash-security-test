@@ -16,12 +16,9 @@
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/KVStore/Decode/RegionTable.h>
 #include <Storages/KVStore/FFI/ProxyFFI.h>
 #include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/MultiRaft/Disagg/CheckpointIngestInfo.h>
-#include <Storages/KVStore/MultiRaft/Disagg/FastAddPeerContext.h>
 #include <Storages/KVStore/Region.h>
 #include <Storages/KVStore/TMTContext.h>
 #include <Storages/StorageDeltaMerge.h>
@@ -116,18 +113,7 @@ void KVStore::checkAndApplyPreHandledSnapshot(const RegionPtrWrap & new_region, 
             }
         }
     }
-    // NOTE Do NOT move it to prehandle stage!
-    // Otherwise a fap snapshot may be cleaned when prehandling after restarted.
-    if (tmt.getContext().getSharedContextDisagg()->isDisaggregatedStorageMode())
-    {
-        if constexpr (!std::is_same_v<RegionPtrWrap, RegionPtrWithCheckpointInfo>)
-        {
-            auto fap_ctx = tmt.getContext().getSharedContextDisagg()->fap_context;
-            auto region_id = new_region->id();
-            // Everytime we meet a regular snapshot, we try to clean obsolete fap ingest info.
-            fap_ctx->resolveFapSnapshotState(tmt, proxy_helper, region_id, true);
-        }
-    }
+
     onSnapshot(new_region, old_region, old_applied_index, tmt);
 }
 
@@ -297,7 +283,6 @@ void KVStore::onSnapshot(
             manage_lock.index.add(new_region);
         }
 
-        GET_METRIC(tiflash_raft_write_flow_bytes, type_snapshot_uncommitted).Observe(new_region->dataSize());
         persistRegion(*new_region, region_lock, PersistRegionReason::ApplySnapshotCurRegion, "");
 
         tmt.getRegionTable().shrinkRegionRange(*new_region);
@@ -348,7 +333,7 @@ template void KVStore::onSnapshot<RegionPtrWithSnapshotFiles>(
     UInt64,
     TMTContext &);
 
-void KVStore::handleIngestCheckpoint(RegionPtr region, CheckpointIngestInfoPtr checkpoint_info, TMTContext & tmt)
+void KVStore::handleIngestCheckpoint(RegionPtr region, CheckpointInfoPtr checkpoint_info, TMTContext & tmt)
 {
     applyPreHandledSnapshot(RegionPtrWithCheckpointInfo{region, checkpoint_info}, tmt);
 }

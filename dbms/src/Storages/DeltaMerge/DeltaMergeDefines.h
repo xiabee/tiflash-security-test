@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <type_traits>
 
 namespace TiDB
 {
@@ -58,6 +59,7 @@ class DTEntryIterator;
 template <size_t M, size_t F, size_t S, typename TAllocator = Allocator<false>>
 class DTEntriesCopy;
 
+struct RefTuple;
 
 struct EmptyValueSpace
 {
@@ -182,6 +184,6 @@ struct fmt::formatter<DB::DM::ColumnDefine>
     auto format(const DB::DM::ColumnDefine & cd, FormatContext & ctx) const -> decltype(ctx.out())
     {
         // Use '/' as separators because column names often have '_'.
-        return fmt::format_to(ctx.out(), "{}/{}/{}", cd.id, cd.name, cd.type->getName());
+        return format_to(ctx.out(), "{}/{}/{}", cd.id, cd.name, cd.type->getName());
     }
 };

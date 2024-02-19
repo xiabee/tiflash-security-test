@@ -100,19 +100,23 @@ public:
         // Convert from data_sizes to the offset of each field
         PageFieldOffsetChecksums offsets;
         PageFieldOffset off = 0;
-        for (const auto data_sz : data_sizes)
+        for (auto data_sz : data_sizes)
         {
             offsets.emplace_back(off, 0);
             off += data_sz;
         }
-        RUNTIME_CHECK_MSG(
-            data_sizes.empty() || off == size,
-            "Try to put Page with fields, but page size and fields total size not match "
-            "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
-            page_id,
-            data_sizes.size(),
-            size,
-            off);
+        if (unlikely(!data_sizes.empty() && off != size))
+        {
+            throw Exception(
+                fmt::format(
+                    "Try to put Page with fields, but page size and fields total size not match "
+                    "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
+                    page_id,
+                    data_sizes.size(),
+                    size,
+                    off),
+                ErrorCodes::LOGICAL_ERROR);
+        }
 
         Write w{WriteBatchWriteType::PUT, page_id, tag, read_buffer, size, 0, std::move(offsets), 0, 0, {}};
         total_data_size += size;
@@ -216,8 +220,6 @@ public:
         sequence = 0;
         total_data_size = 0;
     }
-
-    size_t size() const { return writes.size(); }
 
     SequenceID getSequence() const { return sequence; }
 

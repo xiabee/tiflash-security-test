@@ -39,8 +39,13 @@ void TableStatus::read(ReadBuffer & in)
     }
 }
 
-void TablesStatusRequest::write(WriteBuffer & out) const
+void TablesStatusRequest::write(WriteBuffer & out, UInt64 server_protocol_revision) const
 {
+    if (server_protocol_revision < DBMS_MIN_REVISION_WITH_TABLES_STATUS)
+        throw Exception(
+            "Logical error: method TablesStatusRequest::write is called for unsupported server revision",
+            ErrorCodes::LOGICAL_ERROR);
+
     writeVarUInt(tables.size(), out);
     for (const auto & table_name : tables)
     {
@@ -49,8 +54,13 @@ void TablesStatusRequest::write(WriteBuffer & out) const
     }
 }
 
-void TablesStatusRequest::read(ReadBuffer & in)
+void TablesStatusRequest::read(ReadBuffer & in, UInt64 client_protocol_revision)
 {
+    if (client_protocol_revision < DBMS_MIN_REVISION_WITH_TABLES_STATUS)
+        throw Exception(
+            "method TablesStatusRequest::read is called for unsupported client revision",
+            ErrorCodes::LOGICAL_ERROR);
+
     size_t size = 0;
     readVarUInt(size, in);
 
@@ -66,8 +76,13 @@ void TablesStatusRequest::read(ReadBuffer & in)
     }
 }
 
-void TablesStatusResponse::write(WriteBuffer & out) const
+void TablesStatusResponse::write(WriteBuffer & out, UInt64 client_protocol_revision) const
 {
+    if (client_protocol_revision < DBMS_MIN_REVISION_WITH_TABLES_STATUS)
+        throw Exception(
+            "method TablesStatusResponse::write is called for unsupported client revision",
+            ErrorCodes::LOGICAL_ERROR);
+
     writeVarUInt(table_states_by_id.size(), out);
     for (const auto & kv : table_states_by_id)
     {
@@ -80,8 +95,13 @@ void TablesStatusResponse::write(WriteBuffer & out) const
     }
 }
 
-void TablesStatusResponse::read(ReadBuffer & in)
+void TablesStatusResponse::read(ReadBuffer & in, UInt64 server_protocol_revision)
 {
+    if (server_protocol_revision < DBMS_MIN_REVISION_WITH_TABLES_STATUS)
+        throw Exception(
+            "method TablesStatusResponse::read is called for unsupported server revision",
+            ErrorCodes::LOGICAL_ERROR);
+
     size_t size = 0;
     readVarUInt(size, in);
 

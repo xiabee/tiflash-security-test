@@ -14,11 +14,11 @@
 
 #include <Client/Connection.h>
 #include <Client/TimeoutSetter.h>
+#include <Common/ClickHouseRevision.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
 #include <Common/NetException.h>
-#include <Common/TiFlashBuildInfo.h>
 #include <Common/config.h>
 #include <Core/Defines.h>
 #include <DataStreams/NativeBlockInputStream.h>
@@ -44,6 +44,7 @@ namespace ErrorCodes
 {
 extern const int NETWORK_ERROR;
 extern const int SOCKET_TIMEOUT;
+extern const int SERVER_REVISION_IS_TOO_OLD;
 extern const int UNEXPECTED_PACKET_FROM_SERVER;
 extern const int UNKNOWN_PACKET_FROM_SERVER;
 extern const int SUPPORT_IS_DISABLED;
@@ -97,7 +98,7 @@ void Connection::connect()
             server_name,
             server_version_major,
             server_version_minor,
-            server_version_patch);
+            server_revision);
     }
     catch (Poco::Net::NetException & e)
     {
@@ -130,10 +131,10 @@ void Connection::disconnect()
 void Connection::sendHello()
 {
     writeVarUInt(Protocol::Client::Hello, *out);
-    writeStringBinary(fmt::format("{} {}", TiFlashBuildInfo::getName(), client_name), *out);
-    writeVarUInt(TiFlashBuildInfo::getMajorVersion(), *out);
-    writeVarUInt(TiFlashBuildInfo::getMinorVersion(), *out);
-    writeVarUInt(TiFlashBuildInfo::getPatchVersion(), *out);
+    writeStringBinary((DBMS_NAME " ") + client_name, *out);
+    writeVarUInt(DBMS_VERSION_MAJOR, *out);
+    writeVarUInt(DBMS_VERSION_MINOR, *out);
+    writeVarUInt(ClickHouseRevision::get(), *out);
     writeStringBinary(default_database, *out);
     writeStringBinary(user, *out);
     writeStringBinary(password, *out);
@@ -153,9 +154,15 @@ void Connection::receiveHello()
         readStringBinary(server_name, *in);
         readVarUInt(server_version_major, *in);
         readVarUInt(server_version_minor, *in);
-        readVarUInt(server_version_patch, *in);
-        readStringBinary(server_timezone, *in);
-        readStringBinary(server_display_name, *in);
+        readVarUInt(server_revision, *in);
+        if (server_revision >= DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE)
+        {
+            readStringBinary(server_timezone, *in);
+        }
+        if (server_revision >= DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME)
+        {
+            readStringBinary(server_display_name, *in);
+        }
     }
     else if (packet_type == Protocol::Server::Exception)
         receiveException()->rethrow();
@@ -192,7 +199,7 @@ UInt16 Connection::getPort() const
     return port;
 }
 
-void Connection::getServerVersion(String & name, UInt64 & version_major, UInt64 & version_minor, UInt64 & version_patch)
+void Connection::getServerVersion(String & name, UInt64 & version_major, UInt64 & version_minor, UInt64 & revision)
 {
     if (!connected)
         connect();
@@ -200,7 +207,7 @@ void Connection::getServerVersion(String & name, UInt64 & version_major, UInt64 
     name = server_name;
     version_major = server_version_major;
     version_minor = server_version_minor;
-    version_patch = server_version_patch;
+    revision = server_revision;
 }
 
 const String & Connection::getServerTimezone()
@@ -277,7 +284,7 @@ TablesStatusResponse Connection::getTablesStatus(const TablesStatusRequest & req
     TimeoutSetter timeout_setter(*socket, sync_request_timeout, true);
 
     writeVarUInt(Protocol::Client::TablesStatusRequest, *out);
-    request.write(*out);
+    request.write(*out, server_revision);
     out->next();
 
     UInt64 response_type = 0;
@@ -289,7 +296,7 @@ TablesStatusResponse Connection::getTablesStatus(const TablesStatusRequest & req
         throwUnexpectedPacket(response_type, "TablesStatusResponse");
 
     TablesStatusResponse response;
-    response.read(*in);
+    response.read(*in, server_revision);
     return response;
 }
 
@@ -313,6 +320,7 @@ void Connection::sendQuery(
     writeStringBinary(query_id, *out);
 
     /// Client info.
+    if (server_revision >= DBMS_MIN_REVISION_WITH_CLIENT_INFO)
     {
         ClientInfo client_info_to_send;
 
@@ -321,7 +329,7 @@ void Connection::sendQuery(
             /// No client info passed - means this query initiated by me.
             client_info_to_send.query_kind = ClientInfo::QueryKind::INITIAL_QUERY;
             client_info_to_send.fillOSUserHostNameAndVersionInfo();
-            client_info_to_send.client_name = fmt::format("{} {}", TiFlashBuildInfo::getName(), client_name);
+            client_info_to_send.client_name = (DBMS_NAME " ") + client_name;
         }
         else
         {
@@ -330,7 +338,7 @@ void Connection::sendQuery(
             client_info_to_send.query_kind = ClientInfo::QueryKind::SECONDARY_QUERY;
         }
 
-        client_info_to_send.write(*out);
+        client_info_to_send.write(*out, server_revision);
     }
 
     /// Per query settings.
@@ -374,7 +382,8 @@ void Connection::sendData(const Block & block, const String & name)
         else
             maybe_compressed_out = out;
 
-        block_out = std::make_shared<NativeBlockOutputStream>(*maybe_compressed_out, 1, block.cloneEmpty());
+        block_out
+            = std::make_shared<NativeBlockOutputStream>(*maybe_compressed_out, server_revision, block.cloneEmpty());
     }
 
     writeVarUInt(Protocol::Client::Data, *out);
@@ -558,7 +567,7 @@ void Connection::initBlockInput()
         else
             maybe_compressed_in = in;
 
-        block_in = std::make_shared<NativeBlockInputStream>(*maybe_compressed_in, 1);
+        block_in = std::make_shared<NativeBlockInputStream>(*maybe_compressed_in, server_revision);
     }
 }
 
@@ -584,7 +593,7 @@ std::unique_ptr<Exception> Connection::receiveException()
 Progress Connection::receiveProgress()
 {
     Progress progress;
-    progress.read(*in);
+    progress.read(*in, server_revision);
     return progress;
 }
 

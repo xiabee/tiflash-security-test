@@ -28,7 +28,6 @@
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <common/logger_useful.h>
-
 namespace DB::DM
 {
 class DMFile;
@@ -58,6 +57,23 @@ public:
         READABLE,
         DROPPED,
     };
+
+    static String statusString(Status status)
+    {
+        switch (status)
+        {
+        case WRITABLE:
+            return "WRITABLE";
+        case WRITING:
+            return "WRITING";
+        case READABLE:
+            return "READABLE";
+        case DROPPED:
+            return "DROPPED";
+        default:
+            throw Exception("Unexpected status: " + DB::toString(static_cast<int>(status)));
+        }
+    }
 
     struct ReadMetaMode
     {
@@ -203,7 +219,6 @@ public:
         DMConfigurationOpt configuration = std::nullopt,
         UInt64 small_file_size_threshold = 128 * 1024,
         UInt64 merged_file_max_size = 16 * 1024 * 1024,
-        KeyspaceID keyspace_id = NullspaceID,
         DMFileFormat::Version = STORAGE_FORMAT_CURRENT.dm_file);
 
     static DMFilePtr restore(
@@ -211,8 +226,7 @@ public:
         UInt64 file_id,
         UInt64 page_id,
         const String & parent_path,
-        const ReadMetaMode & read_meta_mode,
-        KeyspaceID keyspace_id = NullspaceID);
+        const ReadMetaMode & read_meta_mode);
 
     struct ListOptions
     {
@@ -226,8 +240,7 @@ public:
     static std::set<UInt64> listAllInPath(
         const FileProviderPtr & file_provider,
         const String & parent_path,
-        const ListOptions & options,
-        KeyspaceID keyspace_id = NullspaceID);
+        const ListOptions & options);
 
     // static helper function for getting path
     static String getPathByStatus(const String & parent_path, UInt64 file_id, DMFile::Status status);
@@ -316,7 +329,7 @@ public:
     }
 
     static String metav2FileName() { return "meta"; }
-    std::vector<String> listFilesForUpload() const;
+    std::vector<String> listFilesForUpload();
     void switchToRemote(const S3::DMFileOID & oid);
 
 #ifndef DBMS_PUBLIC_GTEST
@@ -332,11 +345,9 @@ public:
         UInt64 small_file_size_threshold_ = 128 * 1024,
         UInt64 merged_file_max_size_ = 16 * 1024 * 1024,
         DMConfigurationOpt configuration_ = std::nullopt,
-        DMFileFormat::Version version_ = STORAGE_FORMAT_CURRENT.dm_file,
-        KeyspaceID keyspace_id_ = NullspaceID)
+        DMFileFormat::Version version_ = STORAGE_FORMAT_CURRENT.dm_file)
         : file_id(file_id_)
         , page_id(page_id_)
-        , keyspace_id(keyspace_id_)
         , parent_path(std::move(parent_path_))
         , status(status_)
         , configuration(std::move(configuration_))
@@ -412,7 +423,7 @@ public:
     static String colMarkFileName(const FileNameBase & file_name_base);
 
     using OffsetAndSize = std::tuple<size_t, size_t>;
-    OffsetAndSize writeMetaToBuffer(WriteBuffer & buffer) const;
+    OffsetAndSize writeMetaToBuffer(WriteBuffer & buffer);
     OffsetAndSize writePackStatToBuffer(WriteBuffer & buffer);
     OffsetAndSize writePackPropertyToBuffer(WriteBuffer & buffer, UnifiedDigestBase * digest = nullptr);
 
@@ -453,10 +464,10 @@ public:
     static constexpr size_t meta_buffer_size = 64 * 1024;
     void finalizeMetaV2(WriteBuffer & buffer);
     MetaBlockHandle writeSLPackStatToBuffer(WriteBuffer & buffer);
-    MetaBlockHandle writeSLPackPropertyToBuffer(WriteBuffer & buffer) const;
+    MetaBlockHandle writeSLPackPropertyToBuffer(WriteBuffer & buffer);
     MetaBlockHandle writeColumnStatToBuffer(WriteBuffer & buffer);
     MetaBlockHandle writeMergedSubFilePosotionsToBuffer(WriteBuffer & buffer);
-    std::vector<char> readMetaV2(const FileProviderPtr & file_provider) const;
+    std::vector<char> readMetaV2(const FileProviderPtr & file_provider);
     void parseMetaV2(std::string_view buffer);
     void parseColumnStat(std::string_view buffer);
     void parseMergedSubFilePos(std::string_view buffer);
@@ -473,8 +484,6 @@ public:
     UInt64 file_id;
     // It is the page_id that represent this file in the PageStorage. It could be the same as file id.
     UInt64 page_id;
-    // The id of the keyspace that this file belongs to.
-    KeyspaceID keyspace_id;
     String parent_path;
 
     PackStats pack_stats;

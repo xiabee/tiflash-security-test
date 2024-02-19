@@ -21,6 +21,7 @@
 
 #include <map>
 #include <set>
+#include <unordered_map>
 
 namespace DB
 {
@@ -77,12 +78,15 @@ public:
     std::string_view getFieldData(size_t index) const
     {
         auto iter = field_offsets.find(FieldOffsetInsidePage(index));
-        RUNTIME_CHECK_MSG(
-            iter != field_offsets.end(),
-            "Try to getFieldData with invalid field index [page_id={}] [valid={}] [field_index={}]",
-            page_id,
-            is_valid,
-            index);
+        if (unlikely(iter == field_offsets.end()))
+            throw Exception(
+                fmt::format(
+                    "Try to getFieldData with invalid field index [page_id={}] [valid={}] [field_index={}]",
+                    page_id,
+                    is_valid,
+                    index),
+                ErrorCodes::LOGICAL_ERROR);
+
         PageFieldOffset beg = iter->offset;
         ++iter;
         PageFieldOffset end = (iter == field_offsets.end() ? data.size() : iter->offset);

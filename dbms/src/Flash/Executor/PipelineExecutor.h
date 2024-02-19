@@ -67,7 +67,7 @@ public:
 
     int estimateNewThreadCount() override;
 
-    UInt64 collectCPUTimeNs() override;
+    RU collectRequestUnit() override;
 
     Block getSampleBlock() const override;
 

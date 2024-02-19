@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <BaseFile/PosixRandomAccessFile.h>
-#include <BaseFile/PosixWritableFile.h>
 #include <Common/FailPoint.h>
 #include <Core/ColumnWithTypeAndName.h>
+#include <Encryption/PosixRandomAccessFile.h>
+#include <Encryption/PosixWritableFile.h>
 #include <Interpreters/Context.h>
 #include <Poco/DirectoryIterator.h>
 #include <Storages/DeltaMerge/DMContext.h>
@@ -113,7 +113,6 @@ public:
             std::move(configuration),
             128 * 1024,
             16 * 1024 * 1024,
-            NullspaceID,
             modeToVersion(mode));
         table_columns = std::make_shared<ColumnDefines>();
         column_cache = std::make_shared<ColumnCache>();
@@ -130,7 +129,7 @@ public:
         if (table_columns != cols)
             *table_columns = *cols;
         *path_pool = db_context->getPathPool().withTable("test", "t1", false);
-        dm_context = DMContext::createUnique(
+        dm_context = std::make_unique<DMContext>( //
             *db_context,
             path_pool,
             storage_pool,
@@ -622,14 +621,8 @@ try
         Block block2 = DMTestEnv::prepareSimpleWriteBlockWithNullable(num_rows_write / 2, num_rows_write);
         auto mode = DMFileMode::DirectoryChecksum;
         auto configuration = createConfiguration(mode);
-        dmfile1 = DMFile::create(
-            1,
-            parent_path,
-            std::move(configuration),
-            128 * 1024,
-            16 * 1024 * 1024,
-            NullspaceID,
-            DMFileFormat::V2);
+        dmfile1
+            = DMFile::create(1, parent_path, std::move(configuration), 128 * 1024, 16 * 1024 * 1024, DMFileFormat::V2);
         auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dmfile1, *cols);
         stream->writePrefix();
         stream->write(block1, block_property1);
@@ -641,14 +634,8 @@ try
         Block block2 = DMTestEnv::prepareSimpleWriteBlockWithNullable(num_rows_write / 2, num_rows_write);
         auto mode = DMFileMode::DirectoryMetaV2;
         auto configuration = createConfiguration(mode);
-        dmfile2 = DMFile::create(
-            2,
-            parent_path,
-            std::move(configuration),
-            128 * 1024,
-            16 * 1024 * 1024,
-            NullspaceID,
-            DMFileFormat::V3);
+        dmfile2
+            = DMFile::create(2, parent_path, std::move(configuration), 128 * 1024, 16 * 1024 * 1024, DMFileFormat::V3);
         auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dmfile2, *cols);
         stream->writePrefix();
         stream->write(block1, block_property1);
@@ -746,14 +733,7 @@ try
     Block block2 = DMTestEnv::prepareSimpleWriteBlockWithNullable(num_rows_write / 2, num_rows_write);
     auto mode = DMFileMode::DirectoryChecksum;
     auto configuration = createConfiguration(mode);
-    dmfile = DMFile::create(
-        1,
-        parent_path,
-        std::move(configuration),
-        128 * 1024,
-        16 * 1024 * 1024,
-        NullspaceID,
-        DMFileFormat::V3);
+    dmfile = DMFile::create(1, parent_path, std::move(configuration), 128 * 1024, 16 * 1024 * 1024, DMFileFormat::V3);
     auto stream = std::make_shared<DMFileBlockOutputStream>(dbContext(), dmfile, *cols);
     stream->writePrefix();
     stream->write(block1, block_property1);
@@ -797,14 +777,8 @@ try
     auto mode = GetParam();
     auto configuration = createConfiguration(mode);
 
-    dm_file = DMFile::create(
-        id,
-        parent_path,
-        std::move(configuration),
-        128 * 1024,
-        16 * 1024 * 1024,
-        NullspaceID,
-        modeToVersion(mode));
+    dm_file
+        = DMFile::create(id, parent_path, std::move(configuration), 128 * 1024, 16 * 1024 * 1024, modeToVersion(mode));
     // Right after created, the fil is not abled to GC and it is ignored by `listAllInPath`
     EXPECT_FALSE(dm_file->canGC());
     DMFile::ListOptions options;
@@ -1046,8 +1020,8 @@ namespace
 RSOperatorPtr toRSFilter(const ColumnDefine & cd, const HandleRange & range)
 {
     Attr attr = {cd.name, cd.id, cd.type};
-    auto left = createGreaterEqual(attr, Field(range.start));
-    auto right = createLess(attr, Field(range.end));
+    auto left = createGreaterEqual(attr, Field(range.start), -1);
+    auto right = createLess(attr, Field(range.end), -1);
     return createAnd({left, right});
 }
 } // namespace
@@ -1171,10 +1145,10 @@ try
     filters.emplace_back(one_part_filter, span_per_part); // only first part
     // <filter, num_rows_should_read>
     // (first range) And (Unsuppported) -> should filter some chunks by range
-    filters.emplace_back(createAnd({one_part_filter, createUnsupported("test", "test")}), span_per_part);
+    filters.emplace_back(createAnd({one_part_filter, createUnsupported("test", "test", false)}), span_per_part);
     // <filter, num_rows_should_read>
     // (first range) Or (Unsupported) -> should NOT filter any chunk
-    filters.emplace_back(createOr({one_part_filter, createUnsupported("test", "test")}), num_rows_write);
+    filters.emplace_back(createOr({one_part_filter, createUnsupported("test", "test", false)}), num_rows_write);
     auto test_read_filter = [&](const DM::RSOperatorPtr & filter, const size_t num_rows_should_read) {
         // Test read
         DMFileBlockInputStreamBuilder builder(dbContext());
@@ -1469,14 +1443,7 @@ public:
 
         path_pool = std::make_shared<StoragePathPool>(db_context->getPathPool().withTable("test", "t", false));
         storage_pool = std::make_shared<StoragePool>(*db_context, NullspaceID, table_id, *path_pool, "test.t1");
-        dm_file = DMFile::create(
-            0,
-            path,
-            std::move(configuration),
-            128 * 1024,
-            16 * 1024 * 1024,
-            NullspaceID,
-            modeToVersion(mode));
+        dm_file = DMFile::create(0, path, std::move(configuration), 128 * 1024, 16 * 1024 * 1024, modeToVersion(mode));
         table_columns = std::make_shared<ColumnDefines>();
         column_cache = std::make_shared<ColumnCache>();
 
@@ -1493,7 +1460,7 @@ public:
 
         *table_columns = *cols;
 
-        dm_context = DMContext::createUnique(
+        dm_context = std::make_unique<DMContext>( //
             *db_context,
             path_pool,
             storage_pool,

@@ -27,7 +27,7 @@ restoreFromCheckpoints(
     PageStorage::VersionedPageEntries & version_set,
     PageStorage::StatisticsInfo & info,
     const String & storage_name,
-    LoggerPtr logger)
+    Poco::Logger * logger)
 {
     // The sequence number of checkpoint. We should ignore the WriteBatch with
     // smaller number than checkpoint's.

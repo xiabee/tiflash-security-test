@@ -27,14 +27,11 @@ extern const int NO_ELEMENTS_IN_CONFIG;
 /// Set the configuration by name.
 void Settings::set(const String & name, const Field & value)
 {
-#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME)(NAME).set(value);
+#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) NAME.set(value);
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else
-    {
-        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
-    }
+    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
 
 #undef TRY_SET
 }
@@ -42,14 +39,11 @@ void Settings::set(const String & name, const Field & value)
 /// Set the configuration by name. Read the binary serialized value from the buffer (for interserver interaction).
 void Settings::set(const String & name, ReadBuffer & buf)
 {
-#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME)(NAME).set(buf);
+#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) NAME.set(buf);
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else
-    {
-        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
-    }
+    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
 
 #undef TRY_SET
 }
@@ -59,12 +53,9 @@ void Settings::ignore(const String & name, ReadBuffer & buf)
 {
 #define TRY_IGNORE(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) decltype(NAME)(DEFAULT).set(buf);
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_IGNORE)
-    else
-    {
-        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
-    }
+    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
 
 #undef TRY_IGNORE
 }
@@ -73,28 +64,22 @@ void Settings::ignore(const String & name, ReadBuffer & buf)
     */
 void Settings::set(const String & name, const String & value)
 {
-#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME)(NAME).set(value);
+#define TRY_SET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) NAME.set(value);
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_SET)
-    else
-    {
-        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
-    }
+    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
 
 #undef TRY_SET
 }
 
 String Settings::get(const String & name) const
 {
-#define GET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) return (NAME).toString();
+#define GET(TYPE, NAME, DEFAULT, DESCRIPTION) else if (name == #NAME) return NAME.toString();
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(GET)
-    else
-    {
-        throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING);
-    }
+    else { throw Exception("Unknown setting " + name, ErrorCodes::UNKNOWN_SETTING); }
 
 #undef GET
 }
@@ -104,16 +89,13 @@ bool Settings::tryGet(const String & name, String & value) const
 #define TRY_GET(TYPE, NAME, DEFAULT, DESCRIPTION) \
     else if (name == #NAME)                       \
     {                                             \
-        value = (NAME).toString();                \
+        value = NAME.toString();                  \
         return true;                              \
     }
 
-    if (false) {} // NOLINT(readability-simplify-boolean-expr)
+    if (false) {}
     APPLY_FOR_SETTINGS(TRY_GET)
-    else
-    {
-        return false;
-    }
+    else { return false; }
 
 #undef TRY_GET
 }
@@ -184,10 +166,10 @@ void Settings::deserialize(ReadBuffer & buf)
 void Settings::serialize(WriteBuffer & buf) const
 {
 #define WRITE(TYPE, NAME, DEFAULT, DESCRIPTION) \
-    if ((NAME).changed)                         \
+    if (NAME.changed)                           \
     {                                           \
         writeStringBinary(#NAME, buf);          \
-        (NAME).write(buf);                      \
+        NAME.write(buf);                        \
     }
 
     APPLY_FOR_SETTINGS(WRITE)
@@ -196,23 +178,6 @@ void Settings::serialize(WriteBuffer & buf) const
     writeStringBinary("", buf);
 
 #undef WRITE
-}
-
-String Settings::toString() const
-{
-    FmtBuffer buf;
-#define WRITE(TYPE, NAME, DEFAULT, DESCRIPTION)                                   \
-    if ((NAME).changed)                                                           \
-    {                                                                             \
-        buf.fmtAppend("{}={}(default {}), ", #NAME, (NAME).toString(), #DEFAULT); \
-    }
-
-    APPLY_FOR_SETTINGS(WRITE)
-
-#undef WRITE
-    if (buf.size() > 2)
-        buf.resize(buf.size() - 2);
-    return buf.toString();
 }
 
 } // namespace DB

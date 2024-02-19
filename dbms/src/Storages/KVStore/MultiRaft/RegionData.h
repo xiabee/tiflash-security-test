@@ -37,11 +37,7 @@ public:
     using WriteCFIter = RegionWriteCFData::Map::iterator;
     using ConstWriteCFIter = RegionWriteCFData::Map::const_iterator;
 
-    static void reportAlloc(size_t delta);
-    static void reportDealloc(size_t delta);
-    static void reportDelta(size_t prev, size_t current);
-
-    size_t insert(ColumnFamilyType cf, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
+    void insert(ColumnFamilyType cf, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
     void remove(ColumnFamilyType cf, const TiKVKey & key);
 
     WriteCFIter removeDataByWriteIt(const WriteCFIter & write_it);
@@ -54,8 +50,6 @@ public:
         bool hard_error);
 
     DecodedLockCFValuePtr getLockInfo(const RegionLockReadQuery & query) const;
-
-    std::shared_ptr<const TiKVValue> getLockByKey(const TiKVKey & key) const;
 
     void splitInto(const RegionRange & range, RegionData & new_region_data);
     void mergeFrom(const RegionData & ori_region_data);

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/CPUAffinityManager.h>
 #include <Common/Exception.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
@@ -175,7 +174,6 @@ void WaitReactor::loop()
 {
     try
     {
-        CPUAffinityManager::getInstance().bindSelfQueryThread();
         doLoop();
     }
     CATCH_AND_TERMINATE(logger)

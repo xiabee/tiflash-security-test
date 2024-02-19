@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <BaseFile/WriteReadableFile.h>
 #include <Common/FailPoint.h>
 #include <Common/RedactHelpers.h>
 #include <Core/Defines.h>
@@ -312,7 +311,7 @@ TEST_P(LogFileRWTest, Fragmentation)
 }
 
 // This test may take a lot of time
-TEST_P(LogFileRWTest, DISABLED_DifferentPayloadSize)
+TEST_P(LogFileRWTest, DISABLED__DifferentPayloadSize)
 {
     for (size_t i = 0; i < 40000; i += 1)
     {

@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Columns/IColumn.h>
-#include <Common/HashTable/HashTable.h>
 #include <Common/HashTable/HashTableKeyHolder.h>
 #include <Common/assert_cast.h>
 #include <Functions/FunctionHelpers.h>
@@ -81,7 +80,7 @@ public:
 };
 
 template <>
-class EmplaceResultImpl<VoidMapped>
+class EmplaceResultImpl<void>
 {
     bool inserted;
 
@@ -108,7 +107,7 @@ public:
 };
 
 template <>
-class FindResultImpl<VoidMapped>
+class FindResultImpl<void>
 {
     bool found;
 
@@ -125,7 +124,7 @@ class HashMethodBase
 public:
     using EmplaceResult = EmplaceResultImpl<Mapped>;
     using FindResult = FindResultImpl<Mapped>;
-    static constexpr bool has_mapped = !std::is_same<Mapped, VoidMapped>::value;
+    static constexpr bool has_mapped = !std::is_same<Mapped, void>::value;
     using Cache = LastElementCache<Value, consecutive_keys_optimization>;
 
     template <typename Data>
@@ -281,7 +280,7 @@ struct MappedCache : public PaddedPODArray<T>
 };
 
 template <>
-struct MappedCache<VoidMapped>
+struct MappedCache<void>
 {
 };
 

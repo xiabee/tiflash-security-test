@@ -56,7 +56,7 @@ inline void serializeEntryTo(const PageEntryV3 & entry, WriteBuffer & buf, bool 
         writeIntBinary(off, buf);
         writeIntBinary(checksum, buf);
     }
-    if (has_checkpoint_info && entry.checkpoint_info.data_location.isValid())
+    if (has_checkpoint_info)
     {
         writeIntBinary(entry.checkpoint_info.data_location.offset_in_file, buf);
         writeIntBinary(entry.checkpoint_info.data_location.size_in_file, buf);

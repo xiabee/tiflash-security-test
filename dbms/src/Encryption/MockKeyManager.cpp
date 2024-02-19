@@ -19,6 +19,7 @@
 #include <common/logger_useful.h>
 #include <fmt/core.h>
 
+#include <iostream>
 
 namespace DB
 {
@@ -52,20 +53,18 @@ MockKeyManager::MockKeyManager(
     , logger(DB::Logger::get())
 {}
 
-FileEncryptionInfo MockKeyManager::newInfo(const EncryptionPath & ep)
+FileEncryptionInfo MockKeyManager::newFile(const String & fname)
 {
-    const auto & fname = ep.full_path;
     if (encryption_enabled)
     {
         LOG_TRACE(logger, "Create mock encryption [file={}]", fname);
         files.emplace_back(fname);
     }
-    return getInfo(ep);
+    return getFile(fname);
 }
 
-void MockKeyManager::deleteInfo(const EncryptionPath & ep, bool throw_on_error)
+void MockKeyManager::deleteFile(const String & fname, bool throw_on_error)
 {
-    const auto & fname = ep.full_path;
     std::ignore = throw_on_error;
     if (encryption_enabled)
     {
@@ -85,10 +84,9 @@ void MockKeyManager::deleteInfo(const EncryptionPath & ep, bool throw_on_error)
     }
 }
 
-void MockKeyManager::linkInfo(const EncryptionPath & src_ep, const EncryptionPath & dst_ep)
+void MockKeyManager::linkFile(const String & src_fname, const String & dst_fname)
 {
-    const auto & src_fname = src_ep.full_path;
-    const auto & dst_fname = dst_ep.full_path;
+    std::ignore = dst_fname;
     if (encryption_enabled)
     {
         if (!fileExist(src_fname))
@@ -120,9 +118,9 @@ bool MockKeyManager::fileExist(const String & fname) const
     return false;
 }
 
-FileEncryptionInfo MockKeyManager::getInfo(const EncryptionPath & ep)
+FileEncryptionInfo MockKeyManager::getFile(const String & fname)
 {
-    const auto & fname = ep.full_path;
+    std::ignore = fname;
     if (encryption_enabled)
     {
         auto * file_key = RawCppString::New(key);
@@ -147,11 +145,4 @@ FileEncryptionInfo MockKeyManager::getInfo(const EncryptionPath & ep)
         };
     }
 }
-
-bool MockKeyManager::isEncryptionEnabled(KeyspaceID /*keyspace_id*/)
-{
-    // for simplicity, we just return encryption_enabled
-    return encryption_enabled;
-}
-
 } // namespace DB

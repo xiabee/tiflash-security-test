@@ -196,8 +196,6 @@ public:
 
     bool empty() const { return writes.empty(); }
 
-    size_t size() const { return writes.size(); }
-
     const Writes & getWrites() const { return writes; }
     Writes & getMutWrites() { return writes; }
 

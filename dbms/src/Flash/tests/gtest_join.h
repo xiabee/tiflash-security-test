@@ -74,7 +74,7 @@ public:
         for (const auto & column_info : mockColumnInfosToTiDBColumnInfos(left_column_infos))
         {
             ColumnGeneratorOpts opts{
-                common_rows / 2,
+                common_rows,
                 getDataTypeByColumnInfoForComputingLayer(column_info)->getName(),
                 RANDOM,
                 column_info.name};
@@ -103,22 +103,11 @@ public:
 
         for (size_t i = 0; i < common_column_data.size(); ++i)
         {
-            left_column_data[i].column->assumeMutable()->insertRangeFrom(
-                *common_column_data[i].column,
-                0,
-                common_rows / 2);
-            left_column_data[i].column->assumeMutable()->insertRangeFrom(
-                *common_column_data[i].column,
-                0,
-                common_rows / 2);
+            left_column_data[i].column->assumeMutable()->insertRangeFrom(*common_column_data[i].column, 0, common_rows);
             right_column_data[i].column->assumeMutable()->insertRangeFrom(
                 *common_column_data[i].column,
                 0,
-                common_rows / 2);
-            right_column_data[i].column->assumeMutable()->insertRangeFrom(
-                *common_column_data[i].column,
-                0,
-                common_rows / 2);
+                common_rows);
         }
 
         ColumnWithTypeAndName shuffle_column = ColumnGenerator::instance().generate({table_rows, "UInt64", RANDOM});
@@ -166,19 +155,6 @@ public:
             right_column_data,
             10,
             right_partition_column_infos);
-    }
-
-    ColumnsWithTypeAndName genScalarCountResults(const ColumnsWithTypeAndName & ref)
-    {
-        ColumnsWithTypeAndName ret;
-        ret.push_back(toVec<UInt64>({ref.empty() ? 0 : ref[0].column == nullptr ? 0 : ref[0].column->size()}));
-        return ret;
-    }
-    ColumnsWithTypeAndName genScalarCountResults(UInt64 result)
-    {
-        ColumnsWithTypeAndName ret;
-        ret.push_back(toVec<UInt64>({result}));
-        return ret;
     }
 
     static constexpr size_t join_type_num = 7;

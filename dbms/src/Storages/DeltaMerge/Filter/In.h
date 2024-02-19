@@ -32,21 +32,18 @@ public:
 
     String name() override { return "in"; }
 
-    ColIds getColumnIDs() override { return {attr.col_id}; }
+    Attrs getAttrs() override { return {attr}; }
 
     String toDebugString() override
     {
-        FmtBuffer buf;
-        buf.fmtAppend(R"({{"op":"{}","col":"{}","value":"[)", name(), attr.col_name);
-        buf.joinStr(
-            values.cbegin(),
-            values.cend(),
-            [](const auto & v, FmtBuffer & fb) {
-                fb.fmtAppend("\"{}\"", applyVisitor(FieldVisitorToDebugString(), v));
-            },
-            ",");
-        buf.append("]}");
-        return buf.toString();
+        String s = R"({"op":")" + name() + R"(","col":")" + attr.col_name + R"(","value":"[)";
+        if (!values.empty())
+        {
+            for (auto & v : values)
+                s += "\"" + applyVisitor(FieldVisitorToDebugString(), v) + "\",";
+            s.pop_back();
+        }
+        return s + "]}";
     };
 
     RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override

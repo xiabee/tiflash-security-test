@@ -43,8 +43,6 @@ struct PrehandleResult
         size_t lock_cf_keys = 0;
         size_t default_cf_keys = 0;
         size_t max_split_write_cf_keys = 0;
-        // Will be set in preHandleSnapshotToFiles
-        size_t start_time = 0;
 
         void mergeFrom(const Stats & other)
         {

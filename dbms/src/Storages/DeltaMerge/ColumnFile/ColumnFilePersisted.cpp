@@ -15,7 +15,6 @@
 #include <IO/CompressedReadBuffer.h>
 #include <IO/CompressedWriteBuffer.h>
 #include <IO/MemoryReadWriteBuffer.h>
-#include <IO/ReadBufferFromString.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileBig.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileInMemory.h>
@@ -140,16 +139,14 @@ ColumnFilePersisteds deserializeSavedColumnFiles(
         break;
     default:
         throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "Unexpected delta value version: {}, latest version: {}",
-            version,
-            DeltaFormat::V3);
+            "Unexpected delta value version: " + DB::toString(version)
+                + ", latest version: " + DB::toString(DeltaFormat::V3),
+            ErrorCodes::LOGICAL_ERROR);
     }
     return column_files;
 }
 
 ColumnFilePersisteds createColumnFilesFromCheckpoint( //
-    const LoggerPtr & parent_log,
     DMContext & context,
     const RowKeyRange & segment_range,
     ReadBuffer & buf,
@@ -164,14 +161,13 @@ ColumnFilePersisteds createColumnFilesFromCheckpoint( //
     switch (version)
     {
     case DeltaFormat::V3:
-        column_files = createColumnFilesInV3FormatFromCheckpoint(parent_log, context, segment_range, buf, temp_ps, wbs);
+        column_files = createColumnFilesInV3FormatFromCheckpoint(context, segment_range, buf, temp_ps, wbs);
         break;
     default:
         throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "Unexpected delta value version: {}, latest version: {}",
-            version,
-            DeltaFormat::V3);
+            "Unexpected delta value version: " + DB::toString(version)
+                + ", latest version: " + DB::toString(DeltaFormat::V3),
+            ErrorCodes::LOGICAL_ERROR);
     }
     return column_files;
 }

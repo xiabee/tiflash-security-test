@@ -18,8 +18,6 @@
 #include <Common/Logger.h>
 #include <Common/grpcpp.h>
 
-#include <magic_enum.hpp>
-
 namespace DB
 {
 
@@ -72,7 +70,7 @@ public:
         RUNTIME_ASSERT(
             error == grpc_call_error::GRPC_CALL_OK,
             "grpc_call_start_batch returns {} != GRPC_CALL_OK, memory of tag may leak",
-            magic_enum::enum_name(error));
+            error);
     }
 
     grpc_call * getCall() const { return call; }

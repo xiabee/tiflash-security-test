@@ -15,16 +15,11 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Encryption/BlockAccessCipherStream.h>
-#include <Encryption/EncryptionPath.h>
 #include <RaftStoreProxyFFI/EncryptionFFI.h>
 #include <Storages/KVStore/FFI/ProxyFFICommon.h>
-#include <common/likely.h>
-
 
 namespace DB
 {
-using PageIdU64 = uint64_t;
 
 const char * IntoEncryptionMethodName(EncryptionMethod);
 struct EngineStoreServerWrap;
@@ -34,10 +29,7 @@ struct EngineStoreServerWrap;
 #ifndef __clang__
 #pragma GCC diagnostic ignored "-Wclass-memaccess"
 #endif
-
-/// FileEncryptionInfo hold the encryption info of a file, the key is plain text.
-/// Warning: Never expose the key.
-struct FileEncryptionInfo : private FileEncryptionInfoRaw
+struct FileEncryptionInfo : FileEncryptionInfoRaw
 {
     ~FileEncryptionInfo()
     {
@@ -58,7 +50,7 @@ struct FileEncryptionInfo : private FileEncryptionInfoRaw
         }
     }
 
-    explicit FileEncryptionInfo(const FileEncryptionInfoRaw & src)
+    FileEncryptionInfo(const FileEncryptionInfoRaw & src)
         : FileEncryptionInfoRaw(src)
     {}
     FileEncryptionInfo(
@@ -71,52 +63,19 @@ struct FileEncryptionInfo : private FileEncryptionInfoRaw
     {}
     DISALLOW_COPY(FileEncryptionInfo);
     FileEncryptionInfo(FileEncryptionInfo && src)
-        : FileEncryptionInfoRaw()
     {
-        std::memcpy(this, &src, sizeof(src)); // NOLINT
-        std::memset(&src, 0, sizeof(src)); // NOLINT
+        std::memcpy(this, &src, sizeof(src));
+        std::memset(&src, 0, sizeof(src));
     }
     FileEncryptionInfo & operator=(FileEncryptionInfo && src)
     {
         if (this == &src)
             return *this;
         this->~FileEncryptionInfo();
-        std::memcpy(this, &src, sizeof(src)); // NOLINT
-        std::memset(&src, 0, sizeof(src)); // NOLINT
+        std::memcpy(this, &src, sizeof(src));
+        std::memset(&src, 0, sizeof(src));
         return *this;
     }
-
-    BlockAccessCipherStreamPtr createCipherStream(
-        const EncryptionPath & encryption_path,
-        bool is_new_created_info = false) const;
-
-    enum Operation : uint64_t
-    {
-        Encrypt,
-        Decrypt,
-    };
-
-    // Encrypt/decrypt the data in place.
-    template <Operation op>
-    void cipherData(char * data, size_t data_size) const;
-
-    bool isValid() const { return (res == FileEncryptionRes::Ok || res == FileEncryptionRes::Disabled); }
-    // FileEncryptionRes::Disabled means encryption feature has never been enabled, so no file will be encrypted.
-    bool isEncrypted() const { return (res != FileEncryptionRes::Disabled && method != EncryptionMethod::Plaintext); }
-
-    // Check if two FileEncryptionInfo are equal.
-    // Both of them must be valid, and the key and iv must be not null, otherwise return false.
-    // Only used in test now.
-    bool equals(const FileEncryptionInfo & rhs) const
-    {
-        if (!isValid() || !rhs.isValid())
-            return false;
-        if (unlikely(key == nullptr || iv == nullptr || rhs.key == nullptr || rhs.iv == nullptr))
-            return false;
-        return res == rhs.res && method == rhs.method && *key == *rhs.key && *iv == *rhs.iv;
-    }
-
-    std::string getErrorMsg() const { return error_msg ? std::string(*error_msg) : ""; }
 };
 #pragma GCC diagnostic pop
 

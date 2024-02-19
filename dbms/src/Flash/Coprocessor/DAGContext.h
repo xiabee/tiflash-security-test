@@ -157,8 +157,6 @@ public:
         const String & tidb_host_,
         DAGRequestKind cop_kind_,
         const String & resource_group_name,
-        UInt64 connection_id_,
-        const String & connection_alias_,
         LoggerPtr log_);
 
     // for mpp
@@ -283,6 +281,15 @@ public:
     void setMPPReceiverSet(const MPPReceiverSetPtr & receiver_set) { mpp_receiver_set = receiver_set; }
     void addCoprocessorReader(const CoprocessorReaderPtr & coprocessor_reader);
     std::vector<CoprocessorReaderPtr> & getCoprocessorReaders();
+    void setDisaggregatedComputeExchangeReceiver(const String & executor_id, const ExchangeReceiverPtr & receiver)
+    {
+        disaggregated_compute_exchange_receiver = std::make_pair(executor_id, receiver);
+    }
+    std::optional<std::pair<String, ExchangeReceiverPtr>> getDisaggregatedComputeExchangeReceiver()
+    {
+        return disaggregated_compute_exchange_receiver;
+    }
+
 
     void addSubquery(const String & subquery_id, SubqueryForSet && subquery);
     bool hasSubquery() const { return !subqueries.empty(); }
@@ -314,7 +321,7 @@ public:
     // For now, only called for BlockIO execution engine to disable report RU of storage layer.
     void clearResourceGroupName() { resource_group_name = ""; }
 
-    UInt64 getReadBytes() const;
+    RU getReadRU() const;
 
     void switchToStreamMode()
     {
@@ -341,9 +348,6 @@ public:
 
     void setAutoSpillMode() { in_auto_spill_mode = true; }
     bool isInAutoSpillMode() const { return in_auto_spill_mode; }
-
-    UInt64 getConnectionID() const { return connection_id; }
-    const String & getConnectionAlias() const { return connection_alias; }
 
 public:
     DAGRequest dag_request;
@@ -441,6 +445,9 @@ private:
     /// vector of SubqueriesForSets(such as join build subquery).
     /// The order of the vector is also the order of the subquery.
     std::vector<SubqueriesForSets> subqueries;
+    // In disaggregated tiflash mode, table_scan in tiflash_compute node will be converted ExchangeReceiver.
+    // Record here so we can add to receiver_set and cancel/close it.
+    std::optional<std::pair<String, ExchangeReceiverPtr>> disaggregated_compute_exchange_receiver;
 
     // The keyspace that the DAG request from
     const KeyspaceID keyspace_id = NullspaceID;
@@ -452,11 +459,6 @@ private:
     // - Stream: execute with block input stream
     // - Pipeline: execute with pipeline model
     ExecutionMode execution_mode = ExecutionMode::None;
-
-    // It's the session id between mysql client and tidb
-    UInt64 connection_id;
-    // It's the session alias between mysql client and tidb
-    String connection_alias;
 };
 
 } // namespace DB

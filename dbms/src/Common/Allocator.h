@@ -42,6 +42,7 @@ public:
 
     /// Free memory range.
     void free(void * buf, size_t size);
+
     /** Enlarge memory range.
       * Data from old range is moved to the beginning of new range.
       * Address of memory range could change.

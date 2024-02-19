@@ -69,7 +69,6 @@ std::tuple<WaitIndexStatus, double> Region::waitIndex(
     std::function<bool(void)> && check_running,
     const LoggerPtr & log)
 {
-    fiu_return_on(FailPoints::force_wait_index_timeout, std::make_tuple(WaitIndexStatus::Timeout, 1.0));
     if (proxy_helper == nullptr) // just for debug
         return {WaitIndexStatus::Finished, 0};
 
@@ -115,7 +114,7 @@ std::tuple<WaitIndexStatus, double> Region::waitIndex(
             wait_idx_res.prev_index,
             wait_idx_res.current_index,
             index,
-            fmt::underlying(peerState()),
+            static_cast<Int32>(peerState()),
             elapsed_secs,
             timeout_ms / 1000.0);
         return {status, elapsed_secs};

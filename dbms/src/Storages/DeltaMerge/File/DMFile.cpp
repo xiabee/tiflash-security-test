@@ -36,6 +36,7 @@
 #include <common/logger_useful.h>
 #include <fmt/format.h>
 
+#include <atomic>
 #include <boost/algorithm/string/classification.hpp>
 #include <filesystem>
 #include <utility>
@@ -120,7 +121,6 @@ DMFilePtr DMFile::create(
     DMConfigurationOpt configuration,
     UInt64 small_file_size_threshold,
     UInt64 merged_file_max_size,
-    KeyspaceID keyspace_id,
     DMFileFormat::Version version)
 {
     // if small_file_size_threshold == 0 we should use DMFileFormat::V2
@@ -132,6 +132,7 @@ DMFilePtr DMFile::create(
     fiu_do_on(FailPoints::force_use_dmfile_format_v3, {
         // some unit test we need mock upload DMFile to S3, which only support DMFileFormat::V3
         version = DMFileFormat::V3;
+        LOG_WARNING(Logger::get(), "!!!force use DMFileFormat::V3!!!");
     });
     // On create, ref_id is the same as file_id.
     DMFilePtr new_dmfile(new DMFile(
@@ -142,8 +143,7 @@ DMFilePtr DMFile::create(
         small_file_size_threshold,
         merged_file_max_size,
         std::move(configuration),
-        version,
-        keyspace_id));
+        version));
 
     auto path = new_dmfile->path();
     Poco::File file(path);
@@ -168,8 +168,7 @@ DMFilePtr DMFile::restore(
     UInt64 file_id,
     UInt64 page_id,
     const String & parent_path,
-    const ReadMetaMode & read_meta_mode,
-    KeyspaceID keyspace_id)
+    const ReadMetaMode & read_meta_mode)
 {
     auto is_s3_file = S3::S3FilenameView::fromKeyWithPrefix(parent_path).isDataFile();
     if (!is_s3_file)
@@ -183,16 +182,7 @@ DMFilePtr DMFile::restore(
             return nullptr;
     }
 
-    DMFilePtr dmfile(new DMFile(
-        file_id,
-        page_id,
-        parent_path,
-        Status::READABLE,
-        /*small_file_size_threshold_*/ 128 * 1024,
-        /*merged_file_max_size_*/ 16 * 1024 * 1024,
-        /*configuration_*/ std::nullopt,
-        /*version_*/ STORAGE_FORMAT_CURRENT.dm_file,
-        /*keyspace_id_*/ keyspace_id));
+    DMFilePtr dmfile(new DMFile(file_id, page_id, parent_path, Status::READABLE));
     if (is_s3_file || Poco::File(dmfile->metav2Path()).exists())
     {
         auto s = dmfile->readMetaV2(file_provider);
@@ -276,47 +266,47 @@ String DMFile::encryptionBasePath() const
 
 EncryptionPath DMFile::encryptionDataPath(const FileNameBase & file_name_base) const
 {
-    return EncryptionPath(encryptionBasePath(), file_name_base + details::DATA_FILE_SUFFIX, keyspace_id);
+    return EncryptionPath(encryptionBasePath(), file_name_base + details::DATA_FILE_SUFFIX);
 }
 
 EncryptionPath DMFile::encryptionIndexPath(const FileNameBase & file_name_base) const
 {
-    return EncryptionPath(encryptionBasePath(), file_name_base + details::INDEX_FILE_SUFFIX, keyspace_id);
+    return EncryptionPath(encryptionBasePath(), file_name_base + details::INDEX_FILE_SUFFIX);
 }
 
 EncryptionPath DMFile::encryptionMarkPath(const FileNameBase & file_name_base) const
 {
-    return EncryptionPath(encryptionBasePath(), file_name_base + details::MARK_FILE_SUFFIX, keyspace_id);
+    return EncryptionPath(encryptionBasePath(), file_name_base + details::MARK_FILE_SUFFIX);
 }
 
 EncryptionPath DMFile::encryptionMetaPath() const
 {
-    return EncryptionPath(encryptionBasePath(), metaFileName(), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), metaFileName());
 }
 
 EncryptionPath DMFile::encryptionPackStatPath() const
 {
-    return EncryptionPath(encryptionBasePath(), packStatFileName(), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), packStatFileName());
 }
 
 EncryptionPath DMFile::encryptionPackPropertyPath() const
 {
-    return EncryptionPath(encryptionBasePath(), packPropertyFileName(), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), packPropertyFileName());
 }
 
 EncryptionPath DMFile::encryptionConfigurationPath() const
 {
-    return EncryptionPath(encryptionBasePath(), configurationFileName(), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), configurationFileName());
 }
 
 EncryptionPath DMFile::encryptionMetav2Path() const
 {
-    return EncryptionPath(encryptionBasePath(), metav2FileName(), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), metav2FileName());
 }
 
 EncryptionPath DMFile::encryptionMergedPath(UInt32 number) const
 {
-    return EncryptionPath(encryptionBasePath(), mergedFilename(number), keyspace_id);
+    return EncryptionPath(encryptionBasePath(), mergedFilename(number));
 }
 
 String DMFile::colDataFileName(const FileNameBase & file_name_base)
@@ -332,7 +322,7 @@ String DMFile::colMarkFileName(const FileNameBase & file_name_base)
     return file_name_base + details::MARK_FILE_SUFFIX;
 }
 
-DMFile::OffsetAndSize DMFile::writeMetaToBuffer(WriteBuffer & buffer) const
+DMFile::OffsetAndSize DMFile::writeMetaToBuffer(WriteBuffer & buffer)
 {
     size_t meta_offset = buffer.count();
     writeString("DTFile format: ", buffer);
@@ -657,7 +647,7 @@ void DMFile::finalizeForFolderMode(const FileProviderPtr & file_provider, const 
     }
     writeMetadata(file_provider, write_limiter);
     if (unlikely(status != Status::WRITING))
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected WRITING status, now {}", magic_enum::enum_name(status));
+        throw Exception("Expected WRITING status, now " + statusString(status));
     Poco::File old_file(path());
     setStatus(Status::READABLE);
 
@@ -711,8 +701,7 @@ std::vector<String> DMFile::listS3(const String & parent_path)
 std::set<UInt64> DMFile::listAllInPath(
     const FileProviderPtr & file_provider,
     const String & parent_path,
-    const DMFile::ListOptions & options,
-    KeyspaceID keyspace_id)
+    const DMFile::ListOptions & options)
 {
     auto s3_fname_view = S3::S3FilenameView::fromKeyWithPrefix(parent_path);
     auto file_names = s3_fname_view.isValid() ? listS3(s3_fname_view.toFullKey()) : listLocal(parent_path);
@@ -749,9 +738,7 @@ std::set<UInt64> DMFile::listAllInPath(
                 }
                 UInt64 file_id = *res;
                 const String readable_path = getPathByStatus(parent_path, file_id, DMFile::Status::READABLE);
-                file_provider->deleteEncryptionInfo(
-                    EncryptionPath(readable_path, "", keyspace_id),
-                    /* throw_on_error= */ false);
+                file_provider->deleteEncryptionInfo(EncryptionPath(readable_path, ""), /* throw_on_error= */ false);
                 const auto full_path = parent_path + "/" + name;
                 if (Poco::File file(full_path); file.exists())
                     file.remove(true);
@@ -816,7 +803,7 @@ void DMFile::remove(const FileProviderPtr & file_provider)
         // Rename the directory first (note that we should do it before deleting encryption info)
         dir_file.renameTo(deleted_path);
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_dmfile_remove_encryption);
-        file_provider->deleteEncryptionInfo(EncryptionPath(encryptionBasePath(), "", keyspace_id));
+        file_provider->deleteEncryptionInfo(EncryptionPath(encryptionBasePath(), ""));
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_dmfile_remove_from_disk);
         // Then clean the files on disk
         dir_file.remove(true);
@@ -863,7 +850,7 @@ DMFile::MetaBlockHandle DMFile::writeSLPackStatToBuffer(WriteBuffer & buffer)
     return MetaBlockHandle{MetaBlockType::PackStat, offset, buffer.count() - offset};
 }
 
-DMFile::MetaBlockHandle DMFile::writeSLPackPropertyToBuffer(WriteBuffer & buffer) const
+DMFile::MetaBlockHandle DMFile::writeSLPackPropertyToBuffer(WriteBuffer & buffer)
 {
     auto offset = buffer.count();
     for (const auto & pb : pack_properties.property())
@@ -937,7 +924,7 @@ void DMFile::finalizeMetaV2(WriteBuffer & buffer)
     writePODBinary(footer, buffer);
 }
 
-std::vector<char> DMFile::readMetaV2(const FileProviderPtr & file_provider) const
+std::vector<char> DMFile::readMetaV2(const FileProviderPtr & file_provider)
 {
     auto rbuf = openForRead(file_provider, metav2Path(), encryptionMetav2Path(), meta_buffer_size);
     std::vector<char> buf(meta_buffer_size);
@@ -1079,7 +1066,7 @@ void DMFile::finalizeDirName()
         status == Status::WRITING,
         "FileId={} Expected WRITING status, but {}",
         file_id,
-        magic_enum::enum_name(status));
+        statusString(status));
     Poco::File old_file(path());
     setStatus(Status::READABLE);
     auto new_path = path();
@@ -1097,7 +1084,7 @@ void DMFile::finalizeDirName()
     old_file.renameTo(new_path);
 }
 
-std::vector<String> DMFile::listFilesForUpload() const
+std::vector<String> DMFile::listFilesForUpload()
 {
     RUNTIME_CHECK(useMetaV2());
     std::vector<String> fnames;
@@ -1160,11 +1147,8 @@ void DMFile::finalizeSmallFiles(
     auto copy_file_to_cur = [&](const String & fname, UInt64 fsize) {
         checkMergedFile(writer, file_provider, write_limiter);
 
-        auto read_file = openForRead(
-            file_provider,
-            subFilePath(fname),
-            EncryptionPath(encryptionBasePath(), fname, keyspace_id),
-            fsize);
+        auto read_file
+            = openForRead(file_provider, subFilePath(fname), EncryptionPath(encryptionBasePath(), fname), fsize);
         std::vector<char> read_buf(fsize);
         auto read_size = read_file.readBig(read_buf.data(), read_buf.size());
         RUNTIME_CHECK(read_size == fsize, fname, read_size, fsize);

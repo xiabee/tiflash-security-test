@@ -358,7 +358,7 @@ void ExpressionAction::execute(Block & block) const
     //TODO: Clean up all Join logic in ExpressionAction
     case JOIN:
     {
-        ProbeProcessInfo probe_process_info(0, 0);
+        ProbeProcessInfo probe_process_info(0);
         probe_process_info.block = block;
         join->joinBlock(probe_process_info);
         break;
@@ -539,8 +539,7 @@ void ExpressionActions::execute(Block & block) const
         action.execute(block);
 }
 
-template <class NameAndTypeContainer>
-std::string ExpressionActions::getSmallestColumn(const NameAndTypeContainer & columns)
+std::string ExpressionActions::getSmallestColumn(const NamesAndTypesList & columns)
 {
     std::optional<size_t> min_size;
     String res;
@@ -563,7 +562,7 @@ std::string ExpressionActions::getSmallestColumn(const NameAndTypeContainer & co
     return res;
 }
 
-void ExpressionActions::finalize(const Names & output_columns, bool keep_used_input_columns)
+void ExpressionActions::finalize(const Names & output_columns)
 {
     NameSet final_columns;
     for (const auto & name : output_columns)
@@ -675,15 +674,6 @@ void ExpressionActions::finalize(const Names & output_columns, bool keep_used_in
     /// If the column after performing the function `refcount = 0`, it can be deleted.
     std::map<String, int> columns_refcount;
 
-    NameSet columns_should_not_be_removed;
-    if (keep_used_input_columns)
-    {
-        /// if keep_used_input_columns is true, then don't remove the input_columns
-        /// this is used in nullaware/semi join which intends to reuse the input column
-        for (const auto & column : input_columns)
-            columns_should_not_be_removed.insert(column.name);
-    }
-
     for (const auto & name : final_columns)
         ++columns_refcount[name];
 
@@ -706,22 +696,21 @@ void ExpressionActions::finalize(const Names & output_columns, bool keep_used_in
     {
         new_actions.push_back(action);
 
-        auto process = [&](const String & name, const ExpressionAction::Type & type) {
+        auto process = [&](const String & name) {
             auto refcount = --columns_refcount[name];
-            if (refcount <= 0 && columns_should_not_be_removed.count(name) == 0)
+            if (refcount <= 0)
             {
-                if (type != ExpressionAction::REMOVE_COLUMN)
-                    new_actions.push_back(ExpressionAction::removeColumn(name));
+                new_actions.push_back(ExpressionAction::removeColumn(name));
                 if (sample_block.has(name))
                     sample_block.erase(name);
             }
         };
 
         if (!action.source_name.empty())
-            process(action.source_name, action.type);
+            process(action.source_name);
 
         for (const auto & name : action.argument_names)
-            process(name, action.type);
+            process(name);
 
         /// For `projection`, there is no reduction in `refcount`, because the `project` action replaces the names of the columns, in effect, already deleting them under the old names.
     }
@@ -801,8 +790,5 @@ std::string ExpressionActionsChain::dumpChain()
 
     return ss.str();
 }
-
-template std::string ExpressionActions::getSmallestColumn(const NamesAndTypesList & columns);
-template std::string ExpressionActions::getSmallestColumn(const NamesAndTypes & columns);
 
 } // namespace DB

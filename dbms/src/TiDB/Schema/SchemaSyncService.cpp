@@ -144,7 +144,7 @@ void SchemaSyncService::removeKeyspaceGCTasks()
         keyspace_handle_iter = keyspace_handle_map.erase(keyspace_handle_iter);
 
         context.getTMTContext().getSchemaSyncerManager()->removeSchemaSyncer(keyspace);
-        PDClientHelper::remove_ks_gc_sp(keyspace);
+        PDClientHelper::removeKeyspaceGCSafepoint(keyspace);
         keyspace_gc_context.erase(keyspace); // clear the last gc safepoint
         num_remove_tasks += 1;
     }
@@ -217,8 +217,11 @@ bool SchemaSyncService::gcImpl(Timestamp gc_safepoint, KeyspaceID keyspace_id, b
     if (last_gc_safepoint.has_value() && gc_safepoint == *last_gc_safepoint)
         return false;
 
+    String last_gc_safepoint_str = "none";
+    if (last_gc_safepoint.has_value())
+        last_gc_safepoint_str = fmt::format("{}", *last_gc_safepoint);
     auto keyspace_log = log->getChild(fmt::format("keyspace={}", keyspace_id));
-    LOG_INFO(keyspace_log, "Schema GC begin, last_safepoint={} safepoint={}", last_gc_safepoint, gc_safepoint);
+    LOG_INFO(keyspace_log, "Schema GC begin, last_safepoint={} safepoint={}", last_gc_safepoint_str, gc_safepoint);
 
     size_t num_tables_removed = 0;
     size_t num_databases_removed = 0;
@@ -423,7 +426,7 @@ bool SchemaSyncService::gcImpl(Timestamp gc_safepoint, KeyspaceID keyspace_id, b
         LOG_INFO(
             keyspace_log,
             "Schema GC meet error, will try again later, last_safepoint={} safepoint={}",
-            last_gc_safepoint,
+            last_gc_safepoint_str,
             gc_safepoint);
     }
 

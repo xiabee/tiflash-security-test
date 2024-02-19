@@ -88,6 +88,7 @@ namespace DB
     M(force_set_dtfile_exist_when_acquire_id)                \
     M(force_no_local_region_for_mpp_task)                    \
     M(force_remote_read_for_batch_cop)                       \
+    M(force_pd_grpc_error)                                   \
     M(force_context_path)                                    \
     M(force_slow_page_storage_snapshot_release)              \
     M(force_pick_all_blobs_to_full_gc)                       \
@@ -108,10 +109,7 @@ namespace DB
     M(force_set_parallel_prehandle_threshold)                \
     M(force_raise_prehandle_exception)                       \
     M(force_agg_on_partial_block)                            \
-    M(force_set_fap_candidate_store_id)                      \
-    M(force_not_clean_fap_on_destroy)                        \
-    M(delta_tree_create_node_fail)                           \
-    M(disable_flush_cache)
+    M(delta_tree_create_node_fail)
 
 #define APPLY_FOR_PAUSEABLE_FAILPOINTS_ONCE(M) \
     M(pause_with_alter_locks_acquired)         \
@@ -133,7 +131,6 @@ namespace DB
     M(pause_after_copr_streams_acquired)  \
     M(pause_query_init)                   \
     M(pause_before_prehandle_snapshot)    \
-    M(pause_before_prehandle_subtask)     \
     M(pause_when_persist_region)          \
     M(pause_before_wn_establish_task)     \
     M(pause_passive_flush_before_persist_region)

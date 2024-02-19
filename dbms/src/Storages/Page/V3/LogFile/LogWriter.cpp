@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <BaseFile/WritableFile.h>
 #include <Common/Checksum.h>
 #include <Common/Exception.h>
 #include <Common/Logger.h>

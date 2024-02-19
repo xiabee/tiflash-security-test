@@ -19,6 +19,7 @@
 #include <Core/SortDescription.h>
 #include <Core/Spiller.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/NativeBlockInputStream.h>
 #include <IO/CompressedReadBuffer.h>
 #include <IO/ReadBufferFromFile.h>
 #include <Interpreters/SortSpillContext.h>

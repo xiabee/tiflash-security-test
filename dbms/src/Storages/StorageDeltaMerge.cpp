@@ -43,6 +43,7 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
+#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/FilterParser/FilterParser.h>
@@ -60,6 +61,7 @@
 #include <common/config_common.h>
 #include <common/logger_useful.h>
 
+#include <random>
 
 namespace DB
 {
@@ -1178,17 +1180,9 @@ UInt64 StorageDeltaMerge::ingestFiles(
     return getAndMaybeInitStore()->ingestFiles(global_context, settings, range, external_files, clear_data_in_range);
 }
 
-DM::Segments StorageDeltaMerge::buildSegmentsFromCheckpointInfo(
-    const DM::RowKeyRange & range,
-    CheckpointInfoPtr checkpoint_info,
-    const Settings & settings)
-{
-    return getAndMaybeInitStore()->buildSegmentsFromCheckpointInfo(global_context, settings, range, checkpoint_info);
-}
-
 void StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
     const DM::RowKeyRange & range,
-    const CheckpointIngestInfoPtr & checkpoint_info,
+    CheckpointInfoPtr checkpoint_info,
     const Settings & settings)
 {
     GET_METRIC(tiflash_storage_command_count, type_ingest_checkpoint).Increment();

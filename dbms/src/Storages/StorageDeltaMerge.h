@@ -22,7 +22,6 @@
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
@@ -37,8 +36,6 @@ namespace DB
 {
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 namespace DM
 {
 struct RowKeyRange;
@@ -48,9 +45,6 @@ using DeltaMergeStorePtr = std::shared_ptr<DeltaMergeStore>;
 using RowKeyRanges = std::vector<RowKeyRange>;
 struct ExternalDTFileInfo;
 struct GCOptions;
-class Segment;
-using SegmentPtr = std::shared_ptr<Segment>;
-using Segments = std::vector<SegmentPtr>;
 } // namespace DM
 
 class StorageDeltaMerge
@@ -65,7 +59,6 @@ public:
     String getName() const override;
     String getTableName() const override;
     String getDatabaseName() const override;
-    KeyspaceID getKeyspaceID() const { return _store->getKeyspaceID(); }
 
     void clearData() override;
 
@@ -128,14 +121,9 @@ public:
         bool clear_data_in_range,
         const Settings & settings);
 
-    DM::Segments buildSegmentsFromCheckpointInfo(
-        const DM::RowKeyRange & range,
-        CheckpointInfoPtr checkpoint_info,
-        const Settings & settings);
-
     void ingestSegmentsFromCheckpointInfo(
         const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info,
+        CheckpointInfoPtr checkpoint_info,
         const Settings & settings);
 
     UInt64 onSyncGc(Int64, const DM::GCOptions &) override;

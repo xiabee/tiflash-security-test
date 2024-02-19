@@ -17,6 +17,7 @@
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
+#include <Encryption/RandomAccessFile.h>
 #include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/S3/FileCache.h>
 #include <Storages/S3/MemoryRandomAccessFile.h>
@@ -24,9 +25,10 @@
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <aws/s3/model/GetObjectRequest.h>
-#include <common/likely.h>
 
+#include <chrono>
 #include <optional>
+#include <thread>
 
 namespace ProfileEvents
 {
@@ -43,7 +45,6 @@ S3RandomAccessFile::S3RandomAccessFile(std::shared_ptr<TiFlashS3Client> client_p
     , cur_offset(0)
     , log(Logger::get(remote_fname))
 {
-    RUNTIME_CHECK(client_ptr != nullptr);
     RUNTIME_CHECK(initialize(), remote_fname);
 }
 

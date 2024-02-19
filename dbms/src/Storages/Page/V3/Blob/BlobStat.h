@@ -26,10 +26,6 @@
 namespace DB::PS::V3
 {
 
-/**
- * BlobStats is a collection of BlobStat, which have red-black tree/ map implemention.
- * Each node on the tree records the information of a Blob(<BlobFile, SpaceMap>).
- */
 class BlobStats
 {
 public:
@@ -43,7 +39,6 @@ public:
         READ_ONLY = 2
     };
 
-    // All operations on SpaceMap should be done by this class.
     struct BlobStat
     {
         const BlobFileId id;
@@ -64,6 +59,7 @@ public:
         // sm_valid_size / sm_total_size
         double sm_valid_rate = 0.0;
 
+    public:
         BlobStat(BlobFileId id_, SpaceMap::SpaceMapType sm_type, UInt64 sm_max_caps_, BlobStatType type_)
             : id(id_)
             , type(type_)
@@ -160,7 +156,11 @@ public:
     BlobStatPtr blobIdToStat(BlobFileId file_id, bool ignore_not_exist = false);
 
     using StatsMap = std::map<String, std::list<BlobStatPtr>>;
-    StatsMap getStats() const;
+    StatsMap getStats() const
+    {
+        auto guard = lock();
+        return stats_map;
+    }
 
     static std::pair<BlobFileId, String> getBlobIdFromName(const String & blob_name);
 

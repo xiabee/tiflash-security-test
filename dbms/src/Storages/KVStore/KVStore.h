@@ -24,7 +24,6 @@
 #include <Storages/KVStore/MultiRaft/RegionRangeKeys.h>
 #include <Storages/KVStore/StorageEngineType.h>
 
-#include <condition_variable>
 #include <magic_enum.hpp>
 
 namespace TiDB
@@ -45,7 +44,7 @@ struct ExternalDTFileInfo;
 
 namespace tests
 {
-class KVStoreTestBase;
+class RegionKVStoreTest;
 }
 
 class IAST;
@@ -83,8 +82,6 @@ class PathPool;
 class RegionPersister;
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 class UniversalPageStorage;
 using UniversalPageStoragePtr = std::shared_ptr<UniversalPageStorage>;
 
@@ -177,7 +174,7 @@ public:
         uint64_t truncated_index,
         uint64_t truncated_term);
 
-    void handleIngestCheckpoint(RegionPtr region, CheckpointIngestInfoPtr checkpoint_info, TMTContext & tmt);
+    void handleIngestCheckpoint(RegionPtr region, CheckpointInfoPtr checkpoint_info, TMTContext & tmt);
 
     // For Raftstore V2, there could be some orphan keys in the write column family being left to `new_region` after pre-handled.
     // All orphan write keys are asserted to be replayed before reaching `deadline_index`.
@@ -214,9 +211,7 @@ public:
     // May return 0 if uninitialized
     StoreID getStoreID(std::memory_order = std::memory_order_relaxed) const;
 
-    metapb::Store clonedStoreMeta() const;
-    const metapb::Store & getStoreMeta() const;
-    metapb::Store & debugMutStoreMeta();
+    metapb::Store getStoreMeta() const;
 
     BatchReadIndexRes batchReadIndex(const std::vector<kvrpcpb::ReadIndexRequest> & req, uint64_t timeout_ms) const;
 
@@ -254,7 +249,6 @@ public:
     RaftLogEagerGcTasks::Hints getRaftLogGcHints();
     void applyRaftLogGcTaskRes(const RaftLogGcTasksRes & res) const;
     const ProxyConfigSummary & getProxyConfigSummay() const { return proxy_config_summary; }
-    size_t getMaxParallelPrehandleSize() const;
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -276,7 +270,7 @@ private:
     using DBGInvokerPrinter = std::function<void(const std::string &)>;
     friend void dbgFuncRemoveRegion(Context &, const ASTs &, DBGInvokerPrinter);
     friend void dbgFuncPutRegion(Context &, const ASTs &, DBGInvokerPrinter);
-    friend class tests::KVStoreTestBase;
+    friend class tests::RegionKVStoreTest;
     friend class ReadIndexStressTest;
     struct StoreMeta
     {
@@ -367,8 +361,6 @@ private:
 
     void releaseReadIndexWorkers();
     void handleDestroy(UInt64 region_id, TMTContext & tmt, const KVStoreTaskLock &);
-    void fetchProxyConfig(const TiFlashRaftProxyHelper * proxy_helper);
-    RegionTaskLock genRegionTaskLock(UInt64 region_id) const;
 
 #ifndef DBMS_PUBLIC_GTEST
 private:

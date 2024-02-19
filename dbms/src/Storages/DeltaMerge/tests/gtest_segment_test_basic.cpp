@@ -49,7 +49,7 @@ extern DMFilePtr writeIntoNewDMFile(
 namespace DB::DM::tests
 {
 
-void SegmentTestBasic::reloadWithOptions(SegmentTestOptions config)
+void SegmentTestBasic::buildFirstSegmentWithOptions(SegmentTestOptions config)
 {
     {
         auto const seed = std::random_device{}();
@@ -63,7 +63,7 @@ void SegmentTestBasic::reloadWithOptions(SegmentTestOptions config)
     options = config;
     table_columns = std::make_shared<ColumnDefines>();
 
-    root_segment = reload(config.is_common_handle, nullptr, std::move(config.db_settings));
+    root_segment = buildFirstSegment(config.is_common_handle, nullptr, std::move(config.db_settings));
     ASSERT_EQ(root_segment->segmentId(), DELTA_MERGE_FIRST_SEGMENT_ID);
     segments.clear();
     segments[DELTA_MERGE_FIRST_SEGMENT_ID] = root_segment;
@@ -522,7 +522,7 @@ void SegmentTestBasic::ingestDTFileIntoDelta(
         auto ref_id = storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
         wbs.data.putRefPage(ref_id, dm_file->pageId());
         auto ref_file = DMFile::restore(
-            dm_context->global_context.getFileProvider(),
+            dm_context->db_context.getFileProvider(),
             file_id,
             ref_id,
             parent_path,
@@ -581,7 +581,7 @@ void SegmentTestBasic::ingestDTFileByReplace(
         auto ref_id = storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
         wbs.data.putRefPage(ref_id, dm_file->pageId());
         auto ref_file = DMFile::restore(
-            dm_context->global_context.getFileProvider(),
+            dm_context->db_context.getFileProvider(),
             file_id,
             ref_id,
             parent_path,
@@ -818,7 +818,7 @@ std::set<PageIdU64> SegmentTestBasic::getAliveExternalPageIdsAfterGC(NamespaceID
     }
 }
 
-SegmentPtr SegmentTestBasic::reload(
+SegmentPtr SegmentTestBasic::buildFirstSegment(
     bool is_common_handle,
     const ColumnDefinesPtr & pre_define_columns,
     DB::Settings && db_settings)
@@ -849,7 +849,7 @@ void SegmentTestBasic::reloadDMContext()
 
 std::unique_ptr<DMContext> SegmentTestBasic::createDMContext()
 {
-    return DMContext::createUnique(
+    return std::make_unique<DMContext>(
         *db_context,
         storage_path_pool,
         storage_pool,
@@ -984,7 +984,7 @@ class SegmentFrameworkTest : public SegmentTestBasic
 TEST_F(SegmentFrameworkTest, PrepareWriteBlock)
 try
 {
-    reloadWithOptions({.is_common_handle = false});
+    buildFirstSegmentWithOptions({.is_common_handle = false});
 
     auto s1_id = splitSegmentAt(DELTA_MERGE_FIRST_SEGMENT_ID, 10);
     ASSERT_TRUE(s1_id.has_value());

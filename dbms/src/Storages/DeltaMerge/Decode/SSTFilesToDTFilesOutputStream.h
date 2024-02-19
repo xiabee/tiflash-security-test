@@ -22,6 +22,7 @@
 #include <Storages/Page/PageDefinesBase.h>
 
 #include <memory>
+#include <string_view>
 
 namespace DB
 {
@@ -94,7 +95,7 @@ public:
     // Try to cleanup the files in `ingest_files` quickly.
     void cancel();
 
-    bool isAbort() const { return prehandle_task->isAbort(); }
+    bool isAbort() const { return prehandle_task->abort_flag.load(std::memory_order_seq_cst); }
 
     size_t getTotalCommittedBytes() const { return total_committed_bytes; }
     size_t getTotalBytesOnDisk() const { return total_bytes_on_disk; }
@@ -167,7 +168,7 @@ public:
 
     static SSTFilesToBlockInputStream::ProcessKeys getProcessKeys() { return {}; }
 
-    static size_t getSplitId() { return DM::SSTScanSoftLimit::HEAD_OR_ONLY_SPLIT; }
+    size_t getSplitId() const { return DM::SSTScanSoftLimit::HEAD_OR_ONLY_SPLIT; }
 
 protected:
     BlockInputStreamPtr mock_data;

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <BaseFile/PosixRandomAccessFile.h>
 #include <Common/FailPoint.h>
-#include <Encryption/MockKeyManager.h>
+#include <Encryption/PosixRandomAccessFile.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
 #include <Flash/Disaggregated/S3LockClient.h>
 #include <IO/ReadBufferFromFile.h>
@@ -38,12 +37,11 @@
 
 #include <memory>
 
-
-namespace DB::PS::universal::tests
+namespace DB
 {
-class UniPageStorageRemoteReadTest
-    : public DB::base::TiFlashStorageTestBasic
-    , public testing::WithParamInterface<std::pair<bool, bool>>
+namespace PS::universal::tests
+{
+class UniPageStorageRemoteReadTest : public DB::base::TiFlashStorageTestBasic
 {
 public:
     UniPageStorageRemoteReadTest()
@@ -54,15 +52,13 @@ public:
     {
         TiFlashStorageTestBasic::SetUp();
         auto path = getTemporaryPath();
-        dir = path;
-        data_file_path_pattern = dir + "/data_{index}";
+        dir_ = path;
+        data_file_path_pattern = dir_ + "/data_{index}";
         data_file_id_pattern = "data_{index}";
-        manifest_file_path = dir + "/manifest_foo";
+        manifest_file_path = dir_ + "/manifest_foo";
         manifest_file_id = "manifest_foo";
         createIfNotExist(path);
-        auto [is_encrypted, is_keyspace_encrypted] = GetParam();
-        KeyManagerPtr key_manager = std::make_shared<MockKeyManager>(is_encrypted);
-        file_provider = std::make_shared<FileProvider>(key_manager, is_encrypted, is_keyspace_encrypted);
+        file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
         delegator = std::make_shared<DB::tests::MockDiskDelegatorSingle>(path);
         s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
 
@@ -106,7 +102,7 @@ protected:
 
 protected:
     StoreID test_store_id = 1234;
-    String dir;
+    String dir_;
     FileProviderPtr file_provider;
     PSDiskDelegatorPtr delegator;
     std::shared_ptr<S3::TiFlashS3Client> s3_client;
@@ -121,7 +117,7 @@ protected:
     String manifest_file_path;
 };
 
-TEST_P(UniPageStorageRemoteReadTest, WriteRead)
+TEST_F(UniPageStorageRemoteReadTest, WriteRead)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -205,7 +201,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithRestart)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithRestart)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -279,7 +275,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithRef)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithRef)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -367,7 +363,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadMultiple)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadMultiple)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -454,7 +450,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithFields)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithFields)
 try
 {
     PageTypeAndConfig page_type_and_config{
@@ -488,7 +484,7 @@ try
         .data_file_id_pattern = data_file_id_pattern,
         .manifest_file_path = manifest_file_path,
         .manifest_file_id = manifest_file_id,
-        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(blob_store, file_provider),
+        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(blob_store),
     });
     writer->writePrefix({
         .writer = {},
@@ -563,7 +559,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadExternal)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadExternal)
 try
 {
     UniversalPageId page_id1{"aaabbb"};
@@ -610,9 +606,5 @@ try
 }
 CATCH
 
-INSTANTIATE_TEST_CASE_P(
-    UniPageStorageRemote,
-    UniPageStorageRemoteReadTest,
-    testing::Values(std::make_pair(false, false), std::make_pair(true, false), std::make_pair(true, true)));
-
-} // namespace DB::PS::universal::tests
+} // namespace PS::universal::tests
+} // namespace DB

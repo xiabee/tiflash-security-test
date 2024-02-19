@@ -44,7 +44,7 @@ public:
         sample_block = Block(schema_);
     }
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     void expandTransform(DAGPipeline & child_pipeline);
 

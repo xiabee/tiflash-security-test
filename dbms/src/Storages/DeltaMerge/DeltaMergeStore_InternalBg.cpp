@@ -82,8 +82,7 @@ public:
         for (auto & root_path : delegate.listPaths())
         {
             std::set<PageIdU64> ids_under_path;
-            auto file_ids_in_current_path
-                = DMFile::listAllInPath(file_provider, root_path, options, path_pool->getKeyspaceID());
+            auto file_ids_in_current_path = DMFile::listAllInPath(file_provider, root_path, options);
             path_and_ids_vec.emplace_back(root_path, std::move(file_ids_in_current_path));
         }
         return path_and_ids_vec;
@@ -130,13 +129,7 @@ public:
                     continue;
 
                 // Note that page_id is useless here.
-                auto dmfile = DMFile::restore(
-                    file_provider,
-                    id,
-                    /* page_id= */ 0,
-                    path,
-                    DMFile::ReadMetaMode::none(),
-                    path_pool->getKeyspaceID());
+                auto dmfile = DMFile::restore(file_provider, id, /* page_id= */ 0, path, DMFile::ReadMetaMode::none());
                 if (unlikely(!dmfile))
                 {
                     // If the dtfile directory is not exist, it means `StoragePathPool::drop` have been
@@ -274,7 +267,7 @@ void DeltaMergeStore::setUpBackgroundTask(const DMContextPtr & dm_context)
     // we must make the callbacks safe.
     ExternalPageCallbacks callbacks;
     callbacks.prefix = storage_pool->getTableID();
-    if (auto data_store = dm_context->global_context.getSharedContextDisagg()->remote_data_store; !data_store)
+    if (auto data_store = dm_context->db_context.getSharedContextDisagg()->remote_data_store; !data_store)
     {
         callbacks.scanner
             = LocalDMFileGcScanner(std::weak_ptr<StoragePathPool>(path_pool), global_context.getFileProvider());

@@ -26,7 +26,6 @@
 #include <TestUtils/ExecutorSerializer.h>
 #include <TestUtils/ExecutorTestUtils.h>
 #include <gtest/gtest.h>
-#include <gtest/internal/gtest-internal.h>
 
 #include <functional>
 
@@ -189,6 +188,8 @@ void ExecutorTest::executeExecutor(
     std::function<::testing::AssertionResult(const ColumnsWithTypeAndName &)> assert_func)
 {
     WRAP_FOR_TEST_BEGIN
+    if (enable_pipeline && !Pipeline::isSupported(*request, context.context->getSettingsRef()))
+        continue;
     std::vector<size_t> concurrencies{1, 2, 10};
     for (auto concurrency : concurrencies)
     {
@@ -211,6 +212,8 @@ void ExecutorTest::checkBlockSorted(
         assert_func)
 {
     WRAP_FOR_TEST_BEGIN
+    if (enable_pipeline && !Pipeline::isSupported(*request, context.context->getSettingsRef()))
+        continue;
     std::vector<size_t> concurrencies{2, 5, 10};
     for (auto concurrency : concurrencies)
     {
@@ -315,6 +318,7 @@ void ExecutorTest::enablePlanner(bool is_enable) const
 void ExecutorTest::enablePipeline(bool is_enable) const
 {
     context.context->setSetting("enable_resource_control", is_enable ? "true" : "false");
+    context.context->setSetting("enforce_enable_resource_control", is_enable ? "true" : "false");
 }
 
 // ywq todo rename
@@ -370,11 +374,10 @@ void ExecutorTest::testForExecutionSummary(
     ASSERT_TRUE(dag_context.collect_execution_summaries);
     ExecutorStatisticsCollector statistics_collector("test_execution_summary", true);
     statistics_collector.initialize(&dag_context);
-    statistics_collector.setLocalRUConsumption(
-        RUConsumption{.cpu_ru = 0.0, .cpu_time_ns = 0, .read_ru = 0.0, .read_bytes = 0});
     auto summaries = statistics_collector.genExecutionSummaryResponse().execution_summaries();
     bool enable_planner = context.context->getSettingsRef().enable_planner;
-    bool enable_pipeline = context.context->getSettingsRef().enable_resource_control;
+    bool enable_pipeline = context.context->getSettingsRef().enable_resource_control
+        || context.context->getSettingsRef().enforce_enable_resource_control;
     ASSERT_EQ(summaries.size(), expect.size())
         << "\n"
         << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
@@ -421,18 +424,9 @@ DB::ColumnsWithTypeAndName ExecutorTest::executeRawQuery(const String & query, s
     return executeStreams(query_tasks[0].dag_request, concurrency);
 }
 
-::testing::AssertionResult ExecutorTest::dagRequestEqual(
-    const char * lhs_expr,
-    const char * rhs_expr,
-    const String & expected_string,
-    const std::shared_ptr<tipb::DAGRequest> & actual)
+void ExecutorTest::dagRequestEqual(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & actual)
 {
-    auto trim_expected = Poco::trim(expected_string);
-    auto trim_actual = Poco::trim(ExecutorSerializer().serialize(actual.get()));
-
-    if (trim_expected == trim_actual)
-        return ::testing::AssertionSuccess();
-    return ::testing::internal::EqFailure(lhs_expr, rhs_expr, trim_expected, trim_actual, false);
+    ASSERT_EQ(Poco::trim(expected_string), Poco::trim(ExecutorSerializer().serialize(actual.get())));
 }
 
 } // namespace DB::tests

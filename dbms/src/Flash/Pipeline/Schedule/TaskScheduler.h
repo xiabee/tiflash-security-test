@@ -26,14 +26,6 @@ struct TaskSchedulerConfig
 {
     ThreadPoolConfig cpu_task_thread_pool_config;
     ThreadPoolConfig io_task_thread_pool_config;
-
-    String toString() const
-    {
-        return fmt::format(
-            "cpu: {}, io: {}",
-            cpu_task_thread_pool_config.toString(),
-            io_task_thread_pool_config.toString());
-    }
 };
 
 /**
