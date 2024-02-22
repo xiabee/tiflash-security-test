@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 
 namespace DB
 {
-DAGResponseWriter::DAGResponseWriter(
-    Int64 records_per_chunk_,
-    DAGContext & dag_context_)
+DAGResponseWriter::DAGResponseWriter(Int64 records_per_chunk_, DAGContext & dag_context_)
     : records_per_chunk(records_per_chunk_)
     , dag_context(dag_context_)
 {
@@ -31,7 +30,7 @@ DAGResponseWriter::DAGResponseWriter(
         && dag_context.encode_type != tipb::EncodeType::TypeDefault)
     {
         throw TiFlashException(
-            "Only Default/Arrow/CHBlock encode type is supported in DAGBlockOutputStream.",
+            "Only Default/Arrow/CHBlock encode type is supported in DAGResponseWriter.",
             Errors::Coprocessor::Unimplemented);
     }
 }

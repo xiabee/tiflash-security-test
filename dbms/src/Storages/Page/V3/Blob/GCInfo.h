@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Poco/Message.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/V3/PageDefines.h>
 #include <common/types.h>
 
 namespace DB::PS::V3

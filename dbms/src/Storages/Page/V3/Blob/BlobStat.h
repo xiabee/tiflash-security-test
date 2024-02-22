@@ -16,9 +16,9 @@
 
 #include <Common/Logger.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V3/Blob/BlobConfig.h>
 #include <Storages/Page/V3/PageEntry.h>
+#include <Storages/Page/V3/PageType.h>
 #include <Storages/Page/V3/spacemap/SpaceMap.h>
 #include <Storages/PathPool.h>
 #include <common/types.h>
@@ -67,54 +67,39 @@ public:
             , sm_max_caps(sm_max_caps_)
         {}
 
-        [[nodiscard]] std::unique_lock<std::mutex> lock()
-        {
-            return std::unique_lock(sm_lock);
-        }
+        [[nodiscard]] std::unique_lock<std::mutex> lock() { return std::unique_lock(sm_lock); }
 
-        [[nodiscard]] std::unique_lock<std::mutex> defer_lock()
-        {
-            return std::unique_lock(sm_lock, std::defer_lock);
-        }
+        [[nodiscard]] std::unique_lock<std::mutex> defer_lock() { return std::unique_lock(sm_lock, std::defer_lock); }
 
-        bool isNormal() const
-        {
-            return type.load() == BlobStatType::NORMAL;
-        }
+        bool isNormal() const { return type.load() == BlobStatType::NORMAL; }
 
-        bool isReadOnly() const
-        {
-            return type.load() == BlobStatType::READ_ONLY;
-        }
+        bool isReadOnly() const { return type.load() == BlobStatType::READ_ONLY; }
 
-        void changeToReadOnly()
-        {
-            type.store(BlobStatType::READ_ONLY);
-        }
+        void changeToReadOnly() { type.store(BlobStatType::READ_ONLY); }
 
         BlobFileOffset getPosFromStat(size_t buf_size, const std::unique_lock<std::mutex> &);
 
         /**
-             * The return value is the valid data size remained in the BlobFile after the remove
-             */
+          * The return value is the valid data size remained in the BlobFile after the remove
+          */
         size_t removePosFromStat(BlobFileOffset offset, size_t buf_size, const std::unique_lock<std::mutex> &);
 
         /**
-             * This method is only used when blobstore restore
-             * Restore space map won't change the `sm_total_size`/`sm_valid_size`/`sm_valid_rate`
-             */
-        void restoreSpaceMap(BlobFileOffset offset, size_t buf_size);
+         * This method is only used when blobstore restore
+         * Restore space map won't change the `sm_total_size`/`sm_valid_size`/`sm_valid_rate`
+         */
+        std::tuple<bool, String> restoreSpaceMap(BlobFileOffset offset, size_t buf_size);
 
         /**
-             * After we restore the space map.
-             * We still need to recalculate a `sm_total_size`/`sm_valid_size`/`sm_valid_rate`.
-             */
+          * After we restore the space map.
+          * We still need to recalculate a `sm_total_size`/`sm_valid_size`/`sm_valid_rate`.
+          */
         void recalculateSpaceMap();
 
         /**
-             * The `sm_max_cap` is not accurate after GC removes out-of-date data, or after restoring from disk.
-             * Caller should call this function to update the `sm_max_cap` so that we can reuse the space in this BlobStat.
-             */
+          * The `sm_max_cap` is not accurate after GC removes out-of-date data, or after restoring from disk.
+          * Caller should call this function to update the `sm_max_cap` so that we can reuse the space in this BlobStat.
+          */
         void recalculateCapacity();
     };
 
@@ -144,20 +129,29 @@ public:
     void eraseStat(BlobFileId blob_file_id, const std::lock_guard<std::mutex> &);
 
     /**
-         * Choose a available `BlobStat` from `BlobStats`.
-         * 
-         * If we can't find any usable span to fit `buf_size` in the existed stats.
-         * Then it will return null `BlobStat` with a available `BlobFileId`. 
-         * eq. {nullptr,`BlobFileId`}.
-         * The `BlobFileId` can use to create a new `BlobFile`.
-         *  
-         * If we do find a usable span to fit `buf_size`.
-         * Then it will return a available `BlobStatPtr` with a `INVALID_BLOBFILE_ID`.
-         * eq. {`BlobStatPtr`,INVALID_BLOBFILE_ID}.
-         * The `INVALID_BLOBFILE_ID` means that you don't need create a new `BlobFile`.
-         * 
-         */
-    std::pair<BlobStatPtr, BlobFileId> chooseStat(size_t buf_size, const std::lock_guard<std::mutex> &);
+     * Change all existing BlobStat to be `ReadOnly`. So following new blobs will
+     * be written to new `BlobStat`.
+     */
+    void setAllToReadOnly();
+
+    /**
+     * Choose a available `BlobStat` from `BlobStats`.
+     * 
+     * If we can't find any usable span to fit `buf_size` in the existed stats.
+     * Then it will return null `BlobStat` with a available `BlobFileId`. 
+     * eq. {nullptr,`BlobFileId`}.
+     * The `BlobFileId` can use to create a new `BlobFile`.
+     *  
+     * If we do find a usable span to fit `buf_size`.
+     * Then it will return a available `BlobStatPtr` with a `INVALID_BLOBFILE_ID`.
+     * eq. {`BlobStatPtr`,INVALID_BLOBFILE_ID}.
+     * The `INVALID_BLOBFILE_ID` means that you don't need create a new `BlobFile`.
+     * 
+     */
+    std::pair<BlobStatPtr, BlobFileId> chooseStat(
+        size_t buf_size,
+        PageType page_type,
+        const std::lock_guard<std::mutex> &);
 
     BlobStatPtr blobIdToStat(BlobFileId file_id, bool ignore_not_exist = false);
 
@@ -168,13 +162,14 @@ public:
         return stats_map;
     }
 
-    static std::pair<BlobFileId, String> getBlobIdFromName(String blob_name);
+    static std::pair<BlobFileId, String> getBlobIdFromName(const String & blob_name);
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #endif
-    void restoreByEntry(const PageEntryV3 & entry);
+    std::tuple<bool, String> restoreByEntry(const PageEntryV3 & entry);
     void restore();
+    template <typename>
     friend class PageDirectoryFactory;
 
 #ifndef DBMS_PUBLIC_GTEST
@@ -185,7 +180,8 @@ private:
     BlobConfig & config;
 
     mutable std::mutex lock_stats;
-    BlobFileId roll_id = 1;
+    const PageTypeAndConfig page_type_and_config;
+    BlobFileId cur_max_id = 1;
     // Index for selecting next path for creating new blobfile
     UInt32 stats_map_path_index = 0;
     std::map<String, std::list<BlobStatPtr>> stats_map;

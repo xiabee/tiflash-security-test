@@ -17,8 +17,8 @@
 #include <Core/Block.h>
 #include <Core/ColumnWithTypeAndName.h>
 #include <Core/Names.h>
-#include <Interpreters/Settings.h>
-#include <Storages/Transaction/Collator.h>
+#include <Interpreters/Expand.h>
+#include <TiDB/Collation/Collator.h>
 
 #include <unordered_map>
 #include <unordered_set>
@@ -33,8 +33,10 @@ extern const int LOGICAL_ERROR;
 
 using NameWithAlias = std::pair<std::string, std::string>;
 using NamesWithAliases = std::vector<NameWithAlias>;
+using NamesWithAliasesVec = std::vector<NamesWithAliases>;
 
 class Join;
+class Expand;
 
 class IFunctionBase;
 using FunctionBasePtr = std::shared_ptr<IFunctionBase>;
@@ -66,6 +68,10 @@ public:
 
         /// Reorder and rename the columns, delete the extra ones. The same column names are allowed in the result.
         PROJECT,
+
+        EXPAND,
+
+        CONVERT_TO_NULLABLE,
     };
 
     Type type;
@@ -74,6 +80,9 @@ public:
     std::string source_name;
     std::string result_name;
     DataTypePtr result_type;
+
+    /// For CONVERT_TO_NULLABLE
+    std::string col_need_to_nullable;
 
     /// For ADD_COLUMN.
     ColumnPtr added_column;
@@ -91,6 +100,9 @@ public:
     /// For PROJECT.
     NamesWithAliases projections;
 
+    /// For EXPAND.
+    std::shared_ptr<const Expand> expand;
+
     /// If result_name_ == "", as name "function_name(arguments separated by commas) is used".
     static ExpressionAction applyFunction(
         const FunctionBuilderPtr & function_,
@@ -103,7 +115,11 @@ public:
     static ExpressionAction copyColumn(const std::string & from_name, const std::string & to_name);
     static ExpressionAction project(const NamesWithAliases & projected_columns_);
     static ExpressionAction project(const Names & projected_columns_);
-    static ExpressionAction ordinaryJoin(std::shared_ptr<const Join> join_, const NamesAndTypesList & columns_added_by_join_);
+    static ExpressionAction ordinaryJoin(
+        std::shared_ptr<const Join> join_,
+        const NamesAndTypesList & columns_added_by_join_);
+    static ExpressionAction expandSource(GroupingSets grouping_sets);
+    static ExpressionAction convertToNullable(const std::string & col_name);
 
     /// Which columns necessary to perform this action.
     Names getNeededColumns() const;
@@ -115,7 +131,6 @@ private:
 
     void prepare(Block & sample_block);
     void execute(Block & block) const;
-    void executeOnTotals(Block & block) const;
 };
 
 
@@ -126,25 +141,22 @@ class ExpressionActions
 public:
     using Actions = std::vector<ExpressionAction>;
 
-    ExpressionActions(const NamesAndTypesList & input_columns_, const Settings & settings_)
+    explicit ExpressionActions(const NamesAndTypesList & input_columns_)
         : input_columns(input_columns_)
-        , settings(settings_)
     {
         for (const auto & input_elem : input_columns)
             sample_block.insert(ColumnWithTypeAndName(nullptr, input_elem.type, input_elem.name));
     }
 
-    ExpressionActions(const NamesAndTypes & input_columns_, const Settings & settings_)
+    explicit ExpressionActions(const NamesAndTypes & input_columns_)
         : input_columns(input_columns_.cbegin(), input_columns_.cend())
-        , settings(settings_)
     {
         for (const auto & input_elem : input_columns)
             sample_block.insert(ColumnWithTypeAndName(nullptr, input_elem.type, input_elem.name));
     }
 
     /// For constant columns the columns themselves can be contained in `input_columns_`.
-    ExpressionActions(const ColumnsWithTypeAndName & input_columns_, const Settings & settings_)
-        : settings(settings_)
+    explicit ExpressionActions(const ColumnsWithTypeAndName & input_columns_)
     {
         for (const auto & input_elem : input_columns_)
         {
@@ -191,11 +203,6 @@ public:
     /// Execute the expression on the block. The block must contain all the columns returned by getRequiredColumns.
     void execute(Block & block) const;
 
-    /** Execute the expression on the block of total values.
-      * Almost the same as `execute`. The difference is only when JOIN is executed.
-      */
-    void executeOnTotals(Block & block) const;
-
     /// Obtain a sample block that contains the names and types of result columns.
     const Block & getSampleBlock() const { return sample_block; }
 
@@ -203,20 +210,16 @@ public:
 
     static std::string getSmallestColumn(const NamesAndTypesList & columns);
 
-    BlockInputStreamPtr createStreamWithNonJoinedDataIfFullOrRightJoin(const Block & source_header, size_t index, size_t step, size_t max_block_size) const;
-
 private:
     NamesAndTypesList input_columns;
     Actions actions;
     Block sample_block;
-    Settings settings;
-
-    void checkLimits(Block & block) const;
 
     void addImpl(ExpressionAction action, Names & new_names);
 };
 
 using ExpressionActionsPtr = std::shared_ptr<ExpressionActions>;
+using ExpressionActionsPtrVec = std::vector<ExpressionActionsPtr>;
 
 
 /** The sequence of transformations over the block.
@@ -243,17 +246,13 @@ struct ExpressionActionsChain
 
     using Steps = std::vector<Step>;
 
-    Settings settings;
     Steps steps;
 
     void addStep();
 
     void finalize();
 
-    void clear()
-    {
-        steps.clear();
-    }
+    void clear() { steps.clear(); }
 
     ExpressionActionsPtr getLastActions()
     {

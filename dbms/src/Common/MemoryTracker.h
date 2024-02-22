@@ -18,6 +18,7 @@
 #include <common/types.h>
 
 #include <atomic>
+#include <boost/noncopyable.hpp>
 
 extern std::atomic<Int64> real_rss, proc_num_threads, baseline_of_query_mem_tracker;
 extern std::atomic<UInt64> proc_virt_size;
@@ -46,6 +47,7 @@ class MemoryTracker : public std::enable_shared_from_this<MemoryTracker>
     double fault_probability = 0;
 
     bool is_global_root = false;
+    bool log_peak_memory_usage_in_destructor = true;
 
     /// To test the accuracy of memory track, it throws an exception when the part exceeding the tracked amount is greater than accuracy_diff_for_test.
     std::atomic<Int64> accuracy_diff_for_test{0};
@@ -58,11 +60,13 @@ class MemoryTracker : public std::enable_shared_from_this<MemoryTracker>
     /// You could specify custom metric to track memory usage.
     CurrentMetrics::Metric metric = CurrentMetrics::MemoryTracking;
 
+    /// Report the amount of this MemoryTracker.
+    std::optional<CurrentMetrics::Metric> amount_metric;
+
     /// This description will be used as prefix into log messages (if isn't nullptr)
-    const char * description = nullptr;
+    std::atomic<const char *> description = nullptr;
 
     /// Make constructors private to ensure all objects of this class is created by `MemoryTracker::create`.
-    MemoryTracker() = default;
     explicit MemoryTracker(Int64 limit_)
         : limit(limit_)
     {}
@@ -72,24 +76,22 @@ class MemoryTracker : public std::enable_shared_from_this<MemoryTracker>
         , is_global_root(is_global_root)
     {}
 
+    void reportAmount();
+
 public:
     /// Using `std::shared_ptr` and `new` instread of `std::make_shared` is because `std::make_shared` cannot call private constructors.
-    static MemoryTrackerPtr create(Int64 limit = 0)
+    static MemoryTrackerPtr create(
+        Int64 limit = 0,
+        MemoryTracker * parent = nullptr,
+        bool log_peak_memory_usage_in_destructor = true)
     {
-        if (limit == 0)
-        {
-            return std::shared_ptr<MemoryTracker>(new MemoryTracker);
-        }
-        else
-        {
-            return std::shared_ptr<MemoryTracker>(new MemoryTracker(limit));
-        }
+        auto p = std::shared_ptr<MemoryTracker>(new MemoryTracker(limit));
+        p->setParent(parent);
+        p->log_peak_memory_usage_in_destructor = log_peak_memory_usage_in_destructor;
+        return p;
     }
 
-    static MemoryTrackerPtr createGlobalRoot()
-    {
-        return std::shared_ptr<MemoryTracker>(new MemoryTracker(0, true));
-    }
+    static MemoryTrackerPtr createGlobalRoot() { return std::shared_ptr<MemoryTracker>(new MemoryTracker(0, true)); }
 
     ~MemoryTracker();
 
@@ -116,14 +118,17 @@ public:
       */
     void setOrRaiseLimit(Int64 value);
 
-    void setBytesThatRssLargerThanLimit(Int64 value) { bytes_rss_larger_than_limit.store(value, std::memory_order_relaxed); }
+    void setBytesThatRssLargerThanLimit(Int64 value)
+    {
+        bytes_rss_larger_than_limit.store(value, std::memory_order_relaxed);
+    }
 
     void setFaultProbability(double value) { fault_probability = value; }
 
     void setAccuracyDiffForTest(Int64 value) { accuracy_diff_for_test.store(value, std::memory_order_relaxed); }
 
     /// next should be changed only once: from nullptr to some value.
-    void setNext(MemoryTracker * elem)
+    void setParent(MemoryTracker * elem)
     {
         MemoryTracker * old_val = nullptr;
         if (!next.compare_exchange_strong(old_val, elem, std::memory_order_seq_cst, std::memory_order_relaxed))
@@ -133,6 +138,8 @@ public:
 
     /// The memory consumption could be shown in realtime via CurrentMetrics counter
     void setMetric(CurrentMetrics::Metric metric_) { metric = metric_; }
+
+    void setAmountMetric(CurrentMetrics::Metric amount_metric_) { amount_metric = amount_metric_; }
 
     void setDescription(const char * description_) { description = description_; }
 
@@ -157,7 +164,15 @@ extern thread_local MemoryTracker * current_memory_tracker;
 extern std::shared_ptr<MemoryTracker> root_of_non_query_mem_trackers;
 extern std::shared_ptr<MemoryTracker> root_of_query_mem_trackers;
 
+// Initialize in `initStorageMemoryTracker`.
+// If a memory tracker of storage tasks is driven by query, it should inherit `sub_root_of_query_storage_task_mem_trackers`.
+// Since it is difficult to maintain synchronization with the root_of_query_mem_trackers, it is not inherited from root_of_query_mem_trackers.
+// sub_root_of_query_storage_task_mem_trackers
+//                  |-- fetch_pages_mem_tracker
+extern std::shared_ptr<MemoryTracker> sub_root_of_query_storage_task_mem_trackers;
+extern std::shared_ptr<MemoryTracker> fetch_pages_mem_tracker;
 extern std::shared_ptr<MemoryTracker> shared_column_data_mem_tracker;
+
 void initStorageMemoryTracker(Int64 limit, Int64 larger_than_limit);
 
 /// Convenience methods, that use current_memory_tracker if it is available.
@@ -171,8 +186,6 @@ void realloc(Int64 old_size, Int64 new_size);
 void free(Int64 size);
 } // namespace CurrentMemoryTracker
 
-
-#include <boost/noncopyable.hpp>
 
 struct TemporarilyDisableMemoryTracker : private boost::noncopyable
 {

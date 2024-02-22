@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Coprocessor/PushDownFilter.h>
+#pragma once
+
+#include <Flash/Coprocessor/DAGStorageInterpreter.h>
+#include <Flash/Coprocessor/FilterConditions.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Planner/plans/PhysicalLeaf.h>
+#include <Flash/Planner/Plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
 {
+
 class PhysicalTableScan : public PhysicalLeaf
 {
 public:
@@ -38,20 +42,33 @@ public:
 
     const Block & getSampleBlock() const override;
 
-    bool pushDownFilter(const String & filter_executor_id, const tipb::Selection & selection);
+    bool setFilterConditions(const String & filter_executor_id, const tipb::Selection & selection);
 
-    bool hasPushDownFilter() const;
+    bool hasFilterConditions() const;
 
-    const String & getPushDownFilterId() const;
+    const String & getFilterConditionsId() const;
+
+    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
 
 private:
-    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & /*exec_status*/,
+        PipelineExecGroupBuilder & group_builder,
+        Context & /*context*/,
+        size_t /*concurrency*/) override;
+
+    void buildProjection(DAGPipeline & pipeline);
+    void buildProjection(PipelineExecutorContext & exec_context, PipelineExecGroupBuilder & group_builder);
 
 private:
-    PushDownFilter push_down_filter;
+    FilterConditions filter_conditions;
 
     TiDBTableScan tidb_table_scan;
 
     Block sample_block;
+
+    PipelineExecGroupBuilder pipeline_exec_builder;
 };
 } // namespace DB

@@ -15,7 +15,7 @@
 #include <Common/Logger.h>
 #include <DataStreams/MockExchangeSenderInputStream.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
-#include <Flash/Planner/plans/PhysicalMockExchangeSender.h>
+#include <Flash/Planner/Plans/PhysicalMockExchangeSender.h>
 #include <Interpreters/Context.h>
 
 namespace DB
@@ -25,11 +25,12 @@ PhysicalPlanNodePtr PhysicalMockExchangeSender::build(
     const LoggerPtr & log,
     const PhysicalPlanNodePtr & child)
 {
-    assert(child);
+    RUNTIME_CHECK(child);
 
     auto physical_mock_exchange_sender = std::make_shared<PhysicalMockExchangeSender>(
         executor_id,
         child->getSchema(),
+        FineGrainedShuffle{},
         log->identifier(),
         child);
     // executeUnion will be call after sender.transform, so don't need to restore concurrency.
@@ -37,11 +38,15 @@ PhysicalPlanNodePtr PhysicalMockExchangeSender::build(
     return physical_mock_exchange_sender;
 }
 
-void PhysicalMockExchangeSender::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalMockExchangeSender::buildBlockInputStreamImpl(
+    DAGPipeline & pipeline,
+    Context & context,
+    size_t max_streams)
 {
-    child->transform(pipeline, context, max_streams);
+    child->buildBlockInputStream(pipeline, context, max_streams);
 
-    pipeline.transform([&](auto & stream) { stream = std::make_shared<MockExchangeSenderInputStream>(stream, log->identifier()); });
+    pipeline.transform(
+        [&](auto & stream) { stream = std::make_shared<MockExchangeSenderInputStream>(stream, log->identifier()); });
 }
 
 void PhysicalMockExchangeSender::finalize(const Names & parent_require)

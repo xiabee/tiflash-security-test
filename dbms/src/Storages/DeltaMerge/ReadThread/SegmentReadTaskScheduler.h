@@ -46,10 +46,7 @@ public:
     // Add SegmentReadTaskPool to `read_pools` and index segments into merging_segments.
     void add(const SegmentReadTaskPoolPtr & pool);
 
-    void pushMergedTask(const MergedTaskPtr & p)
-    {
-        merged_task_pool.push(p);
-    }
+    void pushMergedTask(const MergedTaskPtr & p) { merged_task_pool.push(p); }
 
 private:
     SegmentReadTaskScheduler();
@@ -65,9 +62,12 @@ private:
     bool needScheduleToRead(const SegmentReadTaskPoolPtr & pool);
     SegmentReadTaskPools getPoolsUnlock(const std::vector<uint64_t> & pool_ids);
     // <seg_id, pool_ids>
-    std::optional<std::pair<uint64_t, std::vector<uint64_t>>> scheduleSegmentUnlock(const SegmentReadTaskPoolPtr & pool);
+    std::optional<std::pair<uint64_t, std::vector<uint64_t>>> scheduleSegmentUnlock(
+        const SegmentReadTaskPoolPtr & pool);
     SegmentReadTaskPoolPtr scheduleSegmentReadTaskPoolUnlock();
 
+    // To restrict the instantaneous concurrency of `add` and avoid `schedule` from always failing to acquire the lock.
+    std::mutex add_mtx;
     std::mutex mtx;
     SegmentReadTaskPoolList read_pools;
     // table_id -> {seg_id -> pool_ids, seg_id -> pool_ids, ...}
@@ -78,6 +78,6 @@ private:
     std::atomic<bool> stop;
     std::thread sched_thread;
 
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 } // namespace DB::DM

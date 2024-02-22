@@ -492,7 +492,8 @@ typename TypeTraits<T>::FieldType parseDecimal(
     }
     auto max_value = DecimalMaxValue::get(max_prec);
     if (parsed_value > max_value || parsed_value < -max_value)
-        throw TiFlashTestException(fmt::format("Input {} overflow for decimal({},{})", literal, max_prec, expected_scale));
+        throw TiFlashTestException(
+            fmt::format("Input {} overflow for decimal({},{})", literal, max_prec, expected_scale));
     auto value = static_cast<NativeType>(parsed_value);
     return DecimalField<DecimalType>(value, expected_scale);
 }
@@ -579,23 +580,21 @@ String getColumnsContent(const ColumnsWithTypeAndName & cols, size_t begin, size
 //  but with this func we can write `ASSERT_COLUMNS_EQ_R(createColumns{col1, col2, col3}, actual_cols)` instead.
 ColumnsWithTypeAndName createColumns(const ColumnsWithTypeAndName & cols);
 
-::testing::AssertionResult dataTypeEqual(
-    const DataTypePtr & expected,
-    const DataTypePtr & actual);
+::testing::AssertionResult dataTypeEqual(const DataTypePtr & expected, const DataTypePtr & actual);
 
 ::testing::AssertionResult columnEqual(
     const ColumnPtr & expected,
     const ColumnPtr & actual,
+    const ICollator * collator = nullptr,
     bool is_floating_point = false);
 
 // ignore name
 ::testing::AssertionResult columnEqual(
     const ColumnWithTypeAndName & expected,
-    const ColumnWithTypeAndName & actual);
+    const ColumnWithTypeAndName & actual,
+    const ICollator * collator = nullptr);
 
-::testing::AssertionResult blockEqual(
-    const Block & expected,
-    const Block & actual);
+::testing::AssertionResult blockEqual(const Block & expected, const Block & actual);
 
 ::testing::AssertionResult columnsEqual(
     const ColumnsWithTypeAndName & expected,
@@ -608,6 +607,7 @@ ColumnWithTypeAndName executeFunction(
     const String & func_name,
     const ColumnsWithTypeAndName & columns,
     const TiDB::TiDBCollatorPtr & collator = nullptr,
+    const String & val = "",
     bool raw_function_test = false);
 
 ColumnWithTypeAndName executeFunction(
@@ -616,6 +616,7 @@ ColumnWithTypeAndName executeFunction(
     const ColumnNumbers & argument_column_numbers,
     const ColumnsWithTypeAndName & columns,
     const TiDB::TiDBCollatorPtr & collator = nullptr,
+    const String & val = "",
     bool raw_function_test = false);
 
 template <typename... Args>
@@ -747,7 +748,9 @@ ColumnWithTypeAndName toVec(const std::vector<typename TypeTraits<T>::FieldType>
 }
 
 template <typename T>
-ColumnWithTypeAndName toNullableVec(String name, const std::vector<std::optional<typename TypeTraits<T>::FieldType>> & v)
+ColumnWithTypeAndName toNullableVec(
+    String name,
+    const std::vector<std::optional<typename TypeTraits<T>::FieldType>> & v)
 {
     return createColumn<Nullable<T>>(v, name);
 }
@@ -761,13 +764,16 @@ ColumnWithTypeAndName toVec(String name, const std::vector<typename TypeTraits<T
 ColumnWithTypeAndName toDatetimeVec(String name, const std::vector<String> & v, int fsp);
 
 ColumnWithTypeAndName toNullableDatetimeVec(String name, const std::vector<String> & v, int fsp);
+
+struct FuncMetaData
+{
+    String val; // This is for the val field of tipb::expr
+};
+
 class FunctionTest : public ::testing::Test
 {
 protected:
-    void SetUp() override
-    {
-        initializeDAGContext();
-    }
+    void SetUp() override { initializeDAGContext(); }
 
 public:
     static void SetUpTestCase()
@@ -781,26 +787,22 @@ public:
             // Maybe another test has already registered, ignore exception here.
         }
     }
-    FunctionTest()
-        : context(TiFlashTestEnv::getContext())
-    {}
-    virtual void initializeDAGContext()
-    {
-        dag_context_ptr = std::make_unique<DAGContext>(1024);
-        context.setDAGContext(dag_context_ptr.get());
-    }
+
+    FunctionTest();
+
+    virtual void initializeDAGContext();
 
     ColumnWithTypeAndName executeFunction(
         const String & func_name,
         const ColumnsWithTypeAndName & columns,
         const TiDB::TiDBCollatorPtr & collator = nullptr,
-        bool raw_function_test = false)
-    {
-        return DB::tests::executeFunction(context, func_name, columns, collator, raw_function_test);
-    }
+        bool raw_function_test = false);
 
     template <typename... Args>
-    ColumnWithTypeAndName executeFunction(const String & func_name, const ColumnWithTypeAndName & first_column, const Args &... columns)
+    ColumnWithTypeAndName executeFunction(
+        const String & func_name,
+        const ColumnWithTypeAndName & first_column,
+        const Args &... columns)
     {
         ColumnsWithTypeAndName vec({first_column, columns...});
         return executeFunction(func_name, vec);
@@ -811,17 +813,31 @@ public:
         const ColumnNumbers & argument_column_numbers,
         const ColumnsWithTypeAndName & columns,
         const TiDB::TiDBCollatorPtr & collator = nullptr,
-        bool raw_function_test = false)
-    {
-        return DB::tests::executeFunction(context, func_name, argument_column_numbers, columns, collator, raw_function_test);
-    }
+        bool raw_function_test = false);
 
     template <typename... Args>
-    ColumnWithTypeAndName executeFunction(const String & func_name, const ColumnNumbers & argument_column_numbers, const ColumnWithTypeAndName & first_column, const Args &... columns)
+    ColumnWithTypeAndName executeFunction(
+        const String & func_name,
+        const ColumnNumbers & argument_column_numbers,
+        const ColumnWithTypeAndName & first_column,
+        const Args &... columns)
     {
         ColumnsWithTypeAndName vec({first_column, columns...});
         return executeFunction(func_name, argument_column_numbers, vec);
     }
+
+    ColumnWithTypeAndName executeFunctionWithMetaData(
+        const String & func_name,
+        const ColumnsWithTypeAndName & columns,
+        const FuncMetaData & meta,
+        const TiDB::TiDBCollatorPtr & collator = nullptr);
+
+    ColumnWithTypeAndName executeFunctionWithMetaData(
+        const String & func_name,
+        const ColumnNumbers & argument_column_numbers,
+        const ColumnsWithTypeAndName & columns,
+        const FuncMetaData & meta,
+        const TiDB::TiDBCollatorPtr & collator = nullptr);
 
     DAGContext & getDAGContext()
     {
@@ -830,12 +846,12 @@ public:
     }
 
 protected:
-    Context context;
+    ContextPtr context;
     std::unique_ptr<DAGContext> dag_context_ptr;
 };
 
 #define ASSERT_COLUMN_EQ(expected, actual) ASSERT_TRUE(DB::tests::columnEqual((expected), (actual)))
-#define ASSERT_BLOCK_EQ(expected, actual) DB::tests::blockEqual((expected), (actual))
+#define ASSERT_BLOCK_EQ(expected, actual) ASSERT_TRUE(DB::tests::blockEqual((expected), (actual)))
 
 /// restrictly checking columns equality, both data set and each row's offset should be the same
 #define ASSERT_COLUMNS_EQ_R(expected, actual) ASSERT_TRUE(DB::tests::columnsEqual((expected), (actual), true))
