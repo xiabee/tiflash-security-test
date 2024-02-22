@@ -25,7 +25,10 @@ struct JoinImpl
 
     static constexpr auto type = "Join";
 
-    static bool isMatch(const tipb::Executor * executor) { return executor->has_join(); }
+    static bool isMatch(const tipb::Executor * executor)
+    {
+        return executor->has_join();
+    }
 };
 
 using JoinStatisticsBase = ExecutorStatistics<JoinImpl>;
@@ -36,10 +39,10 @@ public:
     JoinStatistics(const tipb::Executor * executor, DAGContext & dag_context_);
 
 private:
-    size_t peak_build_bytes_usage = 0;
+    size_t hash_table_bytes = 0;
     String build_side_child;
-    bool is_spill_enabled = false;
-    bool is_spilled = false;
+
+    BaseRuntimeStatistics non_joined_base;
 
     BaseRuntimeStatistics join_build_base;
 

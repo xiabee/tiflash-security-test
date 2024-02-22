@@ -15,12 +15,7 @@
 #include <Debug/dbgFuncCoprocessor.h>
 #include <Debug/dbgFuncCoprocessorUtils.h>
 #include <Debug/dbgNaturalDag.h>
-#include <Debug/dbgQueryExecutor.h>
-#include <Debug/dbgTools.h>
-#include <Interpreters/Context.h>
-#include <Parsers/ASTLiteral.h>
 #include <Storages/IManageableStorage.h>
-#include <Storages/KVStore/TMTContext.h>
 
 namespace DB
 {
@@ -50,29 +45,23 @@ BlockInputStreamPtr dbgFuncTiDBQuery(Context & context, const ASTs & args)
         context,
         query,
         [&](const String & database_name, const String & table_name) {
-            auto mapped_database_name = mappedDatabase(context, database_name);
-            auto mapped_table_name = mappedTable(context, database_name, table_name);
-            auto storage = context.getTable(mapped_database_name, mapped_table_name.second);
+            auto storage = context.getTable(database_name, table_name);
             auto managed_storage = std::dynamic_pointer_cast<IManageableStorage>(storage);
             if (!managed_storage //
-                || !(
-                    managed_storage->engineType() == ::TiDB::StorageEngine::DT
-                    || managed_storage->engineType() == ::TiDB::StorageEngine::TMT))
-                throw Exception(
-                    database_name + "." + table_name + " is not ManageableStorage",
-                    ErrorCodes::BAD_ARGUMENTS);
+                || !(managed_storage->engineType() == ::TiDB::StorageEngine::DT
+                     || managed_storage->engineType() == ::TiDB::StorageEngine::TMT))
+                throw Exception(database_name + "." + table_name + " is not ManageableStorage", ErrorCodes::BAD_ARGUMENTS);
             return managed_storage->getTableInfo();
         },
         properties);
+
     return executeQuery(context, region_id, properties, query_tasks, func_wrap_output_stream);
 }
 
 BlockInputStreamPtr dbgFuncMockTiDBQuery(Context & context, const ASTs & args)
 {
     if (args.size() < 2 || args.size() > 4)
-        throw Exception(
-            "Args not matched, should be: query, region-id[, start-ts, dag_prop_string]",
-            ErrorCodes::BAD_ARGUMENTS);
+        throw Exception("Args not matched, should be: query, region-id[, start-ts, dag_prop_string]", ErrorCodes::BAD_ARGUMENTS);
 
     auto query = safeGet<String>(typeid_cast<const ASTLiteral &>(*args[0]).value);
     auto region_id = safeGet<RegionID>(typeid_cast<const ASTLiteral &>(*args[1]).value);
@@ -151,9 +140,7 @@ void dbgFuncTiDBQueryFromNaturalDag(Context & context, const ASTs & args, DBGInv
         fmt_buf.joinStr(
             failed_req_msg_vec.begin(),
             failed_req_msg_vec.end(),
-            [](const auto & pair, FmtBuffer & fb) {
-                fb.fmtAppend("request {} failed, msg: {}", pair.first, pair.second);
-            },
+            [](const auto & pair, FmtBuffer & fb) { fb.fmtAppend("request {} failed, msg: {}", pair.first, pair.second); },
             "\n");
         throw Exception(fmt_buf.toString(), ErrorCodes::LOGICAL_ERROR);
     }

@@ -41,9 +41,15 @@ public:
     const char * getFamilyName() const override { return "Function"; }
     TypeIndex getTypeId() const override { return TypeIndex::Function; }
 
-    const DataTypes & getArgumentTypes() const { return argument_types; }
+    const DataTypes & getArgumentTypes() const
+    {
+        return argument_types;
+    }
 
-    const DataTypePtr & getReturnType() const { return return_type; }
+    const DataTypePtr & getReturnType() const
+    {
+        return return_type;
+    }
 
     bool equals(const IDataType & rhs) const override;
 };

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Common/TiFlashException.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
 #include <Flash/Statistics/ExchangeSenderImpl.h>
@@ -77,14 +76,11 @@ ExchangeSenderStatistics::ExchangeSenderStatistics(const tipb::Executor * execut
     {
         mpp::TaskMeta task_meta;
         if (unlikely(!task_meta.ParseFromString(exchange_sender_executor.encoded_task_meta(i))))
-            throw TiFlashException(
-                "Failed to decode task meta info in ExchangeSender",
-                Errors::Coprocessor::BadRequest);
+            throw TiFlashException("Failed to decode task meta info in ExchangeSender", Errors::Coprocessor::BadRequest);
         sender_target_task_ids.push_back(task_meta.task_id());
 
         const auto & mpp_tunnel = mpp_tunnels[i];
-        mpp_tunnel_details
-            .emplace_back(mpp_tunnel->id(), task_meta.task_id(), task_meta.address(), mpp_tunnel->isLocal());
+        mpp_tunnel_details.emplace_back(mpp_tunnel->id(), task_meta.task_id(), task_meta.address(), mpp_tunnel->isLocal());
     }
 
     // for root task, exchange_sender_executor.task_meta[0].address is blank or not tidb host

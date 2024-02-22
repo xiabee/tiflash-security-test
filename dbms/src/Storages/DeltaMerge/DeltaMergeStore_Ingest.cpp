@@ -14,20 +14,10 @@
 
 #include <Common/FailPoint.h>
 #include <Common/TiFlashMetrics.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
-#include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
-#include <Storages/DeltaMerge/Remote/ObjectId.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/MultiRaft/Disagg/CheckpointInfo.h>
-#include <Storages/KVStore/MultiRaft/Disagg/FastAddPeer.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <Storages/PathPool.h>
 
 #include <magic_enum.hpp>
 
@@ -57,7 +47,8 @@ extern const char force_ingest_via_replace[];
 
 namespace DM
 {
-std::tuple<String, PageIdU64> DeltaMergeStore::preAllocateIngestFile()
+
+std::tuple<String, PageId> DeltaMergeStore::preAllocateIngestFile()
 {
     if (shutdown_called.load(std::memory_order_relaxed))
         return {};
@@ -68,74 +59,14 @@ std::tuple<String, PageIdU64> DeltaMergeStore::preAllocateIngestFile()
     return {parent_path, new_id};
 }
 
-void DeltaMergeStore::preIngestFile(const String & parent_path, const PageIdU64 file_id, size_t file_size)
+void DeltaMergeStore::preIngestFile(const String & parent_path, const PageId file_id, size_t file_size)
 {
     if (shutdown_called.load(std::memory_order_relaxed))
         return;
 
     auto delegator = path_pool->getStableDiskDelegator();
-    if (auto remote_data_store = global_context.getSharedContextDisagg()->remote_data_store; !remote_data_store)
-    {
-        delegator.addDTFile(file_id, file_size, parent_path);
-    }
-    else
-    {
-        delegator.addRemoteDTFileWithGCDisabled(file_id, file_size);
-    }
+    delegator.addDTFile(file_id, file_size, parent_path);
 }
-
-void DeltaMergeStore::removePreIngestFile(PageIdU64 file_id, bool throw_on_not_exist)
-{
-    if (shutdown_called.load(std::memory_order_relaxed))
-        return;
-
-    auto delegator = path_pool->getStableDiskDelegator();
-    if (auto remote_data_store = global_context.getSharedContextDisagg()->remote_data_store; !remote_data_store)
-    {
-        delegator.removeDTFile(file_id, throw_on_not_exist);
-    }
-    else
-    {
-        delegator.removeRemoteDTFile(file_id, throw_on_not_exist);
-    }
-}
-
-
-void DeltaMergeStore::cleanPreIngestFiles(
-    const Context & db_context,
-    const DB::Settings & db_settings,
-    const std::vector<DM::ExternalDTFileInfo> & external_files)
-{
-    auto dm_context = newDMContext(db_context, db_settings);
-    auto delegate = dm_context->path_pool->getStableDiskDelegator();
-    auto file_provider = dm_context->db_context.getFileProvider();
-
-    for (const auto & f : external_files)
-    {
-        if (auto remote_data_store = global_context.getSharedContextDisagg()->remote_data_store; !remote_data_store)
-        {
-            auto file_parent_path = delegate.getDTFilePath(f.id);
-            auto file = DM::DMFile::restore(
-                file_provider,
-                f.id,
-                f.id,
-                file_parent_path,
-                DM::DMFile::ReadMetaMode::memoryAndDiskSize());
-            removePreIngestFile(f.id, false);
-            file->remove(file_provider);
-        }
-        else
-        {
-            // For disagg mode
-            // - if the job has been finished, it means the local files is likely all uploaded to S3
-            // - if the job is intrrupted, it means the `SSTFilesToDTFilesOutputStream::cancel` is called
-            //   and local files are also removed.
-            // So we ignore the files on disk.
-            removePreIngestFile(f.id, false);
-        }
-    }
-}
-
 
 Segments DeltaMergeStore::ingestDTFilesUsingColumnFile(
     const DMContextPtr & dm_context,
@@ -143,7 +74,7 @@ Segments DeltaMergeStore::ingestDTFilesUsingColumnFile(
     const std::vector<DMFilePtr> & files,
     bool clear_data_in_range)
 {
-    auto delegate = dm_context->path_pool->getStableDiskDelegator();
+    auto delegate = dm_context->path_pool.getStableDiskDelegator();
     auto file_provider = dm_context->db_context.getFileProvider();
 
     Segments updated_segments;
@@ -156,8 +87,14 @@ Segments DeltaMergeStore::ingestDTFilesUsingColumnFile(
         // Keep trying until succeeded.
         while (true)
         {
-            auto [segment, is_empty]
-                = getSegmentByStartKey(cur_range.getStart(), /*create_if_empty*/ true, /*throw_if_notfound*/ true);
+            SegmentPtr segment;
+            {
+                std::shared_lock lock(read_write_mutex);
+
+                auto segment_it = segments.upper_bound(cur_range.getStart());
+                RUNTIME_CHECK(segment_it != segments.end(), cur_range.toDebugString());
+                segment = segment_it->second;
+            }
 
             FAIL_POINT_PAUSE(FailPoints::pause_when_ingesting_to_dt_store);
             waitForWrite(dm_context, segment);
@@ -181,8 +118,7 @@ Segments DeltaMergeStore::ingestDTFilesUsingColumnFile(
                 const auto & file_parent_path = file->parentPath();
                 auto page_id = storage_pool->newDataPageIdForDTFile(delegate, __PRETTY_FUNCTION__);
 
-                auto ref_file
-                    = DMFile::restore(file_provider, file_id, page_id, file_parent_path, DMFile::ReadMetaMode::all());
+                auto ref_file = DMFile::restore(file_provider, file_id, page_id, file_parent_path, DMFile::ReadMetaMode::all());
                 data_files.emplace_back(std::move(ref_file));
                 wbs.data.putRefPage(page_id, file->pageId());
             }
@@ -191,8 +127,7 @@ Segments DeltaMergeStore::ingestDTFilesUsingColumnFile(
             // they are visible for readers immediately, who require file_ids to be found in PageStorage.
             wbs.writeLogAndData();
 
-            bool ingest_success
-                = segment->ingestDataToDelta(*dm_context, range.shrink(segment_range), data_files, clear_data_in_range);
+            bool ingest_success = segment->ingestDataToDelta(*dm_context, range.shrink(segment_range), data_files, clear_data_in_range);
             fiu_do_on(FailPoints::force_set_segment_ingest_packs_fail, { ingest_success = false; });
             if (ingest_success)
             {
@@ -235,9 +170,15 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
     bool clear_data_in_range)
 {
     {
-        RUNTIME_CHECK(files.size() == external_files.size(), files.size(), external_files.size());
+        RUNTIME_CHECK(
+            files.size() == external_files.size(),
+            files.size(),
+            external_files.size());
         for (size_t i = 0; i < files.size(); ++i)
-            RUNTIME_CHECK(files[i]->pageId() == external_files[i].id, files[i]->pageId(), external_files[i].toString());
+            RUNTIME_CHECK(
+                files[i]->pageId() == external_files[i].id,
+                files[i]->pageId(),
+                external_files[i].toString());
     }
 
     std::set<SegmentPtr> updated_segments;
@@ -254,22 +195,24 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
 
         while (!remaining_delete_range.none())
         {
-            auto [segment, is_empty] = getSegmentByStartKey(
-                remaining_delete_range.getStart(),
-                /*create_if_empty*/ true,
-                /*throw_if_notfound*/ true);
+            SegmentPtr segment;
+            {
+                std::shared_lock lock(read_write_mutex);
+
+                auto segment_it = segments.upper_bound(remaining_delete_range.getStart());
+                RUNTIME_CHECK(segment_it != segments.end(), remaining_delete_range.toDebugString());
+                segment = segment_it->second;
+            }
 
             const auto delete_range = remaining_delete_range.shrink(segment->getRowKeyRange());
             RUNTIME_CHECK(
-                !delete_range
-                     .none(), // as remaining_delete_range is not none, we expect the shrinked range to be not none.
+                !delete_range.none(), // as remaining_delete_range is not none, we expect the shrinked range to be not none.
                 delete_range.toDebugString(),
                 segment->simpleInfo(),
                 remaining_delete_range.toDebugString());
             LOG_DEBUG(
                 log,
-                "Table ingest using split - delete range phase - Try to delete range in segment, delete_range={} "
-                "segment={} remaining_delete_range={} updated_segments_n={}",
+                "Table ingest using split - delete range phase - Try to delete range in segment, delete_range={} segment={} remaining_delete_range={} updated_segments_n={}",
                 delete_range.toDebugString(),
                 segment->simpleInfo(),
                 remaining_delete_range.toDebugString(),
@@ -334,8 +277,7 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
         {
             LOG_WARNING(
                 log,
-                "Table ingest using split - split ingest phase - Unexpected empty DMFile, skipped. ingest_range={} "
-                "file_idx={} file={}",
+                "Table ingest using split - split ingest phase - Unexpected empty DMFile, skipped. ingest_range={} file_idx={} file={}",
                 ingest_range.toDebugString(),
                 file_idx,
                 files[file_idx]->path());
@@ -353,10 +295,16 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
         auto file_ingest_range = external_files[file_idx].range.shrink(ingest_range);
         while (!file_ingest_range.none()) // This DMFile has remaining data to ingest
         {
-            auto [segment, is_empty] = getSegmentByStartKey(
-                file_ingest_range.getStart(),
-                /*create_if_empty*/ true,
-                /*throw_if_notfound*/ true);
+            SegmentPtr segment;
+            {
+                std::shared_lock lock(read_write_mutex);
+                auto segment_it = segments.upper_bound(file_ingest_range.getStart());
+                RUNTIME_CHECK(segment_it != segments.end(),
+                              file_ingest_range.toDebugString(),
+                              file_idx,
+                              files[file_idx]->path());
+                segment = segment_it->second;
+            }
 
             if (segment->hasAbandoned())
                 continue; // retry with current range and file
@@ -378,20 +326,14 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
 
             LOG_INFO(
                 log,
-                "Table ingest using split - split ingest phase - Try to ingest file into segment, file_idx={} "
-                "file_id=dmf_{} file_ingest_range={} segment={} segment_ingest_range={}",
+                "Table ingest using split - split ingest phase - Try to ingest file into segment, file_idx={} file_id=dmf_{} file_ingest_range={} segment={} segment_ingest_range={}",
                 file_idx,
                 files[file_idx]->fileId(),
                 file_ingest_range.toDebugString(),
                 segment->simpleInfo(),
                 segment_ingest_range.toDebugString());
 
-            const bool succeeded = ingestDTFileIntoSegmentUsingSplit(
-                *dm_context,
-                segment,
-                segment_ingest_range,
-                files[file_idx],
-                clear_data_in_range);
+            const bool succeeded = ingestDTFileIntoSegmentUsingSplit(*dm_context, segment, segment_ingest_range, files[file_idx], clear_data_in_range);
             if (succeeded)
             {
                 updated_segments.insert(segment);
@@ -412,7 +354,9 @@ Segments DeltaMergeStore::ingestDTFilesUsingSplit(
         "Table ingest using split - split ingest phase - finished, updated_segments_n={}",
         updated_segments.size());
 
-    return std::vector<SegmentPtr>(updated_segments.begin(), updated_segments.end());
+    return std::vector<SegmentPtr>(
+        updated_segments.begin(),
+        updated_segments.end());
 }
 
 /**
@@ -428,7 +372,9 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
     const auto & segment_range = segment->getRowKeyRange();
 
     // The ingest_range must fall in segment's range.
-    RUNTIME_CHECK(!ingest_range.none(), ingest_range.toDebugString());
+    RUNTIME_CHECK(
+        !ingest_range.none(),
+        ingest_range.toDebugString());
     RUNTIME_CHECK(
         compare(segment_range.getStart(), ingest_range.getStart()) <= 0,
         segment_range.toDebugString(),
@@ -451,7 +397,7 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
          *    │-------- Ingest Range --------│
          */
 
-        auto delegate = dm_context.path_pool->getStableDiskDelegator();
+        auto delegate = dm_context.path_pool.getStableDiskDelegator();
         auto file_provider = dm_context.db_context.getFileProvider();
 
         WriteBatches wbs(*storage_pool, dm_context.getWriteLimiter());
@@ -498,12 +444,7 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
          *    │--------------- Segment ------│--------│
          *    │-------- Ingest Range --------│
          */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.end,
-            SegmentSplitMode::Logical);
+        const auto [left, right] = segmentSplit(dm_context, segment, SegmentSplitReason::ForIngest, ingest_range.end, SegmentSplitMode::Logical);
         if (left == nullptr || right == nullptr)
         {
             // Split failed, likely caused by snapshot failed.
@@ -525,12 +466,7 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
          *    │--------│------ Segment ---------------│
          *             │-------- Ingest Range --------│
          */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.start,
-            SegmentSplitMode::Logical);
+        const auto [left, right] = segmentSplit(dm_context, segment, SegmentSplitReason::ForIngest, ingest_range.start, SegmentSplitMode::Logical);
         if (left == nullptr || right == nullptr)
         {
             // Split failed, likely caused by snapshot failed.
@@ -550,12 +486,7 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
          *    │---│----------- Segment ---------------│
          *        │-------- Ingest Range --------│
          */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.start,
-            SegmentSplitMode::Logical);
+        const auto [left, right] = segmentSplit(dm_context, segment, SegmentSplitReason::ForIngest, ingest_range.start, SegmentSplitMode::Logical);
         if (left == nullptr || right == nullptr)
         {
             // Split failed, likely caused by snapshot failed.
@@ -566,7 +497,7 @@ bool DeltaMergeStore::ingestDTFileIntoSegmentUsingSplit(
     }
 }
 
-UInt64 DeltaMergeStore::ingestFiles(
+void DeltaMergeStore::ingestFiles(
     const DMContextPtr & dm_context,
     const RowKeyRange & range,
     const std::vector<DM::ExternalDTFileInfo> & external_files,
@@ -596,7 +527,9 @@ UInt64 DeltaMergeStore::ingestFiles(
         //                         We require A <= B.
         for (const auto & ext_file : external_files)
         {
-            RUNTIME_CHECK(!ext_file.range.none(), ext_file.toString());
+            RUNTIME_CHECK(
+                !ext_file.range.none(),
+                ext_file.toString());
             RUNTIME_CHECK(
                 compare(last_end.toRowKeyValueRef(), ext_file.range.getStart()) <= 0,
                 last_end.toDebugString(),
@@ -605,66 +538,36 @@ UInt64 DeltaMergeStore::ingestFiles(
         }
 
         // Check whether all external files are contained by the range.
-        if (dm_context->db_context.getSettingsRef().dt_enable_ingest_check)
-        {
-            for (const auto & ext_file : external_files)
-            {
-                RUNTIME_CHECK_MSG(
-                    compare(range.getStart(), ext_file.range.getStart()) <= 0
-                        && compare(range.getEnd(), ext_file.range.getEnd()) >= 0,
-                    "Detected illegal region boundary: range={} file_range={} keyspace={} table_id={}. "
-                    "TiFlash will exit to prevent data inconsistency. "
-                    "If you accept data inconsistency and want to continue the service, "
-                    "set profiles.default.dt_enable_ingest_check=false .",
-                    keyspace_id,
-                    physical_table_id,
-                    range.toDebugString(),
-                    ext_file.range.toDebugString());
-            }
-        }
+        // Currently this check is disabled, see https://github.com/pingcap/tiflash/pull/6519
+        // for (const auto & ext_file : external_files)
+        // {
+        //     RUNTIME_CHECK(
+        //         compare(range.getStart(), ext_file.range.getStart()) <= 0,
+        //         range.toDebugString(),
+        //         ext_file.range.toDebugString());
+        //     RUNTIME_CHECK(
+        //         compare(range.getEnd(), ext_file.range.getEnd()) >= 0,
+        //         range.toDebugString(),
+        //         ext_file.range.toDebugString());
+        // }
     }
 
     EventRecorder write_block_recorder(ProfileEvents::DMWriteFile, ProfileEvents::DMWriteFileNS);
 
-    auto delegate = dm_context->path_pool->getStableDiskDelegator();
+    auto delegate = dm_context->path_pool.getStableDiskDelegator();
     auto file_provider = dm_context->db_context.getFileProvider();
 
     size_t rows = 0;
     size_t bytes = 0;
     size_t bytes_on_disk = 0;
 
-    auto remote_data_store = dm_context->db_context.getSharedContextDisagg()->remote_data_store;
-    StoreID store_id = InvalidStoreID;
-    if (remote_data_store)
-    {
-        store_id = dm_context->db_context.getTMTContext().getKVStore()->getStoreID();
-    }
-
     DMFiles files;
     for (const auto & external_file : external_files)
     {
+        auto file_parent_path = delegate.getDTFilePath(external_file.id);
+
         // we always create a ref file to this DMFile with all meta info restored later, so here we just restore meta info to calculate its' memory and disk size
-        DMFilePtr file;
-        if (!remote_data_store)
-        {
-            auto file_parent_path = delegate.getDTFilePath(external_file.id);
-            file = DMFile::restore(
-                file_provider,
-                external_file.id,
-                external_file.id,
-                file_parent_path,
-                DMFile::ReadMetaMode::memoryAndDiskSize());
-        }
-        else
-        {
-            Remote::DMFileOID oid{
-                .store_id = store_id,
-                .keyspace_id = dm_context->keyspace_id,
-                .table_id = dm_context->physical_table_id,
-                .file_id = external_file.id};
-            file = remote_data_store->prepareDMFile(oid, external_file.id)
-                       ->restore(DMFile::ReadMetaMode::memoryAndDiskSize());
-        }
+        auto file = DMFile::restore(file_provider, external_file.id, external_file.id, file_parent_path, DMFile::ReadMetaMode::memoryAndDiskSize());
         rows += file->getRows();
         bytes += file->getBytes();
         bytes_on_disk += file->getBytesOnDisk();
@@ -700,8 +603,7 @@ UInt64 DeltaMergeStore::ingestFiles(
         };
         LOG_INFO(
             log,
-            "Table ingest files - begin, use_split_replace={} files={} rows={} bytes={} bytes_on_disk={} range={} "
-            "clear={}",
+            "Table ingest files - begin, use_split_replace={} files={} rows={} bytes={} bytes_on_disk={} range={} clear={}",
             use_split_replace,
             get_ingest_files(),
             rows,
@@ -721,24 +623,7 @@ UInt64 DeltaMergeStore::ingestFiles(
     {
         for (const auto & file : files)
         {
-            if (!remote_data_store)
-            {
-                ingest_wbs.data.putExternal(file->fileId(), 0);
-            }
-            else
-            {
-                Remote::DMFileOID oid{
-                    .store_id = store_id,
-                    .keyspace_id = dm_context->keyspace_id,
-                    .table_id = dm_context->physical_table_id,
-                    .file_id = file->fileId()};
-                PS::V3::CheckpointLocation loc{
-                    .data_file_id = std::make_shared<String>(S3::S3Filename::fromDMFileOID(oid).toFullKey()),
-                    .offset_in_file = 0,
-                    .size_in_file = 0,
-                };
-                ingest_wbs.data.putRemoteExternal(file->fileId(), loc);
-            }
+            ingest_wbs.data.putExternal(file->fileId(), 0);
         }
         ingest_wbs.writeLogAndData();
         ingest_wbs.setRollback(); // rollback if exception thrown
@@ -758,17 +643,8 @@ UInt64 DeltaMergeStore::ingestFiles(
     // Assume that one segment get compacted after file ingested, `gc_handle` gc the
     // DTFiles before they get applied to all segments. Then we will apply some
     // deleted DTFiles to other segments.
-    if (auto data_store = dm_context->db_context.getSharedContextDisagg()->remote_data_store; !data_store)
-    {
-        for (auto & file : files)
-            file->enableGC();
-    }
-    else
-    {
-        auto delegator = dm_context->path_pool->getStableDiskDelegator();
-        for (auto & file : files)
-            delegator.enableGCForRemoteDTFile(file->fileId());
-    }
+    for (const auto & file : files)
+        file->enableGC();
     // After the ingest DTFiles applied, remove the original page
     ingest_wbs.rollbackWrittenLogAndData();
 
@@ -809,373 +685,7 @@ UInt64 DeltaMergeStore::ingestFiles(
 
     // TODO: Update the tracing_id before checkSegmentUpdate?
     for (auto & segment : updated_segments)
-        checkSegmentUpdate(dm_context, segment, ThreadType::Write, InputType::RaftSSTAndSnap);
-
-    return bytes;
-}
-
-std::vector<SegmentPtr> DeltaMergeStore::ingestSegmentsUsingSplit(
-    const DMContextPtr & dm_context,
-    const RowKeyRange & ingest_range,
-    const std::vector<SegmentPtr> & target_segments)
-{
-    std::set<SegmentPtr> updated_segments;
-
-    // First phase (DeleteRange Phase):
-    // Write DeleteRange to the covered segments to ensure that all data in the `ingest_range` is cleared.
-    {
-        RowKeyRange remaining_delete_range = ingest_range;
-        LOG_INFO(
-            log,
-            "Table ingest checkpoint using split - delete range phase - begin, remaining_delete_range={}",
-            remaining_delete_range.toDebugString());
-
-        while (!remaining_delete_range.none())
-        {
-            auto [segment, is_empty] = getSegmentByStartKey(
-                remaining_delete_range.getStart(),
-                /*create_if_empty*/ true,
-                /*throw_if_notfound*/ true);
-
-            const auto delete_range = remaining_delete_range.shrink(segment->getRowKeyRange());
-            RUNTIME_CHECK(
-                !delete_range
-                     .none(), // as remaining_delete_range is not none, we expect the shrinked range to be not none.
-                delete_range.toDebugString(),
-                segment->simpleInfo(),
-                remaining_delete_range.toDebugString());
-            LOG_DEBUG(
-                log,
-                "Table ingest checkpoint using split - delete range phase - Try to delete range in segment, "
-                "delete_range={} segment={} remaining_delete_range={} updated_segments_n={}",
-                delete_range.toDebugString(),
-                segment->simpleInfo(),
-                remaining_delete_range.toDebugString(),
-                updated_segments.size());
-
-            const bool succeeded = segment->write(*dm_context, delete_range);
-            if (succeeded)
-            {
-                updated_segments.insert(segment);
-                RUNTIME_CHECK(compare(delete_range.getEnd(), remaining_delete_range.getStart()) >= 0);
-                remaining_delete_range.setStart(delete_range.end); // We always move forward
-            }
-            else
-            {
-                // segment may be abandoned, retry current range by finding the segment again.
-            }
-        }
-    }
-
-    LOG_DEBUG(
-        log,
-        "Table ingest checkpoint using split - delete range phase - finished, updated_segments_n={}",
-        updated_segments.size());
-
-    /*
-     * In second phase (SplitIngest Phase),
-     * we will try to ingest DMFile one by one into the segments in order.
-     *
-     * Consider the following case:
-     * -Inf                                                                         +Inf
-     *  │        │--------------- Ingest Range ---------------│                       │
-     *  │               │-- DMFile --│- DMFile --│---- DMFile ----│- DMFile --│       │
-     *  │- Segment --│-- Seg --│------- Segment -----│- Seg -│------- Segment --------│
-     *
-     * This is what we will ingest:
-     * Iterate 0:
-     * -Inf                                                                         +Inf
-     *  │        │--------------- Ingest Range ---------------│                       │
-     *  │               │-- DMFile --│                                                │
-     *  │            │-- Seg --│------- Segment -----│                                │
-     *                   ↑              ↑ The segment we ingest DMFile into
-     *
-     * Iterate 1:
-     * -Inf                                                                         +Inf
-     *  │        │--------------- Ingest Range ---------------│                       │
-     *  │               │************│- DMFile --│                                    │
-     *  │                      │------- Segment -----│                                │
-     *                                  ↑ The segment we ingest DMFile into
-     */
-
-    LOG_DEBUG(
-        log,
-        "Table ingest checkpoint using split - split ingest phase - begin, ingest_range={}, files_n={}",
-        ingest_range.toDebugString(),
-        target_segments.size());
-
-    for (size_t segment_idx = 0; segment_idx < target_segments.size(); segment_idx++)
-    {
-        // We may meet empty segment, just ignore it
-        if (target_segments[segment_idx]->getEstimatedRows() == 0)
-        {
-            LOG_INFO(
-                log,
-                "Table ingest checkpoint using split - split ingest phase - Meet empty Segment, skipped. "
-                "ingest_range={} segment_idx={}",
-                ingest_range.toDebugString(),
-                segment_idx);
-            continue;
-        }
-
-        /**
-         * Each DMFile (bounded by the ingest range) may overlap with multiple segments, like:
-         * -Inf                                                                         +Inf
-         *  │        │--------------- Ingest Range ---------------│                       │
-         *  │               │-- DMFile --│                                                │
-         *  │            │-- Seg --│------- Segment -----│                                │
-         * We will try to ingest it into all overlapped segments.
-         */
-        auto file_ingest_range = target_segments[segment_idx]->getRowKeyRange();
-        while (!file_ingest_range.none()) // This DMFile has remaining data to ingest
-        {
-            auto [segment, is_empty] = getSegmentByStartKey(
-                file_ingest_range.getStart(),
-                /*create_if_empty*/ true,
-                /*throw_if_notfound*/ true);
-
-            if (segment->hasAbandoned())
-                continue; // retry with current range and file
-
-            /**
-             * -Inf                                                                         +Inf
-             *  │        │--------------- Ingest Range ---------------│                       │
-             *  │               │-- DMFile --│                                                │
-             *  │            │-- Seg --│------- Segment -----│                                │
-             *                  ^^^^^^^^ segment_ingest_range
-             */
-            const auto segment_ingest_range = file_ingest_range.shrink(segment->getRowKeyRange());
-            RUNTIME_CHECK(!segment_ingest_range.none());
-
-            LOG_INFO(
-                log,
-                "Table ingest checkpoint using split - split ingest phase - Try to ingest file into segment, "
-                "segment_idx={} segment_id={} segment_ingest_range={} segment={} segment_ingest_range={}",
-                segment_idx,
-                target_segments[segment_idx]->segmentId(),
-                file_ingest_range.toDebugString(),
-                segment->simpleInfo(),
-                segment_ingest_range.toDebugString());
-
-            const bool succeeded = ingestSegmentDataIntoSegmentUsingSplit(
-                *dm_context,
-                segment,
-                segment_ingest_range,
-                target_segments[segment_idx]);
-            if (succeeded)
-            {
-                updated_segments.insert(segment);
-                // We have ingested (DTFileRange ∪ ThisSegmentRange), let's try with next overlapped segment.
-                RUNTIME_CHECK(compare(segment_ingest_range.getEnd(), file_ingest_range.getStart()) > 0);
-                file_ingest_range.setStart(segment_ingest_range.end);
-            }
-            else
-            {
-                // this segment is abandoned, or may be split into multiples.
-                // retry with current range and file and find segment again.
-            }
-        }
-    }
-
-    LOG_DEBUG(
-        log,
-        "Table ingest checkpoint using split - split ingest phase - finished, updated_segments_n={}",
-        updated_segments.size());
-
-    return std::vector<SegmentPtr>(updated_segments.begin(), updated_segments.end());
-}
-
-bool DeltaMergeStore::ingestSegmentDataIntoSegmentUsingSplit(
-    DMContext & dm_context,
-    const SegmentPtr & segment,
-    const RowKeyRange & ingest_range,
-    const SegmentPtr & segment_to_ingest)
-{
-    const auto & segment_range = segment->getRowKeyRange();
-
-    // The ingest_range must fall in segment's range.
-    RUNTIME_CHECK(!ingest_range.none(), ingest_range.toDebugString());
-    RUNTIME_CHECK(
-        compare(segment_range.getStart(), ingest_range.getStart()) <= 0,
-        segment_range.toDebugString(),
-        ingest_range.toDebugString());
-    RUNTIME_CHECK(
-        compare(segment_range.getEnd(), ingest_range.getEnd()) >= 0,
-        segment_range.toDebugString(),
-        ingest_range.toDebugString());
-
-    const bool is_start_matching = (compare(segment_range.getStart(), ingest_range.getStart()) == 0);
-    const bool is_end_matching = (compare(segment_range.getEnd(), ingest_range.getEnd()) == 0);
-
-    if (is_start_matching && is_end_matching)
-    {
-        /*
-         * The segment and the ingest range is perfectly matched. We can
-         * simply replace all of the data from this segment.
-         *
-         * Example:
-         *    │----------- Segment ----------│
-         *    │-------- Ingest Range --------│
-         */
-        WriteBatches wbs{*dm_context.storage_pool};
-        auto dm_files = segment_to_ingest->getStable()->getDMFiles();
-        auto [in_memory_files, column_file_persisteds] = segment_to_ingest->getDelta()->cloneAllColumnFiles(
-            segment_to_ingest->mustGetUpdateLock(),
-            dm_context,
-            ingest_range,
-            wbs);
-        wbs.writeLogAndData();
-        RUNTIME_CHECK(in_memory_files.empty());
-        RUNTIME_CHECK(dm_files.size() == 1);
-        const auto new_segment_or_null
-            = segmentDangerouslyReplaceDataFromCheckpoint(dm_context, segment, dm_files[0], column_file_persisteds);
-        const bool succeeded = new_segment_or_null != nullptr;
-        if (!succeeded)
-        {
-            wbs.rollbackWrittenLogAndData();
-        }
-        return succeeded;
-    }
-    else if (is_start_matching)
-    {
-        /*
-         * Example:
-         *    │--------------- Segment ---------------│
-         *    │-------- Ingest Range --------│
-         *
-         * We will logical split the segment to form a perfect matching segment:
-         *    │--------------- Segment ------│--------│
-         *    │-------- Ingest Range --------│
-         */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.end,
-            SegmentSplitMode::Logical);
-        if (left == nullptr || right == nullptr)
-        {
-            // Split failed, likely caused by snapshot failed.
-            // Sleep awhile and retry.
-            std::this_thread::sleep_for(std::chrono::milliseconds(15));
-        }
-        // Always returning false, because we need to retry to get a new segment (as the old segment is abandoned)
-        // even when split succeeded.
-        return false;
-    }
-    else if (is_end_matching)
-    {
-        /*
-         * Example:
-         *    │--------------- Segment ---------------│
-         *             │-------- Ingest Range --------│
-         *
-         * We will logical split the segment to form a perfect matching segment:
-         *    │--------│------ Segment ---------------│
-         *             │-------- Ingest Range --------│
-         */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.start,
-            SegmentSplitMode::Logical);
-        if (left == nullptr || right == nullptr)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(15));
-        }
-        return false;
-    }
-    else
-    {
-        /*
-         * Example:
-         *    │--------------- Segment ---------------│
-         *        │-------- Ingest Range --------│
-         *
-         * We invoke a logical split first:
-         *    │---│----------- Segment ---------------│
-         *        │-------- Ingest Range --------│
-         */
-        const auto [left, right] = segmentSplit(
-            dm_context,
-            segment,
-            SegmentSplitReason::ForIngest,
-            ingest_range.start,
-            SegmentSplitMode::Logical);
-        if (left == nullptr || right == nullptr)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(15));
-        }
-        return false;
-    }
-}
-
-void DeltaMergeStore::ingestSegmentsFromCheckpointInfo(
-    const DMContextPtr & dm_context,
-    const DM::RowKeyRange & range,
-    CheckpointInfoPtr checkpoint_info)
-{
-    if (unlikely(shutdown_called.load(std::memory_order_relaxed)))
-    {
-        const auto msg = fmt::format("Try to ingest files into a shutdown table, store_id={}", log->identifier());
-        LOG_WARNING(log, "{}", msg);
-        throw Exception(msg);
-    }
-
-    if (unlikely(range.none()))
-    {
-        LOG_INFO(
-            log,
-            "Ingest checkpoint from remote meet empty range, ignore, store_id={} region_id={}",
-            checkpoint_info->remote_store_id,
-            checkpoint_info->region_id);
-        return;
-    }
-
-    LOG_INFO(
-        log,
-        "Ingest checkpoint from remote, store_id={} region_id={}",
-        checkpoint_info->remote_store_id,
-        checkpoint_info->region_id);
-    auto segment_meta_infos = Segment::readAllSegmentsMetaInfoInRange(*dm_context, range, checkpoint_info);
-    LOG_INFO(log, "Ingest checkpoint segments num {}", segment_meta_infos.size());
-    WriteBatches wbs{*dm_context->storage_pool};
-    auto restored_segments = Segment::createTargetSegmentsFromCheckpoint( //
-        log,
-        *dm_context,
-        checkpoint_info->remote_store_id,
-        segment_meta_infos,
-        range,
-        checkpoint_info->temp_ps,
-        wbs);
-
-    if (restored_segments.empty())
-    {
-        LOG_DEBUG(log, "No segments to ingest.");
-        return;
-    }
-    wbs.writeLogAndData();
-
-    auto updated_segments = ingestSegmentsUsingSplit(dm_context, range, restored_segments);
-    LOG_INFO(
-        log,
-        "Ingest checkpoint from remote done, store_id={} region_id={} n_segments={}",
-        checkpoint_info->remote_store_id,
-        checkpoint_info->region_id,
-        restored_segments.size());
-
-    for (auto & segment : restored_segments)
-    {
-        auto delta = segment->getDelta();
-        auto stable = segment->getStable();
-        delta->recordRemoveColumnFilesPages(wbs);
-        stable->recordRemovePacksPages(wbs);
-        wbs.writeRemoves();
-    }
-
-    for (auto & segment : updated_segments)
-        checkSegmentUpdate(dm_context, segment, ThreadType::Write, InputType::NotRaft);
+        checkSegmentUpdate(dm_context, segment, ThreadType::Write);
 }
 
 } // namespace DM

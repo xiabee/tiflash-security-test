@@ -16,13 +16,13 @@
 
 namespace DB::PhysicalPlanHelper
 {
-ExpressionActionsPtr newActions(const Block & input_block)
+ExpressionActionsPtr newActions(const Block & input_block, const Context & context)
 {
     const ColumnsWithTypeAndName & actions_input_columns = input_block.getColumnsWithTypeAndName();
-    return std::make_shared<ExpressionActions>(actions_input_columns);
+    return std::make_shared<ExpressionActions>(actions_input_columns, context.getSettingsRef());
 }
 
-ExpressionActionsPtr newActions(const NamesAndTypes & input_columns)
+ExpressionActionsPtr newActions(const NamesAndTypes & input_columns, const Context & context)
 {
     NamesAndTypesList actions_input_column;
     std::unordered_set<String> column_name_set;
@@ -34,7 +34,7 @@ ExpressionActionsPtr newActions(const NamesAndTypes & input_columns)
             column_name_set.emplace(col.name);
         }
     }
-    return std::make_shared<ExpressionActions>(actions_input_column);
+    return std::make_shared<ExpressionActions>(actions_input_column, context.getSettingsRef());
 }
 
 NamesAndTypes addSchemaProjectAction(
@@ -42,8 +42,8 @@ NamesAndTypes addSchemaProjectAction(
     const NamesAndTypes & before_schema,
     const String & column_prefix)
 {
-    RUNTIME_CHECK(expr_actions);
-    RUNTIME_CHECK(!before_schema.empty());
+    assert(expr_actions);
+    assert(!before_schema.empty());
 
     NamesAndTypes after_schema = before_schema;
     NamesWithAliases project_aliases;
@@ -64,9 +64,11 @@ NamesAndTypes addSchemaProjectAction(
     return after_schema;
 }
 
-void addParentRequireProjectAction(const ExpressionActionsPtr & expr_actions, const Names & parent_require)
+void addParentRequireProjectAction(
+    const ExpressionActionsPtr & expr_actions,
+    const Names & parent_require)
 {
-    RUNTIME_CHECK(expr_actions);
+    assert(expr_actions);
     NamesWithAliases project_aliases;
     {
         std::unordered_set<String> column_name_set;

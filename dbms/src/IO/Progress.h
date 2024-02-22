@@ -35,6 +35,7 @@ struct ProgressValues
 
     void read(ReadBuffer & in, UInt64 server_revision);
     void write(WriteBuffer & out, UInt64 client_revision) const;
+    void writeJSON(WriteBuffer & out) const;
 };
 
 
@@ -53,7 +54,7 @@ struct Progress
       */
     std::atomic<size_t> total_rows{0};
 
-    Progress() = default;
+    Progress() {}
     Progress(size_t rows_, size_t bytes_, size_t total_rows_ = 0)
         : rows(rows_)
         , bytes(bytes_)
@@ -62,6 +63,9 @@ struct Progress
 
     void read(ReadBuffer & in, UInt64 server_revision);
     void write(WriteBuffer & out, UInt64 client_revision) const;
+
+    /// Progress in JSON format (single line, without whitespaces) is used in HTTP headers.
+    void writeJSON(WriteBuffer & out) const;
 
     /// Each value separately is changed atomically (but not whole object).
     void incrementPiecewiseAtomically(const Progress & rhs)
@@ -80,7 +84,7 @@ struct Progress
 
     ProgressValues getValues() const
     {
-        ProgressValues res{};
+        ProgressValues res;
 
         res.rows = rows.load(std::memory_order_relaxed);
         res.bytes = bytes.load(std::memory_order_relaxed);
@@ -91,7 +95,7 @@ struct Progress
 
     ProgressValues fetchAndResetPiecewiseAtomically()
     {
-        ProgressValues res{};
+        ProgressValues res;
 
         res.rows = rows.fetch_and(0);
         res.bytes = bytes.fetch_and(0);
@@ -109,7 +113,10 @@ struct Progress
         return *this;
     }
 
-    Progress(Progress && other) { *this = std::move(other); }
+    Progress(Progress && other)
+    {
+        *this = std::move(other);
+    }
 };
 
 

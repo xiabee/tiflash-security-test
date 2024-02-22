@@ -14,14 +14,16 @@
 
 #pragma once
 
-#include <atomic>
+#include "DateLUTImpl.h"
+
+#include "defines.h"
+
 #include <boost/noncopyable.hpp>
+
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
-
-#include "DateLUTImpl.h"
-#include "defines.h"
 
 
 /// This class provides lazy initialization and lookup of singleton DateLUTImpl objects for a given timezone.

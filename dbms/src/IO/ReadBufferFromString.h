@@ -15,7 +15,6 @@
 #pragma once
 
 #include <IO/ReadBufferFromMemory.h>
-#include <common/types.h>
 
 
 namespace DB
@@ -29,17 +28,6 @@ public:
     template <typename S>
     explicit ReadBufferFromString(const S & s)
         : ReadBufferFromMemory(s.data(), s.size())
-    {}
-};
-
-class ReadBufferFromOwnString
-    : public String
-    , public ReadBufferFromString
-{
-public:
-    explicit ReadBufferFromOwnString(std::string_view s_)
-        : String(s_)
-        , ReadBufferFromString(*this)
     {}
 };
 

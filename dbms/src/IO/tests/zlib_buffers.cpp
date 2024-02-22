@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Stopwatch.h>
+#include <string>
+
+#include <iostream>
+#include <iomanip>
+
 #include <Core/Types.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/ReadHelpers.h>
+#include <Common/Stopwatch.h>
 #include <IO/WriteBufferFromFile.h>
-#include <IO/WriteHelpers.h>
+#include <IO/ReadBufferFromFile.h>
 #include <IO/ZlibDeflatingWriteBuffer.h>
 #include <IO/ZlibInflatingReadBuffer.h>
-
-#include <iomanip>
-#include <iostream>
-#include <string>
+#include <IO/WriteHelpers.h>
+#include <IO/ReadHelpers.h>
 
 
 int main(int, char **)
@@ -48,7 +49,8 @@ try
 
         stopwatch.stop();
         std::cout << "Writing done. Elapsed: " << stopwatch.elapsedSeconds() << " s."
-                  << ", " << (deflating_buf.count() / stopwatch.elapsedSeconds() / 1000000) << " MB/s" << std::endl;
+            << ", " << (deflating_buf.count() / stopwatch.elapsedSeconds() / 1000000) << " MB/s"
+            << std::endl;
     }
 
     {
@@ -67,7 +69,8 @@ try
         }
         stopwatch.stop();
         std::cout << "Reading done. Elapsed: " << stopwatch.elapsedSeconds() << " s."
-                  << ", " << (inflating_buf.count() / stopwatch.elapsedSeconds() / 1000000) << " MB/s" << std::endl;
+            << ", " << (inflating_buf.count() / stopwatch.elapsedSeconds() / 1000000) << " MB/s"
+            << std::endl;
     }
 
     return 0;

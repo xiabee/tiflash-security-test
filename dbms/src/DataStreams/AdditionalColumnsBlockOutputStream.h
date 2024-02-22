@@ -14,9 +14,9 @@
 
 #pragma once
 
-#include <Core/ColumnsWithTypeAndName.h>
 #include <DataStreams/IBlockOutputStream.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <Core/ColumnsWithTypeAndName.h>
 #include <pingcap/pd/IClient.h>
 
 namespace DB
@@ -37,14 +37,11 @@ using AdditionalBlockGenerators = std::vector<AdditionalBlockGeneratorPtr>;
 class AdditionalBlockGeneratorPD : public IAdditionalBlockGenerator
 {
 public:
-    AdditionalBlockGeneratorPD(const String name_, pingcap::pd::ClientPtr pd_)
-        : name(name_)
-        , pd(pd_)
-    {}
+    AdditionalBlockGeneratorPD(const String name_, pingcap::pd::ClientPtr pd_) : name(name_), pd(pd_) {}
 
     ColumnWithTypeAndName genColumn(const Block & ref) const override
     {
-        auto data_type = std::make_shared<DataTypeNumber<UInt64>>();
+        auto data_type = std::make_shared<DataTypeNumber<UInt64> >();
         auto column = data_type->createColumn();
         size_t size = ref.rows();
         for (size_t i = 0; i < size; i++)
@@ -56,7 +53,10 @@ public:
         return ColumnWithTypeAndName(std::move(column), data_type, name);
     }
 
-    const std::string & getName() const override { return name; }
+    const std::string & getName() const override
+    {
+        return name;
+    }
 
 private:
     String name;
@@ -69,9 +69,7 @@ class AdditionalBlockGeneratorConst : public IAdditionalBlockGenerator
 public:
     using AdditionalDataType = DataTypeNumber<T>;
 
-    AdditionalBlockGeneratorConst(const String name_, const T & value_)
-        : name(name_)
-        , value(value_)
+    AdditionalBlockGeneratorConst(const String name_, const T & value_) : name(name_), value(value_)
     {}
 
     ColumnWithTypeAndName genColumn(const Block & ref) const override
@@ -85,7 +83,10 @@ public:
         return ColumnWithTypeAndName(std::move(column), data_type, name);
     }
 
-    const std::string & getName() const override { return name; }
+    const std::string & getName() const override
+    {
+        return name;
+    }
 
 private:
     String name;
@@ -99,9 +100,7 @@ class AdditionalBlockGeneratorIncrease : public IAdditionalBlockGenerator
 public:
     using AdditionalDataType = DataTypeNumber<T>;
 
-    AdditionalBlockGeneratorIncrease(const String name_, const T & value_)
-        : name(name_)
-        , value(value_)
+    AdditionalBlockGeneratorIncrease(const String name_, const T & value_) : name(name_), value(value_)
     {}
 
     ColumnWithTypeAndName genColumn(const Block & ref) const override
@@ -117,7 +116,10 @@ public:
         return ColumnWithTypeAndName(std::move(column), data_type, name);
     }
 
-    const std::string & getName() const override { return name; }
+    const std::string & getName() const override
+    {
+        return name;
+    }
 
 private:
     String name;
@@ -125,18 +127,16 @@ private:
 };
 
 
-class AdditionalColumnsBlockOutputStream : public IBlockOutputStream
+class AdditionalColumnsBlockOutputStream: public IBlockOutputStream
 {
 public:
     AdditionalColumnsBlockOutputStream(BlockOutputStreamPtr output_, AdditionalBlockGenerators gens_)
-        : output(output_)
-        , gens(gens_)
-    {}
+        : output(output_), gens(gens_) {}
 
     Block getHeader() const override
     {
         Block block = output->getHeader();
-        for (auto it : gens)
+        for (auto it: gens)
         {
             if (!block.has(it->getName()))
                 block.insert(it->genColumn(block));
@@ -149,7 +149,7 @@ public:
         if (block)
         {
             Block clone = block;
-            for (auto it : gens)
+            for (auto it: gens)
             {
                 // TODO: dont' gen default columns
                 if (clone.has(it->getName()))
@@ -157,30 +157,55 @@ public:
                 clone.insert(it->genColumn(block));
             }
             output->write(clone);
-        }
-        else
+        } else
         {
             output->write(block);
         }
     }
 
-    void writeSuffix() override { output->writeSuffix(); }
+    void writeSuffix() override
+    {
+        output->writeSuffix();
+    }
 
-    void writePrefix() override { output->writePrefix(); }
+    void writePrefix() override
+    {
+        output->writePrefix();
+    }
 
-    void flush() override { output->flush(); }
+    void flush() override
+    {
+        output->flush();
+    }
 
-    void setRowsBeforeLimit(size_t rows_before_limit) override { output->setRowsBeforeLimit(rows_before_limit); }
+    void setRowsBeforeLimit(size_t rows_before_limit) override
+    {
+        output->setRowsBeforeLimit(rows_before_limit);
+    }
 
-    void setExtremes(const Block & extremes) override { output->setExtremes(extremes); }
+    void setTotals(const Block & totals) override
+    {
+        output->setTotals(totals);
+    }
 
-    void onProgress(const Progress & progress) override { output->onProgress(progress); }
+    void setExtremes(const Block & extremes) override
+    {
+        output->setExtremes(extremes);
+    }
 
-    std::string getContentType() const override { return output->getContentType(); }
+    void onProgress(const Progress & progress) override
+    {
+        output->onProgress(progress);
+    }
+
+    std::string getContentType() const override
+    {
+        return output->getContentType();
+    }
 
 private:
     BlockOutputStreamPtr output;
     AdditionalBlockGenerators gens;
 };
 
-} // namespace DB
+}

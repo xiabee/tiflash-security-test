@@ -36,7 +36,10 @@ struct MergedUnit
 class MergedTask
 {
 public:
-    static int64_t getPassiveMergedSegments() { return passive_merged_segments.load(std::memory_order_relaxed); }
+    static int64_t getPassiveMergedSegments()
+    {
+        return passive_merged_segments.load(std::memory_order_relaxed);
+    }
 
     MergedTask(uint64_t seg_id_, std::vector<MergedUnit> && units_)
         : seg_id(seg_id_)
@@ -44,7 +47,7 @@ public:
         , inited(false)
         , cur_idx(-1)
         , finished_count(0)
-        , log(Logger::get())
+        , log(&Poco::Logger::get("MergedTask"))
     {
         passive_merged_segments.fetch_add(units.size() - 1, std::memory_order_relaxed);
         GET_METRIC(tiflash_storage_read_thread_gauge, type_merged_task).Increment();
@@ -60,11 +63,20 @@ public:
 
     int readBlock();
 
-    bool allStreamsFinished() const { return finished_count >= units.size(); }
+    bool allStreamsFinished() const
+    {
+        return finished_count >= units.size();
+    }
 
-    uint64_t getSegmentId() const { return seg_id; }
+    uint64_t getSegmentId() const
+    {
+        return seg_id;
+    }
 
-    size_t getPoolCount() const { return units.size(); }
+    size_t getPoolCount() const
+    {
+        return units.size();
+    }
 
     std::vector<uint64_t> getPoolIds() const
     {
@@ -74,7 +86,7 @@ public:
         {
             if (unit.pool != nullptr)
             {
-                ids.push_back(unit.pool->pool_id);
+                ids.push_back(unit.pool->poolId());
             }
         }
         return ids;
@@ -84,7 +96,7 @@ public:
     {
         for (const auto & unit : units)
         {
-            if (unit.pool != nullptr && unit.pool->pool_id == pool_id)
+            if (unit.pool != nullptr && unit.pool->poolId() == pool_id)
             {
                 return true;
             }
@@ -109,7 +121,7 @@ private:
             // `MergedUnit.stream` must be released explicitly for updating memory statistics of `MemoryTracker`.
             auto & [pool, task, stream] = units[i];
             {
-                MemoryTrackerSetter setter(true, pool->mem_tracker.get());
+                MemoryTrackerSetter setter(true, pool->getMemoryTracker().get());
                 task = nullptr;
                 stream = nullptr;
             }
@@ -130,7 +142,7 @@ private:
     bool inited;
     int cur_idx;
     size_t finished_count;
-    LoggerPtr log;
+    Poco::Logger * log;
     Stopwatch sw;
     inline static std::atomic<int64_t> passive_merged_segments{0};
 };
@@ -144,7 +156,7 @@ class MergedTaskPool
 {
 public:
     MergedTaskPool()
-        : log(Logger::get())
+        : log(&Poco::Logger::get("MergedTaskPool"))
     {}
 
     MergedTaskPtr pop(uint64_t pool_id);
@@ -154,6 +166,6 @@ public:
 private:
     std::mutex mtx;
     std::list<MergedTaskPtr> merged_task_pool;
-    LoggerPtr log;
+    Poco::Logger * log;
 };
 } // namespace DB::DM

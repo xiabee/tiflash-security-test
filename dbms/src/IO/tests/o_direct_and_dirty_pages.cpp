@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/Types.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteBufferFromFile.h>
-#include <IO/WriteHelpers.h>
+#include <string>
 
 #include <iostream>
-#include <string>
+
+#include <Core/Types.h>
+#include <IO/WriteHelpers.h>
+#include <IO/ReadHelpers.h>
+#include <IO/WriteBufferFromFile.h>
+#include <IO/ReadBufferFromFile.h>
 
 int main(int, char **)
 {

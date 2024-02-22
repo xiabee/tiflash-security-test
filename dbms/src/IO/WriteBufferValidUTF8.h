@@ -48,7 +48,10 @@ public:
         const char * replacement = "\xEF\xBF\xBD",
         size_t size = DEFAULT_SIZE);
 
-    virtual ~WriteBufferValidUTF8() override { finish(); }
+    virtual ~WriteBufferValidUTF8() override
+    {
+        finish();
+    }
 };
 
 } // namespace DB

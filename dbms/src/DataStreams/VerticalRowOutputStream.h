@@ -41,11 +41,13 @@ public:
 
     void flush() override;
 
+    void setTotals(const Block & totals_) override { totals = totals_; }
     void setExtremes(const Block & extremes_) override { extremes = extremes_; }
 
 protected:
     virtual void writeValue(const IColumn & column, const IDataType & type, size_t row_num) const;
 
+    void writeTotals();
     void writeExtremes();
     /// For totals and extremes.
     void writeSpecialRow(const Block & block, size_t row_num, const char * title);
@@ -59,6 +61,7 @@ protected:
     using NamesAndPaddings = std::vector<String>;
     NamesAndPaddings names_and_paddings;
 
+    Block totals;
     Block extremes;
 };
 
@@ -74,4 +77,5 @@ protected:
     void writeValue(const IColumn & column, const IDataType & type, size_t row_num) const override;
 };
 
-} // namespace DB
+}
+

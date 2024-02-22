@@ -12,21 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/BlockUtils.h>
-#include <DataStreams/BlocksListBlockInputStream.h>
-#include <DataStreams/SquashingBlockInputStream.h>
-#include <Debug/DAGProperties.h>
 #include <Debug/dbgFuncCoprocessorUtils.h>
-#include <Flash/Coprocessor/ArrowChunkCodec.h>
-#include <Flash/Coprocessor/CHBlockChunkCodec.h>
-#include <Flash/Coprocessor/ChunkCodec.h>
-#include <Flash/Coprocessor/DAGContext.h>
-#include <Flash/Coprocessor/DefaultChunkCodec.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/sortBlock.h>
-#include <Poco/StringTokenizer.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/TMTContext.h>
 
 namespace DB
 {
@@ -88,10 +74,7 @@ BlockInputStreamPtr outputDAGResponse(Context &, const DAGSchema & schema, const
 }
 
 // Just for test usage, dag_response should not contain result more than 128M
-Block getMergedBigBlockFromDagRsp(
-    Context & context,
-    const DAGSchema & schema,
-    const tipb::SelectResponse & dag_response)
+Block getMergedBigBlockFromDagRsp(Context & context, const DAGSchema & schema, const tipb::SelectResponse & dag_response)
 {
     auto src = outputDAGResponse(context, schema, dag_response);
     // Try to merge into big block. 128 MB should be enough.
@@ -120,11 +103,7 @@ Block getMergedBigBlockFromDagRsp(
     return result_data[0];
 }
 
-bool dagRspEqual(
-    Context & context,
-    const tipb::SelectResponse & expected,
-    const tipb::SelectResponse & actual,
-    String & unequal_msg)
+bool dagRspEqual(Context & context, const tipb::SelectResponse & expected, const tipb::SelectResponse & actual, String & unequal_msg)
 {
     auto schema = getSelectSchema(context);
     SortDescription sort_desc = generateSDFromSchema(schema);
@@ -135,11 +114,7 @@ bool dagRspEqual(
     bool equal = blockEqual(block_a, block_b, unequal_msg);
     if (!equal)
     {
-        unequal_msg = fmt::format(
-            "{}\nExpected Results: \n{}\nActual Results: \n{}",
-            unequal_msg,
-            formatBlockData(block_a),
-            formatBlockData(block_b));
+        unequal_msg = fmt::format("{}\nExpected Results: \n{}\nActual Results: \n{}", unequal_msg, formatBlockData(block_a), formatBlockData(block_b));
     }
     return equal;
 }

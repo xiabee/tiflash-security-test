@@ -144,12 +144,16 @@ if (USE_STATIC_LIBRARIES)
     list(REVERSE CMAKE_FIND_LIBRARY_SUFFIXES)
 endif ()
 
-if (ARCH_AMD64)
+if (CMAKE_LIBRARY_ARCHITECTURE MATCHES "amd64.*|x86_64.*|AMD64.*")
     option (USE_INTERNAL_MEMCPY "Use internal implementation of 'memcpy' function instead of provided by libc. Only for x86_64." ON)
+
+    if (OS_LINUX)
+        option (GLIBC_COMPATIBILITY "Set to TRUE to enable compatibility with older glibc libraries. Only for x86_64, Linux. Implies USE_INTERNAL_MEMCPY." ON)
+    endif()
 endif ()
 
-if ((ARCH_AMD64 OR ARCH_AARCH64) AND OS_LINUX)
-    option (GLIBC_COMPATIBILITY "Set to TRUE to enable compatibility with older glibc libraries. Only for x86_64, Linux. Implies USE_INTERNAL_MEMCPY." ON)
+if (GLIBC_COMPATIBILITY)
+    set (USE_INTERNAL_MEMCPY ON)
 endif ()
 
 option (PIPE "-pipe compiler option [less /tmp usage, more ram usage]" ON)
@@ -159,7 +163,7 @@ endif ()
 
 include (cmake/cpu_features.cmake)
 
-set (CMAKE_CXX_STANDARD 20)
+set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_EXTENSIONS 1) # https://cmake.org/cmake/help/latest/prop_tgt/CXX_EXTENSIONS.html#prop_tgt:CXX_EXTENSIONS
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -302,18 +306,6 @@ include (cmake/find_prometheus.cmake)
 include (cmake/find_tiflash_proxy.cmake)
 include (cmake/find_xxhash.cmake)
 
-if (OS_LINUX AND ARCH_AMD64 AND TIFLASH_ENABLE_AVX512_SUPPORT)
-    option (ENABLE_QPL "Enable Intel Query Processing Library" OFF)
-endif()
-
-if (ENABLE_QPL)
-    if (OS_LINUX AND ARCH_AMD64 AND TIFLASH_ENABLE_AVX512_SUPPORT)
-        include (cmake/find_qpl.cmake)
-    else ()
-        message (FATAL_ERROR "`ENABLE_QPL` is not supported on this platform")
-    endif ()
-endif ()
-
 include (cmake/find_contrib_lib.cmake)
 find_contrib_lib(cityhash)
 find_contrib_lib(farmhash)
@@ -388,6 +380,8 @@ if (ARCH_AMD64)
     else()
         add_definitions(-DTIFLASH_COMPILER_VPCLMULQDQ_SUPPORT=0)
     endif()
+
+    check_cxx_compiler_flag("-mmovbe" TIFLASH_COMPILER_MOVBE_SUPPORT)
 else()
     add_definitions(-DTIFLASH_COMPILER_VPCLMULQDQ_SUPPORT=0)
 endif()
@@ -403,6 +397,6 @@ include (cmake/print_include_directories.cmake)
 # Another way to do so is to use JOB_POOL with single concurrency. However, it is Ninja specific and it seems to have bugs
 # with a large number of threads.
 include (cmake/sequential.cmake)
-build_sequentially (process_metrics symbolization tiflash_proxy)
+build_sequentially (symbolization tiflash_proxy)
 
 print_flags ()

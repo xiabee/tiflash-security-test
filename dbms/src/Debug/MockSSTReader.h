@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Storages/KVStore/FFI/ProxyFFI.h>
-#include <Storages/KVStore/FFI/SSTReader.h>
+#include <Storages/Transaction/ProxyFFI.h>
+#include <Storages/Transaction/SSTReader.h>
 
 #include <map>
 
@@ -37,34 +37,19 @@ struct MockSSTReader
     using Key = std::pair<std::string, ColumnFamilyType>;
     struct Data : std::vector<std::pair<std::string, std::string>>
     {
+        DISALLOW_COPY(Data);
         Data(Data &&) = default;
         Data & operator=(Data &&) = default;
         Data() = default;
-        static Data copyFrom(const Data & other) { return other; }
-
-    private:
-        Data(const Data &) = default;
     };
 
-    explicit MockSSTReader(const Data & data_, SSTFormatKind kind_)
+    explicit MockSSTReader(const Data & data_)
         : iter(data_.begin())
-        , begin(data_.begin())
         , end(data_.end())
         , remained(iter != end)
-        , kind(kind_)
-        , len(data_.size())
-    {
-        total_bytes = 0;
-        for (auto it = data_.begin(); it != data_.end(); it++)
-        {
-            total_bytes += it->second.size();
-        }
-    }
+    {}
 
-    static SSTReaderPtr ffi_get_cf_file_reader(const Data & data_, SSTFormatKind kind_)
-    {
-        return SSTReaderPtr{new MockSSTReader(data_, kind_), kind_};
-    }
+    static SSTReaderPtr ffi_get_cf_file_reader(const Data & data_) { return SSTReaderPtr{new MockSSTReader(data_)}; }
 
     bool ffi_remained() const { return iter != end; }
 
@@ -74,60 +59,31 @@ struct MockSSTReader
 
     void ffi_next() { ++iter; }
 
-    SSTFormatKind ffi_kind() { return kind; }
-
-    void ffi_seek(SSTReaderPtr, ColumnFamilyType, EngineIteratorSeekType et, BaseBuffView bf)
-    {
-        if (et == EngineIteratorSeekType::First)
-        {
-            iter = begin;
-            remained = iter != end;
-        }
-        else if (et == EngineIteratorSeekType::Last)
-        {
-            iter = end;
-            remained = false;
-        }
-        else
-        {
-            // Seek the first key >= given key
-            iter = begin;
-            remained = iter != end;
-            auto thres = buffToStrView(bf);
-            while (ffi_remained())
-            {
-                auto && current_key = iter->first;
-                if (current_key >= thres)
-                {
-                    return;
-                }
-                ffi_next();
-            }
-        }
-    }
-
-    size_t ffi_approx_size() { return total_bytes; }
-
-    size_t length() const { return len; }
-
-    Data::const_iterator getBegin() const { return begin; }
-
-    Data::const_iterator getEnd() const { return end; }
-
     static std::map<Key, MockSSTReader::Data> & getMockSSTData() { return MockSSTData; }
 
 private:
     Data::const_iterator iter;
-    Data::const_iterator begin;
     Data::const_iterator end;
     bool remained;
-    SSTFormatKind kind;
-    size_t total_bytes;
-    size_t len;
 
     // (region_id, cf) -> Data
     static std::map<Key, MockSSTReader::Data> MockSSTData;
 };
 
 SSTReaderInterfaces make_mock_sst_reader_interface();
+
+class RegionMockTest final
+{
+public:
+    RegionMockTest(KVStore * kvstore_, RegionPtr region_);
+    ~RegionMockTest();
+
+    DISALLOW_COPY_AND_MOVE(RegionMockTest);
+
+private:
+    TiFlashRaftProxyHelper mock_proxy_helper{};
+    const TiFlashRaftProxyHelper * ori_proxy_helper{};
+    KVStore * kvstore;
+    RegionPtr region;
+};
 } // namespace DB

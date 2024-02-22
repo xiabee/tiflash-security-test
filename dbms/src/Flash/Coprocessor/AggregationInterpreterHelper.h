@@ -37,12 +37,10 @@ Aggregator::Params buildParams(
     const Context & context,
     const Block & before_agg_header,
     size_t before_agg_streams_size,
-    size_t agg_streams_size,
     const Names & key_names,
     const TiDB::TiDBCollators & collators,
     const AggregateDescriptions & aggregate_descriptions,
-    bool is_final_agg,
-    const SpillConfig & spill_config);
+    bool is_final_agg);
 
 void fillArgColumnNumbers(AggregateDescriptions & aggregate_descriptions, const Block & before_agg_header);
 } // namespace AggregationInterpreterHelper

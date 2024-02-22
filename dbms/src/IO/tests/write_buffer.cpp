@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/Types.h>
-#include <IO/WriteBufferFromOStream.h>
-#include <IO/WriteHelpers.h>
+#include <string>
 
 #include <iostream>
 #include <sstream>
-#include <string>
+
+#include <Core/Types.h>
+#include <IO/WriteHelpers.h>
+#include <IO/WriteBufferFromOStream.h>
 
 
 int main(int, char **)

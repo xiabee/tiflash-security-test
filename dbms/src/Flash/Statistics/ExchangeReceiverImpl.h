@@ -37,7 +37,10 @@ struct ExchangeReceiverImpl
 
     static constexpr auto type = "ExchangeReceiver";
 
-    static bool isMatch(const tipb::Executor * executor) { return executor->has_exchange_receiver(); }
+    static bool isMatch(const tipb::Executor * executor)
+    {
+        return executor->has_exchange_receiver();
+    }
 };
 
 using ExchangeReceiverStatisticsBase = ExecutorStatistics<ExchangeReceiverImpl>;
@@ -56,8 +59,5 @@ private:
 protected:
     void appendExtraJson(FmtBuffer &) const override;
     void collectExtraRuntimeDetail() override;
-
-private:
-    void updateExchangeReceiveDetail(const std::vector<ConnectionProfileInfo> & connection_profile_infos);
 };
 } // namespace DB

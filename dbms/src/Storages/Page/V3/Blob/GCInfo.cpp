@@ -33,7 +33,7 @@ struct fmt::formatter<DB::PS::V3::BlobFileGCInfo>
     template <typename FormatContext>
     auto format(const DB::PS::V3::BlobFileGCInfo & i, FormatContext & ctx) const
     {
-        return format_to(ctx.out(), "<id:{} rate:{:.2f}>", i.blob_id, i.valid_rate);
+        return fmt::format_to(ctx.out(), "<id:{} rate:{:.2f}>", i.blob_id, i.valid_rate);
     }
 };
 template <>
@@ -51,13 +51,7 @@ struct fmt::formatter<DB::PS::V3::BlobFileTruncateInfo>
     template <typename FormatContext>
     auto format(const DB::PS::V3::BlobFileTruncateInfo & i, FormatContext & ctx) const
     {
-        return format_to(
-            ctx.out(),
-            "<id:{} origin:{} truncate:{} rate:{:.2f}>",
-            i.blob_id,
-            i.origin_size,
-            i.truncated_size,
-            i.valid_rate);
+        return fmt::format_to(ctx.out(), "<id:{} origin:{} truncate:{} rate:{:.2f}>", i.blob_id, i.origin_size, i.truncated_size, i.valid_rate);
     }
 };
 
@@ -73,12 +67,11 @@ Poco::Message::Priority BlobStoreGCInfo::getLoggingLevel() const
 
 String BlobStoreGCInfo::toString() const
 {
-    return fmt::format(
-        "{} {} {} {}",
-        toTypeString(ReadOnly),
-        toTypeString(Unchanged),
-        toTypeString(FullGC),
-        toTypeTruncateString(Truncated));
+    return fmt::format("{} {} {} {}",
+                       toTypeString(ReadOnly),
+                       toTypeString(Unchanged),
+                       toTypeString(FullGC),
+                       toTypeTruncateString(Truncated));
 }
 
 String BlobStoreGCInfo::toTypeString(const Type type_index) const
@@ -92,7 +85,9 @@ String BlobStoreGCInfo::toTypeString(const Type type_index) const
         .joinStr(
             blob_gc_info[type_index].begin(),
             blob_gc_info[type_index].end(),
-            [](const auto & i, FmtBuffer & fb) { fb.fmtAppend("{}", i); },
+            [](const auto & i, FmtBuffer & fb) {
+                fb.fmtAppend("{}", i);
+            },
             ", ")
         .append("]}");
     return fmt_buf.toString();
@@ -108,7 +103,9 @@ String BlobStoreGCInfo::toTypeTruncateString(const Type type_index) const
         .joinStr(
             blob_gc_truncate_info.begin(),
             blob_gc_truncate_info.end(),
-            [](const auto & i, FmtBuffer & fb) { fb.fmtAppend("{}", i); },
+            [](const auto & i, FmtBuffer & fb) {
+                fb.fmtAppend("{}", i);
+            },
             ", ")
         .append("]}");
     return fmt_buf.toString();

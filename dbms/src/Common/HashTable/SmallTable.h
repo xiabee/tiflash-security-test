@@ -37,9 +37,11 @@ extern const int INCORRECT_DATA;
   *  you should check if the table is not full,
   *  and do a `fallback` in this case (for example, use a real hash table).
   */
-template <typename Key, typename Cell, size_t capacity>
-class SmallTable
-    : private boost::noncopyable
+template <
+    typename Key,
+    typename Cell,
+    size_t capacity>
+class SmallTable : private boost::noncopyable
     , protected Cell::State
 {
 protected:
@@ -90,7 +92,8 @@ public:
     public:
         explicit Reader(DB::ReadBuffer & in_)
             : in(in_)
-        {}
+        {
+        }
 
         DISALLOW_COPY(Reader);
 
@@ -216,7 +219,10 @@ public:
     /** The table is full.
       * You can not insert anything into the full table.
       */
-    bool full() { return m_size == capacity; }
+    bool full()
+    {
+        return m_size == capacity;
+    }
 
 
     /// Insert the value. In the case of any more complex values, it is better to use the `emplace` function.
@@ -358,9 +364,15 @@ public:
     }
 
 
-    size_t size() const { return m_size; }
+    size_t size() const
+    {
+        return m_size;
+    }
 
-    bool empty() const { return 0 == m_size; }
+    bool empty() const
+    {
+        return 0 == m_size;
+    }
 
     void clear()
     {
@@ -371,9 +383,10 @@ public:
         m_size = 0;
     }
 
-    size_t getBufferSizeInBytes() const { return sizeof(buf); }
-
-    void setResizeCallback(const ResizeCallback &) {}
+    size_t getBufferSizeInBytes() const
+    {
+        return sizeof(buf);
+    }
 };
 
 
@@ -382,11 +395,16 @@ struct HashUnused
 };
 
 
-template <typename Key, size_t capacity>
+template <
+    typename Key,
+    size_t capacity>
 using SmallSet = SmallTable<Key, HashTableCell<Key, HashUnused>, capacity>;
 
 
-template <typename Key, typename Cell, size_t capacity>
+template <
+    typename Key,
+    typename Cell,
+    size_t capacity>
 class SmallMapTable : public SmallTable<Key, Cell, capacity>
 {
 public:
@@ -406,5 +424,8 @@ public:
 };
 
 
-template <typename Key, typename Mapped, size_t capacity>
+template <
+    typename Key,
+    typename Mapped,
+    size_t capacity>
 using SmallMap = SmallMapTable<Key, HashMapCell<Key, Mapped, HashUnused>, capacity>;

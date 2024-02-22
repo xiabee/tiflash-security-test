@@ -33,15 +33,7 @@ public:
     // TODO: currently hashing contains redundant computations when doing distributed or external aggregations
     size_t hash(const Key & x) const
     {
-        return const_cast<Self &>(*this).dispatch(*this, x, [&](const auto &, const auto &, size_t hash) {
-            return hash;
-        });
-    }
-
-    void setResizeCallback(const ResizeCallback & resize_callback)
-    {
-        for (auto & impl : impls)
-            impl.setResizeCallback(resize_callback);
+        return const_cast<Self &>(*this).dispatch(*this, x, [&](const auto &, const auto &, size_t hash) { return hash; });
     }
 
     size_t operator()(const Key & x) const { return hash(x); }
@@ -140,19 +132,13 @@ public:
             if ((reinterpret_cast<uintptr_t>(p) & 2048) == 0)
             {
                 memcpy(&n[0], p, 8);
-                if constexpr (DB::isLittleEndian())
-                    n[0] &= (-1ULL >> s);
-                else
-                    n[0] &= (-1ULL << s);
+                n[0] &= -1ul >> s;
             }
             else
             {
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[0], lp, 8);
-                if constexpr (DB::isLittleEndian())
-                    n[0] >>= s;
-                else
-                    n[0] <<= s;
+                n[0] >>= s;
             }
             auto res = hash(k8);
             auto buck = getBucketFromHash(res);
@@ -164,10 +150,7 @@ public:
             memcpy(&n[0], p, 8);
             const char * lp = x.data + x.size - 8;
             memcpy(&n[1], lp, 8);
-            if constexpr (DB::isLittleEndian())
-                n[1] >>= s;
-            else
-                n[1] <<= s;
+            n[1] >>= s;
             auto res = hash(k16);
             auto buck = getBucketFromHash(res);
             keyHolderDiscardKey(key_holder);
@@ -178,10 +161,7 @@ public:
             memcpy(&n[0], p, 16);
             const char * lp = x.data + x.size - 8;
             memcpy(&n[2], lp, 8);
-            if constexpr (DB::isLittleEndian())
-                n[2] >>= s;
-            else
-                n[2] <<= s;
+            n[2] >>= s;
             auto res = hash(k24);
             auto buck = getBucketFromHash(res);
             keyHolderDiscardKey(key_holder);
@@ -202,7 +182,10 @@ public:
         dispatch(*this, key_holder, typename Impl::EmplaceCallable{it, inserted});
     }
 
-    LookupResult ALWAYS_INLINE find(const Key x) { return dispatch(*this, x, typename Impl::FindCallable{}); }
+    LookupResult ALWAYS_INLINE find(const Key x)
+    {
+        return dispatch(*this, x, typename Impl::FindCallable{});
+    }
 
     ConstLookupResult ALWAYS_INLINE find(const Key x) const
     {

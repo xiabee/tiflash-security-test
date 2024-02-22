@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 #include <fmt/core.h>
 
 namespace DB::DM
@@ -26,14 +26,20 @@ struct ExternalDTFileInfo
     /**
      * The allocated PageId of the file.
      */
-    PageIdU64 id;
+    PageId id;
 
     /**
      * The handle range of contained data.
      */
     RowKeyRange range;
 
-    std::string toString() const { return fmt::format("<file=dmf_{} range={}>", id, range.toDebugString()); }
+    std::string toString() const
+    {
+        return fmt::format(
+            "<file=dmf_{} range={}>",
+            id,
+            range.toDebugString());
+    }
 };
 
 } // namespace DB::DM

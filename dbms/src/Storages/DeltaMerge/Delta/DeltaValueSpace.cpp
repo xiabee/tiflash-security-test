@@ -17,13 +17,10 @@
 #include <Functions/FunctionHelpers.h>
 #include <IO/MemoryReadWriteBuffer.h>
 #include <IO/ReadHelpers.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/DeltaValueSpace.h>
 #include <Storages/DeltaMerge/DeltaIndexManager.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
-#include <Storages/Page/V3/Universal/UniversalPageStorage.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
 #include <Storages/PathPool.h>
 
 #include <ext/scope_guard.h>
@@ -35,19 +32,16 @@ namespace DM
 // ================================================
 // Public methods
 // ================================================
-DeltaValueSpace::DeltaValueSpace(
-    PageIdU64 id_,
-    const ColumnFilePersisteds & persisted_files,
-    const ColumnFiles & in_memory_files)
+DeltaValueSpace::DeltaValueSpace(PageId id_, const ColumnFilePersisteds & persisted_files, const ColumnFiles & in_memory_files)
     : persisted_file_set(std::make_shared<ColumnFilePersistedSet>(id_, persisted_files))
-    , mem_table_set(std::make_shared<MemTableSet>(in_memory_files))
+    , mem_table_set(std::make_shared<MemTableSet>(persisted_file_set->getLastSchema(), in_memory_files))
     , delta_index(std::make_shared<DeltaIndex>())
     , log(Logger::get())
 {}
 
 DeltaValueSpace::DeltaValueSpace(ColumnFilePersistedSetPtr && persisted_file_set_)
     : persisted_file_set(std::move(persisted_file_set_))
-    , mem_table_set(std::make_shared<MemTableSet>())
+    , mem_table_set(std::make_shared<MemTableSet>(persisted_file_set->getLastSchema()))
     , delta_index(std::make_shared<DeltaIndex>())
     , log(Logger::get())
 {}
@@ -62,21 +56,9 @@ void DeltaValueSpace::abandon(DMContext & context)
         manager->deleteRef(delta_index);
 }
 
-DeltaValueSpacePtr DeltaValueSpace::restore(DMContext & context, const RowKeyRange & segment_range, PageIdU64 id)
+DeltaValueSpacePtr DeltaValueSpace::restore(DMContext & context, const RowKeyRange & segment_range, PageId id)
 {
     auto persisted_file_set = ColumnFilePersistedSet::restore(context, segment_range, id);
-    return std::make_shared<DeltaValueSpace>(std::move(persisted_file_set));
-}
-
-DeltaValueSpacePtr DeltaValueSpace::createFromCheckpoint( //
-    DMContext & context,
-    UniversalPageStoragePtr temp_ps,
-    const RowKeyRange & segment_range,
-    PageIdU64 delta_id,
-    WriteBatches & wbs)
-{
-    auto persisted_file_set
-        = ColumnFilePersistedSet::createFromCheckpoint(context, temp_ps, segment_range, delta_id, wbs);
     return std::make_shared<DeltaValueSpace>(std::move(persisted_file_set));
 }
 
@@ -133,32 +115,22 @@ std::vector<ColumnFilePtrT> CloneColumnFilesHelper<ColumnFilePtrT>::clone(
         else if (auto * t = column_file->tryToTinyFile(); t)
         {
             // Use a newly created page_id to reference the data page_id of current column file.
-            PageIdU64 new_data_page_id = context.storage_pool->newLogPageId();
+            PageId new_data_page_id = context.storage_pool.newLogPageId();
             wbs.log.putRefPage(new_data_page_id, t->getDataPageId());
             auto new_column_file = t->cloneWith(new_data_page_id);
             cloned.push_back(new_column_file);
         }
         else if (auto * f = column_file->tryToBigFile(); f)
         {
-            auto delegator = context.path_pool->getStableDiskDelegator();
-            auto new_page_id = context.storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
+            auto delegator = context.path_pool.getStableDiskDelegator();
+            auto new_page_id = context.storage_pool.newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
             // Note that the file id may has already been mark as deleted. We must
             // create a reference to the page id itself instead of create a reference
             // to the file id.
             wbs.data.putRefPage(new_page_id, f->getDataPageId());
             auto file_id = f->getFile()->fileId();
-            auto old_dmfile = f->getFile();
-            auto file_parent_path = old_dmfile->parentPath();
-            if (!context.db_context.getSharedContextDisagg()->remote_data_store)
-            {
-                RUNTIME_CHECK(file_parent_path == delegator.getDTFilePath(file_id));
-            }
-            auto new_file = DMFile::restore(
-                context.db_context.getFileProvider(),
-                file_id,
-                /* page_id= */ new_page_id,
-                file_parent_path,
-                DMFile::ReadMetaMode::all());
+            auto file_parent_path = delegator.getDTFilePath(file_id);
+            auto new_file = DMFile::restore(context.db_context.getFileProvider(), file_id, /* page_id= */ new_page_id, file_parent_path, DMFile::ReadMetaMode::all());
 
             auto new_column_file = f->cloneWith(context, new_file, target_range);
             cloned.push_back(new_column_file);
@@ -189,10 +161,7 @@ std::pair<ColumnFiles, ColumnFilePersisteds> DeltaValueSpace::cloneNewlyAppended
     auto [new_mem_files, flushed_mem_files] = mem_table_set->diffColumnFiles(snapshot_mem_files);
     ColumnFiles head_persisted_files;
     head_persisted_files.reserve(snapshot_persisted_files.size() + flushed_mem_files.size());
-    head_persisted_files.insert(
-        head_persisted_files.end(),
-        snapshot_persisted_files.begin(),
-        snapshot_persisted_files.end());
+    head_persisted_files.insert(head_persisted_files.end(), snapshot_persisted_files.begin(), snapshot_persisted_files.end());
     // If there were flush since the snapshot, the flushed files should be behind the files in the snapshot.
     // So let's place these "flused files" after the persisted files in snapshot.
     head_persisted_files.insert(head_persisted_files.end(), flushed_mem_files.begin(), flushed_mem_files.end());
@@ -290,11 +259,7 @@ bool DeltaValueSpace::appendDeleteRange(DMContext & /*context*/, const RowKeyRan
     return true;
 }
 
-bool DeltaValueSpace::ingestColumnFiles(
-    DMContext & /*context*/,
-    const RowKeyRange & range,
-    const ColumnFiles & column_files,
-    bool clear_data_in_range)
+bool DeltaValueSpace::ingestColumnFiles(DMContext & /*context*/, const RowKeyRange & range, const ColumnFiles & column_files, bool clear_data_in_range)
 {
     std::scoped_lock lock(mutex);
     if (abandoned.load(std::memory_order_relaxed))
@@ -316,9 +281,7 @@ bool DeltaValueSpace::flush(DMContext & context)
     SCOPE_EXIT({
         bool v = true;
         if (!is_flushing.compare_exchange_strong(v, false))
-            throw Exception(
-                fmt::format("Delta is expected to be flushing, delta={}", simpleInfo()),
-                ErrorCodes::LOGICAL_ERROR);
+            throw Exception(fmt::format("Delta is expected to be flushing, delta={}", simpleInfo()), ErrorCodes::LOGICAL_ERROR);
     });
 
     LOG_DEBUG(log, "Flush start, delta={}", info());
@@ -328,7 +291,7 @@ bool DeltaValueSpace::flush(DMContext & context)
     ///  2. The serialized metadata of column files in DeltaValueSpace
 
     ColumnFileFlushTaskPtr flush_task;
-    WriteBatches wbs(*context.storage_pool, context.getWriteLimiter());
+    WriteBatches wbs(context.storage_pool, context.getWriteLimiter());
     DeltaIndexPtr cur_delta_index;
     {
         /// Prepare data which will be written to disk.
@@ -338,11 +301,7 @@ bool DeltaValueSpace::flush(DMContext & context)
             LOG_DEBUG(log, "Flush stop because abandoned, delta={}", simpleInfo());
             return false;
         }
-        flush_task = mem_table_set->buildFlushTask(
-            context,
-            persisted_file_set->getRows(),
-            persisted_file_set->getDeletes(),
-            persisted_file_set->getCurrentFlushVersion());
+        flush_task = mem_table_set->buildFlushTask(context, persisted_file_set->getRows(), persisted_file_set->getDeletes(), persisted_file_set->getCurrentFlushVersion());
         cur_delta_index = delta_index;
     }
 
@@ -387,22 +346,9 @@ bool DeltaValueSpace::flush(DMContext & context)
 
         /// Update delta tree
         if (new_delta_index)
-        {
             delta_index = new_delta_index;
 
-            // Indicate that the index with old epoch should not be used anymore.
-            // This is useful in disaggregated mode which will invalidate the delta index cache in RN.
-            delta_index_epoch = std::chrono::steady_clock::now().time_since_epoch().count();
-        }
-
-        LOG_DEBUG(
-            log,
-            "Flush end, flush_tasks={} flush_rows={} flush_bytes={} flush_deletes={} delta={}",
-            flush_task->getTaskNum(),
-            flush_task->getFlushRows(),
-            flush_task->getFlushBytes(),
-            flush_task->getFlushDeletes(),
-            info());
+        LOG_DEBUG(log, "Flush end, flush_tasks={} flush_rows={} flush_bytes={} flush_deletes={} delta={}", flush_task->getTaskNum(), flush_task->getFlushRows(), flush_task->getFlushBytes(), flush_task->getFlushDeletes(), info());
     }
     return true;
 }
@@ -433,22 +379,19 @@ bool DeltaValueSpace::compact(DMContext & context)
             LOG_DEBUG(log, "Compact cancel because nothing to compact, delta={}", simpleInfo());
             return true;
         }
-        log_storage_snap = context.storage_pool->logReader()->getSnapshot(
-            /*tracing_id*/ fmt::format("minor_compact_{}", simpleInfo()));
+        log_storage_snap = context.storage_pool.logReader()->getSnapshot(/*tracing_id*/ fmt::format("minor_compact_{}", simpleInfo()));
     }
 
-    WriteBatches wbs(*context.storage_pool, context.getWriteLimiter());
+    WriteBatches wbs(context.storage_pool, context.getWriteLimiter());
     {
         // do compaction task
-        const auto & reader = context.storage_pool->newLogReader(context.getReadLimiter(), log_storage_snap);
-        compaction_task->prepare(context, wbs, *reader);
+        const auto & reader = context.storage_pool.newLogReader(context.getReadLimiter(), log_storage_snap);
+        compaction_task->prepare(context, wbs, reader);
         log_storage_snap.reset(); // release the snapshot ASAP
     }
 
-    GET_METRIC(tiflash_storage_subtask_throughput_bytes, type_delta_compact)
-        .Increment(compaction_task->getTotalCompactBytes());
-    GET_METRIC(tiflash_storage_subtask_throughput_rows, type_delta_compact)
-        .Increment(compaction_task->getTotalCompactRows());
+    GET_METRIC(tiflash_storage_subtask_throughput_bytes, type_delta_compact).Increment(compaction_task->getTotalCompactBytes());
+    GET_METRIC(tiflash_storage_subtask_throughput_rows, type_delta_compact).Increment(compaction_task->getTotalCompactRows());
 
     {
         std::scoped_lock lock(mutex);

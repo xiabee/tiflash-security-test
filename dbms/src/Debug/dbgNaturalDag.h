@@ -15,12 +15,11 @@
 #pragma once
 
 #include <Flash/Coprocessor/RegionInfo.h>
-#include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/MultiRaft/RegionMeta.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/RegionMeta.h>
+#include <Storages/Transaction/TiDB.h>
+#include <Storages/Transaction/TiKVKeyValue.h>
 #include <kvproto/coprocessor.pb.h>
-#include <kvproto/mpp.pb.h>
 
 #include <fstream>
 #include <iostream>
@@ -30,7 +29,8 @@
 namespace DB
 {
 class Context;
-class TiDBSchemaSyncerManager;
+class SchemaSyncer;
+using SchemaSyncerPtr = std::shared_ptr<SchemaSyncer>;
 
 /// NaturalDag accepts a dag request json file produced from TiDB, and provide following functionalities:
 /// 1. Parse json file to load tables, regions, dag request, dag response information
@@ -50,11 +50,26 @@ public:
 
     void init();
     void build(Context & context);
-    const ReqRspVec & getReqAndRspVec() const { return req_rsp; }
-    const BatchReqRspVec & getBatchReqAndRspVec() const { return batch_req_rsp; }
-    const MPPReqRspVec & getMPPReqAndRspVec() const { return mpp_req_rsp; }
-    const std::vector<int32_t> & getReqIDVec() const { return req_id_vec; }
-    bool continueWhenError() const { return continue_when_error; }
+    const ReqRspVec & getReqAndRspVec() const
+    {
+        return req_rsp;
+    }
+    const BatchReqRspVec & getBatchReqAndRspVec() const
+    {
+        return batch_req_rsp;
+    }
+    const MPPReqRspVec & getMPPReqAndRspVec() const
+    {
+        return mpp_req_rsp;
+    }
+    const std::vector<int32_t> & getReqIDVec() const
+    {
+        return req_id_vec;
+    }
+    bool continueWhenError() const
+    {
+        return continue_when_error;
+    }
     static void clean(Context & context);
 
 private:
@@ -82,10 +97,7 @@ private:
     void loadTables(const JSONObjectPtr & obj);
     LoadedRegionInfo loadRegion(const Poco::Dynamic::Var & region_json) const;
     void loadReqAndRsp(const JSONObjectPtr & obj);
-    static void buildDatabase(
-        Context & context,
-        std::shared_ptr<TiDBSchemaSyncerManager> & schema_syncer,
-        const String & db_name);
+    static void buildDatabase(Context & context, SchemaSyncerPtr & schema_syncer, const String & db_name);
     void buildTables(Context & context);
     static const String & getDatabaseName();
 

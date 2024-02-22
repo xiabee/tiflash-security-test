@@ -44,5 +44,8 @@ public:
 private:
     Poco::Logger * log = &Poco::Logger::get("ServerErrorHandler");
 
-    void logException() { DB::tryLogCurrentException(log); }
+    void logException()
+    {
+        DB::tryLogCurrentException(log);
+    }
 };

@@ -15,9 +15,9 @@
 #pragma once
 
 #include <Core/Block.h>
+#include <IO/WriteBuffer.h>
 #include <DataStreams/IRowOutputStream.h>
 #include <DataTypes/FormatSettingsJSON.h>
-#include <IO/WriteBuffer.h>
 
 
 namespace DB
@@ -36,7 +36,10 @@ public:
     void writeRowStartDelimiter() override;
     void writeRowEndDelimiter() override;
 
-    void flush() override { ostr.next(); }
+    void flush() override
+    {
+        ostr.next();
+    }
 
 private:
     WriteBuffer & ostr;
@@ -46,4 +49,5 @@ private:
     FormatSettingsJSON settings;
 };
 
-} // namespace DB
+}
+

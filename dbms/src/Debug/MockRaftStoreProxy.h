@@ -14,9 +14,8 @@
 
 #pragma once
 
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/Read/ReadIndexWorker.h>
-#include <Storages/Page/V3/Universal/UniversalWriteBatchImpl.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/ReadIndexWorker.h>
 #include <kvproto/raft_serverpb.pb.h>
 #include <raft_cmdpb.pb.h>
 
@@ -30,45 +29,56 @@ struct MockProxyRegion : MutexLockWrap
 {
     raft_serverpb::RegionLocalState getState();
     raft_serverpb::RaftApplyState getApply();
-    void persistAppliedIndex();
     void updateAppliedIndex(uint64_t index);
-    uint64_t getPersistedAppliedIndex();
     uint64_t getLatestAppliedIndex();
     uint64_t getLatestCommitTerm();
     uint64_t getLatestCommitIndex();
     void updateCommitIndex(uint64_t index);
-    void tryUpdateTruncatedState(uint64_t index, uint64_t term);
-    void setState(raft_serverpb::RegionLocalState);
+    void setSate(raft_serverpb::RegionLocalState);
     explicit MockProxyRegion(uint64_t id);
-    UniversalWriteBatch persistMeta();
-    void addPeer(uint64_t store_id, uint64_t peer_id, metapb::PeerRole role);
 
-    struct RawWrite
+    struct NormalWrite
     {
-        std::vector<std::string> keys;
+        std::vector<HandleID> keys;
         std::vector<std::string> vals;
         std::vector<WriteCmdType> cmd_types;
         std::vector<ColumnFamilyType> cmd_cf;
     };
+
     struct AdminCommand
     {
         raft_cmdpb::AdminRequest request;
         raft_cmdpb::AdminResponse response;
-        raft_cmdpb::AdminCmdType cmd_type() const { return request.cmd_type(); }
+        raft_cmdpb::AdminCmdType cmd_type() const
+        {
+            return request.cmd_type();
+        }
     };
 
     struct CachedCommand
     {
         uint64_t term;
-        std::variant<AdminCommand, RawWrite> inner;
+        std::variant<NormalWrite, AdminCommand> inner;
 
-        bool has_admin_request() const { return std::holds_alternative<AdminCommand>(inner); }
+        bool has_admin_request() const
+        {
+            return std::holds_alternative<AdminCommand>(inner);
+        }
 
-        bool has_raw_write_request() const { return std::holds_alternative<RawWrite>(inner); }
+        bool has_write_request() const
+        {
+            return std::holds_alternative<NormalWrite>(inner);
+        }
 
-        AdminCommand & admin() { return std::get<AdminCommand>(inner); }
+        AdminCommand & admin()
+        {
+            return std::get<AdminCommand>(inner);
+        }
 
-        RawWrite & raw_write() { return std::get<RawWrite>(inner); }
+        NormalWrite & write()
+        {
+            return std::get<NormalWrite>(inner);
+        }
     };
 
     const uint64_t id;
@@ -83,8 +93,14 @@ struct MockAsyncNotifier
 {
     RawCppPtr data; // notifier
     void (*wake_fn)(RawVoidPtr);
-    void wake() const { wake_fn(data.ptr); }
-    ~MockAsyncNotifier() { GcRawCppPtr(data.ptr, data.type); }
+    void wake() const
+    {
+        wake_fn(data.ptr);
+    }
+    ~MockAsyncNotifier()
+    {
+        GcRawCppPtr(data.ptr, data.type);
+    }
 };
 
 struct MockAsyncWaker
@@ -115,39 +131,20 @@ struct MockReadIndexTask
 
 struct MockRaftStoreProxy : MutexLockWrap
 {
-    static std::string encodeSSTView(SSTFormatKind kind, std::string ori)
-    {
-        if (kind == SSTFormatKind::KIND_TABLET)
-        {
-            return "!" + ori;
-        }
-        return ori;
-    }
-
-    static SSTFormatKind parseSSTViewKind(std::string_view v)
-    {
-        if (v[0] == '!')
-        {
-            return SSTFormatKind::KIND_TABLET;
-        }
-        return SSTFormatKind::KIND_SST;
-    }
-
     MockProxyRegionPtr getRegion(uint64_t id);
+
     MockProxyRegionPtr doGetRegion(uint64_t id);
 
     MockReadIndexTask * makeReadIndexTask(kvrpcpb::ReadIndexRequest req);
 
     void init(size_t region_num);
-    std::unique_ptr<TiFlashRaftProxyHelper> generateProxyHelper();
 
     size_t size() const;
 
-    void wakeNotifier();
+    void wake();
 
     void testRunNormal(const std::atomic_bool & over);
 
-    /// Handle one read index task.
     void runOneRound();
 
     void unsafeInvokeForTest(std::function<void(MockRaftStoreProxy &)> && cb);
@@ -166,31 +163,26 @@ struct MockRaftStoreProxy : MutexLockWrap
         Type type = NORMAL;
     };
 
-    /// Boostrap with a given region.
-    /// Similar to TiKV's `bootstrap_region`.
-    void bootstrapWithRegion(
+    /// boostrap a region.
+    void bootstrap(
         KVStore & kvs,
         TMTContext & tmt,
-        RegionID region_id,
-        std::optional<std::pair<std::string, std::string>> maybe_range);
+        UInt64 region_id);
 
-    /// Boostrap a table.
-    /// Must be called if:
-    /// 1. Applying snapshot which needs table schema
-    /// 2. Doing row2col.
-    TableID bootstrapTable(Context & ctx, KVStore & kvs, TMTContext & tmt, bool drop_at_first = true);
-
-    /// Manually add a region.
-    void debugAddRegions(
+    /// boostrap a table, since applying snapshot needs table schema.
+    TableID bootstrap_table(
+        Context & ctx,
         KVStore & kvs,
-        TMTContext & tmt,
-        std::vector<UInt64> region_ids,
-        std::vector<std::pair<std::string, std::string>> && ranges);
+        TMTContext & tmt);
 
-    void loadRegionFromKVStore(KVStore & kvs, TMTContext & tmt, UInt64 region_id);
+    /// clear tables.
+    void clear_tables(
+        Context & ctx,
+        KVStore & kvs,
+        TMTContext & tmt);
 
     /// We assume that we generate one command, and immediately commit.
-    /// Normal write to a region.
+    /// normal write to a region.
     std::tuple<uint64_t, uint64_t> normalWrite(
         UInt64 region_id,
         std::vector<HandleID> && keys,
@@ -198,52 +190,23 @@ struct MockRaftStoreProxy : MutexLockWrap
         std::vector<WriteCmdType> && cmd_types,
         std::vector<ColumnFamilyType> && cmd_cf);
 
-    std::tuple<uint64_t, uint64_t> rawWrite(
-        UInt64 region_id,
-        std::vector<std::string> && keys,
-        std::vector<std::string> && vals,
-        std::vector<WriteCmdType> && cmd_types,
-        std::vector<ColumnFamilyType> && cmd_cf,
-        std::optional<uint64_t> forced_index = std::nullopt);
-
-
-    std::tuple<uint64_t, uint64_t> adminCommand(
-        UInt64 region_id,
-        raft_cmdpb::AdminRequest &&,
-        raft_cmdpb::AdminResponse &&,
-        std::optional<uint64_t> forced_index = std::nullopt);
-
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composeCompactLog(
-        MockProxyRegionPtr region,
-        UInt64 compact_index);
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composeChangePeer(
-        metapb::Region && meta,
-        std::vector<UInt64> peer_ids,
-        bool is_v2 = true);
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composePrepareMerge(
-        metapb::Region && target,
-        UInt64 min_index);
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composeCommitMerge(
-        metapb::Region && source,
-        UInt64 commit);
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composeRollbackMerge(UInt64 commit);
-    static std::tuple<raft_cmdpb::AdminRequest, raft_cmdpb::AdminResponse> composeBatchSplit(
-        std::vector<UInt64> && region_ids,
-        std::vector<std::pair<std::string, std::string>> && ranges,
-        metapb::RegionEpoch old_epoch);
+    /// Create a compactLog admin command, returns (index, term) of the admin command itself.
+    std::tuple<uint64_t, uint64_t> compactLog(UInt64 region_id, UInt64 compact_index);
 
     struct Cf
     {
         Cf(UInt64 region_id_, TableID table_id_, ColumnFamilyType type_);
 
         // Actual data will be stored in MockSSTReader.
-        void finish_file(SSTFormatKind kind = SSTFormatKind::KIND_SST);
+        void finish_file();
         void freeze() { freezed = true; }
 
         void insert(HandleID key, std::string val);
-        void insert_raw(std::string key, std::string val);
 
-        ColumnFamilyType cf_type() const { return type; }
+        ColumnFamilyType cf_type() const
+        {
+            return type;
+        }
 
         // Only use this after all sst_files is generated.
         // vector::push_back can cause destruction of std::string,
@@ -260,50 +223,39 @@ struct MockRaftStoreProxy : MutexLockWrap
         bool freezed;
     };
 
-    std::tuple<RegionPtr, PrehandleResult> snapshot(
+    void snapshot(
         KVStore & kvs,
         TMTContext & tmt,
         UInt64 region_id,
         std::vector<Cf> && cfs,
         uint64_t index,
-        uint64_t term,
-        std::optional<uint64_t> deadline_index,
-        bool cancel_after_prehandle = false);
+        uint64_t term);
 
     void doApply(
         KVStore & kvs,
         TMTContext & tmt,
         const FailCond & cond,
         UInt64 region_id,
-        uint64_t index,
-        std::optional<bool> check_proactive_flush = std::nullopt);
+        uint64_t index);
 
-    void replay(KVStore & kvs, TMTContext & tmt, uint64_t region_id, uint64_t to);
-
-    void clear()
-    {
-        auto _ = genLockGuard();
-        regions.clear();
-    }
-
-    std::pair<std::string, std::string> generateTiKVKeyValue(uint64_t tso, int64_t t) const;
+    void replay(
+        KVStore & kvs,
+        TMTContext & tmt,
+        uint64_t region_id,
+        uint64_t to);
 
     MockRaftStoreProxy()
     {
         log = Logger::get("MockRaftStoreProxy");
         table_id = 1;
-        cluster_ver = RaftstoreVer::V1;
     }
 
-    // Mock Proxy will drop read index requests to these regions
     std::unordered_set<uint64_t> region_id_to_drop;
-    // Mock Proxy will return error read index response to these regions
     std::unordered_set<uint64_t> region_id_to_error;
     std::map<uint64_t, MockProxyRegionPtr> regions;
-    std::list<std::shared_ptr<RawMockReadIndexTask>> read_index_tasks;
+    std::list<std::shared_ptr<RawMockReadIndexTask>> tasks;
     AsyncWaker::Notifier notifier;
     TableID table_id;
-    RaftstoreVer cluster_ver;
     LoggerPtr log;
 };
 
@@ -312,12 +264,9 @@ enum class RawObjType : uint32_t
     None,
     MockReadIndexTask,
     MockAsyncWaker,
-    MockString,
-    MockVecOfString
 };
 
-struct GCMonitor
-    : MutexLockWrap
+struct GCMonitor : MutexLockWrap
     , public ext::Singleton<GCMonitor>
 {
     void add(RawObjType type, int64_t diff);
@@ -331,36 +280,4 @@ struct GCMonitor
     static GCMonitor global_gc_monitor;
 };
 
-template <typename... Types>
-std::vector<std::pair<std::string, std::string>> regionRangeToEncodeKeys(Types &&... args)
-{
-    // RegionRangeKeys::RegionRange is not copy-constructible, however, initialize_list need copy construction.
-    // So we have to so this way, rather than create a composeXXX that accepts a vector of RegionRangeKeys::RegionRange.
-    std::vector<std::pair<std::string, std::string>> ranges_str;
-    (
-        [&] {
-            auto & x = args;
-            ranges_str.emplace_back(std::make_pair(x.first.toString(), x.second.toString()));
-        }(),
-        ...);
-    return ranges_str;
-}
-
-struct RustStrWithViewVecInner
-{
-    std::vector<std::string> * vec;
-    BaseBuffView * buffs;
-    ~RustStrWithViewVecInner()
-    {
-        delete vec;
-        delete[] buffs;
-    }
-};
-
-inline BaseBuffView * createBaseBuffViewArray(size_t len)
-{
-    void * raw_memory = operator new[](len * sizeof(BaseBuffView));
-    BaseBuffView * ptr = static_cast<BaseBuffView *>(raw_memory);
-    return ptr;
-}
 } // namespace DB
