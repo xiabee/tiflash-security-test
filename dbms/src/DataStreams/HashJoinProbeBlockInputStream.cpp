@@ -23,7 +23,7 @@ namespace DB
 HashJoinProbeBlockInputStream::HashJoinProbeBlockInputStream(
     const BlockInputStreamPtr & input,
     const JoinPtr & join_,
-    size_t stream_index,
+    size_t scan_hash_map_after_probe_stream_index,
     const String & req_id,
     UInt64 max_block_size_)
     : log(Logger::get(req_id))
@@ -34,7 +34,7 @@ HashJoinProbeBlockInputStream::HashJoinProbeBlockInputStream(
     RUNTIME_CHECK_MSG(original_join != nullptr, "join ptr should not be null.");
     RUNTIME_CHECK_MSG(original_join->getProbeConcurrency() > 0, "Join probe concurrency must be greater than 0");
 
-    probe_exec.set(HashJoinProbeExec::build(req_id, original_join, stream_index, input, max_block_size_));
+    probe_exec.set(HashJoinProbeExec::build(original_join, input, scan_hash_map_after_probe_stream_index, max_block_size_));
     probe_exec->setCancellationHook([&]() { return isCancelledOrThrowIfKilled(); });
 
     ProbeProcessInfo header_probe_process_info(0);
@@ -44,12 +44,7 @@ HashJoinProbeBlockInputStream::HashJoinProbeBlockInputStream(
 
 void HashJoinProbeBlockInputStream::readSuffixImpl()
 {
-    LOG_DEBUG(
-        log,
-        "Finish join probe, total output rows {}, joined rows {}, scan hash map rows {}",
-        joined_rows + scan_hash_map_rows,
-        joined_rows,
-        scan_hash_map_rows);
+    LOG_DEBUG(log, "Finish join probe, total output rows {}, joined rows {}, scan hash map rows {}", joined_rows + scan_hash_map_rows, joined_rows, scan_hash_map_rows);
 }
 
 Block HashJoinProbeBlockInputStream::getHeader() const
@@ -87,8 +82,7 @@ void HashJoinProbeBlockInputStream::onCurrentScanHashMapDone()
 
 void HashJoinProbeBlockInputStream::tryGetRestoreJoin()
 {
-    if (auto restore_probe_exec = probe_exec->tryGetRestoreExec();
-        restore_probe_exec && unlikely(!isCancelledOrThrowIfKilled()))
+    if (auto restore_probe_exec = probe_exec->tryGetRestoreExec(); restore_probe_exec && unlikely(!isCancelledOrThrowIfKilled()))
     {
         probe_exec.set(std::move(restore_probe_exec));
         switchStatus(ProbeStatus::RESTORE_BUILD);

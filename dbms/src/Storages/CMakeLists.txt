@@ -15,4 +15,3 @@
 add_subdirectory (System)
 add_subdirectory (Page)
 add_subdirectory (DeltaMerge)
-add_subdirectory (KVStore)

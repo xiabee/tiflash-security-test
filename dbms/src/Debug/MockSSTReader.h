@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Storages/KVStore/FFI/ProxyFFI.h>
-#include <Storages/KVStore/FFI/SSTReader.h>
+#include <Storages/Transaction/ProxyFFI.h>
+#include <Storages/Transaction/SSTReader.h>
 
 #include <map>
 
@@ -37,13 +37,10 @@ struct MockSSTReader
     using Key = std::pair<std::string, ColumnFamilyType>;
     struct Data : std::vector<std::pair<std::string, std::string>>
     {
+        DISALLOW_COPY(Data);
         Data(Data &&) = default;
         Data & operator=(Data &&) = default;
         Data() = default;
-        static Data copyFrom(const Data & other) { return other; }
-
-    private:
-        Data(const Data &) = default;
     };
 
     explicit MockSSTReader(const Data & data_, SSTFormatKind kind_)
@@ -52,27 +49,24 @@ struct MockSSTReader
         , end(data_.end())
         , remained(iter != end)
         , kind(kind_)
-        , len(data_.size())
     {
-        total_bytes = 0;
-        for (auto it = data_.begin(); it != data_.end(); it++)
-        {
-            total_bytes += it->second.size();
-        }
     }
 
-    static SSTReaderPtr ffi_get_cf_file_reader(const Data & data_, SSTFormatKind kind_)
-    {
-        return SSTReaderPtr{new MockSSTReader(data_, kind_), kind_};
-    }
+    static SSTReaderPtr ffi_get_cf_file_reader(const Data & data_, SSTFormatKind kind_) { return SSTReaderPtr{new MockSSTReader(data_, kind_), kind_}; }
 
     bool ffi_remained() const { return iter != end; }
 
-    BaseBuffView ffi_key() const { return {iter->first.data(), iter->first.length()}; }
+    BaseBuffView ffi_key() const
+    {
+        return {iter->first.data(), iter->first.length()};
+    }
 
     BaseBuffView ffi_val() const { return {iter->second.data(), iter->second.length()}; }
 
-    void ffi_next() { ++iter; }
+    void ffi_next()
+    {
+        ++iter;
+    }
 
     SSTFormatKind ffi_kind() { return kind; }
 
@@ -80,13 +74,13 @@ struct MockSSTReader
     {
         if (et == EngineIteratorSeekType::First)
         {
-            iter = begin;
             remained = iter != end;
+            iter = begin;
         }
         else if (et == EngineIteratorSeekType::Last)
         {
+            remained = iter != end;
             iter = end;
-            remained = false;
         }
         else
         {
@@ -106,14 +100,6 @@ struct MockSSTReader
         }
     }
 
-    size_t ffi_approx_size() { return total_bytes; }
-
-    size_t length() const { return len; }
-
-    Data::const_iterator getBegin() const { return begin; }
-
-    Data::const_iterator getEnd() const { return end; }
-
     static std::map<Key, MockSSTReader::Data> & getMockSSTData() { return MockSSTData; }
 
 private:
@@ -122,8 +108,6 @@ private:
     Data::const_iterator end;
     bool remained;
     SSTFormatKind kind;
-    size_t total_bytes;
-    size_t len;
 
     // (region_id, cf) -> Data
     static std::map<Key, MockSSTReader::Data> MockSSTData;

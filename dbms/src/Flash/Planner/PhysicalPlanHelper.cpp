@@ -42,8 +42,8 @@ NamesAndTypes addSchemaProjectAction(
     const NamesAndTypes & before_schema,
     const String & column_prefix)
 {
-    RUNTIME_CHECK(expr_actions);
-    RUNTIME_CHECK(!before_schema.empty());
+    assert(expr_actions);
+    assert(!before_schema.empty());
 
     NamesAndTypes after_schema = before_schema;
     NamesWithAliases project_aliases;
@@ -64,9 +64,11 @@ NamesAndTypes addSchemaProjectAction(
     return after_schema;
 }
 
-void addParentRequireProjectAction(const ExpressionActionsPtr & expr_actions, const Names & parent_require)
+void addParentRequireProjectAction(
+    const ExpressionActionsPtr & expr_actions,
+    const Names & parent_require)
 {
-    RUNTIME_CHECK(expr_actions);
+    assert(expr_actions);
     NamesWithAliases project_aliases;
     {
         std::unordered_set<String> column_name_set;

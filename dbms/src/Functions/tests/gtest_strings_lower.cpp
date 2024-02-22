@@ -54,7 +54,10 @@ protected:
         return createColumn<String>(strings);
     }
 
-    static ColumnWithTypeAndName toConst(const String & s) { return createConstColumn<String>(1, s); }
+    static ColumnWithTypeAndName toConst(const String & s)
+    {
+        return createConstColumn<String>(1, s);
+    }
 };
 
 TEST_F(StringLower, lowerAll)
@@ -89,30 +92,53 @@ TEST_F(StringLower, lowerAll)
            "test_wrong_utf8_2\xf1\x22",
            "թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ"};
 
+    ASSERT_COLUMN_EQ(
+        toNullableVec(lower_case_strings),
+        executeFunction(
+            "lowerUTF8",
+            toNullableVec(candidate_strings)));
 
-    ASSERT_COLUMN_EQ(toNullableVec(lower_case_strings), executeFunction("lowerUTF8", toNullableVec(candidate_strings)));
-
-    ASSERT_COLUMN_EQ(toVec(lower_case_strings), executeFunction("lowerUTF8", toVec(candidate_strings)));
+    ASSERT_COLUMN_EQ(
+        toVec(lower_case_strings),
+        executeFunction(
+            "lowerUTF8",
+            toVec(candidate_strings)));
 
     ASSERT_COLUMN_EQ(
         toNullableVec(candidate_strings),
-        executeFunction("lowerBinary", toNullableVec(candidate_strings)));
+        executeFunction(
+            "lowerBinary",
+            toNullableVec(candidate_strings)));
 
-    ASSERT_COLUMN_EQ(toVec(candidate_strings), executeFunction("lowerBinary", toVec(candidate_strings)));
+    ASSERT_COLUMN_EQ(
+        toVec(candidate_strings),
+        executeFunction(
+            "lowerBinary",
+            toVec(candidate_strings)));
 
-    ASSERT_COLUMN_EQ(toConst("one week’s time test"), executeFunction("lowerUTF8", toConst("ONE WEEK’S TIME TEST")));
+    ASSERT_COLUMN_EQ(
+        toConst("one week’s time test"),
+        executeFunction(
+            "lowerUTF8",
+            toConst("ONE WEEK’S TIME TEST")));
 
     ASSERT_COLUMN_EQ(
         toConst("+ѐ-ё*ђ/ѓ!є@ѕ#і$@ї%ј……љ&њ（ћ）ќ￥ѝ#ў@џ！^"),
-        executeFunction("lowerUTF8", toConst("+Ѐ-Ё*Ђ/Ѓ!Є@Ѕ#І$@Ї%Ј……Љ&Њ（Ћ）Ќ￥Ѝ#Ў@Џ！^")));
+        executeFunction(
+            "lowerUTF8",
+            toConst("+Ѐ-Ё*Ђ/Ѓ!Є@Ѕ#І$@Ї%Ј……Љ&Њ（Ћ）Ќ￥Ѝ#Ў@Џ！^")));
 
     ASSERT_COLUMN_EQ(
         toConst("▲α▼βγ➨δε☎ζη✂θι€κλ♫μν✓ξο✚πρ℉στ♥υφ♖χψ♘ω★σ✕"),
-        executeFunction("lowerUTF8", toConst("▲Α▼ΒΓ➨ΔΕ☎ΖΗ✂ΘΙ€ΚΛ♫ΜΝ✓ΞΟ✚ΠΡ℉ΣΤ♥ΥΦ♖ΧΨ♘Ω★Σ✕")));
+        executeFunction(
+            "lowerUTF8",
+            toConst("▲Α▼ΒΓ➨ΔΕ☎ΖΗ✂ΘΙ€ΚΛ♫ΜΝ✓ΞΟ✚ΠΡ℉ΣΤ♥ΥΦ♖ΧΨ♘Ω★Σ✕")));
 
     ASSERT_COLUMN_EQ(
         toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ"),
-        executeFunction("lowerBinary", toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ")));
+        executeFunction(
+            "lowerBinary",
+            toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ")));
 }
 
 

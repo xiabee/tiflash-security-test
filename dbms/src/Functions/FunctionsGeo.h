@@ -81,8 +81,7 @@ private:
             const auto arg = arguments[arg_idx].get();
             if (!checkDataType<DataTypeFloat64>(arg))
                 throw Exception(
-                    "Illegal type " + arg->getName() + " of argument " + std::to_string(arg_idx + 1) + " of function "
-                        + getName() + ". Must be Float64",
+                    "Illegal type " + arg->getName() + " of argument " + std::to_string(arg_idx + 1) + " of function " + getName() + ". Must be Float64",
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
         }
 
@@ -108,9 +107,8 @@ private:
                 result[arg_idx] = instr_t{instr_type::get_const_float_64, col};
             }
             else
-                throw Exception(
-                    "Illegal column " + column->getName() + " of argument of function " + getName(),
-                    ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception("Illegal column " + column->getName() + " of argument of function " + getName(),
+                                ErrorCodes::ILLEGAL_COLUMN);
         }
 
         return result;
@@ -119,12 +117,9 @@ private:
     /// https://en.wikipedia.org/wiki/Great-circle_distance
     Float64 greatCircleDistance(Float64 lon1Deg, Float64 lat1Deg, Float64 lon2Deg, Float64 lat2Deg) const
     {
-        if (lon1Deg < -180 || lon1Deg > 180 || lon2Deg < -180 || lon2Deg > 180 || lat1Deg < -90 || lat1Deg > 90
-            || lat2Deg < -90 || lat2Deg > 90)
+        if (lon1Deg < -180 || lon1Deg > 180 || lon2Deg < -180 || lon2Deg > 180 || lat1Deg < -90 || lat1Deg > 90 || lat2Deg < -90 || lat2Deg > 90)
         {
-            throw Exception(
-                "Arguments values out of bounds for function " + getName(),
-                ErrorCodes::ARGUMENT_OUT_OF_BOUND);
+            throw Exception("Arguments values out of bounds for function " + getName(), ErrorCodes::ARGUMENT_OUT_OF_BOUND);
         }
 
         Float64 lon1Rad = degToRad(lon1Deg);
@@ -146,14 +141,10 @@ private:
 
         if (result_is_const)
         {
-            const auto & colLon1
-                = static_cast<const ColumnConst *>(block.getByPosition(arguments[0]).column.get())->getValue<Float64>();
-            const auto & colLat1
-                = static_cast<const ColumnConst *>(block.getByPosition(arguments[1]).column.get())->getValue<Float64>();
-            const auto & colLon2
-                = static_cast<const ColumnConst *>(block.getByPosition(arguments[2]).column.get())->getValue<Float64>();
-            const auto & colLat2
-                = static_cast<const ColumnConst *>(block.getByPosition(arguments[3]).column.get())->getValue<Float64>();
+            const auto & colLon1 = static_cast<const ColumnConst *>(block.getByPosition(arguments[0]).column.get())->getValue<Float64>();
+            const auto & colLat1 = static_cast<const ColumnConst *>(block.getByPosition(arguments[1]).column.get())->getValue<Float64>();
+            const auto & colLon2 = static_cast<const ColumnConst *>(block.getByPosition(arguments[2]).column.get())->getValue<Float64>();
+            const auto & colLat2 = static_cast<const ColumnConst *>(block.getByPosition(arguments[3]).column.get())->getValue<Float64>();
 
             Float64 res = greatCircleDistance(colLon1, colLat1, colLon2, colLat2);
             block.getByPosition(result).column = block.getByPosition(result).type->createColumnConst(size, res);
@@ -173,9 +164,7 @@ private:
                     else if (instr_type::get_const_float_64 == instrs[idx].first)
                         vals[idx] = static_cast<const ColumnConst *>(instrs[idx].second)->getValue<Float64>();
                     else
-                        throw Exception{
-                            "Unknown instruction type in implementation of greatCircleDistance function",
-                            ErrorCodes::LOGICAL_ERROR};
+                        throw Exception{"Unknown instruction type in implementation of greatCircleDistance function", ErrorCodes::LOGICAL_ERROR};
                 }
                 dst_data[row] = greatCircleDistance(vals[0], vals[1], vals[2], vals[3]);
             }
@@ -224,14 +213,14 @@ private:
         if (arguments.size() < 6 || arguments.size() % 4 != 2)
         {
             throw Exception(
-                "Incorrect number of arguments of function " + getName()
-                + ". Must be 2 for your point plus 4 * N for ellipses (x_i, y_i, a_i, b_i).");
+                "Incorrect number of arguments of function " + getName() + ". Must be 2 for your point plus 4 * N for ellipses (x_i, y_i, a_i, b_i).");
         }
 
         /// For array on stack, see below.
         if (arguments.size() > 10000)
         {
-            throw Exception("Number of arguments of function " + getName() + " is too large.");
+            throw Exception(
+                "Number of arguments of function " + getName() + " is too large.");
         }
 
         for (const auto arg_idx : ext::range(0, arguments.size()))
@@ -240,8 +229,7 @@ private:
             if (!checkDataType<DataTypeFloat64>(arg))
             {
                 throw Exception(
-                    "Illegal type " + arg->getName() + " of argument " + std::to_string(arg_idx + 1) + " of function "
-                        + getName() + ". Must be Float64",
+                    "Illegal type " + arg->getName() + " of argument " + std::to_string(arg_idx + 1) + " of function " + getName() + ". Must be Float64",
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
             }
         }
@@ -271,8 +259,7 @@ private:
                 else
                 {
                     throw Exception(
-                        "Illegal type " + column->getName() + " of argument " + std::to_string(arg_idx + 1)
-                            + " of function " + getName() + ". Must be const Float64",
+                        "Illegal type " + column->getName() + " of argument " + std::to_string(arg_idx + 1) + " of function " + getName() + ". Must be const Float64",
                         ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
                 }
             }
@@ -289,9 +276,8 @@ private:
             }
             else if (!typeid_cast<const ColumnVector<Float64> *>(column))
             {
-                throw Exception(
-                    "Illegal column " + column->getName() + " of argument of function " + getName(),
-                    ErrorCodes::ILLEGAL_COLUMN);
+                throw Exception("Illegal column " + column->getName() + " of argument of function " + getName(),
+                                ErrorCodes::ILLEGAL_COLUMN);
             }
         }
 
@@ -309,12 +295,7 @@ private:
             size_t start_index = 0;
             for (const auto row : ext::range(0, size))
             {
-                dst_data[row] = isPointInEllipses(
-                    col_vec_x->getData()[row],
-                    col_vec_y->getData()[row],
-                    ellipses,
-                    ellipses_count,
-                    start_index);
+                dst_data[row] = isPointInEllipses(col_vec_x->getData()[row], col_vec_y->getData()[row], ellipses, ellipses_count, start_index);
             }
 
             block.getByPosition(result).column = std::move(dst);
@@ -324,29 +305,18 @@ private:
             const auto col_const_x = static_cast<const ColumnConst *>(col_x);
             const auto col_const_y = static_cast<const ColumnConst *>(col_y);
             size_t start_index = 0;
-            UInt8 res = isPointInEllipses(
-                col_const_x->getValue<Float64>(),
-                col_const_y->getValue<Float64>(),
-                ellipses,
-                ellipses_count,
-                start_index);
+            UInt8 res = isPointInEllipses(col_const_x->getValue<Float64>(), col_const_y->getValue<Float64>(), ellipses, ellipses_count, start_index);
             block.getByPosition(result).column = DataTypeUInt8().createColumnConst(size, UInt64(res));
         }
         else
         {
             throw Exception(
-                "Illegal types " + col_x->getName() + ", " + col_y->getName() + " of arguments 1, 2 of function "
-                    + getName() + ". Both must be either const or vector",
+                "Illegal types " + col_x->getName() + ", " + col_y->getName() + " of arguments 1, 2 of function " + getName() + ". Both must be either const or vector",
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
         }
     }
 
-    static bool isPointInEllipses(
-        Float64 x,
-        Float64 y,
-        const Ellipse * ellipses,
-        size_t ellipses_count,
-        size_t & start_index)
+    static bool isPointInEllipses(Float64 x, Float64 y, const Ellipse * ellipses, size_t ellipses_count, size_t & start_index)
     {
         size_t index = 0 + start_index;
         for (size_t i = 0; i < ellipses_count; ++i)

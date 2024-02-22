@@ -17,10 +17,10 @@
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
-#include <Storages/KVStore/TMTContext.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/PathPool.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
@@ -45,25 +45,18 @@ public:
     void SetUp() override
     {
         TiFlashStorageTestBasic::SetUp();
-        buildFirstSegmentWithOptions({});
+        reloadWithOptions({});
     }
 
 public:
-    void buildFirstSegmentWithOptions(SegmentTestOptions config);
+    void reloadWithOptions(SegmentTestOptions config);
 
     /**
      * When `check_rows` is true, it will compare the rows num before and after the segment update.
      * So if there is some write during the segment update, it will report false failure if `check_rows` is true.
      */
-    std::optional<PageIdU64> splitSegment(
-        PageIdU64 segment_id,
-        Segment::SplitMode split_mode = Segment::SplitMode::Auto,
-        bool check_rows = true);
-    std::optional<PageIdU64> splitSegmentAt(
-        PageIdU64 segment_id,
-        Int64 split_at,
-        Segment::SplitMode split_mode = Segment::SplitMode::Auto,
-        bool check_rows = true);
+    std::optional<PageIdU64> splitSegment(PageIdU64 segment_id, Segment::SplitMode split_mode = Segment::SplitMode::Auto, bool check_rows = true);
+    std::optional<PageIdU64> splitSegmentAt(PageIdU64 segment_id, Int64 split_at, Segment::SplitMode split_mode = Segment::SplitMode::Auto, bool check_rows = true);
     void mergeSegment(const std::vector<PageIdU64> & segments, bool check_rows = true);
     void mergeSegmentDelta(PageIdU64 segment_id, bool check_rows = true);
     void flushSegmentCache(PageIdU64 segment_id);
@@ -73,20 +66,9 @@ public:
      * written randomly in the segment range.
      */
     void writeSegment(PageIdU64 segment_id, UInt64 write_rows = 100, std::optional<Int64> start_at = std::nullopt);
-    void ingestDTFileIntoDelta(
-        PageIdU64 segment_id,
-        UInt64 write_rows = 100,
-        std::optional<Int64> start_at = std::nullopt,
-        bool clear = false);
-    void ingestDTFileByReplace(
-        PageIdU64 segment_id,
-        UInt64 write_rows = 100,
-        std::optional<Int64> start_at = std::nullopt,
-        bool clear = false);
-    void writeSegmentWithDeletedPack(
-        PageIdU64 segment_id,
-        UInt64 write_rows = 100,
-        std::optional<Int64> start_at = std::nullopt);
+    void ingestDTFileIntoDelta(PageIdU64 segment_id, UInt64 write_rows = 100, std::optional<Int64> start_at = std::nullopt, bool clear = false);
+    void ingestDTFileByReplace(PageIdU64 segment_id, UInt64 write_rows = 100, std::optional<Int64> start_at = std::nullopt, bool clear = false);
+    void writeSegmentWithDeletedPack(PageIdU64 segment_id, UInt64 write_rows = 100, std::optional<Int64> start_at = std::nullopt);
     void deleteRangeSegment(PageIdU64 segment_id);
 
     /**
@@ -96,11 +78,7 @@ public:
     void replaceSegmentData(PageIdU64 segment_id, const Block & block, SegmentSnapshotPtr snapshot = nullptr);
 
     Block prepareWriteBlock(Int64 start_key, Int64 end_key, bool is_deleted = false);
-    Block prepareWriteBlockInSegmentRange(
-        PageIdU64 segment_id,
-        UInt64 total_write_rows,
-        std::optional<Int64> write_start_key = std::nullopt,
-        bool is_deleted = false);
+    Block prepareWriteBlockInSegmentRange(PageIdU64 segment_id, UInt64 total_write_rows, std::optional<Int64> write_start_key = std::nullopt, bool is_deleted = false);
 
     size_t getSegmentRowNumWithoutMVCC(PageIdU64 segment_id);
     size_t getSegmentRowNum(PageIdU64 segment_id);
@@ -138,6 +116,8 @@ protected:
     // <name, number_of_success_runs>
     std::map<std::string, size_t> operation_statistics;
 
+    SegmentPtr reload(bool is_common_handle, const ColumnDefinesPtr & pre_define_columns, DB::Settings && db_settings);
+
     // setColumns should update dm_context at the same time
     void setColumns(const ColumnDefinesPtr & columns);
 
@@ -148,15 +128,8 @@ protected:
      * For example, if you have changed the settings, you should grab a new DMContext.
      */
     void reloadDMContext();
-    std::unique_ptr<DMContext> createDMContext();
 
     std::pair<SegmentPtr, SegmentSnapshotPtr> getSegmentForRead(PageIdU64 segment_id);
-
-private:
-    SegmentPtr buildFirstSegment(
-        bool is_common_handle,
-        const ColumnDefinesPtr & pre_define_columns,
-        DB::Settings && db_settings);
 
 protected:
     inline static constexpr PageIdU64 NAMESPACE_ID = 100;

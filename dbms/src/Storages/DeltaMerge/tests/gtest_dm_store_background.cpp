@@ -33,7 +33,8 @@ namespace DM
 {
 namespace tests
 {
-class DeltaMergeStoreGCTest : public SimplePKTestBasic
+class DeltaMergeStoreGCTest
+    : public SimplePKTestBasic
 {
 public:
     void SetUp() override

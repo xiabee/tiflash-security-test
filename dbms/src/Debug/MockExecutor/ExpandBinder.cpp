@@ -18,11 +18,7 @@
 namespace DB::mock
 {
 
-bool ExpandBinder::toTiPBExecutor(
-    tipb::Executor * tipb_executor,
-    int32_t collator_id,
-    const MPPInfo & mpp_info,
-    const Context & context)
+bool ExpandBinder::toTiPBExecutor(tipb::Executor * tipb_executor, int32_t collator_id, const MPPInfo & mpp_info, const Context & context)
 {
     tipb_executor->set_tp(tipb::ExecType::TypeExpand);
     tipb_executor->set_executor_id(name);
@@ -36,12 +32,7 @@ bool ExpandBinder::toTiPBExecutor(
             for (const auto & grouping_col : grouping_exprs)
             {
                 tipb::Expr * add_column = ges->add_grouping_expr();
-                astToPB(
-                    children[0]->output_schema,
-                    grouping_col,
-                    add_column,
-                    collator_id,
-                    context); // ast column ref change to tipb:Expr column ref
+                astToPB(children[0]->output_schema, grouping_col, add_column, collator_id, context); // ast column ref change to tipb:Expr column ref
             }
         }
     }
@@ -49,11 +40,7 @@ bool ExpandBinder::toTiPBExecutor(
     return children[0]->toTiPBExecutor(children_executor, collator_id, mpp_info, context);
 }
 
-ExecutorBinderPtr compileExpand(
-    ExecutorBinderPtr input,
-    size_t & executor_index,
-    MockVVecGroupingNameVec grouping_set_columns,
-    std::set<String> in_set)
+ExecutorBinderPtr compileExpand(ExecutorBinderPtr input, size_t & executor_index, MockVVecGroupingNameVec grouping_set_columns, std::set<String> in_set)
 {
     DAGSchema output_schema;
     for (const auto & field : input->output_schema)
@@ -74,8 +61,7 @@ ExecutorBinderPtr compileExpand(
         field_type.set_decimal(-1);
         output_schema.push_back(std::make_pair("groupingID", TiDB::fieldTypeToColumnInfo(field_type)));
     }
-    ExecutorBinderPtr expand
-        = std::make_shared<ExpandBinder>(executor_index, output_schema, std::move(grouping_set_columns));
+    ExecutorBinderPtr expand = std::make_shared<ExpandBinder>(executor_index, output_schema, std::move(grouping_set_columns));
     expand->children.push_back(input);
     return expand;
 }

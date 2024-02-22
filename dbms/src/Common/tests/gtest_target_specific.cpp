@@ -46,19 +46,14 @@ TEST(TargetSpecific, byteAddition)
 }
 
 TIFLASH_DECLARE_MULTITARGET_FUNCTION_ALONE(int, sumIntFromZero, (const int * __restrict src, size_t length))
-TIFLASH_IMPLEMENT_MULTITARGET_FUNCTION(
-    int,
-    sumIntFromZero,
-    (src, length),
-    (const int * __restrict src, size_t length),
+TIFLASH_IMPLEMENT_MULTITARGET_FUNCTION(int, sumIntFromZero, (src, length), (const int * __restrict src, size_t length), {
+    int acc = 0;
+    for (size_t i = 0; i < length; ++i)
     {
-        int acc = 0;
-        for (size_t i = 0; i < length; ++i)
-        {
-            acc += src[i];
-        }
-        return acc;
-    })
+        acc += src[i];
+    }
+    return acc;
+})
 
 TEST(TargetSpecific, sumIntFromZero)
 {

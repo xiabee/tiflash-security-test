@@ -31,7 +31,7 @@ PhysicalPlanNodePtr PhysicalLimit::build(
     const tipb::Limit & limit,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
     auto physical_limit = std::make_shared<PhysicalLimit>(
         executor_id,
         child->getSchema(),
@@ -46,26 +46,16 @@ void PhysicalLimit::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & 
 {
     child->buildBlockInputStream(pipeline, context, max_streams);
 
-    pipeline.transform([&](auto & stream) {
-        stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier());
-    });
+    pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier()); });
     if (pipeline.hasMoreThanOneStream())
     {
-        executeUnion(
-            pipeline,
-            max_streams,
-            context.getSettingsRef().max_buffered_bytes_in_executor,
-            log,
-            false,
-            "for partial limit");
-        pipeline.transform([&](auto & stream) {
-            stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier());
-        });
+        executeUnion(pipeline, max_streams, log, false, "for partial limit");
+        pipeline.transform([&](auto & stream) { stream = std::make_shared<LimitBlockInputStream>(stream, limit, /*offset*/ 0, log->identifier()); });
     }
 }
 
-void PhysicalLimit::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalLimit::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & /*context*/,
     size_t /*concurrency*/)
@@ -73,8 +63,7 @@ void PhysicalLimit::buildPipelineExecGroupImpl(
     auto input_header = group_builder.getCurrentHeader();
     auto global_limit = std::make_shared<GlobalLimitTransformAction>(input_header, limit);
     group_builder.transform([&](auto & builder) {
-        builder.appendTransformOp(
-            std::make_unique<LimitTransformOp<GlobalLimitPtr>>(exec_context, log->identifier(), global_limit));
+        builder.appendTransformOp(std::make_unique<LimitTransformOp<GlobalLimitPtr>>(exec_status, log->identifier(), global_limit));
     });
 }
 

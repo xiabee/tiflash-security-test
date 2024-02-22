@@ -36,7 +36,10 @@ struct MergedUnit
 class MergedTask
 {
 public:
-    static int64_t getPassiveMergedSegments() { return passive_merged_segments.load(std::memory_order_relaxed); }
+    static int64_t getPassiveMergedSegments()
+    {
+        return passive_merged_segments.load(std::memory_order_relaxed);
+    }
 
     MergedTask(uint64_t seg_id_, std::vector<MergedUnit> && units_)
         : seg_id(seg_id_)
@@ -60,11 +63,20 @@ public:
 
     int readBlock();
 
-    bool allStreamsFinished() const { return finished_count >= units.size(); }
+    bool allStreamsFinished() const
+    {
+        return finished_count >= units.size();
+    }
 
-    uint64_t getSegmentId() const { return seg_id; }
+    uint64_t getSegmentId() const
+    {
+        return seg_id;
+    }
 
-    size_t getPoolCount() const { return units.size(); }
+    size_t getPoolCount() const
+    {
+        return units.size();
+    }
 
     std::vector<uint64_t> getPoolIds() const
     {
@@ -74,7 +86,7 @@ public:
         {
             if (unit.pool != nullptr)
             {
-                ids.push_back(unit.pool->pool_id);
+                ids.push_back(unit.pool->poolId());
             }
         }
         return ids;
@@ -84,7 +96,7 @@ public:
     {
         for (const auto & unit : units)
         {
-            if (unit.pool != nullptr && unit.pool->pool_id == pool_id)
+            if (unit.pool != nullptr && unit.pool->poolId() == pool_id)
             {
                 return true;
             }
@@ -109,7 +121,7 @@ private:
             // `MergedUnit.stream` must be released explicitly for updating memory statistics of `MemoryTracker`.
             auto & [pool, task, stream] = units[i];
             {
-                MemoryTrackerSetter setter(true, pool->mem_tracker.get());
+                MemoryTrackerSetter setter(true, pool->getMemoryTracker().get());
                 task = nullptr;
                 stream = nullptr;
             }

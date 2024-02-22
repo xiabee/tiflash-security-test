@@ -52,7 +52,10 @@ public:
         UInt64 max_edit_records_per_part = 100000;
     };
 
-    static CPFilesWriterPtr create(Options options) { return std::make_unique<CPFilesWriter>(std::move(options)); }
+    static CPFilesWriterPtr create(Options options)
+    {
+        return std::make_unique<CPFilesWriter>(std::move(options));
+    }
 
     explicit CPFilesWriter(Options options);
 
@@ -93,8 +96,7 @@ public:
     };
     CPDataDumpStats writeEditsAndApplyCheckpointInfo(
         universal::PageEntriesEdit & edit,
-        const CompactOptions & options = CompactOptions(false),
-        bool manifest_only = false);
+        const CompactOptions & options = CompactOptions(false));
 
     /**
      * This function must be called, and must be called last, after other `writeXxx`.

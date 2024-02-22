@@ -20,10 +20,10 @@
 #include <Databases/DatabaseTiFlash.h>
 #include <Databases/IDatabase.h>
 #include <Interpreters/Context.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/System/StorageSystemDatabases.h>
+#include <Storages/Transaction/TiDB.h>
+#include <Storages/Transaction/Types.h>
 #include <TiDB/Schema/SchemaNameMapper.h>
-#include <TiDB/Schema/TiDB.h>
 
 
 namespace DB
@@ -45,13 +45,12 @@ StorageSystemDatabases::StorageSystemDatabases(const std::string & name_)
 }
 
 
-BlockInputStreams StorageSystemDatabases::read(
-    const Names & column_names,
-    const SelectQueryInfo &,
-    const Context & context,
-    QueryProcessingStage::Enum & processed_stage,
-    const size_t /*max_block_size*/,
-    const unsigned /*num_streams*/)
+BlockInputStreams StorageSystemDatabases::read(const Names & column_names,
+                                               const SelectQueryInfo &,
+                                               const Context & context,
+                                               QueryProcessingStage::Enum & processed_stage,
+                                               const size_t /*max_block_size*/,
+                                               const unsigned /*num_streams*/)
 {
     check(column_names);
     processed_stage = QueryProcessingStage::FetchColumns;
@@ -86,9 +85,7 @@ BlockInputStreams StorageSystemDatabases::read(
         res_columns[j++]->insert(database.second->getMetadataPath());
     }
 
-    return BlockInputStreams(
-        1,
-        std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
+    return BlockInputStreams(1, std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
 }
 
 

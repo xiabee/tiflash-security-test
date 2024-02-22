@@ -67,16 +67,15 @@ public:
 
     const Block & getSampleBlock() const override;
 
-private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & exec_context,
+    void buildPipelineExecGroup(
+        PipelineExecutorStatus & exec_status,
         PipelineExecGroupBuilder & group_builder,
         Context & /*context*/,
         size_t /*concurrency*/) override;
 
 private:
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
     const String extra_info;
 
     ExpressionActionsPtr project_actions;

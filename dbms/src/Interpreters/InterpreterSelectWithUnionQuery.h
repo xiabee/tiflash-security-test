@@ -45,7 +45,9 @@ public:
 
     Block getSampleBlock();
 
-    static Block getSampleBlock(const ASTPtr & query_ptr_, const Context & context_);
+    static Block getSampleBlock(
+        const ASTPtr & query_ptr_,
+        const Context & context_);
 
 private:
     ASTPtr query_ptr;

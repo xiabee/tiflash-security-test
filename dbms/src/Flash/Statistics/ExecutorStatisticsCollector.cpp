@@ -33,31 +33,15 @@ namespace
 RemoteExecutionSummary getRemoteExecutionSummariesFromExchange(DAGContext & dag_context)
 {
     RemoteExecutionSummary exchange_execution_summary;
-    switch (dag_context.getExecutionMode())
+    for (const auto & map_entry : dag_context.getInBoundIOInputStreamsMap())
     {
-    case ExecutionMode::None:
-        break;
-    case ExecutionMode::Stream:
-        for (const auto & map_entry : dag_context.getInBoundIOInputStreamsMap())
+        for (const auto & stream_ptr : map_entry.second)
         {
-            for (const auto & stream_ptr : map_entry.second)
+            if (auto * exchange_receiver_stream_ptr = dynamic_cast<ExchangeReceiverInputStream *>(stream_ptr.get()); exchange_receiver_stream_ptr)
             {
-                if (auto * exchange_receiver_stream_ptr = dynamic_cast<ExchangeReceiverInputStream *>(stream_ptr.get());
-                    exchange_receiver_stream_ptr)
-                    exchange_execution_summary.merge(exchange_receiver_stream_ptr->getRemoteExecutionSummary());
+                exchange_execution_summary.merge(exchange_receiver_stream_ptr->getRemoteExecutionSummary());
             }
         }
-        break;
-    case ExecutionMode::Pipeline:
-        for (const auto & map_entry : dag_context.getInboundIOProfileInfosMap())
-        {
-            for (const auto & profile_info : map_entry.second)
-            {
-                if (!profile_info->is_local)
-                    exchange_execution_summary.merge(profile_info->remote_execution_summary);
-            }
-        }
-        break;
     }
     return exchange_execution_summary;
 }
@@ -70,7 +54,9 @@ String ExecutorStatisticsCollector::profilesToJson() const
     buffer.joinStr(
         profiles.cbegin(),
         profiles.cend(),
-        [](const auto & s, FmtBuffer & fb) { fb.append(s.second->toJson()); },
+        [](const auto & s, FmtBuffer & fb) {
+            fb.append(s.second->toJson());
+        },
         ",");
     buffer.append("]");
     return buffer.toString();
@@ -142,15 +128,6 @@ tipb::SelectResponse ExecutorStatisticsCollector::genExecutionSummaryResponse()
     return response;
 }
 
-tipb::TiFlashExecutionInfo ExecutorStatisticsCollector::genTiFlashExecutionInfo()
-{
-    tipb::SelectResponse response = genExecutionSummaryResponse();
-    tipb::TiFlashExecutionInfo execution_info;
-    auto * execution_summaries = execution_info.mutable_execution_summaries();
-    execution_summaries->CopyFrom(response.execution_summaries());
-    return execution_info;
-}
-
 void ExecutorStatisticsCollector::fillExecutionSummary(
     tipb::SelectResponse & response,
     const String & executor_id,
@@ -166,12 +143,7 @@ void ExecutorStatisticsCollector::fillExecutionSummary(
         current.scan_context->merge(*(iter->second));
 
     current.time_processed_ns += dag_context->compile_time_ns;
-    fillTiExecutionSummary(
-        *dag_context,
-        response.add_execution_summaries(),
-        current,
-        executor_id,
-        force_fill_executor_id);
+    fillTiExecutionSummary(*dag_context, response.add_execution_summaries(), current, executor_id, force_fill_executor_id);
 }
 
 void ExecutorStatisticsCollector::fillExecuteSummaries(tipb::SelectResponse & response)
@@ -232,12 +204,7 @@ void ExecutorStatisticsCollector::fillRemoteExecutionSummaries(tipb::SelectRespo
 
     // fill execution_summaries from remote executor received by exchange.
     for (auto & p : exchange_execution_summary.execution_summaries)
-        fillTiExecutionSummary(
-            *dag_context,
-            response.add_execution_summaries(),
-            p.second,
-            p.first,
-            force_fill_executor_id);
+        fillTiExecutionSummary(*dag_context, response.add_execution_summaries(), p.second, p.first, force_fill_executor_id);
 }
 
 } // namespace DB

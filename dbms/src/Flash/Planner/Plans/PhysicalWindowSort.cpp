@@ -22,6 +22,7 @@
 #include <Flash/Planner/PhysicalPlanHelper.h>
 #include <Flash/Planner/Plans/PhysicalWindowSort.h>
 #include <Interpreters/Context.h>
+#include <Operators/LocalSortTransformOp.h>
 
 namespace DB
 {
@@ -33,7 +34,7 @@ PhysicalPlanNodePtr PhysicalWindowSort::build(
     const FineGrainedShuffle & fine_grained_shuffle,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     RUNTIME_ASSERT(window_sort.ispartialsort(), log, "for window sort, ispartialsort must be true");
 
@@ -58,16 +59,15 @@ void PhysicalWindowSort::buildBlockInputStreamImpl(DAGPipeline & pipeline, Conte
     orderStreams(pipeline, max_streams, order_descr, 0, fine_grained_shuffle.enable(), context, log);
 }
 
-void PhysicalWindowSort::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalWindowSort::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & context,
     size_t /*concurrency*/)
 {
-    if (fine_grained_shuffle.enable())
-        executeLocalSort(exec_context, group_builder, order_descr, {}, true, context, log);
-    else
-        executeFinalSort(exec_context, group_builder, order_descr, {}, context, log);
+    // TODO support non fine grained shuffle.
+    assert(fine_grained_shuffle.enable());
+    executeLocalSort(exec_status, group_builder, order_descr, {}, context, log);
 }
 
 void PhysicalWindowSort::finalize(const Names & parent_require)

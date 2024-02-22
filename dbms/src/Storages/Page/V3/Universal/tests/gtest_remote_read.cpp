@@ -66,10 +66,12 @@ public:
 
         page_storage = UniversalPageStorage::create("write", delegator, config, file_provider);
         page_storage->restore();
-        DB::tests::TiFlashTestEnv::enableS3Config();
     }
 
-    void reload() { page_storage = reopenWithConfig(config); }
+    void reload()
+    {
+        page_storage = reopenWithConfig(config);
+    }
 
     std::shared_ptr<UniversalPageStorage> reopenWithConfig(const PageStorageConfig & config_)
     {
@@ -95,10 +97,11 @@ public:
         ASSERT_EQ(r, 0);
     }
 
-    void TearDown() override { DB::tests::TiFlashTestEnv::disableS3Config(); }
-
 protected:
-    void deleteBucket() { ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client); }
+    void deleteBucket()
+    {
+        ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client);
+    }
 
 protected:
     StoreID test_store_id = 1234;
@@ -135,8 +138,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         edits.appendRecord({.type = PS::V3::EditRecordType::VAR_REF, .page_id = "aaabbb2", .ori_page_id = "aaabbb"});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
@@ -162,12 +164,7 @@ try
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage(r[0].page_id, 0, "local data");
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         wb.putRefPage(r[1].page_id, r[0].page_id);
         page_storage->write(std::move(wb));
     }
@@ -219,8 +216,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -244,12 +240,7 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -293,8 +284,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -319,12 +309,7 @@ try
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage(r[0].page_id, 0, "local data");
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -371,8 +356,8 @@ try
         .data_file_id_pattern = data_file_id_pattern,
         .manifest_file_path = manifest_file_path,
         .manifest_file_id = manifest_file_id,
-        .data_source = PS::V3::CPWriteDataSourceFixture::create(
-            {{5, "Said she just dreamed a dream"}, {10, "nahida opened her eyes"}}),
+        .data_source = PS::V3::CPWriteDataSourceFixture::create({{5, "Said she just dreamed a dream"},
+                                                                 {10, "nahida opened her eyes"}}),
     });
 
     writer->writePrefix({
@@ -384,10 +369,8 @@ try
     UniversalPageId page_id2 = "aaabbb2";
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id1, .entry = {.size = 29, .offset = 5}});
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id2, .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id1, .entry = {.size = 29, .offset = 5}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id2, .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -411,18 +394,8 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
-        wb.putRemotePage(
-            r[1].page_id,
-            0,
-            r[0].entry.size,
-            r[1].entry.checkpoint_info.data_location,
-            std::move(r[1].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[1].page_id, 0, r[0].entry.size, r[1].entry.checkpoint_info.data_location, std::move(r[1].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -453,30 +426,17 @@ CATCH
 TEST_F(UniPageStorageRemoteReadTest, WriteReadWithFields)
 try
 {
-    PageTypeAndConfig page_type_and_config{
-        {PageType::Normal, PageTypeConfig{.heavy_gc_valid_rate = 0.5}},
-        {PageType::RaftData, PageTypeConfig{.heavy_gc_valid_rate = 0.1}},
-    };
-    auto blob_store = PS::V3::BlobStore<PS::V3::universal::BlobStoreTrait>(
-        getCurrentTestName(),
-        file_provider,
-        delegator,
-        PS::V3::BlobConfig{},
-        page_type_and_config);
+    auto blob_store = PS::V3::BlobStore<PS::V3::universal::BlobStoreTrait>(getCurrentTestName(), file_provider, delegator, PS::V3::BlobConfig{});
 
     auto edits = PS::V3::universal::PageEntriesEdit{};
     {
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage("page_foo", 0, "The flower carriage rocked", {4, 10, 12});
-        auto blob_store_edits = blob_store.write(std::move(wb));
+        auto blob_store_edits = blob_store.write(std::move(wb), nullptr);
 
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY,
-             .page_id = "page_foo",
-             .entry = blob_store_edits.getRecords()[0].entry});
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_REF, .page_id = "page_foo2", .ori_page_id = "page_foo"});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "page_foo", .entry = blob_store_edits.getRecords()[0].entry});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_REF, .page_id = "page_foo2", .ori_page_id = "page_foo"});
     }
 
     auto writer = PS::V3::CPFilesWriter::create({
@@ -513,12 +473,7 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         wb.putRefPage(r[1].page_id, r[0].page_id);
         page_storage->write(std::move(wb));
     }

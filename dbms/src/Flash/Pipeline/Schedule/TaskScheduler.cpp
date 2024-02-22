@@ -23,75 +23,59 @@
 namespace DB
 {
 TaskScheduler::TaskScheduler(const TaskSchedulerConfig & config)
-    : cpu_task_thread_pool(*this, config.cpu_task_thread_pool_config)
-    , io_task_thread_pool(*this, config.io_task_thread_pool_config)
+    : cpu_task_thread_pool(*this, config.cpu_task_thread_pool_size)
+    , io_task_thread_pool(*this, config.io_task_thread_pool_size)
     , wait_reactor(*this)
-{}
+{
+}
 
 TaskScheduler::~TaskScheduler()
 {
-    cpu_task_thread_pool.finish();
-    io_task_thread_pool.finish();
-    wait_reactor.finish();
+    cpu_task_thread_pool.close();
+    io_task_thread_pool.close();
+    wait_reactor.close();
 
     cpu_task_thread_pool.waitForStop();
     io_task_thread_pool.waitForStop();
     wait_reactor.waitForStop();
 }
 
-void TaskScheduler::submit(TaskPtr && task)
-{
-    auto task_status = task->getStatus();
-    switch (task_status)
-    {
-    case ExecTaskStatus::RUNNING:
-        submitToCPUTaskThreadPool(std::move(task));
-        break;
-    case ExecTaskStatus::IO_IN:
-    case ExecTaskStatus::IO_OUT:
-        submitToIOTaskThreadPool(std::move(task));
-        break;
-    case ExecTaskStatus::WAITING:
-        submitToWaitReactor(std::move(task));
-        break;
-    default:
-        throw Exception(fmt::format("Unexpected task status: {}", magic_enum::enum_name(task_status)));
-    }
-}
-
-void TaskScheduler::submit(std::vector<TaskPtr> & tasks)
+void TaskScheduler::submit(std::vector<TaskPtr> & tasks) noexcept
 {
     if (unlikely(tasks.empty()))
         return;
 
-    std::vector<TaskPtr> cpu_tasks;
+    // The memory tracker is set by the caller.
+    std::vector<TaskPtr> running_tasks;
     std::vector<TaskPtr> io_tasks;
-    std::list<TaskPtr> await_tasks;
+    std::list<TaskPtr> waiting_tasks;
     for (auto & task : tasks)
     {
-        auto task_status = task->getStatus();
-        switch (task_status)
+        assert(task);
+        // A quick check to avoid an unnecessary round into `running_tasks` then being scheduled out immediately.
+        auto status = task->await();
+        switch (status)
         {
         case ExecTaskStatus::RUNNING:
-            cpu_tasks.push_back(std::move(task));
+            running_tasks.push_back(std::move(task));
             break;
-        case ExecTaskStatus::IO_IN:
-        case ExecTaskStatus::IO_OUT:
+        case ExecTaskStatus::IO:
             io_tasks.push_back(std::move(task));
             break;
         case ExecTaskStatus::WAITING:
-            await_tasks.push_back(std::move(task));
+            waiting_tasks.push_back(std::move(task));
+            break;
+        case FINISH_STATUS:
+            task.reset();
             break;
         default:
-            throw Exception(fmt::format("Unexpected task status: {}", magic_enum::enum_name(task_status)));
+            UNEXPECTED_STATUS(logger, status);
         }
     }
-    if (!cpu_tasks.empty())
-        submitToCPUTaskThreadPool(cpu_tasks);
-    if (!io_tasks.empty())
-        submitToIOTaskThreadPool(io_tasks);
-    if (!await_tasks.empty())
-        wait_reactor.submit(await_tasks);
+    tasks.clear();
+    cpu_task_thread_pool.submit(running_tasks);
+    io_task_thread_pool.submit(io_tasks);
+    wait_reactor.submit(waiting_tasks);
 }
 
 void TaskScheduler::submitToWaitReactor(TaskPtr && task)
@@ -117,12 +101,6 @@ void TaskScheduler::submitToIOTaskThreadPool(TaskPtr && task)
 void TaskScheduler::submitToIOTaskThreadPool(std::vector<TaskPtr> & tasks)
 {
     io_task_thread_pool.submit(tasks);
-}
-
-void TaskScheduler::cancel(const String & query_id, const String & resource_group_name)
-{
-    cpu_task_thread_pool.cancel(query_id, resource_group_name);
-    io_task_thread_pool.cancel(query_id, resource_group_name);
 }
 
 std::unique_ptr<TaskScheduler> TaskScheduler::instance;

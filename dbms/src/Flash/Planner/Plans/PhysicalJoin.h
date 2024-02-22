@@ -51,7 +51,7 @@ public:
         , sample_block(sample_block_)
     {}
 
-    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
+    void buildPipeline(PipelineBuilder & builder) override;
 
     void finalize(const Names & parent_require) override;
 
@@ -61,6 +61,8 @@ private:
     void probeSideTransform(DAGPipeline & probe_pipeline, Context & context);
 
     void buildSideTransform(DAGPipeline & build_pipeline, Context & context, size_t max_streams);
+
+    void doSchemaProject(DAGPipeline & pipeline);
 
     void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 

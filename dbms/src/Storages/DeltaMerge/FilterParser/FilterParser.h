@@ -14,17 +14,19 @@
 
 #pragma once
 
-#include <Interpreters/Set.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
-#include <Storages/KVStore/Types.h>
-#include <tipb/executor.pb.h>
+#include <Storages/Transaction/Types.h>
 #include <tipb/expression.pb.h>
 
 #include <functional>
 #include <memory>
 #include <unordered_map>
 
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB
 {
@@ -48,16 +50,6 @@ public:
         const ColumnDefines & columns_to_read,
         AttrCreatorByColumnID && creator,
         const LoggerPtr & log);
-
-    // only for runtime filter in predicate
-    static RSOperatorPtr parseRFInExpr(
-        tipb::RuntimeFilterType rf_type,
-        const tipb::Expr & target_expr,
-        const ColumnDefines & columns_to_read,
-        const std::set<Field> & setElements,
-        const TimezoneInfo & timezone_info);
-
-    static bool isRSFilterSupportType(Int32 field_type);
 
     /// Some helper structure
 

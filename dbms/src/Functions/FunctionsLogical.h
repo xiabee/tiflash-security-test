@@ -48,14 +48,20 @@ extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 
 struct AndImpl
 {
-    static inline bool isSaturable() { return true; }
+    static inline bool isSaturable()
+    {
+        return true;
+    }
 
     static inline bool resNotNull(const Field & value)
     {
         return !value.isNull() && applyVisitor(FieldVisitorConvertToNumber<bool>(), value) == 0;
     }
 
-    static inline bool resNotNull(UInt8 value, UInt8 is_null) { return !is_null && !value; }
+    static inline bool resNotNull(UInt8 value, UInt8 is_null)
+    {
+        return !is_null && !value;
+    }
 
     static inline void adjustForNullValue(UInt8 & value, UInt8 & is_null)
     {
@@ -63,23 +69,38 @@ struct AndImpl
         value = false;
     }
 
-    static inline bool isSaturatedValue(bool a) { return !a; }
+    static inline bool isSaturatedValue(bool a)
+    {
+        return !a;
+    }
 
-    static inline bool apply(bool a, bool b) { return a && b; }
+    static inline bool apply(bool a, bool b)
+    {
+        return a && b;
+    }
 };
 
 struct OrImpl
 {
-    static inline bool isSaturable() { return true; }
+    static inline bool isSaturable()
+    {
+        return true;
+    }
 
-    static inline bool isSaturatedValue(bool a) { return a; }
+    static inline bool isSaturatedValue(bool a)
+    {
+        return a;
+    }
 
     static inline bool resNotNull(const Field & value)
     {
         return !value.isNull() && applyVisitor(FieldVisitorConvertToNumber<bool>(), value) == 1;
     }
 
-    static inline bool resNotNull(UInt8 value, UInt8 is_null) { return !is_null && value; }
+    static inline bool resNotNull(UInt8 value, UInt8 is_null)
+    {
+        return !is_null && value;
+    }
 
     static inline void adjustForNullValue(UInt8 & value, UInt8 & is_null)
     {
@@ -87,22 +108,42 @@ struct OrImpl
         value = true;
     }
 
-    static inline bool apply(bool a, bool b) { return a || b; }
+    static inline bool apply(bool a, bool b)
+    {
+        return a || b;
+    }
 };
 
 struct XorImpl
 {
-    static inline bool isSaturable() { return false; }
+    static inline bool isSaturable()
+    {
+        return false;
+    }
 
-    static inline bool isSaturatedValue(bool) { return false; }
+    static inline bool isSaturatedValue(bool)
+    {
+        return false;
+    }
 
-    static inline bool resNotNull(const Field &) { return true; }
+    static inline bool resNotNull(const Field &)
+    {
+        return true;
+    }
 
-    static inline bool resNotNull(UInt8, UInt8) { return true; }
+    static inline bool resNotNull(UInt8, UInt8)
+    {
+        return true;
+    }
 
-    static inline void adjustForNullValue(UInt8 &, UInt8 &) {}
+    static inline void adjustForNullValue(UInt8 &, UInt8 &)
+    {
+    }
 
-    static inline bool apply(bool a, bool b) { return a != b; }
+    static inline bool apply(bool a, bool b)
+    {
+        return a != b;
+    }
 };
 
 template <typename A>
@@ -110,7 +151,10 @@ struct NotImpl
 {
     using ResultType = UInt8;
 
-    static inline bool apply(A a) { return !a; }
+    static inline bool apply(A a)
+    {
+        return !a;
+    }
 };
 
 
@@ -194,7 +238,10 @@ struct AssociativeOperationImpl<Op, 1>
         : vec(in[in.size() - 1]->getData())
     {}
 
-    inline bool apply(size_t i) const { return vec[i]; }
+    inline bool apply(size_t i) const
+    {
+        return vec[i];
+    }
 };
 
 
@@ -259,11 +306,7 @@ private:
         return true;
     }
 
-    bool convertOnlyNullToUInt8(
-        const IColumn * column,
-        UInt8Container & res,
-        UInt8Container & res_not_null,
-        UInt8Container & input_has_null) const
+    bool convertOnlyNullToUInt8(const IColumn * column, UInt8Container & res, UInt8Container & res_not_null, UInt8Container & input_has_null) const
     {
         if (!column->onlyNull())
             return false;
@@ -283,11 +326,7 @@ private:
     }
 
     template <typename T>
-    bool convertNullableTypeToUInt8(
-        const IColumn * column,
-        UInt8Container & res,
-        UInt8Container & res_not_null,
-        UInt8Container & input_has_null) const
+    bool convertNullableTypeToUInt8(const IColumn * column, UInt8Container & res, UInt8Container & res_not_null, UInt8Container & input_has_null) const
     {
         auto col_nullable = checkAndGetColumn<ColumnNullable>(column);
 
@@ -312,11 +351,7 @@ private:
         return true;
     }
 
-    void convertToUInt8(
-        const IColumn * column,
-        UInt8Container & res,
-        UInt8Container & res_not_null,
-        UInt8Container & input_has_null) const
+    void convertToUInt8(const IColumn * column, UInt8Container & res, UInt8Container & res_not_null, UInt8Container & input_has_null) const
     {
         if (!convertTypeToUInt8<Int8>(column, res, res_not_null)
             && !convertTypeToUInt8<Int16>(column, res, res_not_null)
@@ -342,7 +377,10 @@ private:
     }
 
 public:
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
@@ -354,8 +392,8 @@ public:
     {
         if (arguments.size() < 2)
             throw Exception(
-                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(arguments.size())
-                    + ", should be at least 2.",
+                "Number of arguments for function " + getName() + " doesn't match: passed "
+                    + toString(arguments.size()) + ", should be at least 2.",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
         bool has_nullable_input_column = false;
@@ -364,10 +402,11 @@ public:
             has_nullable_input_column |= arguments[i]->isNullable();
             if (!(arguments[i]->isNumber()
                   || (special_impl_for_nulls
-                      && (arguments[i]->onlyNull() || removeNullable(arguments[i])->isNumber()))))
+                      && (arguments[i]->onlyNull()
+                          || removeNullable(arguments[i])->isNumber()))))
                 throw Exception(
-                    "Illegal type (" + arguments[i]->getName() + ") of " + toString(i + 1) + " argument of function "
-                        + getName(),
+                    "Illegal type (" + arguments[i]->getName() + ") of "
+                        + toString(i + 1) + " argument of function " + getName(),
                     ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
         }
 
@@ -398,8 +437,7 @@ public:
         bool has_consts = extractConstColumns(in, const_val, const_val_res_not_null, const_val_input_has_null);
 
         // If this value uniquely determines the result, return it.
-        if (has_consts
-            && (in.empty() || (!has_nullable_input_column && Impl::apply(const_val, 0) == Impl::apply(const_val, 1))))
+        if (has_consts && (in.empty() || (!has_nullable_input_column && Impl::apply(const_val, 0) == Impl::apply(const_val, 1))))
         {
             if (!in.empty())
                 const_val = Impl::apply(const_val, 0);
@@ -410,8 +448,7 @@ public:
                 if (const_val_input_has_null && const_val_res_not_null)
                     Impl::adjustForNullValue(const_val, const_val_input_has_null);
                 if (const_val_input_has_null)
-                    block.getByPosition(result).column
-                        = block.getByPosition(result).type->createColumnConst(rows, Null());
+                    block.getByPosition(result).column = block.getByPosition(result).type->createColumnConst(rows, Null());
                 else
                     block.getByPosition(result).column = has_nullable_input_column
                         ? makeNullable(DataTypeUInt8().createColumnConst(rows, toField(const_val)))
@@ -421,8 +458,7 @@ public:
         }
 
         /// If this value is a neutral element, let's forget about it.
-        if (!has_nullable_input_column && has_consts && Impl::apply(const_val, 0) == 0
-            && Impl::apply(const_val, 1) == 1)
+        if (!has_nullable_input_column && has_consts && Impl::apply(const_val, 0) == 0 && Impl::apply(const_val, 1) == 1)
             has_consts = false;
 
         auto col_res = ColumnUInt8::create();
@@ -509,8 +545,7 @@ public:
                     if (vec_input_has_null[i] && vec_res_not_null[i])
                         Impl::adjustForNullValue(vec_res[i], vec_input_has_null[i]);
                 }
-                block.getByPosition(result).column
-                    = ColumnNullable::create(std::move(col_res), std::move(col_input_has_null));
+                block.getByPosition(result).column = ColumnNullable::create(std::move(col_res), std::move(col_input_has_null));
             }
             else
                 block.getByPosition(result).column = std::move(col_res);
@@ -546,7 +581,10 @@ private:
     }
 
 public:
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     size_t getNumberOfArguments() const override { return 1; }
 
@@ -554,7 +592,8 @@ public:
     {
         if (!arguments[0]->isNumber())
             throw Exception(
-                "Illegal type (" + arguments[0]->getName() + ") of argument of function " + getName(),
+                "Illegal type (" + arguments[0]->getName()
+                    + ") of argument of function " + getName(),
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeUInt8>();
@@ -564,14 +603,19 @@ public:
 
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
-        if (!(executeType<UInt8>(block, arguments, result) || executeType<UInt16>(block, arguments, result)
-              || executeType<UInt32>(block, arguments, result) || executeType<UInt64>(block, arguments, result)
-              || executeType<Int8>(block, arguments, result) || executeType<Int16>(block, arguments, result)
-              || executeType<Int32>(block, arguments, result) || executeType<Int64>(block, arguments, result)
-              || executeType<Float32>(block, arguments, result) || executeType<Float64>(block, arguments, result)))
+        if (!(executeType<UInt8>(block, arguments, result)
+              || executeType<UInt16>(block, arguments, result)
+              || executeType<UInt32>(block, arguments, result)
+              || executeType<UInt64>(block, arguments, result)
+              || executeType<Int8>(block, arguments, result)
+              || executeType<Int16>(block, arguments, result)
+              || executeType<Int32>(block, arguments, result)
+              || executeType<Int64>(block, arguments, result)
+              || executeType<Float32>(block, arguments, result)
+              || executeType<Float64>(block, arguments, result)))
             throw Exception(
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function "
-                    + getName(),
+                "Illegal column " + block.getByPosition(arguments[0]).column->getName()
+                    + " of argument of function " + getName(),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };

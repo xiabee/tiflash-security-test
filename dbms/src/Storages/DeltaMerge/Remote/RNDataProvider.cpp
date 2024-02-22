@@ -36,7 +36,9 @@ Page ColumnFileDataProviderRNLocalPageCache::readTinyData(
 
 size_t ColumnFileDataProviderRNLocalPageCache::getTinyDataSize(PageId) const
 {
-    RUNTIME_CHECK_MSG(false, "ColumnFileDataProviderRNLocalPageCache currently does not support getTinyDataSize");
+    RUNTIME_CHECK_MSG(
+        false,
+        "ColumnFileDataProviderRNLocalPageCache currently does not support getTinyDataSize");
 }
 
 } // namespace DB::DM::Remote

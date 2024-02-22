@@ -38,11 +38,7 @@ void DataTypeNothing::serializeBinaryBulk(const IColumn & column, WriteBuffer & 
         ostr.write('0');
 }
 
-void DataTypeNothing::deserializeBinaryBulk(
-    IColumn & column,
-    ReadBuffer & istr,
-    size_t limit,
-    double /*avg_value_size_hint*/) const
+void DataTypeNothing::deserializeBinaryBulk(IColumn & column, ReadBuffer & istr, size_t limit, double /*avg_value_size_hint*/) const
 {
     typeid_cast<ColumnNothing &>(column).addSize(istr.tryIgnore(limit));
 }

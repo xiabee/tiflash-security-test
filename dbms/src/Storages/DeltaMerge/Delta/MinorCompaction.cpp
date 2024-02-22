@@ -74,12 +74,7 @@ bool MinorCompaction::commit(ColumnFilePersistedSetPtr & persisted_file_set, Wri
 
 String MinorCompaction::info() const
 {
-    return fmt::format(
-        "Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}",
-        total_compact_files,
-        result_compact_files,
-        total_compact_rows,
-        total_compact_bytes);
+    return fmt::format("Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}", total_compact_files, result_compact_files, total_compact_rows, total_compact_bytes);
 }
 } // namespace DM
 } // namespace DB

@@ -18,22 +18,22 @@
 namespace DB
 {
 BlockInputStreamSourceOp::BlockInputStreamSourceOp(
-    PipelineExecutorContext & exec_context_,
+    PipelineExecutorStatus & exec_status_,
     const String & req_id,
     const BlockInputStreamPtr & impl_)
-    : SourceOp(exec_context_, req_id)
+    : SourceOp(exec_status_, req_id)
     , impl(impl_)
 {
     assert(impl);
     setHeader(impl->getHeader());
 }
 
-void BlockInputStreamSourceOp::operatePrefixImpl()
+void BlockInputStreamSourceOp::operatePrefix()
 {
     impl->readPrefix();
 }
 
-void BlockInputStreamSourceOp::operateSuffixImpl()
+void BlockInputStreamSourceOp::operateSuffix()
 {
     impl->readSuffix();
 }

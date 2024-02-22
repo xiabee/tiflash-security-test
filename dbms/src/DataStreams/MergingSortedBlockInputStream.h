@@ -14,15 +14,17 @@
 
 #pragma once
 
-#include <Core/Row.h>
-#include <Core/SortCursor.h>
-#include <Core/SortDescription.h>
-#include <DataStreams/ColumnGathererStream.h>
-#include <DataStreams/IProfilingBlockInputStream.h>
+#include <queue>
+#include <boost/intrusive_ptr.hpp>
+
 #include <common/logger_useful.h>
 
-#include <boost/intrusive_ptr.hpp>
-#include <queue>
+#include <Core/Row.h>
+#include <Core/SortDescription.h>
+#include <Core/SortCursor.h>
+
+#include <DataStreams/IProfilingBlockInputStream.h>
+#include <DataStreams/ColumnGathererStream.h>
 
 
 namespace DB
@@ -30,7 +32,7 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int CORRUPTED_DATA;
+    extern const int CORRUPTED_DATA;
 }
 
 
@@ -49,11 +51,9 @@ struct SharedBlock : Block
     ColumnRawPtrs all_columns;
     ColumnRawPtrs sort_columns;
 
-    SharedBlock(Block && block)
-        : Block(std::move(block))
-    {}
+    SharedBlock(Block && block) : Block(std::move(block)) {}
 };
-} // namespace detail
+}
 
 using SharedBlockPtr = boost::intrusive_ptr<detail::SharedBlock>;
 
@@ -79,12 +79,8 @@ public:
       * quiet - don't log profiling info
       */
     MergingSortedBlockInputStream(
-        const BlockInputStreams & inputs_,
-        const SortDescription & description_,
-        size_t max_block_size_,
-        size_t limit_ = 0,
-        WriteBuffer * out_row_sources_buf_ = nullptr,
-        bool quiet_ = false);
+        const BlockInputStreams & inputs_, const SortDescription & description_, size_t max_block_size_,
+        size_t limit_ = 0, WriteBuffer * out_row_sources_buf_ = nullptr, bool quiet_ = false);
 
     String getName() const override { return "MergingSorted"; }
 
@@ -118,7 +114,10 @@ protected:
             return true;
         }
 
-        bool operator!=(const RowRef & other) const { return !(*this == other); }
+        bool operator!=(const RowRef & other) const
+        {
+            return !(*this == other);
+        }
 
         void reset()
         {
@@ -203,9 +202,8 @@ protected:
                     }
                 }
 
-                throw Exception(
-                    "MergingSortedBlockInputStream failed to read row " + toString(cursor->pos) + " of column "
-                        + toString(i) + (column_name.empty() ? "" : " (" + column_name + ")"),
+                throw Exception("MergingSortedBlockInputStream failed to read row " + toString(cursor->pos)
+                    + " of column " + toString(i) + (column_name.empty() ? "" : " (" + column_name + ")"),
                     ErrorCodes::CORRUPTED_DATA);
             }
         }
@@ -230,6 +228,7 @@ protected:
     virtual void initQueue();
 
 private:
+
     /** We support two different cursors - with Collation and without.
      * Templates are used instead of polymorphic SortCursor and calls to virtual functions.
      */
@@ -245,4 +244,4 @@ private:
     bool finished = false;
 };
 
-} // namespace DB
+}

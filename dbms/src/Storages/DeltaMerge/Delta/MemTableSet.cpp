@@ -156,8 +156,7 @@ std::pair</* New */ ColumnFiles, /* Flushed */ ColumnFiles> MemTableSet::diffCol
         /* new */ std::vector<ColumnFilePtr>( //
             column_files.begin() + unflushed_n,
             column_files.end()),
-        /* flushed */
-        std::vector<ColumnFilePtr>( //
+        /* flushed */ std::vector<ColumnFilePtr>( //
             column_files_in_snapshot.begin(),
             column_files_in_snapshot.begin() + flushed_n),
     };
@@ -215,10 +214,7 @@ void MemTableSet::appendDeleteRange(const RowKeyRange & delete_range)
     appendColumnFileInner(f);
 }
 
-void MemTableSet::ingestColumnFiles(
-    const RowKeyRange & range,
-    const ColumnFiles & new_column_files,
-    bool clear_data_in_range)
+void MemTableSet::ingestColumnFiles(const RowKeyRange & range, const ColumnFiles & new_column_files, bool clear_data_in_range)
 {
     for (const auto & f : new_column_files)
         RUNTIME_CHECK(f->isBigFile());
@@ -234,9 +230,7 @@ void MemTableSet::ingestColumnFiles(
         appendColumnFileInner(f);
 }
 
-ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(
-    const IColumnFileDataProviderPtr & data_provider,
-    bool disable_sharing)
+ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(const IColumnFileDataProviderPtr & data_provider, bool disable_sharing)
 {
     // Disable append, so that new writes will not touch the content of this snapshot.
     // This could lead to more fragmented IOs, so we don't do it for all snapshots.
@@ -282,11 +276,7 @@ ColumnFileSetSnapshotPtr MemTableSet::createSnapshot(
     return snap;
 }
 
-ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(
-    DMContext & context,
-    size_t rows_offset,
-    size_t deletes_offset,
-    size_t flush_version)
+ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(DMContext & context, size_t rows_offset, size_t deletes_offset, size_t flush_version)
 {
     if (column_files.empty())
         return nullptr;
@@ -314,15 +304,7 @@ ColumnFileFlushTaskPtr MemTableSet::buildFlushTask(
     }
     if (unlikely(flush_task->getFlushRows() != rows || flush_task->getFlushDeletes() != deletes))
     {
-        LOG_ERROR(
-            log,
-            "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Column "
-            "Files: {}",
-            flush_task->getFlushRows(),
-            flush_task->getFlushDeletes(),
-            rows.load(),
-            deletes.load(),
-            columnFilesToString(column_files));
+        LOG_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Column Files: {}", flush_task->getFlushRows(), flush_task->getFlushDeletes(), rows.load(), deletes.load(), columnFilesToString(column_files));
         throw Exception("Rows and deletes check failed.", ErrorCodes::LOGICAL_ERROR);
     }
 

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/ReadHelpers.h>
-#include <Parsers/ASTSampleRatio.h>
+#include <common/intExp.h>
+
 #include <Parsers/CommonParsers.h>
 #include <Parsers/ParserSampleRatio.h>
-#include <common/intExp.h>
+#include <Parsers/ASTSampleRatio.h>
+#include <IO/ReadHelpers.h>
 
 
 namespace DB
@@ -126,4 +127,4 @@ bool ParserSampleRatio::parseImpl(Pos & pos, ASTPtr & node, Expected &)
     return true;
 }
 
-} // namespace DB
+}

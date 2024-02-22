@@ -114,11 +114,10 @@ private:
 
     const Context & context;
 
-    static void parseAlter(
-        const ASTAlterQuery::ParameterContainer & params,
-        AlterCommands & out_alter_commands,
-        PartitionCommands & out_partition_commands,
-        StoragePtr table);
+    static void parseAlter(const ASTAlterQuery::ParameterContainer & params,
+                           AlterCommands & out_alter_commands,
+                           PartitionCommands & out_partition_commands,
+                           StoragePtr table);
 };
 
 } // namespace DB

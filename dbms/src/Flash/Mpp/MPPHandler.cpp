@@ -50,6 +50,14 @@ void addRetryRegion(const ContextPtr & context, mpp::DispatchTaskResponse * resp
         }
     }
 }
+
+void injectFailPointBeforeMPPTaskRun(bool is_root_task)
+{
+    if (is_root_task)
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_root_task_run);
+    else
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_non_root_task_run);
+}
 } // namespace
 
 void MPPHandler::handleError(const MPPTaskPtr & task, String error)
@@ -81,13 +89,7 @@ grpc::Status MPPHandler::execute(const ContextPtr & context, mpp::DispatchTaskRe
         task->prepare(task_request);
 
         addRetryRegion(context, response);
-
-#ifndef NDEBUG
-        if (task->isRootMPPTask())
-            FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_root_task_run);
-        else
-            FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_mpp_non_root_task_run);
-#endif
+        injectFailPointBeforeMPPTaskRun(task->isRootMPPTask());
 
         task->run();
         LOG_INFO(log, "processing dispatch is over; the time cost is {} ms", stopwatch.elapsedMilliseconds());

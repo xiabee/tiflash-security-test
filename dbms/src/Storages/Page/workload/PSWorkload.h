@@ -34,8 +34,14 @@ template <typename Child>
 class StressWorkloadFunc
 {
 public:
-    static String nameFunc() { return Child::name(); }
-    static UInt64 maskFunc() { return Child::mask(); }
+    static String nameFunc()
+    {
+        return Child::name();
+    }
+    static UInt64 maskFunc()
+    {
+        return Child::mask();
+    }
 };
 
 // Define a workload.
@@ -54,7 +60,10 @@ public:
 
     virtual String desc() { return ""; }
     virtual void run() {}
-    virtual bool verify() { return true; }
+    virtual bool verify()
+    {
+        return true;
+    }
     virtual void onFailed() {}
     virtual void onDumpResult();
 
@@ -150,7 +159,10 @@ public:
         return instance;
     }
 
-    void setEnv(const StressEnv & env_) { options = env_; }
+    void setEnv(const StressEnv & env_)
+    {
+        options = env_;
+    }
 
     void reg(const String & name, const UInt64 & mask, const WorkloadCreator workload_creator)
     {
@@ -214,7 +226,9 @@ void work_load_register()
     PageWorkloadFactory::getInstance().reg(
         Workload::nameFunc(),
         Workload::maskFunc(),
-        [](const StressEnv & opts) -> std::shared_ptr<StressWorkload> { return std::make_shared<Workload>(opts); });
+        [](const StressEnv & opts) -> std::shared_ptr<StressWorkload> {
+            return std::make_shared<Workload>(opts);
+        });
 }
 
 } // namespace DB::PS::tests

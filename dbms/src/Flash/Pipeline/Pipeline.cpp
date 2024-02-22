@@ -14,7 +14,7 @@
 
 #include <Common/FmtUtils.h>
 #include <Flash/Coprocessor/FineGrainedShuffle.h>
-#include <Flash/Executor/PipelineExecutorContext.h>
+#include <Flash/Executor/PipelineExecutorStatus.h>
 #include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Pipeline/Pipeline.h>
 #include <Flash/Pipeline/Schedule/Events/Event.h>
@@ -23,10 +23,7 @@
 #include <Flash/Planner/PhysicalPlanNode.h>
 #include <Flash/Planner/Plans/PhysicalGetResultSink.h>
 #include <Flash/Statistics/traverseExecutors.h>
-#include <Interpreters/Settings.h>
 #include <tipb/select.pb.h>
-
-#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -107,7 +104,7 @@ void PipelineEvents::mapInputs(const PipelineEvents & inputs)
          *     ```
          */
 
-        // If the outputs is fine grained mode, the inputs must also be.
+        // If the outputs is fine grained model, the intputs must also be.
         RUNTIME_CHECK(inputs.is_fine_grained || !is_fine_grained);
         for (const auto & output : events)
         {
@@ -119,22 +116,18 @@ void PipelineEvents::mapInputs(const PipelineEvents & inputs)
 
 void Pipeline::addPlanNode(const PhysicalPlanNodePtr & plan_node)
 {
-    assert(plan_node);
-    /// For fine grained mode, all plan node should enable fine grained shuffle.
-    if (!plan_node->getFineGrainedShuffle().enable())
-        is_fine_grained_mode = false;
     plan_nodes.push_back(plan_node);
 }
 
 void Pipeline::addChild(const PipelinePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
     children.push_back(child);
 }
 
 Block Pipeline::getSampleBlock() const
 {
-    RUNTIME_CHECK(!plan_nodes.empty());
+    assert(!plan_nodes.empty());
     return plan_nodes.back()->getSampleBlock();
 }
 
@@ -150,57 +143,29 @@ void Pipeline::toSelfString(FmtBuffer & buffer, size_t level) const
         " -> ");
 }
 
-const String & Pipeline::toTreeString() const
-{
-    if (!tree_string.empty())
-        return tree_string;
-
-    FmtBuffer buffer;
-    toTreeStringImpl(buffer, 0);
-    tree_string = buffer.toString();
-    return tree_string;
-}
-
-void Pipeline::toTreeStringImpl(FmtBuffer & buffer, size_t level) const
+void Pipeline::toTreeString(FmtBuffer & buffer, size_t level) const
 {
     toSelfString(buffer, level);
     if (!children.empty())
         buffer.append("\n");
     ++level;
     for (const auto & child : children)
-        child->toTreeStringImpl(buffer, level);
+        child->toTreeString(buffer, level);
 }
 
 void Pipeline::addGetResultSink(const ResultQueuePtr & result_queue)
 {
-    RUNTIME_CHECK(!plan_nodes.empty());
+    assert(!plan_nodes.empty());
     auto get_result_sink = PhysicalGetResultSink::build(result_queue, log, plan_nodes.back());
     addPlanNode(get_result_sink);
 }
 
-String Pipeline::getFinalPlanExecId() const
+PipelineExecGroup Pipeline::buildExecGroup(PipelineExecutorStatus & exec_status, Context & context, size_t concurrency)
 {
-    // NOLINTNEXTLINE(modernize-loop-convert)
-    for (auto it = plan_nodes.crbegin(); it != plan_nodes.crend(); ++it)
-    {
-        const auto & plan_node = *it;
-        if (plan_node->isTiDBOperator())
-            return plan_node->execId();
-    }
-    return "";
-}
-
-PipelineExecGroup Pipeline::buildExecGroup(
-    PipelineExecutorContext & exec_context,
-    Context & context,
-    size_t concurrency)
-{
-    RUNTIME_CHECK(!plan_nodes.empty());
+    assert(!plan_nodes.empty());
     PipelineExecGroupBuilder builder;
     for (const auto & plan_node : plan_nodes)
-    {
-        plan_node->buildPipelineExecGroup(exec_context, builder, context, concurrency);
-    }
+        plan_node->buildPipelineExecGroup(exec_status, builder, context, concurrency);
     return builder.build();
 }
 
@@ -221,99 +186,79 @@ PipelineExecGroup Pipeline::buildExecGroup(
  */
 bool Pipeline::isFineGrainedMode() const
 {
-    return is_fine_grained_mode;
-}
-
-EventPtr Pipeline::complete(PipelineExecutorContext & exec_context)
-{
-    assert(!isFineGrainedMode());
-    if unlikely (exec_context.isCancelled())
-        return nullptr;
     assert(!plan_nodes.empty());
-    return plan_nodes.back()->sinkComplete(exec_context);
+    // The source plan node determines whether the execution mode is fine grained or non-fine grained.
+    return plan_nodes.front()->getFineGrainedShuffle().enable();
 }
 
-Events Pipeline::toEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency)
+Events Pipeline::toEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency)
 {
     Events all_events;
-    doToEvents(exec_context, context, concurrency, all_events);
-    RUNTIME_CHECK(!all_events.empty());
+    doToEvents(status, context, concurrency, all_events);
+    assert(!all_events.empty());
     return all_events;
 }
 
-PipelineEvents Pipeline::toSelfEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency)
+PipelineEvents Pipeline::toSelfEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency)
 {
+    auto memory_tracker = current_memory_tracker ? current_memory_tracker->shared_from_this() : nullptr;
     Events self_events;
-    RUNTIME_CHECK(!plan_nodes.empty());
+    assert(!plan_nodes.empty());
     if (isFineGrainedMode())
     {
-        auto fine_grained_exec_group = buildExecGroup(exec_context, context, concurrency);
+        auto fine_grained_exec_group = buildExecGroup(status, context, concurrency);
         for (auto & pipeline_exec : fine_grained_exec_group)
-            self_events.push_back(
-                std::make_shared<FineGrainedPipelineEvent>(exec_context, log->identifier(), std::move(pipeline_exec)));
-        LOG_DEBUG(log, "Execute in fine grained mode and generate {} fine grained pipeline event", self_events.size());
+            self_events.push_back(std::make_shared<FineGrainedPipelineEvent>(status, memory_tracker, log->identifier(), std::move(pipeline_exec)));
+        LOG_DEBUG(log, "Execute in fine grained model and generate {} fine grained pipeline event", self_events.size());
     }
     else
     {
-        self_events.push_back(std::make_shared<PlainPipelineEvent>(
-            exec_context,
-            log->identifier(),
-            context,
-            shared_from_this(),
-            concurrency));
-        LOG_DEBUG(log, "Execute in non fine grained mode and generate one plain pipeline event");
+        self_events.push_back(std::make_shared<PlainPipelineEvent>(status, memory_tracker, log->identifier(), context, shared_from_this(), concurrency));
+        LOG_DEBUG(log, "Execute in non fine grained model and generate one plain pipeline event");
     }
     return {std::move(self_events), isFineGrainedMode()};
 }
 
-PipelineEvents Pipeline::doToEvents(
-    PipelineExecutorContext & exec_context,
-    Context & context,
-    size_t concurrency,
-    Events & all_events)
+PipelineEvents Pipeline::doToEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency, Events & all_events)
 {
-    auto self_events = toSelfEvents(exec_context, context, concurrency);
+    auto self_events = toSelfEvents(status, context, concurrency);
     for (const auto & child : children)
-        self_events.mapInputs(child->doToEvents(exec_context, context, concurrency, all_events));
+        self_events.mapInputs(child->doToEvents(status, context, concurrency, all_events));
     all_events.insert(all_events.end(), self_events.events.cbegin(), self_events.events.cend());
     return self_events;
 }
 
-bool Pipeline::isSupported(const tipb::DAGRequest & dag_request, const Settings & settings)
+bool Pipeline::isSupported(const tipb::DAGRequest & dag_request)
 {
     bool is_supported = true;
-    traverseExecutors(&dag_request, [&](const tipb::Executor & executor) {
-        switch (executor.tp())
-        {
-        case tipb::ExecType::TypeTableScan:
-        case tipb::ExecType::TypePartitionTableScan:
-        case tipb::ExecType::TypeProjection:
-        case tipb::ExecType::TypeSelection:
-        case tipb::ExecType::TypeLimit:
-        case tipb::ExecType::TypeTopN:
-        case tipb::ExecType::TypeExchangeSender:
-        case tipb::ExecType::TypeExchangeReceiver:
-        case tipb::ExecType::TypeExpand:
-        case tipb::ExecType::TypeExpand2:
-        case tipb::ExecType::TypeAggregation:
-        case tipb::ExecType::TypeStreamAgg:
-        case tipb::ExecType::TypeWindow:
-        case tipb::ExecType::TypeSort:
-        case tipb::ExecType::TypeJoin:
-            return true;
-        default:
-            if (settings.enforce_enable_resource_control)
-                throw Exception(fmt::format(
-                    "Pipeline mode does not support {}, and an error is reported because the setting "
-                    "enforce_enable_resource_control is true.",
-                    magic_enum::enum_name(executor.tp())));
-            is_supported = false;
-            return false;
-        }
-    });
-    if (settings.enforce_enable_resource_control && !is_supported)
-        throw Exception("There is an unsupported operator in pipeline model, and an error is reported because the "
-                        "setting enforce_enable_resource_control is true.");
+    traverseExecutors(
+        &dag_request,
+        [&](const tipb::Executor & executor) {
+            switch (executor.tp())
+            {
+            case tipb::ExecType::TypeTableScan:
+                // TODO support keep order.
+                is_supported = !executor.tbl_scan().keep_order();
+                return is_supported;
+            case tipb::ExecType::TypeProjection:
+            case tipb::ExecType::TypeSelection:
+            case tipb::ExecType::TypeLimit:
+            case tipb::ExecType::TypeTopN:
+            case tipb::ExecType::TypeExchangeSender:
+            case tipb::ExecType::TypeExchangeReceiver:
+            case tipb::ExecType::TypeExpand:
+            case tipb::ExecType::TypeAggregation:
+                return true;
+            case tipb::ExecType::TypeWindow:
+            case tipb::ExecType::TypeSort:
+                // TODO support non fine grained shuffle.
+                is_supported = FineGrainedShuffle(&executor).enable();
+                return is_supported;
+            default:
+                is_supported = false;
+                return false;
+            }
+        });
     return is_supported;
 }
 } // namespace DB

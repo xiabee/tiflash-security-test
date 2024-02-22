@@ -85,7 +85,10 @@ public:
     }
 
     /// That is executed in a separate thread
-    void thread() { out.next(); }
+    void thread()
+    {
+        out.next();
+    }
 };
 
 } // namespace DB

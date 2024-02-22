@@ -52,7 +52,10 @@ public:
     /// Should be called once
     void getResultBuffers(WriteBufferPtrs & res);
 
-    const WriteBuffer * getCurrentBuffer() const { return curr_buffer; }
+    const WriteBuffer * getCurrentBuffer() const
+    {
+        return curr_buffer;
+    }
 
     ~CascadeWriteBuffer();
 

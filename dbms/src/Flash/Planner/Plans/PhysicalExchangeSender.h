@@ -52,16 +52,15 @@ public:
 
     const Block & getSampleBlock() const override;
 
-private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & exec_context,
+    void buildPipelineExecGroup(
+        PipelineExecutorStatus & exec_status,
         PipelineExecGroupBuilder & group_builder,
         Context & context,
         size_t /*concurrency*/) override;
 
 private:
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
     std::vector<Int64> partition_col_ids;
     TiDB::TiDBCollators partition_col_collators;
     tipb::ExchangeType exchange_type;

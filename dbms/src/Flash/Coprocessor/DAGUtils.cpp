@@ -22,7 +22,7 @@
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Functions/FunctionHelpers.h>
 #include <Interpreters/Context.h>
-#include <TiDB/Decode/Datum.h>
+#include <Storages/Transaction/Datum.h>
 
 #include <unordered_map>
 namespace DB
@@ -39,8 +39,6 @@ const std::unordered_map<tipb::ExprType, String> window_func_map({
     {tipb::ExprType::RowNumber, "row_number"},
     {tipb::ExprType::Lead, "lead"},
     {tipb::ExprType::Lag, "lag"},
-    {tipb::ExprType::FirstValue, "first_value"},
-    {tipb::ExprType::LastValue, "last_value"},
 });
 
 const std::unordered_map<tipb::ExprType, String> agg_func_map({
@@ -682,8 +680,6 @@ const std::unordered_map<tipb::ScalarFuncSig, String> scalar_func_map({
     {tipb::ScalarFuncSig::UpperUTF8, "upperUTF8"},
     {tipb::ScalarFuncSig::Upper, "upperBinary"},
     //{tipb::ScalarFuncSig::CharLength, "upper"},
-
-    {tipb::ScalarFuncSig::GroupingSig, "grouping"},
 });
 
 template <typename GetColumnsFunc, typename GetDataTypeFunc>
@@ -695,11 +691,12 @@ void assertBlockSchema(
 {
     size_t columns = get_columns();
     if (block.columns() != columns)
-        throw Exception(fmt::format(
-            "Block schema mismatch in {}: different number of columns: expected {} columns, got {} columns",
-            context_description,
-            columns,
-            block.columns()));
+        throw Exception(
+            fmt::format(
+                "Block schema mismatch in {}: different number of columns: expected {} columns, got {} columns",
+                context_description,
+                columns,
+                block.columns()));
 
     for (size_t i = 0; i < columns; ++i)
     {
@@ -707,13 +704,12 @@ void assertBlockSchema(
         const auto & expected = get_datatype(i);
 
         if (!expected->equals(*actual))
-            throw Exception(fmt::format(
-                "Block schema mismatch in {}: different types: expected {}, got {}; col_index: {}; col_name: {}",
-                context_description,
-                expected->getName(),
-                actual->getName(),
-                i,
-                block.getByPosition(i).name));
+            throw Exception(
+                fmt::format(
+                    "Block schema mismatch in {}: different types: expected {}, got {}",
+                    context_description,
+                    expected->getName(),
+                    actual->getName()));
     }
 }
 /// used by test
@@ -766,7 +762,9 @@ const String & getWindowFunctionName(const tipb::Expr & expr)
     if (it != window_func_map.end())
         return it->second;
 
-    const auto errmsg = fmt::format("{} is not supported.", tipb::ExprType_Name(expr.tp()));
+    const auto errmsg = fmt::format(
+        "{} is not supported.",
+        tipb::ExprType_Name(expr.tp()));
     throw TiFlashException(errmsg, Errors::Coprocessor::Unimplemented);
 }
 
@@ -785,9 +783,7 @@ const String & getFunctionName(const tipb::Expr & expr)
     {
         auto it = scalar_func_map.find(expr.sig());
         if (it == scalar_func_map.end())
-            throw TiFlashException(
-                tipb::ScalarFuncSig_Name(expr.sig()) + " is not supported.",
-                Errors::Coprocessor::Unimplemented);
+            throw TiFlashException(tipb::ScalarFuncSig_Name(expr.sig()) + " is not supported.", Errors::Coprocessor::Unimplemented);
         return it->second;
     }
 }
@@ -837,9 +833,7 @@ String getJoinExecTypeName(const tipb::JoinExecType & tp)
     case tipb::JoinExecType::TypeHashJoin:
         return "HashJoin";
     default:
-        throw TiFlashException(
-            fmt::format("Not supported Join exectution type: {}", tp),
-            Errors::Coprocessor::Internal);
+        throw TiFlashException(fmt::format("Not supported Join exectution type: {}", tp), Errors::Coprocessor::Internal);
     }
 }
 
@@ -924,12 +918,9 @@ String exprToString(const tipb::Expr & expr, const std::vector<NameAndTypePair> 
     case tipb::ExprType::MysqlTime:
     {
         if (!expr.has_field_type())
-            throw TiFlashException(
-                "MySQL Time literal without field_type" + expr.DebugString(),
-                Errors::Coprocessor::BadRequest);
+            throw TiFlashException("MySQL Time literal without field_type" + expr.DebugString(), Errors::Coprocessor::BadRequest);
         auto t = decodeDAGUInt64(expr.val());
-        auto ret
-            = std::to_string(TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field().get<UInt64>());
+        auto ret = std::to_string(TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field().get<UInt64>());
         if (expr.field_type().tp() == TiDB::TypeTimestamp)
             ret = ret + "_ts";
         return ret;
@@ -937,12 +928,9 @@ String exprToString(const tipb::Expr & expr, const std::vector<NameAndTypePair> 
     case tipb::ExprType::MysqlDuration:
     {
         if (!expr.has_field_type())
-            throw TiFlashException(
-                "MySQL Duration literal without field_type" + expr.DebugString(),
-                Errors::Coprocessor::BadRequest);
+            throw TiFlashException("MySQL Duration literal without field_type" + expr.DebugString(), Errors::Coprocessor::BadRequest);
         auto t = decodeDAGInt64(expr.val());
-        auto ret
-            = std::to_string(TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field().get<Int64>());
+        auto ret = std::to_string(TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field().get<Int64>());
         return ret;
     }
     case tipb::ExprType::ColumnRef:
@@ -960,9 +948,7 @@ String exprToString(const tipb::Expr & expr, const std::vector<NameAndTypePair> 
     case tipb::ExprType::ScalarFunc:
         if (scalar_func_map.find(expr.sig()) == scalar_func_map.end())
         {
-            throw TiFlashException(
-                tipb::ScalarFuncSig_Name(expr.sig()) + " not supported",
-                Errors::Coprocessor::Unimplemented);
+            throw TiFlashException(tipb::ScalarFuncSig_Name(expr.sig()) + " not supported", Errors::Coprocessor::Unimplemented);
         }
         func_name = scalar_func_map.find(expr.sig())->second;
         break;
@@ -977,7 +963,9 @@ String exprToString(const tipb::Expr & expr, const std::vector<NameAndTypePair> 
         fmt_buf.joinStr(
             expr.children().begin() + 1,
             expr.children().end(),
-            [input_col](const auto & arg, FmtBuffer & fb) { fb.append(exprToString(arg, input_col)); },
+            [input_col](const auto & arg, FmtBuffer & fb) {
+                fb.append(exprToString(arg, input_col));
+            },
             ", ");
         fmt_buf.append(")");
     }
@@ -987,7 +975,9 @@ String exprToString(const tipb::Expr & expr, const std::vector<NameAndTypePair> 
         fmt_buf.joinStr(
             expr.children().begin(),
             expr.children().end(),
-            [input_col](const auto & arg, FmtBuffer & fb) { fb.append(exprToString(arg, input_col)); },
+            [input_col](const auto & arg, FmtBuffer & fb) {
+                fb.append(exprToString(arg, input_col));
+            },
             ", ");
         fmt_buf.append(")");
     }
@@ -1038,11 +1028,11 @@ bool isWindowFunctionExpr(const tipb::Expr & expr)
     case tipb::ExprType::DenseRank:
     case tipb::ExprType::Lead:
     case tipb::ExprType::Lag:
-    case tipb::ExprType::FirstValue:
-    case tipb::ExprType::LastValue:
         //    case tipb::ExprType::CumeDist:
         //    case tipb::ExprType::PercentRank:
         //    case tipb::ExprType::Ntile:
+        //    case tipb::ExprType::FirstValue:
+        //    case tipb::ExprType::LastValue:
         //    case tipb::ExprType::NthValue:
         return true;
     default:
@@ -1116,18 +1106,14 @@ Field decodeLiteral(const tipb::Expr & expr)
     case tipb::ExprType::MysqlTime:
     {
         if (!expr.has_field_type())
-            throw TiFlashException(
-                "MySQL Time literal without field_type" + expr.DebugString(),
-                Errors::Coprocessor::BadRequest);
+            throw TiFlashException("MySQL Time literal without field_type" + expr.DebugString(), Errors::Coprocessor::BadRequest);
         auto t = decodeDAGUInt64(expr.val());
         return TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field();
     }
     case tipb::ExprType::MysqlDuration:
     {
         if (!expr.has_field_type())
-            throw TiFlashException(
-                "MySQL Duration literal without field_type" + expr.DebugString(),
-                Errors::Coprocessor::BadRequest);
+            throw TiFlashException("MySQL Duration literal without field_type" + expr.DebugString(), Errors::Coprocessor::BadRequest);
         auto t = decodeDAGInt64(expr.val());
         return TiDB::DatumFlat(t, static_cast<TiDB::TP>(expr.field_type().tp())).field();
     }
@@ -1137,9 +1123,7 @@ Field decodeLiteral(const tipb::Expr & expr)
     case tipb::ExprType::MysqlSet:
     case tipb::ExprType::MysqlJson:
     case tipb::ExprType::ValueList:
-        throw TiFlashException(
-            tipb::ExprType_Name(expr.tp()) + " is not supported yet",
-            Errors::Coprocessor::Unimplemented);
+        throw TiFlashException(tipb::ExprType_Name(expr.tp()) + " is not supported yet", Errors::Coprocessor::Unimplemented);
     default:
         throw TiFlashException("Should not reach here: not a literal expression", Errors::Coprocessor::Internal);
     }
@@ -1150,11 +1134,7 @@ String getColumnNameForColumnExpr(const tipb::Expr & expr, const std::vector<Nam
     auto column_index = decodeDAGInt64(expr.val());
     if (column_index < 0 || column_index >= static_cast<Int64>(input_col.size()))
     {
-        throw TiFlashException(
-            Errors::Coprocessor::BadRequest,
-            "Column index out of bound, expr: {}, size of input columns: {}",
-            expr.DebugString(),
-            input_col.size());
+        throw TiFlashException(Errors::Coprocessor::BadRequest, "Column index out of bound, expr: {}, size of input columns: {}", expr.DebugString(), input_col.size());
     }
     return input_col[column_index].name;
 }
@@ -1164,19 +1144,12 @@ ColumnID getColumnIDForColumnExpr(const tipb::Expr & expr, const std::vector<Col
     auto column_index = decodeDAGInt64(expr.val());
     if (column_index < 0 || column_index >= static_cast<Int64>(input_col.size()))
     {
-        throw TiFlashException(
-            Errors::Coprocessor::BadRequest,
-            "Column index out of bound, expr: {}, size of input columns: {}",
-            expr.DebugString(),
-            input_col.size());
+        throw TiFlashException(Errors::Coprocessor::BadRequest, "Column index out of bound, expr: {}, size of input columns: {}", expr.DebugString(), input_col.size());
     }
     return input_col[column_index].id;
 }
 
-void getColumnIDsFromExpr(
-    const tipb::Expr & expr,
-    const std::vector<ColumnInfo> & input_col,
-    std::unordered_set<ColumnID> & col_id_set)
+void getColumnIDsFromExpr(const tipb::Expr & expr, const std::vector<ColumnInfo> & input_col, std::unordered_set<ColumnID> & col_id_set)
 {
     if (expr.children_size() == 0)
     {
@@ -1194,9 +1167,7 @@ void getColumnIDsFromExpr(
     }
 }
 
-NameAndTypePair getColumnNameAndTypeForColumnExpr(
-    const tipb::Expr & expr,
-    const std::vector<NameAndTypePair> & input_col)
+NameAndTypePair getColumnNameAndTypeForColumnExpr(const tipb::Expr & expr, const std::vector<NameAndTypePair> & input_col)
 {
     auto column_index = decodeDAGInt64(expr.val());
     if (column_index < 0 || column_index >= static_cast<Int64>(input_col.size()))
@@ -1222,8 +1193,7 @@ bool exprHasValidFieldType(const tipb::Expr & expr)
 bool isUnsupportedEncodeType(const std::vector<tipb::FieldType> & types, tipb::EncodeType encode_type)
 {
     const static std::unordered_map<tipb::EncodeType, std::unordered_set<Int32>> unsupported_types_map({
-        {tipb::EncodeType::TypeCHBlock,
-         {TiDB::TypeSet, TiDB::TypeGeometry, TiDB::TypeNull, TiDB::TypeEnum, TiDB::TypeJSON, TiDB::TypeBit}},
+        {tipb::EncodeType::TypeCHBlock, {TiDB::TypeSet, TiDB::TypeGeometry, TiDB::TypeNull, TiDB::TypeEnum, TiDB::TypeJSON, TiDB::TypeBit}},
         {tipb::EncodeType::TypeChunk, {TiDB::TypeSet, TiDB::TypeGeometry, TiDB::TypeNull}},
     });
 
@@ -1280,8 +1250,7 @@ DataTypePtr inferDataType4Literal(const tipb::Expr & expr)
         }
         else
         {
-            target_type
-                = exprHasValidFieldType(expr) ? getDataTypeByFieldTypeForComputingLayer(expr.field_type()) : flash_type;
+            target_type = exprHasValidFieldType(expr) ? getDataTypeByFieldTypeForComputingLayer(expr.field_type()) : flash_type;
         }
         // We should remove nullable for constant value since TiDB may not set NOT_NULL flag for literal expression.
         target_type = removeNullable(target_type);
@@ -1323,9 +1292,7 @@ UInt8 getFieldLengthForArrowEncode(Int32 tp)
     case TiDB::TypeJSON:
         return VAR_SIZE;
     default:
-        throw TiFlashException(
-            "not supported field type in arrow encode: " + std::to_string(tp),
-            Errors::Coprocessor::Internal);
+        throw TiFlashException("not supported field type in arrow encode: " + std::to_string(tp), Errors::Coprocessor::Internal);
     }
 }
 
@@ -1382,9 +1349,7 @@ TiDB::TiDBCollatorPtr getCollatorFromExpr(const tipb::Expr & expr)
     return nullptr;
 }
 
-SortDescription getSortDescription(
-    const std::vector<NameAndTypePair> & order_columns,
-    const google::protobuf::RepeatedPtrField<tipb::ByItem> & by_items)
+SortDescription getSortDescription(const std::vector<NameAndTypePair> & order_columns, const google::protobuf::RepeatedPtrField<tipb::ByItem> & by_items)
 {
     SortDescription order_descr;
     order_descr.reserve(by_items.size());
@@ -1403,7 +1368,10 @@ SortDescription getSortDescription(
     return order_descr;
 }
 
-String genFuncString(const String & func_name, const Names & argument_names, const TiDB::TiDBCollators & collators)
+String genFuncString(
+    const String & func_name,
+    const Names & argument_names,
+    const TiDB::TiDBCollators & collators)
 {
     FmtBuffer buf;
     buf.fmtAppend("{}({})_collator", func_name, fmt::join(argument_names.begin(), argument_names.end(), ", "));
@@ -1430,7 +1398,10 @@ bool hasUnsignedFlag(const tipb::FieldType & tp)
     return tp.flag() & TiDB::ColumnFlagUnsigned;
 }
 
-void assertBlockSchema(const DataTypes & expected_types, const Block & block, const String & context_description)
+void assertBlockSchema(
+    const DataTypes & expected_types,
+    const Block & block,
+    const String & context_description)
 {
     assertBlockSchema(
         [&] { return expected_types.size(); },
@@ -1439,7 +1410,10 @@ void assertBlockSchema(const DataTypes & expected_types, const Block & block, co
         context_description);
 }
 
-void assertBlockSchema(const Block & header, const Block & block, const String & context_description)
+void assertBlockSchema(
+    const Block & header,
+    const Block & block,
+    const String & context_description)
 {
     assertBlockSchema(
         [&] { return header.columns(); },
@@ -1455,9 +1429,7 @@ tipb::DAGRequest getDAGRequestFromStringWithRetry(const String & s)
     {
         /// ParseFromString will use the default recursion limit, which is 100 to decode the plan, if the plan tree is too deep,
         /// it may exceed this limit, so just try again by double the recursion limit
-        ::google::protobuf::io::CodedInputStream coded_input_stream(
-            reinterpret_cast<const UInt8 *>(s.data()),
-            s.size());
+        ::google::protobuf::io::CodedInputStream coded_input_stream(reinterpret_cast<const UInt8 *>(s.data()), s.size());
         coded_input_stream.SetRecursionLimit(::google::protobuf::io::CodedInputStream::GetDefaultRecursionLimit() * 2);
         if (!dag_req.ParseFromCodedStream(&coded_input_stream))
         {
@@ -1465,12 +1437,34 @@ tipb::DAGRequest getDAGRequestFromStringWithRetry(const String & s)
             /// successfully by using a very large value of the recursion limit, it is kinds of meaningless because the runtime
             /// performance of this task may be very bad if the plan tree is too deep
             throw TiFlashException(
-                std::string(__PRETTY_FUNCTION__)
-                    + ": Invalid encoded plan, the most likely is that the plan/expression tree is too deep",
+                std::string(__PRETTY_FUNCTION__) + ": Invalid encoded plan, the most likely is that the plan/expression tree is too deep",
                 Errors::Coprocessor::BadRequest);
         }
     }
     return dag_req;
+}
+
+tipb::EncodeType analyzeDAGEncodeType(DAGContext & dag_context)
+{
+    const tipb::DAGRequest & dag_request = *dag_context.dag_request;
+    const tipb::EncodeType encode_type = dag_request.encode_type();
+    if (dag_context.isMPPTask() && !dag_context.isRootMPPTask())
+    {
+        /// always use CHBlock encode type for data exchange between TiFlash nodes
+        return tipb::EncodeType::TypeCHBlock;
+    }
+    if (dag_request.has_force_encode_type() && dag_request.force_encode_type())
+    {
+        assert(encode_type == tipb::EncodeType::TypeCHBlock);
+        return encode_type;
+    }
+    if (isUnsupportedEncodeType(dag_context.result_field_types, encode_type))
+        return tipb::EncodeType::TypeDefault;
+    if (encode_type == tipb::EncodeType::TypeChunk && dag_request.has_chunk_memory_layout()
+        && dag_request.chunk_memory_layout().has_endian() && dag_request.chunk_memory_layout().endian() == tipb::Endian::BigEndian)
+        // todo support BigEndian encode for chunk encode type
+        return tipb::EncodeType::TypeDefault;
+    return encode_type;
 }
 
 tipb::ScalarFuncSig reverseGetFuncSigByFuncName(const String & name)

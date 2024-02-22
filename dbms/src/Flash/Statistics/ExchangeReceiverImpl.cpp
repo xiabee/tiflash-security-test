@@ -40,36 +40,26 @@ void ExchangeReceiverStatistics::appendExtraJson(FmtBuffer & fmt_buffer) const
     fmt_buffer.append("]");
 }
 
-void ExchangeReceiverStatistics::updateExchangeReceiveDetail(
-    const std::vector<ConnectionProfileInfo> & connection_profile_infos)
-{
-    RUNTIME_CHECK(connection_profile_infos.size() == partition_num);
-    for (size_t i = 0; i < partition_num; ++i)
-    {
-        exchange_receive_details[i].packets += connection_profile_infos[i].packets;
-        exchange_receive_details[i].bytes += connection_profile_infos[i].bytes;
-    }
-}
-
 void ExchangeReceiverStatistics::collectExtraRuntimeDetail()
 {
-    switch (dag_context.getExecutionMode())
+    const auto & io_stream_map = dag_context.getInBoundIOInputStreamsMap();
+    auto it = io_stream_map.find(executor_id);
+    if (it != io_stream_map.end())
     {
-    case ExecutionMode::None:
-        break;
-    case ExecutionMode::Stream:
-        transformInBoundIOProfileForStream(dag_context, executor_id, [&](const IBlockInputStream & stream) {
+        for (const auto & io_stream : it->second)
+        {
             /// InBoundIOInputStream of ExchangeReceiver should be ExchangeReceiverInputStream
-            if (const auto * exchange_receiver_stream = dynamic_cast<const ExchangeReceiverInputStream *>(&stream);
-                exchange_receiver_stream)
-                updateExchangeReceiveDetail(exchange_receiver_stream->getConnectionProfileInfos());
-        });
-        break;
-    case ExecutionMode::Pipeline:
-        transformInBoundIOProfileForPipeline(dag_context, executor_id, [&](const IOProfileInfo & profile_info) {
-            updateExchangeReceiveDetail(profile_info.connection_profile_infos);
-        });
-        break;
+            if (auto * exchange_receiver_stream = dynamic_cast<ExchangeReceiverInputStream *>(io_stream.get()); exchange_receiver_stream)
+            {
+                const auto & connection_profile_infos = exchange_receiver_stream->getConnectionProfileInfos();
+                RUNTIME_CHECK(connection_profile_infos.size() == partition_num);
+                for (size_t i = 0; i < partition_num; ++i)
+                {
+                    exchange_receive_details[i].packets += connection_profile_infos[i].packets;
+                    exchange_receive_details[i].bytes += connection_profile_infos[i].bytes;
+                }
+            }
+        }
     }
 }
 

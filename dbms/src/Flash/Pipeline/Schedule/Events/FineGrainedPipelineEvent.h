@@ -23,17 +23,18 @@ class FineGrainedPipelineEvent : public Event
 {
 public:
     FineGrainedPipelineEvent(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
+        MemoryTrackerPtr mem_tracker_,
         const String & req_id,
         PipelineExecPtr && pipeline_exec_)
-        : Event(exec_context_, req_id)
+        : Event(exec_status_, std::move(mem_tracker_), req_id)
         , pipeline_exec(std::move(pipeline_exec_))
     {
-        RUNTIME_CHECK(pipeline_exec);
+        assert(pipeline_exec);
     }
 
 protected:
-    void scheduleImpl() override;
+    std::vector<TaskPtr> scheduleImpl() override;
 
 private:
     // The pipeline exec for executing the specific fine-grained partition.

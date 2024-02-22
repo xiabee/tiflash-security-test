@@ -42,7 +42,10 @@ public:
     }
 
     // Quick check whether this node is owner or not
-    bool isOwner() override { return owner == OwnerType::IsOwner; }
+    bool isOwner() override
+    {
+        return owner == OwnerType::IsOwner;
+    }
 
     OwnerInfo getOwnerID() override
     {
@@ -71,7 +74,10 @@ public:
         owner = OwnerType::NotOwner;
     }
 
-    void setBeOwnerHook(std::function<void()> &&) override { throw Exception(ErrorCodes::NOT_IMPLEMENTED, ""); }
+    void setBeOwnerHook(std::function<void()> &&) override
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "");
+    }
 
 
     // testing method

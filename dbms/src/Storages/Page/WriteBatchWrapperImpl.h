@@ -77,12 +77,7 @@ public:
         , uwb(std::move(rhs.uwb))
     {}
 
-    void putPage(
-        PageIdU64 page_id,
-        UInt64 tag,
-        const ReadBufferPtr & read_buffer,
-        PageSize size,
-        const PageFieldSizes & data_sizes = {})
+    void putPage(PageIdU64 page_id, UInt64 tag, const ReadBufferPtr & read_buffer, PageSize size, const PageFieldSizes & data_sizes = {})
     {
         if (wb)
             wb->putPage(page_id, tag, read_buffer, size, data_sizes);
@@ -96,20 +91,12 @@ public:
         putPage(page_id, tag, buffer_ptr, data.size());
     }
 
-    void putRemotePage(
-        PageIdU64 page_id,
-        UInt64 tag,
-        PageSize size,
-        const PS::V3::CheckpointLocation & data_location,
-        PageFieldOffsetChecksums && offset_and_checksums)
+    void putRemotePage(PageIdU64 page_id, UInt64 tag, PageSize size, const PS::V3::CheckpointLocation & data_location, PageFieldOffsetChecksums && offset_and_checksums)
     {
         if (uwb)
             uwb->putRemotePage(page_id, tag, size, data_location, std::move(offset_and_checksums));
         else
-            throw Exception(
-                ErrorCodes::LOGICAL_ERROR,
-                "try to put remote page with remote location with u64 id, page_id={}",
-                page_id);
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "try to put remote page with remote location with u64 id, page_id={}", page_id);
     }
 
     void putExternal(PageIdU64 page_id, UInt64 tag)
@@ -125,10 +112,7 @@ public:
         if (uwb)
             uwb->putRemoteExternal(page_id, data_location);
         else
-            throw Exception(
-                ErrorCodes::LOGICAL_ERROR,
-                "try to put external page with remote location with u64 id, page_id={}",
-                page_id);
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "try to put external page with remote location with u64 id, page_id={}", page_id);
     }
 
     // Add RefPage{ref_id} -> Page{page_id}
@@ -164,13 +148,25 @@ public:
             uwb->clear();
     }
 
-    const WriteBatch & getWriteBatch() const { return *wb; }
+    const WriteBatch & getWriteBatch() const
+    {
+        return *wb;
+    }
 
-    const UniversalWriteBatch & getUniversalWriteBatch() const { return *uwb; }
+    const UniversalWriteBatch & getUniversalWriteBatch() const
+    {
+        return *uwb;
+    }
 
-    WriteBatch && releaseWriteBatch() { return std::move(*wb); }
+    WriteBatch && releaseWriteBatch()
+    {
+        return std::move(*wb);
+    }
 
-    UniversalWriteBatch && releaseUniversalWriteBatch() { return std::move(*uwb); }
+    UniversalWriteBatch && releaseUniversalWriteBatch()
+    {
+        return std::move(*uwb);
+    }
 
 private:
     std::unique_ptr<WriteBatch> wb;

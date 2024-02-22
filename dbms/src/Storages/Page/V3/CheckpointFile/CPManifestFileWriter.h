@@ -48,7 +48,10 @@ public:
         RUNTIME_CHECK(max_edit_records_per_part > 0, max_edit_records_per_part);
     }
 
-    ~CPManifestFileWriter() { flush(); }
+    ~CPManifestFileWriter()
+    {
+        flush();
+    }
 
     /// Must be called first.
     void writePrefix(const CheckpointProto::ManifestFilePrefix & prefix);

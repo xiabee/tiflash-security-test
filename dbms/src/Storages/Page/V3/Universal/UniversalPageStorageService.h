@@ -47,12 +47,12 @@ public:
         PSDiskDelegatorPtr delegator,
         const PageStorageConfig & config);
 
-    bool gc() const;
+    bool gc();
 
     bool uploadCheckpoint();
 
     // Set a flag for sync all data to remote store at next checkpoint
-    void setUploadAllData();
+    void setSyncAllData();
 
     UniversalPageStoragePtr getUniversalPageStorage() const { return uni_page_storage; }
     ~UniversalPageStorageService();
@@ -64,22 +64,15 @@ public:
         const DM::Remote::IDataStorePtr & remote_store,
         bool force_sync_data);
 
-    static UniversalPageStorageServicePtr createForTest(
+    static UniversalPageStorageServicePtr
+    createForTest(
         Context & context,
         const String & name,
         PSDiskDelegatorPtr delegator,
         const PageStorageConfig & config);
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#else
-public:
-#endif
     explicit UniversalPageStorageService(Context & global_context_);
-    // If the TiFlash process restart unexpectedly, some local checkpoint files can be left,
-    // remove these files when the process restarting.
-    void removeAllLocalCheckpointFiles() const;
-    Poco::Path getCheckpointLocalDir(UInt64 seq) const;
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -90,11 +83,13 @@ public:
 
     // Once this flag is set, all data will be synced to remote store at next time
     // `uploadCheckpoint` is called.
-    std::atomic_bool upload_all_at_next_upload{false};
+    std::atomic_bool sync_all_at_next_upload{false};
 
     Context & global_context;
     UniversalPageStoragePtr uni_page_storage;
     BackgroundProcessingPool::TaskHandle gc_handle;
+
+    std::atomic<Timepoint> last_try_gc_time = Clock::now();
 
     LoggerPtr log;
 
@@ -102,7 +97,5 @@ public:
     // other background tasks unexpectly.
     std::unique_ptr<BackgroundProcessingPool> checkpoint_pool;
     BackgroundProcessingPool::TaskHandle remote_checkpoint_handle;
-
-    inline static const String checkpoint_dirname_prefix = "checkpoint_upload_";
 };
 } // namespace DB

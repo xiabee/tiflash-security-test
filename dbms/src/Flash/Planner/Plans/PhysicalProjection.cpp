@@ -33,7 +33,7 @@ PhysicalPlanNodePtr PhysicalProjection::build(
     const tipb::Projection & projection,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
     ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
@@ -63,7 +63,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildNonRootFinal(
     const String & column_prefix,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
     ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
@@ -71,11 +71,11 @@ PhysicalPlanNodePtr PhysicalProjection::buildNonRootFinal(
     project_actions->add(ExpressionAction::project(final_project_aliases));
 
     NamesAndTypes schema = child->getSchema();
-    RUNTIME_CHECK(final_project_aliases.size() == schema.size());
+    assert(final_project_aliases.size() == schema.size());
     // replace column name of schema by alias.
     for (size_t i = 0; i < final_project_aliases.size(); ++i)
     {
-        RUNTIME_CHECK(schema[i].name == final_project_aliases[i].first);
+        assert(schema[i].name == final_project_aliases[i].first);
         schema[i].name = final_project_aliases[i].second;
     }
 
@@ -101,7 +101,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildRootFinal(
     bool keep_session_timezone_info,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
     ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
@@ -115,12 +115,12 @@ PhysicalPlanNodePtr PhysicalProjection::buildRootFinal(
 
     project_actions->add(ExpressionAction::project(final_project_aliases));
 
-    RUNTIME_CHECK(final_project_aliases.size() == output_offsets.size());
+    assert(final_project_aliases.size() == output_offsets.size());
     NamesAndTypes schema;
     for (size_t i = 0; i < final_project_aliases.size(); ++i)
     {
         const auto & alias = final_project_aliases[i].second;
-        RUNTIME_CHECK(!alias.empty());
+        assert(!alias.empty());
         const auto & type = analyzer.getCurrentInputColumns()[output_offsets[i]].type;
         schema.emplace_back(alias, type);
     }
@@ -145,13 +145,13 @@ void PhysicalProjection::buildBlockInputStreamImpl(DAGPipeline & pipeline, Conte
     executeExpression(pipeline, project_actions, log, extra_info);
 }
 
-void PhysicalProjection::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalProjection::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & /*context*/,
     size_t /*concurrency*/)
 {
-    executeExpression(exec_context, group_builder, project_actions, log);
+    executeExpression(exec_status, group_builder, project_actions, log);
 }
 
 void PhysicalProjection::finalize(const Names & parent_require)

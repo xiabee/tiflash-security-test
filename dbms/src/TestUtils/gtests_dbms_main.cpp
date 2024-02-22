@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 #include <signal.h>
 
+
 namespace DB::FailPoints
 {
 extern const char force_set_dtfile_exist_when_acquire_id[];
@@ -65,8 +66,7 @@ int main(int argc, char ** argv)
 {
     install_fault_signal_handlers({SIGSEGV, SIGILL, SIGFPE, SIGABRT, SIGTERM});
 
-    bool enable_colors = isatty(STDERR_FILENO) && isatty(STDOUT_FILENO);
-    DB::tests::TiFlashTestEnv::setupLogger("trace", std::cerr, enable_colors);
+    DB::tests::TiFlashTestEnv::setupLogger();
     auto run_mode = DB::PageStorageRunMode::ONLY_V3;
     DB::tests::TiFlashTestEnv::initializeGlobalContext(/*testdata_path*/ {}, run_mode);
     DB::ServerInfo server_info;
@@ -82,7 +82,6 @@ int main(int argc, char ** argv)
     DB::DataStoreS3Pool::initialize(/*max_threads*/ 20, /*max_free_threds*/ 10, /*queue_size*/ 1000);
     DB::RNRemoteReadTaskPool::initialize(/*max_threads*/ 20, /*max_free_threds*/ 10, /*queue_size*/ 1000);
     DB::RNPagePreparerPool::initialize(/*max_threads*/ 20, /*max_free_threds*/ 10, /*queue_size*/ 1000);
-    DB::RNWritePageCachePool::initialize(/*max_threads*/ 20, /*max_free_threds*/ 10, /*queue_size*/ 1000);
     const auto s3_endpoint = Poco::Environment::get("S3_ENDPOINT", "");
     const auto s3_bucket = Poco::Environment::get("S3_BUCKET", "mockbucket");
     const auto s3_root = Poco::Environment::get("S3_ROOT", "tiflash_ut/");
@@ -100,6 +99,7 @@ int main(int argc, char ** argv)
         .secret_access_key = secret_access_key,
         .root = s3_root,
     };
+    s3config.enable(/*check_requirements*/ false, DB::Logger::get());
     Poco::Environment::set("AWS_EC2_METADATA_DISABLED", "true"); // disable to speedup testing
     DB::tests::TiFlashTestEnv::setIsMockedS3Client(mock_s3 == "true");
     DB::S3::ClientFactory::instance().init(s3config, mock_s3 == "true");

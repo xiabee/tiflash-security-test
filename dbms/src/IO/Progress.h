@@ -109,7 +109,10 @@ struct Progress
         return *this;
     }
 
-    Progress(Progress && other) { *this = std::move(other); }
+    Progress(Progress && other)
+    {
+        *this = std::move(other);
+    }
 };
 
 

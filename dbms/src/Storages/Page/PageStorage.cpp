@@ -33,13 +33,7 @@ PageStoragePtr PageStorage::create(
     if (use_v3)
         return std::make_shared<PS::V3::PageStorageImpl>(name, delegator, config, file_provider);
     else
-        return std::make_shared<PS::V2::PageStorage>(
-            name,
-            delegator,
-            config,
-            file_provider,
-            global_ctx.getPSBackgroundPool(),
-            no_more_insert_to_v2);
+        return std::make_shared<PS::V2::PageStorage>(name, delegator, config, file_provider, global_ctx.getPSBackgroundPool(), no_more_insert_to_v2);
 }
 
 /***************************
@@ -80,8 +74,7 @@ public:
 
     virtual FileUsageStatistics getFileUsageStatistics() const = 0;
 
-    virtual void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool only_v2, bool only_v3)
-        const = 0;
+    virtual void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool only_v2, bool only_v3) const = 0;
 };
 
 
@@ -93,21 +86,22 @@ public:
         : ns_id(ns_id_)
         , storage(storage_)
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
     /// Snapshot read.
-    PageReaderImplNormal(
-        NamespaceID ns_id_,
-        PageStoragePtr storage_,
-        const PageStorage::SnapshotPtr & snap_,
-        ReadLimiterPtr read_limiter_)
+    PageReaderImplNormal(NamespaceID ns_id_, PageStoragePtr storage_, const PageStorage::SnapshotPtr & snap_, ReadLimiterPtr read_limiter_)
         : ns_id(ns_id_)
         , storage(storage_)
         , snap(snap_)
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
-    DB::Page read(PageIdU64 page_id) const override { return storage->read(ns_id, page_id, read_limiter, snap); }
+    DB::Page read(PageIdU64 page_id) const override
+    {
+        return storage->read(ns_id, page_id, read_limiter, snap);
+    }
 
     PageMapU64 read(const PageIdU64s & page_ids) const override
     {
@@ -125,7 +119,10 @@ public:
         return storage->getNormalPageId(ns_id, page_id, snap);
     }
 
-    PageEntry getPageEntry(PageIdU64 page_id) const override { return storage->getEntry(ns_id, page_id, snap); }
+    PageEntry getPageEntry(PageIdU64 page_id) const override
+    {
+        return storage->getEntry(ns_id, page_id, snap);
+    }
 
     PageStorage::SnapshotPtr getSnapshot(const String & tracing_id) const override
     {
@@ -133,15 +130,20 @@ public:
     }
 
     // Get some statistics of all living snapshots and the oldest living snapshot.
-    SnapshotsStatistics getSnapshotsStat() const override { return storage->getSnapshotsStat(); }
+    SnapshotsStatistics getSnapshotsStat() const override
+    {
+        return storage->getSnapshotsStat();
+    }
 
-    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool /*only_v2*/, bool /*only_v3*/)
-        const override
+    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool /*only_v2*/, bool /*only_v3*/) const override
     {
         storage->traverse(acceptor, nullptr);
     }
 
-    FileUsageStatistics getFileUsageStatistics() const override { return storage->getFileUsageStatistics(); }
+    FileUsageStatistics getFileUsageStatistics() const override
+    {
+        return storage->getFileUsageStatistics();
+    }
 
 private:
     NamespaceID ns_id;
@@ -155,43 +157,32 @@ class PageReaderImplMixed : public PageReaderImpl
 {
 public:
     /// Not snapshot read.
-    explicit PageReaderImplMixed(
-        NamespaceID ns_id_,
-        PageStoragePtr storage_v2_,
-        PageStoragePtr storage_v3_,
-        ReadLimiterPtr read_limiter_)
+    explicit PageReaderImplMixed(NamespaceID ns_id_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_, ReadLimiterPtr read_limiter_)
         : ns_id(ns_id_)
         , storage_v2(storage_v2_)
         , storage_v3(storage_v3_)
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
     /// Snapshot read.
-    PageReaderImplMixed(
-        NamespaceID ns_id_,
-        PageStoragePtr storage_v2_,
-        PageStoragePtr storage_v3_,
-        const PageStorage::SnapshotPtr & snap_,
-        ReadLimiterPtr read_limiter_)
+    PageReaderImplMixed(NamespaceID ns_id_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_, const PageStorage::SnapshotPtr & snap_, ReadLimiterPtr read_limiter_)
         : ns_id(ns_id_)
         , storage_v2(storage_v2_)
         , storage_v3(storage_v3_)
         , snap(snap_)
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
-    PageReaderImplMixed(
-        NamespaceID ns_id_,
-        PageStoragePtr storage_v2_,
-        PageStoragePtr storage_v3_,
-        PageStorage::SnapshotPtr && snap_,
-        ReadLimiterPtr read_limiter_)
+    PageReaderImplMixed(NamespaceID ns_id_, PageStoragePtr storage_v2_, PageStoragePtr storage_v3_, PageStorage::SnapshotPtr && snap_, ReadLimiterPtr read_limiter_)
         : ns_id(ns_id_)
         , storage_v2(storage_v2_)
         , storage_v3(storage_v3_)
         , snap(std::move(snap_))
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
     DB::Page read(PageIdU64 page_id) const override
     {
@@ -217,8 +208,7 @@ public:
 
         if (!invalid_page_ids.empty())
         {
-            const auto & page_maps_from_v2
-                = storage_v2->read(ns_id, invalid_page_ids, read_limiter, toConcreteV2Snapshot());
+            const auto & page_maps_from_v2 = storage_v2->read(ns_id, invalid_page_ids, read_limiter, toConcreteV2Snapshot());
             for (const auto & [page_id_, page_] : page_maps_from_v2)
             {
                 page_maps.at(page_id_) = page_;
@@ -306,10 +296,12 @@ public:
         return statistics_total;
     }
 
-    FileUsageStatistics getFileUsageStatistics() const override { return storage_v3->getFileUsageStatistics(); }
+    FileUsageStatistics getFileUsageStatistics() const override
+    {
+        return storage_v3->getFileUsageStatistics();
+    }
 
-    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool only_v2, bool only_v3)
-        const override
+    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool only_v2, bool only_v3) const override
     {
         // Used by RegionPersister::restore
         // Must traverse storage_v3 before storage_v2
@@ -358,30 +350,21 @@ class PageReaderImplUniversal : public PageReaderImpl
 {
 public:
     /// Not snapshot read.
-    explicit PageReaderImplUniversal(
-        KeyspaceID keyspace_id_,
-        StorageType tag_,
-        NamespaceID ns_id_,
-        UniversalPageStoragePtr storage_,
-        ReadLimiterPtr read_limiter_)
+    explicit PageReaderImplUniversal(KeyspaceID keyspace_id_, StorageType tag_, NamespaceID ns_id_, UniversalPageStoragePtr storage_, ReadLimiterPtr read_limiter_)
         : storage(storage_)
         , prefix(UniversalPageIdFormat::toFullPrefix(keyspace_id_, tag_, ns_id_))
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
     /// Snapshot read.
-    PageReaderImplUniversal(
-        KeyspaceID keyspace_id_,
-        StorageType tag_,
-        NamespaceID ns_id_,
-        UniversalPageStoragePtr storage_,
-        const PageStorage::SnapshotPtr & snap_,
-        ReadLimiterPtr read_limiter_)
+    PageReaderImplUniversal(KeyspaceID keyspace_id_, StorageType tag_, NamespaceID ns_id_, UniversalPageStoragePtr storage_, const PageStorage::SnapshotPtr & snap_, ReadLimiterPtr read_limiter_)
         : storage(storage_)
         , prefix(UniversalPageIdFormat::toFullPrefix(keyspace_id_, tag_, ns_id_))
         , snap(snap_)
         , read_limiter(read_limiter_)
-    {}
+    {
+    }
 
     DB::Page read(PageIdU64 page_id) const override
     {
@@ -422,8 +405,7 @@ public:
 
     PageIdU64 getNormalPageId(PageIdU64 page_id) const override
     {
-        return UniversalPageIdFormat::getU64ID(
-            storage->getNormalPageId(UniversalPageIdFormat::toFullPageId(prefix, page_id), snap));
+        return UniversalPageIdFormat::getU64ID(storage->getNormalPageId(UniversalPageIdFormat::toFullPageId(prefix, page_id), snap));
     }
 
     PageEntry getPageEntry(PageIdU64 page_id) const override
@@ -437,10 +419,12 @@ public:
     }
 
     // Get some statistics of all living snapshots and the oldest living snapshot.
-    SnapshotsStatistics getSnapshotsStat() const override { return storage->getSnapshotsStat(); }
+    SnapshotsStatistics getSnapshotsStat() const override
+    {
+        return storage->getSnapshotsStat();
+    }
 
-    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool /*only_v2*/, bool /*only_v3*/)
-        const override
+    void traverse(const std::function<void(const DB::Page & page)> & acceptor, bool /*only_v2*/, bool /*only_v3*/) const override
     {
         auto snapshot = storage->getSnapshot(fmt::format("scan_{}", prefix));
         const auto page_ids = storage->page_directory->getAllPageIdsWithPrefix(prefix, snapshot);
@@ -451,7 +435,10 @@ public:
         }
     }
 
-    FileUsageStatistics getFileUsageStatistics() const override { return storage->getFileUsageStatistics(); }
+    FileUsageStatistics getFileUsageStatistics() const override
+    {
+        return storage->getFileUsageStatistics();
+    }
 
 private:
     UniversalPageStoragePtr storage;
@@ -490,9 +477,7 @@ std::unique_ptr<PageReaderImpl> PageReaderImpl::create(
         return std::make_unique<PageReaderImplUniversal>(keyspace_id_, tag_, ns_id_, uni_ps_, snap_, read_limiter_);
     }
     default:
-        throw Exception(
-            fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode_)),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode_)), ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -509,17 +494,9 @@ PageReader::PageReader(
     PageStoragePtr storage_v3_,
     UniversalPageStoragePtr uni_ps_,
     ReadLimiterPtr read_limiter_)
-    : impl(PageReaderImpl::create(
-        run_mode_,
-        keyspace_id_,
-        tag_,
-        ns_id_,
-        storage_v2_,
-        storage_v3_,
-        uni_ps_,
-        /*snap_=*/nullptr,
-        read_limiter_))
-{}
+    : impl(PageReaderImpl::create(run_mode_, keyspace_id_, tag_, ns_id_, storage_v2_, storage_v3_, uni_ps_, /*snap_=*/nullptr, read_limiter_))
+{
+}
 
 /// Snapshot read.
 PageReader::PageReader(
@@ -532,17 +509,9 @@ PageReader::PageReader(
     UniversalPageStoragePtr uni_ps_,
     PageStorage::SnapshotPtr snap_,
     ReadLimiterPtr read_limiter_)
-    : impl(PageReaderImpl::create(
-        run_mode_,
-        keyspace_id_,
-        tag_,
-        ns_id_,
-        storage_v2_,
-        storage_v3_,
-        uni_ps_,
-        std::move(snap_),
-        read_limiter_))
-{}
+    : impl(PageReaderImpl::create(run_mode_, keyspace_id_, tag_, ns_id_, storage_v2_, storage_v3_, uni_ps_, std::move(snap_), read_limiter_))
+{
+}
 
 PageReader::~PageReader() = default;
 
@@ -666,11 +635,10 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
         case WriteBatchWriteType::REF:
         {
             // 1. Try to resolve normal page id
-            PageIdU64 resolved_page_id = storage_v3->getNormalPageId(
-                ns_id,
-                write.ori_page_id,
-                /*snapshot*/ nullptr,
-                false);
+            PageIdU64 resolved_page_id = storage_v3->getNormalPageId(ns_id,
+                                                                     write.ori_page_id,
+                                                                     /*snapshot*/ nullptr,
+                                                                     false);
 
             // If the origin id is found in V3, then just apply the ref to v3
             if (resolved_page_id != INVALID_PAGE_U64_ID)
@@ -692,12 +660,10 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
             // If we can't find origin id in V3, must exist in V2.
             if (!entry_for_put.isValid())
             {
-                throw Exception(
-                    fmt::format(
-                        "Can't find origin entry in V2 and V3, [ns_id={}, ori_page_id={}]",
-                        ns_id,
-                        write.ori_page_id),
-                    ErrorCodes::LOGICAL_ERROR);
+                throw Exception(fmt::format("Can't find origin entry in V2 and V3, [ns_id={}, ori_page_id={}]",
+                                            ns_id,
+                                            write.ori_page_id),
+                                ErrorCodes::LOGICAL_ERROR);
             }
 
             if (entry_for_put.size == 0)
@@ -705,14 +671,13 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
                 // If the origin page size is 0.
                 // That means origin page in V2 is a external page id.
                 // Should not run into here after we introduce `StoragePool::forceTransformDataV2toV3`
-                throw Exception(
-                    fmt::format(
-                        "Can't find the origin page in v3. Origin page in v2 size is 0, meaning it's a external id."
-                        "Migrate a new being ref page into V3 [page_id={}] [origin_id={}]",
-                        write.page_id,
-                        write.ori_page_id,
-                        entry_for_put.field_offsets.size()),
-                    ErrorCodes::LOGICAL_ERROR);
+                throw Exception(fmt::format(
+                                    "Can't find the origin page in v3. Origin page in v2 size is 0, meaning it's a external id."
+                                    "Migrate a new being ref page into V3 [page_id={}] [origin_id={}]",
+                                    write.page_id,
+                                    write.ori_page_id,
+                                    entry_for_put.field_offsets.size()),
+                                ErrorCodes::LOGICAL_ERROR);
             }
 
             // Else find out origin page is a normal page in V2
@@ -725,26 +690,24 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
             // Page with fields
             if (!entry_for_put.field_offsets.empty())
             {
-                wb_for_put_v3.putPage(
-                    write.ori_page_id, //
-                    entry_for_put.tag,
-                    std::make_shared<ReadBufferFromMemory>(page_for_put.data.begin(), page_for_put.data.size()),
-                    page_for_put.data.size(),
-                    Page::fieldOffsetsToSizes(entry_for_put.field_offsets, entry_for_put.size));
+                wb_for_put_v3.putPage(write.ori_page_id, //
+                                      entry_for_put.tag,
+                                      std::make_shared<ReadBufferFromMemory>(page_for_put.data.begin(), page_for_put.data.size()),
+                                      page_for_put.data.size(),
+                                      Page::fieldOffsetsToSizes(entry_for_put.field_offsets, entry_for_put.size));
             }
             else
             { // Normal page without fields
-                wb_for_put_v3.putPage(
-                    write.ori_page_id, //
-                    entry_for_put.tag,
-                    std::make_shared<ReadBufferFromMemory>(page_for_put.data.begin(), page_for_put.data.size()),
-                    page_for_put.data.size());
+                wb_for_put_v3.putPage(write.ori_page_id, //
+                                      entry_for_put.tag,
+                                      std::make_shared<ReadBufferFromMemory>(page_for_put.data.begin(),
+                                                                             page_for_put.data.size()),
+                                      page_for_put.data.size());
             }
 
             LOG_INFO(
                 Logger::get("PageWriter"),
-                "Can't find the origin page in v3, migrate a new being ref page into V3 [page_id={}] [origin_id={}] "
-                "[field_offsets={}]",
+                "Can't find the origin page in v3, migrate a new being ref page into V3 [page_id={}] [origin_id={}] [field_offsets={}]",
                 write.page_id,
                 write.ori_page_id,
                 entry_for_put.field_offsets.size());
@@ -777,7 +740,7 @@ void PageWriter::writeIntoMixMode(WriteBatch && write_batch, WriteLimiterPtr wri
 
 void PageWriter::writeIntoUni(UniversalWriteBatch && write_batch, WriteLimiterPtr write_limiter) const
 {
-    uni_ps->write(std::move(write_batch), PageType::Normal, write_limiter);
+    uni_ps->write(std::move(write_batch), write_limiter);
 }
 
 PageStorageConfig PageWriter::getSettings() const
@@ -798,9 +761,7 @@ PageStorageConfig PageWriter::getSettings() const
         throw Exception("Not support.", ErrorCodes::NOT_IMPLEMENTED);
     }
     default:
-        throw Exception(
-            fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -830,9 +791,7 @@ void PageWriter::reloadSettings(const PageStorageConfig & new_config) const
         break;
     }
     default:
-        throw Exception(
-            fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 };
 
@@ -859,9 +818,7 @@ bool PageWriter::gc(bool not_skip, const WriteLimiterPtr & write_limiter, const 
         return false;
     }
     default:
-        throw Exception(
-            fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception(fmt::format("Unknown PageStorageRunMode {}", static_cast<UInt8>(run_mode)), ErrorCodes::LOGICAL_ERROR);
     }
 }
 

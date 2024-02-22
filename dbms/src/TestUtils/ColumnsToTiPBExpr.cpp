@@ -18,8 +18,8 @@
 #include <Debug/MockExecutor/AstToPB.h>
 #include <Flash/Coprocessor/DAGCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
+#include <Storages/Transaction/TypeMapping.h>
 #include <TestUtils/ColumnsToTiPBExpr.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {
@@ -158,14 +158,12 @@ void columnsToTiPBExprForDateAddSub(
     if (collator != nullptr)
         expr->mutable_field_type()->set_collate(-collator->getCollatorId());
 }
-
 void columnsToTiPBExpr(
     tipb::Expr * expr,
     const String & func_name,
     const ColumnNumbers & argument_column_number,
     const ColumnsWithTypeAndName & columns,
-    const TiDB::TiDBCollatorPtr & collator,
-    const String & val)
+    const TiDB::TiDBCollatorPtr & collator)
 {
     if (func_name == "tidb_cast")
     {
@@ -181,7 +179,6 @@ void columnsToTiPBExpr(
     }
     else
     {
-        expr->set_val(val);
         expr->set_tp(tipb::ExprType::ScalarFunc);
         expr->set_sig(reverseGetFuncSigByFuncName(func_name));
         for (size_t i = 0; i < argument_column_number.size(); ++i)
@@ -197,22 +194,14 @@ void columnsToTiPBExpr(
 }
 } // namespace
 
-tipb::Expr columnToTiPBExpr(const ColumnWithTypeAndName & column, size_t index)
-{
-    tipb::Expr ret;
-    columnToTiPBExpr(&ret, column, index);
-    return ret;
-}
-
 tipb::Expr columnsToTiPBExpr(
     const String & func_name,
     const ColumnNumbers & argument_column_number,
     const ColumnsWithTypeAndName & columns,
-    const TiDB::TiDBCollatorPtr & collator,
-    const String & val)
+    const TiDB::TiDBCollatorPtr & collator)
 {
     tipb::Expr ret;
-    columnsToTiPBExpr(&ret, func_name, argument_column_number, columns, collator, val);
+    columnsToTiPBExpr(&ret, func_name, argument_column_number, columns, collator);
     return ret;
 }
 } // namespace tests

@@ -72,7 +72,10 @@ public:
     static constexpr auto name = "transform";
     static FunctionPtr create(const Context &) { return std::make_shared<FunctionTransform>(); }
 
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
@@ -84,42 +87,40 @@ public:
         const auto args_size = arguments.size();
         if (args_size != 3 && args_size != 4)
             throw Exception{
-                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(args_size)
-                    + ", should be 3 or 4",
+                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(args_size) + ", should be 3 or 4",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH};
 
         const DataTypePtr & type_x = arguments[0];
 
         if (!type_x->isValueRepresentedByNumber() && !type_x->isString())
-            throw Exception{
-                "Unsupported type " + type_x->getName() + " of first argument of function " + getName()
-                    + ", must be numeric type or Date/DateTime or String",
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+            throw Exception{"Unsupported type " + type_x->getName()
+                                + " of first argument of function " + getName()
+                                + ", must be numeric type or Date/DateTime or String",
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
         const DataTypeArray * type_arr_from = checkAndGetDataType<DataTypeArray>(arguments[1].get());
 
         if (!type_arr_from)
-            throw Exception{
-                "Second argument of function " + getName() + ", must be array of source values to transform from.",
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+            throw Exception{"Second argument of function " + getName()
+                                + ", must be array of source values to transform from.",
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
         const auto type_arr_from_nested = type_arr_from->getNestedType();
 
         if ((type_x->isValueRepresentedByNumber() != type_arr_from_nested->isValueRepresentedByNumber())
             || (!!type_x->isString() != !!type_arr_from_nested->isString()))
         {
-            throw Exception{
-                "First argument and elements of array of second argument of function " + getName()
-                    + " must have compatible types: both numeric or both strings.",
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+            throw Exception{"First argument and elements of array of second argument of function " + getName()
+                                + " must have compatible types: both numeric or both strings.",
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
         }
 
         const DataTypeArray * type_arr_to = checkAndGetDataType<DataTypeArray>(arguments[2].get());
 
         if (!type_arr_to)
-            throw Exception{
-                "Third argument of function " + getName() + ", must be array of destination values to transform to.",
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+            throw Exception{"Third argument of function " + getName()
+                                + ", must be array of destination values to transform to.",
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
         const DataTypePtr & type_arr_to_nested = type_arr_to->getNestedType();
 
@@ -127,11 +128,9 @@ public:
         {
             if ((type_x->isValueRepresentedByNumber() != type_arr_to_nested->isValueRepresentedByNumber())
                 || (!!type_x->isString() != !!checkDataType<DataTypeString>(type_arr_to_nested.get())))
-                throw Exception{
-                    "Function " + getName()
-                        + " has signature: transform(T, Array(T), Array(U), U) -> U; or transform(T, Array(T), "
-                          "Array(T)) -> T; where T and U are types.",
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+                throw Exception{"Function " + getName()
+                                    + " has signature: transform(T, Array(T), Array(U), U) -> U; or transform(T, Array(T), Array(T)) -> T; where T and U are types.",
+                                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
             return type_x;
         }
@@ -140,19 +139,16 @@ public:
             const DataTypePtr & type_default = arguments[3];
 
             if (!type_default->isValueRepresentedByNumber() && !type_default->isString())
-                throw Exception{
-                    "Unsupported type " + type_default->getName() + " of fourth argument (default value) of function "
-                        + getName() + ", must be numeric type or Date/DateTime or String",
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+                throw Exception{"Unsupported type " + type_default->getName()
+                                    + " of fourth argument (default value) of function " + getName()
+                                    + ", must be numeric type or Date/DateTime or String",
+                                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
             if ((type_default->isValueRepresentedByNumber() != type_arr_to_nested->isValueRepresentedByNumber())
-                || (!!checkDataType<DataTypeString>(type_default.get())
-                    != !!checkDataType<DataTypeString>(type_arr_to_nested.get())))
-                throw Exception{
-                    "Function " + getName()
-                        + " have signature: transform(T, Array(T), Array(U), U) -> U; or transform(T, Array(T), "
-                          "Array(T)) -> T; where T and U are types.",
-                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+                || (!!checkDataType<DataTypeString>(type_default.get()) != !!checkDataType<DataTypeString>(type_arr_to_nested.get())))
+                throw Exception{"Function " + getName()
+                                    + " have signature: transform(T, Array(T), Array(U), U) -> U; or transform(T, Array(T), Array(T)) -> T; where T and U are types.",
+                                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
             if (type_arr_to_nested->isValueRepresentedByNumber() && type_default->isValueRepresentedByNumber())
             {
@@ -167,15 +163,11 @@ public:
 
     void executeImpl(Block & block, const ColumnNumbers & arguments, const size_t result) const override
     {
-        const ColumnConst * array_from
-            = checkAndGetColumnConst<ColumnArray>(block.getByPosition(arguments[1]).column.get());
-        const ColumnConst * array_to
-            = checkAndGetColumnConst<ColumnArray>(block.getByPosition(arguments[2]).column.get());
+        const ColumnConst * array_from = checkAndGetColumnConst<ColumnArray>(block.getByPosition(arguments[1]).column.get());
+        const ColumnConst * array_to = checkAndGetColumnConst<ColumnArray>(block.getByPosition(arguments[2]).column.get());
 
         if (!array_from || !array_to)
-            throw Exception{
-                "Second and third arguments of function " + getName() + " must be constant arrays.",
-                ErrorCodes::ILLEGAL_COLUMN};
+            throw Exception{"Second and third arguments of function " + getName() + " must be constant arrays.", ErrorCodes::ILLEGAL_COLUMN};
 
         initialize(array_from->getValue<Array>(), array_to->getValue<Array>(), block, arguments);
 
@@ -194,11 +186,16 @@ public:
         auto column_result = block.getByPosition(result).type->createColumn();
         auto out = column_result.get();
 
-        if (!executeNum<UInt8>(in, out, default_column) && !executeNum<UInt16>(in, out, default_column)
-            && !executeNum<UInt32>(in, out, default_column) && !executeNum<UInt64>(in, out, default_column)
-            && !executeNum<Int8>(in, out, default_column) && !executeNum<Int16>(in, out, default_column)
-            && !executeNum<Int32>(in, out, default_column) && !executeNum<Int64>(in, out, default_column)
-            && !executeNum<Float32>(in, out, default_column) && !executeNum<Float64>(in, out, default_column)
+        if (!executeNum<UInt8>(in, out, default_column)
+            && !executeNum<UInt16>(in, out, default_column)
+            && !executeNum<UInt32>(in, out, default_column)
+            && !executeNum<UInt64>(in, out, default_column)
+            && !executeNum<Int8>(in, out, default_column)
+            && !executeNum<Int16>(in, out, default_column)
+            && !executeNum<Int32>(in, out, default_column)
+            && !executeNum<Int64>(in, out, default_column)
+            && !executeNum<Float32>(in, out, default_column)
+            && !executeNum<Float64>(in, out, default_column)
             && !executeString(in, out, default_column))
         {
             throw Exception{
@@ -218,8 +215,7 @@ private:
         ColumnNumbers tmp_arguments;
 
         tmp_block.insert(block.getByPosition(arguments[0]));
-        tmp_block.getByPosition(0).column
-            = tmp_block.getByPosition(0).column->cloneResized(block.rows())->convertToFullColumnIfConst();
+        tmp_block.getByPosition(0).column = tmp_block.getByPosition(0).column->cloneResized(block.rows())->convertToFullColumnIfConst();
         tmp_arguments.push_back(0);
 
         for (size_t i = 1; i < arguments.size(); ++i)
@@ -247,9 +243,8 @@ private:
                 if (!out)
                 {
                     throw Exception{
-                        "Illegal column " + out_untyped->getName()
-                            + " of elements of array of third argument of function " + getName() + ", must be "
-                            + in->getName(),
+                        "Illegal column " + out_untyped->getName() + " of elements of array of third argument of function " + getName()
+                            + ", must be " + in->getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
 
@@ -270,8 +265,7 @@ private:
                     && !executeNumToStringWithConstDefault<T>(in, out_untyped))
                 {
                     throw Exception{
-                        "Illegal column " + in->getName() + " of elements of array of second argument of function "
-                            + getName(),
+                        "Illegal column " + in->getName() + " of elements of array of second argument of function " + getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
             }
@@ -290,8 +284,7 @@ private:
                     && !executeNumToStringWithNonConstDefault<T>(in, out_untyped, default_untyped))
                 {
                     throw Exception{
-                        "Illegal column " + in->getName() + " of elements of array of second argument of function "
-                            + getName(),
+                        "Illegal column " + in->getName() + " of elements of array of second argument of function " + getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
             }
@@ -311,8 +304,7 @@ private:
                 if (!executeStringToString(in, out_untyped))
                 {
                     throw Exception{
-                        "Illegal column " + in->getName() + " of elements of array of second argument of function "
-                            + getName(),
+                        "Illegal column " + in->getName() + " of elements of array of second argument of function " + getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
             }
@@ -331,8 +323,7 @@ private:
                     && !executeStringToStringWithConstDefault(in, out_untyped))
                 {
                     throw Exception{
-                        "Illegal column " + in->getName() + " of elements of array of second argument of function "
-                            + getName(),
+                        "Illegal column " + in->getName() + " of elements of array of second argument of function " + getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
             }
@@ -351,8 +342,7 @@ private:
                     && !executeStringToStringWithNonConstDefault(in, out_untyped, default_untyped))
                 {
                     throw Exception{
-                        "Illegal column " + in->getName() + " of elements of array of second argument of function "
-                            + getName(),
+                        "Illegal column " + in->getName() + " of elements of array of second argument of function " + getName(),
                         ErrorCodes::ILLEGAL_COLUMN};
                 }
             }
@@ -375,10 +365,7 @@ private:
     }
 
     template <typename T, typename U>
-    bool executeNumToNumWithNonConstDefault(
-        const ColumnVector<T> * in,
-        IColumn * out_untyped,
-        const IColumn * default_untyped) const
+    bool executeNumToNumWithNonConstDefault(const ColumnVector<T> * in, IColumn * out_untyped, const IColumn * default_untyped) const
     {
         auto out = typeid_cast<ColumnVector<U> *>(out_untyped);
         if (!out)
@@ -404,10 +391,7 @@ private:
     }
 
     template <typename T, typename U, typename V>
-    bool executeNumToNumWithNonConstDefault2(
-        const ColumnVector<T> * in,
-        ColumnVector<U> * out,
-        const IColumn * default_untyped) const
+    bool executeNumToNumWithNonConstDefault2(const ColumnVector<T> * in, ColumnVector<U> * out, const IColumn * default_untyped) const
     {
         auto col_default = checkAndGetColumn<ColumnVector<V>>(default_untyped);
         if (!col_default)
@@ -426,19 +410,12 @@ private:
 
         const String & default_str = cache.const_default_value.get<const String &>();
         StringRef default_string_ref{default_str.data(), default_str.size() + 1};
-        executeImplNumToStringWithConstDefault<T>(
-            in->getData(),
-            out->getChars(),
-            out->getOffsets(),
-            default_string_ref);
+        executeImplNumToStringWithConstDefault<T>(in->getData(), out->getChars(), out->getOffsets(), default_string_ref);
         return true;
     }
 
     template <typename T>
-    bool executeNumToStringWithNonConstDefault(
-        const ColumnVector<T> * in,
-        IColumn * out_untyped,
-        const IColumn * default_untyped) const
+    bool executeNumToStringWithNonConstDefault(const ColumnVector<T> * in, IColumn * out_untyped, const IColumn * default_untyped) const
     {
         auto out = typeid_cast<ColumnString *>(out_untyped);
         if (!out)
@@ -447,9 +424,8 @@ private:
         auto default_col = checkAndGetColumn<ColumnString>(default_untyped);
         if (!default_col)
         {
-            throw Exception{
-                "Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN};
+            throw Exception{"Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN};
         }
 
         executeImplNumToStringWithNonConstDefault<T>(
@@ -469,19 +445,12 @@ private:
         if (!out)
             return false;
 
-        executeImplStringToNumWithConstDefault<U>(
-            in->getChars(),
-            in->getOffsets(),
-            out->getData(),
-            cache.const_default_value.get<U>());
+        executeImplStringToNumWithConstDefault<U>(in->getChars(), in->getOffsets(), out->getData(), cache.const_default_value.get<U>());
         return true;
     }
 
     template <typename U>
-    bool executeStringToNumWithNonConstDefault(
-        const ColumnString * in,
-        IColumn * out_untyped,
-        const IColumn * default_untyped) const
+    bool executeStringToNumWithNonConstDefault(const ColumnString * in, IColumn * out_untyped, const IColumn * default_untyped) const
     {
         auto out = typeid_cast<ColumnVector<U> *>(out_untyped);
         if (!out)
@@ -498,29 +467,21 @@ private:
             && !executeStringToNumWithNonConstDefault2<U, Float32>(in, out, default_untyped)
             && !executeStringToNumWithNonConstDefault2<U, Float64>(in, out, default_untyped))
         {
-            throw Exception{
-                "Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN};
+            throw Exception{"Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN};
         }
 
         return true;
     }
 
     template <typename U, typename V>
-    bool executeStringToNumWithNonConstDefault2(
-        const ColumnString * in,
-        ColumnVector<U> * out,
-        const IColumn * default_untyped) const
+    bool executeStringToNumWithNonConstDefault2(const ColumnString * in, ColumnVector<U> * out, const IColumn * default_untyped) const
     {
         auto col_default = checkAndGetColumn<ColumnVector<V>>(default_untyped);
         if (!col_default)
             return false;
 
-        executeImplStringToNumWithNonConstDefault<U, V>(
-            in->getChars(),
-            in->getOffsets(),
-            out->getData(),
-            col_default->getData());
+        executeImplStringToNumWithNonConstDefault<U, V>(in->getChars(), in->getOffsets(), out->getData(), col_default->getData());
         return true;
     }
 
@@ -542,19 +503,11 @@ private:
 
         const String & default_str = cache.const_default_value.get<const String &>();
         StringRef default_string_ref{default_str.data(), default_str.size() + 1};
-        executeImplStringToStringWithConstDefault(
-            in->getChars(),
-            in->getOffsets(),
-            out->getChars(),
-            out->getOffsets(),
-            default_string_ref);
+        executeImplStringToStringWithConstDefault(in->getChars(), in->getOffsets(), out->getChars(), out->getOffsets(), default_string_ref);
         return true;
     }
 
-    bool executeStringToStringWithNonConstDefault(
-        const ColumnString * in,
-        IColumn * out_untyped,
-        const IColumn * default_untyped) const
+    bool executeStringToStringWithNonConstDefault(const ColumnString * in, IColumn * out_untyped, const IColumn * default_untyped) const
     {
         auto out = typeid_cast<ColumnString *>(out_untyped);
         if (!out)
@@ -563,9 +516,8 @@ private:
         auto default_col = checkAndGetColumn<ColumnString>(default_untyped);
         if (!default_col)
         {
-            throw Exception{
-                "Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN};
+            throw Exception{"Illegal column " + default_untyped->getName() + " of fourth argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN};
         }
 
         executeImplStringToStringWithNonConstDefault(
@@ -581,8 +533,7 @@ private:
 
 
     template <typename T, typename U>
-    void executeImplNumToNumWithConstDefault(const PaddedPODArray<T> & src, PaddedPODArray<U> & dst, U dst_default)
-        const
+    void executeImplNumToNumWithConstDefault(const PaddedPODArray<T> & src, PaddedPODArray<U> & dst, U dst_default) const
     {
         const auto & table = *cache.table_num_to_num;
         size_t size = src.size();
@@ -598,10 +549,7 @@ private:
     }
 
     template <typename T, typename U, typename V>
-    void executeImplNumToNumWithNonConstDefault(
-        const PaddedPODArray<T> & src,
-        PaddedPODArray<U> & dst,
-        const PaddedPODArray<V> & dst_default) const
+    void executeImplNumToNumWithNonConstDefault(const PaddedPODArray<T> & src, PaddedPODArray<U> & dst, const PaddedPODArray<V> & dst_default) const
     {
         const auto & table = *cache.table_num_to_num;
         size_t size = src.size();
@@ -633,11 +581,10 @@ private:
     }
 
     template <typename T>
-    void executeImplNumToStringWithConstDefault(
-        const PaddedPODArray<T> & src,
-        ColumnString::Chars_t & dst_data,
-        ColumnString::Offsets & dst_offsets,
-        StringRef dst_default) const
+    void executeImplNumToStringWithConstDefault(const PaddedPODArray<T> & src,
+                                                ColumnString::Chars_t & dst_data,
+                                                ColumnString::Offsets & dst_offsets,
+                                                StringRef dst_default) const
     {
         const auto & table = *cache.table_num_to_string;
         size_t size = src.size();
@@ -655,12 +602,11 @@ private:
     }
 
     template <typename T>
-    void executeImplNumToStringWithNonConstDefault(
-        const PaddedPODArray<T> & src,
-        ColumnString::Chars_t & dst_data,
-        ColumnString::Offsets & dst_offsets,
-        const ColumnString::Chars_t & dst_default_data,
-        const ColumnString::Offsets & dst_default_offsets) const
+    void executeImplNumToStringWithNonConstDefault(const PaddedPODArray<T> & src,
+                                                   ColumnString::Chars_t & dst_data,
+                                                   ColumnString::Offsets & dst_offsets,
+                                                   const ColumnString::Chars_t & dst_default_data,
+                                                   const ColumnString::Offsets & dst_default_offsets) const
     {
         const auto & table = *cache.table_num_to_string;
         size_t size = src.size();
@@ -778,12 +724,7 @@ private:
         ColumnString::Offsets & dst_offsets,
         StringRef dst_default) const
     {
-        executeImplStringToStringWithOrWithoutConstDefault<true>(
-            src_data,
-            src_offsets,
-            dst_data,
-            dst_offsets,
-            dst_default);
+        executeImplStringToStringWithOrWithoutConstDefault<true>(src_data, src_offsets, dst_data, dst_offsets, dst_default);
     }
 
     void executeImplStringToStringWithNonConstDefault(
@@ -830,8 +771,7 @@ private:
     struct Cache
     {
         using NumToNum = HashMap<UInt64, UInt64, HashCRC32<UInt64>>;
-        using NumToString
-            = HashMap<UInt64, StringRef, HashCRC32<UInt64>>; /// Everywhere StringRef's with trailing zero.
+        using NumToString = HashMap<UInt64, StringRef, HashCRC32<UInt64>>; /// Everywhere StringRef's with trailing zero.
         using StringToNum = HashMap<StringRef, UInt64, StringRefHash>;
         using StringToString = HashMap<StringRef, StringRef, StringRefHash>;
 
@@ -866,9 +806,7 @@ private:
             return;
 
         if (from.size() != to.size())
-            throw Exception{
-                "Second and third arguments of function " + getName() + " must be arrays of same size",
-                ErrorCodes::BAD_ARGUMENTS};
+            throw Exception{"Second and third arguments of function " + getName() + " must be arrays of same size", ErrorCodes::BAD_ARGUMENTS};
 
         Array converted_to;
         const Array * used_to = &to;
@@ -885,7 +823,8 @@ private:
 
             /// Do we need to convert the elements `to` and `default_value` to the smallest common type that is Float64?
             bool default_col_is_float = checkColumn<ColumnFloat32>(default_col)
-                || checkColumn<ColumnFloat64>(default_col) || checkColumnConst<ColumnFloat32>(default_col)
+                || checkColumn<ColumnFloat64>(default_col)
+                || checkColumnConst<ColumnFloat32>(default_col)
                 || checkColumnConst<ColumnFloat64>(default_col);
 
             bool to_is_float = to[0].getType() == Field::Types::Float64;
@@ -900,8 +839,7 @@ private:
             else if (!default_col_is_float && to_is_float)
             {
                 if (const_default_col)
-                    cache.const_default_value
-                        = applyVisitor(FieldVisitorConvertToNumber<Float64>(), cache.const_default_value);
+                    cache.const_default_value = applyVisitor(FieldVisitorConvertToNumber<Float64>(), cache.const_default_value);
             }
         }
 

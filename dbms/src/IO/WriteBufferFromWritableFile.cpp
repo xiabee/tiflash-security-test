@@ -60,9 +60,7 @@ void WriteBufferFromWritableFile::nextImpl()
 
         if ((-1 == res || 0 == res) && errno != EINTR)
         {
-            throwFromErrno(
-                "Cannot write to file " + getFileName(),
-                ErrorCodes::CANNOT_WRITE_TO_FILE_DESCRIPTOR); // NOLINT
+            throwFromErrno("Cannot write to file " + getFileName(), ErrorCodes::CANNOT_WRITE_TO_FILE_DESCRIPTOR); // NOLINT
         }
 
         if (res > 0)
@@ -93,6 +91,7 @@ void WriteBufferFromWritableFile::sync()
 {
     next();
 
+    ProfileEvents::increment(ProfileEvents::FileFSync);
     int res = file->fsync();
     if (-1 == res)
         throwFromErrno("Cannot fsync " + getFileName(), ErrorCodes::CANNOT_FSYNC);

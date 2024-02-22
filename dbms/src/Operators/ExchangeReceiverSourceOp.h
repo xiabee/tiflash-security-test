@@ -25,27 +25,26 @@ class ExchangeReceiverSourceOp : public SourceOp
 {
 public:
     ExchangeReceiverSourceOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id,
         const std::shared_ptr<ExchangeReceiver> & exchange_receiver_,
         size_t stream_id_)
-        : SourceOp(exec_context_, req_id)
+        : SourceOp(exec_status_, req_id)
         , exchange_receiver(exchange_receiver_)
         , stream_id(stream_id_)
-        , io_profile_info(IOProfileInfo::createForRemote(profile_info_ptr, exchange_receiver->getSourceNum()))
     {
-        exchange_receiver->verifyStreamId(stream_id);
         setHeader(Block(getColumnWithTypeAndName(toNamesAndTypes(exchange_receiver->getOutputSchema()))));
         decoder_ptr = std::make_unique<CHBlockChunkDecodeAndSquash>(getHeader(), 8192);
     }
 
-    String getName() const override { return "ExchangeReceiverSourceOp"; }
+    String getName() const override
+    {
+        return "ExchangeReceiverSourceOp";
+    }
 
-    IOProfileInfoPtr getIOProfileInfo() const override { return io_profile_info; }
+    void operateSuffix() override;
 
 protected:
-    void operateSuffixImpl() override;
-
     OperatorStatus readImpl(Block & block) override;
 
     OperatorStatus awaitImpl() override;
@@ -54,16 +53,14 @@ private:
     Block popFromBlockQueue();
 
 private:
+    // TODO support ConnectionProfileInfo.
+    // TODO support RemoteExecutionSummary.
     std::shared_ptr<ExchangeReceiver> exchange_receiver;
     std::unique_ptr<CHBlockChunkDecodeAndSquash> decoder_ptr;
     uint64_t total_rows{};
     std::queue<Block> block_queue;
-
-    ReceivedMessagePtr recv_msg = nullptr;
-    ReceiveStatus receive_status = ReceiveStatus::empty;
+    std::optional<ReceiveResult> recv_res;
 
     size_t stream_id;
-
-    IOProfileInfoPtr io_profile_info;
 };
 } // namespace DB

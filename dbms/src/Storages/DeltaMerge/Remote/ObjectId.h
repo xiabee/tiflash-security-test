@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 #include <common/types.h>
 #include <fmt/format.h>
 
@@ -59,13 +59,7 @@ struct fmt::formatter<DB::DM::Remote::DMFileOID>
         }
         else
         {
-            return format_to(
-                ctx.out(),
-                "{}_{}_{}_{}",
-                value.store_id,
-                value.keyspace_id,
-                value.table_id,
-                value.file_id);
+            return format_to(ctx.out(), "{}_{}_{}_{}", value.store_id, value.keyspace_id, value.table_id, value.file_id);
         }
     }
 };
@@ -84,13 +78,7 @@ struct fmt::formatter<DB::DM::Remote::PageOID>
         }
         else
         {
-            return format_to(
-                ctx.out(),
-                "{}_{}_{}_{}",
-                value.store_id,
-                value.ks_table_id.first,
-                value.ks_table_id.second,
-                value.page_id);
+            return format_to(ctx.out(), "{}_{}_{}_{}", value.store_id, value.ks_table_id.first, value.ks_table_id.second, value.page_id);
         }
     }
 };

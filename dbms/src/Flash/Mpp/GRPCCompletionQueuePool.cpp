@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/GRPCQueue.h>
 #include <Common/TiFlashMetrics.h>
 #include <Flash/Mpp/GRPCCompletionQueuePool.h>
 
@@ -60,7 +59,8 @@ void GRPCCompletionQueuePool::thread(size_t index)
         {
             break;
         }
-        reinterpret_cast<GRPCKickTag *>(got_tag)->execute(ok);
+        using Callback = UnaryCallback<bool>;
+        reinterpret_cast<Callback *>(got_tag)->execute(ok);
     }
 }
 

@@ -54,7 +54,10 @@ protected:
         return createColumn<String>(strings);
     }
 
-    static ColumnWithTypeAndName toConst(const String & s) { return createConstColumn<String>(1, s); }
+    static ColumnWithTypeAndName toConst(const String & s)
+    {
+        return createConstColumn<String>(1, s);
+    }
 };
 
 TEST_F(StringUpper, upperAll)
@@ -97,19 +100,29 @@ TEST_F(StringUpper, upperAll)
 
     ASSERT_COLUMN_EQ(toVec(candidate_strings), executeFunction("upperBinary", toVec(candidate_strings)));
 
-    ASSERT_COLUMN_EQ(toConst("ONE WEEK’S TIME TEST"), executeFunction("upperUTF8", toConst("one week’s time TEST")));
+    ASSERT_COLUMN_EQ(
+        toConst("ONE WEEK’S TIME TEST"),
+        executeFunction(
+            "upperUTF8",
+            toConst("one week’s time TEST")));
 
     ASSERT_COLUMN_EQ(
         toConst("+Ѐ-Ё*Ђ/Ѓ!Є@Ѕ#І$@Ї%Ј……Љ&Њ（Ћ）Ќ￥Ѝ#Ў@Џ！^"),
-        executeFunction("upperUTF8", toConst("+ѐ-ё*ђ/ѓ!є@ѕ#і$@ї%ј……Љ&Њ（Ћ）Ќ￥Ѝ#Ў@Џ！^")));
+        executeFunction(
+            "upperUTF8",
+            toConst("+ѐ-ё*ђ/ѓ!є@ѕ#і$@ї%ј……Љ&Њ（Ћ）Ќ￥Ѝ#Ў@Џ！^")));
 
     ASSERT_COLUMN_EQ(
         toConst("▲Α▼ΒΓ➨ΔΕ☎ΖΗ✂ΘΙ€ΚΛ♫ΜΝ✓ΞΟ✚ΠΡ℉ΣΤ♥ΥΦ♖ΧΨ♘Ω★Σ✕"),
-        executeFunction("upperUTF8", toConst("▲α▼βγ➨δε☎ζη✂θι€κλ♫μν✓ξο✚πρ℉στ♥υφ♖χψ♘ω★ς✕")));
+        executeFunction(
+            "upperUTF8",
+            toConst("▲α▼βγ➨δε☎ζη✂θι€κλ♫μν✓ξο✚πρ℉στ♥υφ♖χψ♘ω★ς✕")));
 
     ASSERT_COLUMN_EQ(
         toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ"),
-        executeFunction("upperBinary", toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ")));
+        executeFunction(
+            "upperBinary",
+            toConst("թփձջրչճժծքոեռտըւիօպասդֆգհյկլխզղցվբնմշ")));
 }
 
 

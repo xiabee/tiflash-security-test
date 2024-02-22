@@ -25,21 +25,24 @@ class DAGContext;
 class DAGResponseWriter
 {
 public:
-    DAGResponseWriter(Int64 records_per_chunk_, DAGContext & dag_context_);
+    DAGResponseWriter(
+        Int64 records_per_chunk_,
+        DAGContext & dag_context_);
     /// prepared with sample block
     virtual void prepare(const Block &){};
     virtual void write(const Block & block) = 0;
 
-    // For async writer, `isWritable` need to be called before calling `write`.
+    // For async writer, `isReadyForWrite` need to be called before calling `write`.
     // ```
-    // while (!isWritable()) {}
+    // while (!isReadyForWrite()) {}
     // write(block);
     // ```
-    virtual bool isWritable() const { throw Exception("Unsupport"); }
+    virtual bool isReadyForWrite() const { throw Exception("Unsupport"); }
 
     /// flush cached blocks for batch writer
     virtual void flush() = 0;
     virtual ~DAGResponseWriter() = default;
+    const DAGContext & dagContext() const { return dag_context; }
 
 protected:
     Int64 records_per_chunk;

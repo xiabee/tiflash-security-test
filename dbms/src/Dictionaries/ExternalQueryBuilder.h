@@ -14,9 +14,8 @@
 
 #pragma once
 
-#include <Columns/IColumn.h>
-
 #include <string>
+#include <Columns/IColumn.h>
 
 
 namespace DB
@@ -39,9 +38,9 @@ struct ExternalQueryBuilder
     /// NOTE There could be differences in escaping rules inside quotes. Escaping rules may not match that required by specific external DBMS.
     enum QuotingStyle
     {
-        None, /// Write as-is, without quotes.
-        Backticks, /// `mysql` style
-        DoubleQuotes /// "postgres" style
+        None,            /// Write as-is, without quotes.
+        Backticks,        /// `mysql` style
+        DoubleQuotes    /// "postgres" style
     };
 
     QuotingStyle quoting_style;
@@ -58,7 +57,7 @@ struct ExternalQueryBuilder
     std::string composeLoadAllQuery() const;
 
     /** Generate a query to load data after certain time point*/
-    std::string composeUpdateQuery(const std::string & update_field, const std::string & time_point) const;
+    std::string composeUpdateQuery(const std::string &update_field, const std::string &time_point) const;
 
     /** Generate a query to load data by set of UInt64 keys. */
     std::string composeLoadIdsQuery(const std::vector<UInt64> & ids);
@@ -94,4 +93,4 @@ private:
     void writeQuoted(const std::string & s, WriteBuffer & out) const;
 };
 
-} // namespace DB
+}

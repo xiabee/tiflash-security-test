@@ -29,7 +29,8 @@ class DAGContext;
 class ExecutorStatisticsCollector
 {
 public:
-    explicit ExecutorStatisticsCollector(const String & req_id, bool force_fill_executor_id_ = false)
+    explicit ExecutorStatisticsCollector(const String & req_id,
+                                         bool force_fill_executor_id_ = false)
         : log(Logger::get(req_id))
         , force_fill_executor_id(force_fill_executor_id_)
     {}
@@ -41,8 +42,6 @@ public:
     void fillExecuteSummaries(tipb::SelectResponse & response);
 
     tipb::SelectResponse genExecutionSummaryResponse();
-
-    tipb::TiFlashExecutionInfo genTiFlashExecutionInfo();
 
     const std::map<String, ExecutorStatisticsPtr> & getProfiles() const { return profiles; }
 

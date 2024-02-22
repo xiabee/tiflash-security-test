@@ -28,8 +28,6 @@ class DAGRequest;
 
 namespace DB
 {
-struct Settings;
-
 class Pipeline;
 using PipelinePtr = std::shared_ptr<Pipeline>;
 using Pipelines = std::vector<PipelinePtr>;
@@ -41,7 +39,7 @@ using Events = std::vector<EventPtr>;
 class PhysicalPlanNode;
 using PhysicalPlanNodePtr = std::shared_ptr<PhysicalPlanNode>;
 
-class PipelineExecutorContext;
+class PipelineExecutorStatus;
 
 struct PipelineEvents
 {
@@ -65,55 +63,34 @@ public:
 
     void addChild(const PipelinePtr & child);
 
-    const String & toTreeString() const;
+    void toTreeString(FmtBuffer & buffer, size_t level = 0) const;
 
     // used for getting the result blocks.
     void addGetResultSink(const ResultQueuePtr & result_queue);
 
-    PipelineExecGroup buildExecGroup(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
+    PipelineExecGroup buildExecGroup(PipelineExecutorStatus & exec_status, Context & context, size_t concurrency);
 
-    Events toEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
+    Events toEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency);
 
-    static bool isSupported(const tipb::DAGRequest & dag_request, const Settings & settings);
+    static bool isSupported(const tipb::DAGRequest & dag_request);
 
     Block getSampleBlock() const;
 
     bool isFineGrainedMode() const;
 
-    /// This method will not be called for fine grained pipeline.
-    /// This method is used to execute two-stage logic and is not suitable for fine grained execution mode,
-    /// such as local/global join build and local/final agg spill.
-    ///  ┌─stage1─┐      ┌─stage2─┐
-    ///     task1──┐    ┌──►task1
-    ///     task2──┼──►─┼──►task2
-    ///     ...    │    │   ...
-    ///     taskn──┘    └──►taskm
-    EventPtr complete(PipelineExecutorContext & exec_context);
-
-    String getFinalPlanExecId() const;
-
 private:
-    void toTreeStringImpl(FmtBuffer & buffer, size_t level) const;
     void toSelfString(FmtBuffer & buffer, size_t level) const;
 
-    PipelineEvents toSelfEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
-    PipelineEvents doToEvents(
-        PipelineExecutorContext & exec_context,
-        Context & context,
-        size_t concurrency,
-        Events & all_events);
+    PipelineEvents toSelfEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency);
+    PipelineEvents doToEvents(PipelineExecutorStatus & status, Context & context, size_t concurrency, Events & all_events);
 
 private:
     const UInt32 id;
     LoggerPtr log;
 
-    bool is_fine_grained_mode = true;
-
     // data flow: plan_nodes.begin() --> plan_nodes.end()
     std::deque<PhysicalPlanNodePtr> plan_nodes;
 
     std::vector<PipelinePtr> children;
-
-    mutable String tree_string;
 };
 } // namespace DB

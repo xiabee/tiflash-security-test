@@ -16,9 +16,10 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 class Equal : public ColCmpVal
 {
 public:
@@ -28,12 +29,14 @@ public:
 
     String name() override { return "equal"; }
 
-    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
+    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override
     {
-        RSResults results(pack_count, RSResult::Some);
-        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
-        return rsindex.minmax->checkEqual(start_pack, pack_count, value, rsindex.type);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_SOME(param, attr, rsindex);
+        return rsindex.minmax->checkEqual(pack_id, value, rsindex.type);
     }
 };
 
-} // namespace DB::DM
+
+} // namespace DM
+
+} // namespace DB

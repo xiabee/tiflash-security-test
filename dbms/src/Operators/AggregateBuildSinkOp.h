@@ -14,41 +14,38 @@
 
 #pragma once
 
+#include <Operators/AggregateContext.h>
 #include <Operators/Operator.h>
 
 namespace DB
 {
-class AggregateContext;
-using AggregateContextPtr = std::shared_ptr<AggregateContext>;
-
 class AggregateBuildSinkOp : public SinkOp
 {
 public:
     AggregateBuildSinkOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         size_t index_,
         AggregateContextPtr agg_context_,
         const String & req_id)
-        : SinkOp(exec_context_, req_id)
+        : SinkOp(exec_status_, req_id)
         , index(index_)
         , agg_context(agg_context_)
-    {}
+    {
+    }
 
-    String getName() const override { return "AggregateBuildSinkOp"; }
+    String getName() const override
+    {
+        return "AggregateBuildSinkOp";
+    }
+
+    void operateSuffix() override;
 
 protected:
-    void operateSuffixImpl() override;
-
-    OperatorStatus prepareImpl() override;
-
     OperatorStatus writeImpl(Block && block) override;
-
-    OperatorStatus executeIOImpl() override;
 
 private:
     size_t index{};
+    uint64_t total_rows{};
     AggregateContextPtr agg_context;
-
-    bool is_final_spill = false;
 };
 } // namespace DB

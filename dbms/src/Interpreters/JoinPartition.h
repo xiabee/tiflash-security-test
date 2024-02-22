@@ -17,7 +17,6 @@
 #include <Columns/ColumnNullable.h>
 #include <Core/Block.h>
 #include <Flash/Coprocessor/JoinInterpreterHelper.h>
-#include <Interpreters/HashJoinSpillContext.h>
 #include <Interpreters/JoinHashMap.h>
 #include <Interpreters/JoinUtils.h>
 #include <Interpreters/NullAwareSemiJoinHelper.h>
@@ -27,7 +26,6 @@
 namespace DB
 {
 class Arena;
-struct ProbeProcessInfo;
 using ArenaPtr = std::shared_ptr<Arena>;
 using Sizes = std::vector<size_t>;
 
@@ -73,21 +71,12 @@ using JoinPartitions = std::vector<std::unique_ptr<JoinPartition>>;
 class JoinPartition
 {
 public:
-    JoinPartition(
-        JoinMapMethod join_map_type_,
-        ASTTableJoin::Kind kind_,
-        ASTTableJoin::Strictness strictness_,
-        size_t partition_index_,
-        size_t max_block_size,
-        const HashJoinSpillContextPtr & hash_join_spill_context_,
-        const LoggerPtr & log_,
-        bool has_other_condition_)
-        : partition_index(partition_index_)
-        , kind(kind_)
+    JoinPartition(JoinMapMethod join_map_type_, ASTTableJoin::Kind kind_, ASTTableJoin::Strictness strictness_, size_t max_block_size, const LoggerPtr & log_, bool has_other_condition_)
+        : kind(kind_)
         , strictness(strictness_)
         , join_map_method(join_map_type_)
         , pool(std::make_shared<Arena>())
-        , hash_join_spill_context(hash_join_spill_context_)
+        , spill(false)
         , has_other_condition(has_other_condition_)
         , log(log_)
     {
@@ -95,16 +84,12 @@ public:
         initMap();
         if (needRecordNotInsertRows(kind))
             rows_not_inserted_to_map = std::make_unique<RowsNotInsertToMap>(max_block_size);
-        hash_table_pool_memory_usage = getHashMapAndPoolByteCount();
-        block_data_memory_usage = 0;
+        memory_usage = getHashMapAndPoolByteCount();
     }
     void insertBlockForBuild(Block && block);
     void insertBlockForProbe(Block && block);
     size_t getRowCount();
     size_t getHashMapAndPoolByteCount();
-    void setResizeCallbackIfNeeded();
-    void updateHashMapAndPoolMemoryUsage();
-    size_t getHashMapAndPoolMemoryUsage() const { return hash_table_pool_memory_usage; }
     RowsNotInsertToMap * getRowsNotInsertedToMap()
     {
         if (needRecordNotInsertRows(kind))
@@ -114,27 +99,37 @@ public:
         }
         return nullptr;
     };
-    Blocks trySpillProbePartition()
+    Blocks trySpillProbePartition(bool force, size_t max_cached_data_bytes)
     {
         std::unique_lock lock(partition_mutex);
-        return trySpillProbePartition(lock);
+        return trySpillProbePartition(force, max_cached_data_bytes, lock);
     }
-    Blocks trySpillBuildPartition()
+    Blocks trySpillBuildPartition(bool force, size_t max_cached_data_bytes)
     {
         std::unique_lock lock(partition_mutex);
-        return trySpillBuildPartition(lock);
+        return trySpillBuildPartition(force, max_cached_data_bytes, lock);
     }
     std::unique_lock<std::mutex> lockPartition();
-    std::unique_lock<std::mutex> tryLockPartition();
     /// use lock as the argument to force the caller acquire the lock before call them
     void releaseBuildPartitionBlocks(std::unique_lock<std::mutex> &);
     void releaseProbePartitionBlocks(std::unique_lock<std::mutex> &);
     void releasePartitionPoolAndHashMap(std::unique_lock<std::mutex> &);
-    Blocks trySpillBuildPartition(std::unique_lock<std::mutex> & partition_lock);
-    Blocks trySpillProbePartition(std::unique_lock<std::mutex> & partition_lock);
+    Blocks trySpillBuildPartition(bool force, size_t max_cached_data_bytes, std::unique_lock<std::mutex> & partition_lock);
+    Blocks trySpillProbePartition(bool force, size_t max_cached_data_bytes, std::unique_lock<std::mutex> & partition_lock);
     bool hasBuildData() const { return !build_partition.original_blocks.empty(); }
-    void addBlockDataMemoryUsage(size_t delta) { block_data_memory_usage += delta; }
-    bool isSpill() const { return hash_join_spill_context->isPartitionSpilled(partition_index); }
+    void addMemoryUsage(size_t delta)
+    {
+        memory_usage += delta;
+    }
+    void subMemoryUsage(size_t delta)
+    {
+        if likely (memory_usage >= delta)
+            memory_usage -= delta;
+        else
+            memory_usage = 0;
+    }
+    bool isSpill() const { return spill; }
+    void markSpill() { spill = true; }
     JoinMapMethod getJoinMapMethod() const { return join_map_method; }
     ASTTableJoin::Kind getJoinKind() const { return kind; }
     Block * getLastBuildBlock() { return &build_partition.blocks.back(); }
@@ -143,14 +138,7 @@ public:
         assert(pool != nullptr);
         return pool;
     }
-    size_t getMemoryUsage() const { return block_data_memory_usage + hash_table_pool_memory_usage; }
-    size_t revocableBytes() const
-    {
-        if (build_partition.rows > 0 || probe_partition.rows > 0)
-            return getMemoryUsage();
-        else
-            return 0;
-    }
+    size_t getMemoryUsage() const { return memory_usage; }
     template <typename Map>
     Map & getHashMap();
 
@@ -184,7 +172,7 @@ public:
         const JoinBuildInfo & join_build_info,
         ProbeProcessInfo & probe_process_info,
         MutableColumnPtr & record_mapped_entry_column);
-    template <ASTTableJoin::Kind KIND, ASTTableJoin::Strictness STRICTNESS, typename Maps, bool row_flagged_map>
+    template <ASTTableJoin::Kind KIND, ASTTableJoin::Strictness STRICTNESS, typename Maps>
     static void probeBlockImpl(
         const JoinPartitions & join_partitions,
         size_t rows,
@@ -216,7 +204,6 @@ public:
 private:
     friend class ScanHashMapAfterProbeBlockInputStream;
     void initMap();
-    size_t partition_index;
     /// mutex to protect concurrent modify partition
     /// note if you wants to acquire both build_probe_mutex and partition_mutex,
     /// please lock build_probe_mutex first
@@ -231,20 +218,17 @@ private:
     MapsAll maps_all; /// For ALL LEFT|INNER JOIN
     MapsAnyFull maps_any_full; /// For ANY RIGHT|FULL JOIN
     MapsAllFull maps_all_full; /// For ALL RIGHT|FULL JOIN
-    MapsAllFullWithRowFlag
-        maps_all_full_with_row_flag; /// For RIGHT_SEMI | RIGHT_ANTI_SEMI | RIGHT_OUTER with other conditions
-    /// For right outer/full/rightSemi/rightAnti join, including
+    MapsAllFullWithRowFlag maps_all_full_with_row_flag; /// For RIGHT_SEMI | RIGHT_ANTI_SEMI with other conditions
+    /// For right/full/rightSemi/rightAnti join, including
     /// 1. Rows with NULL join keys
     /// 2. Rows that are filtered by right join conditions
     /// For null-aware semi join family, including rows with NULL join keys.
     std::unique_ptr<RowsNotInsertToMap> rows_not_inserted_to_map;
     ArenaPtr pool;
-    HashJoinSpillContextPtr hash_join_spill_context;
+    bool spill;
     bool has_other_condition;
     /// only update this field when spill is enabled. todo support this field in non-spill mode
-    /// all writes to it is protected by lock
-    std::atomic<size_t> block_data_memory_usage{0};
-    std::atomic<size_t> hash_table_pool_memory_usage{0};
+    std::atomic<size_t> memory_usage{0};
     const LoggerPtr log;
 };
 } // namespace DB

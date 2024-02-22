@@ -27,8 +27,7 @@
 
 namespace DB
 {
-class DiagnosticsService final
-    : public ::diagnosticspb::Diagnostics::Service
+class DiagnosticsService final : public ::diagnosticspb::Diagnostics::Service
     , public std::enable_shared_from_this<DiagnosticsService>
     , private boost::noncopyable
 {

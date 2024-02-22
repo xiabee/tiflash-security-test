@@ -18,9 +18,9 @@
 #include <Flash/ServiceUtils.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
-#include <Storages/KVStore/TMTContext.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <TiDB/OwnerInfo.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/ListObjectsRequest.h>
@@ -41,25 +41,23 @@ extern const Metric S3LockServiceNumLatches;
 namespace DB::S3
 {
 S3LockService::S3LockService(Context & context_)
-    : S3LockService(context_.getGlobalContext().getTMTContext().getS3GCOwnerManager())
-{}
+    : S3LockService(
+        context_.getGlobalContext().getTMTContext().getS3GCOwnerManager())
+{
+}
 
 S3LockService::S3LockService(OwnerManagerPtr owner_mgr_)
     : gc_owner(std::move(owner_mgr_))
     , log(Logger::get())
-{}
+{
+}
 
-grpc::Status S3LockService::tryAddLock(
-    const disaggregated::TryAddLockRequest * request,
-    disaggregated::TryAddLockResponse * response)
+grpc::Status S3LockService::tryAddLock(const disaggregated::TryAddLockRequest * request, disaggregated::TryAddLockResponse * response)
 {
     try
     {
         Stopwatch watch;
-        SCOPE_EXIT({
-            GET_METRIC(tiflash_disaggregated_object_lock_request_duration_seconds, type_lock)
-                .Observe(watch.elapsedSeconds());
-        });
+        SCOPE_EXIT({ GET_METRIC(tiflash_disaggregated_object_lock_request_duration_seconds, type_lock).Observe(watch.elapsedSeconds()); });
         tryAddLockImpl(request->data_file_key(), request->lock_store_id(), request->lock_seq(), response);
         if (response->result().has_conflict())
         {
@@ -103,17 +101,12 @@ grpc::Status S3LockService::tryAddLock(
     }
 }
 
-grpc::Status S3LockService::tryMarkDelete(
-    const disaggregated::TryMarkDeleteRequest * request,
-    disaggregated::TryMarkDeleteResponse * response)
+grpc::Status S3LockService::tryMarkDelete(const disaggregated::TryMarkDeleteRequest * request, disaggregated::TryMarkDeleteResponse * response)
 {
     try
     {
         Stopwatch watch;
-        SCOPE_EXIT({
-            GET_METRIC(tiflash_disaggregated_object_lock_request_duration_seconds, type_delete)
-                .Observe(watch.elapsedSeconds());
-        });
+        SCOPE_EXIT({ GET_METRIC(tiflash_disaggregated_object_lock_request_duration_seconds, type_delete).Observe(watch.elapsedSeconds()); });
         tryMarkDeleteImpl(request->data_file_key(), response);
         if (response->result().has_conflict())
         {
@@ -157,7 +150,8 @@ grpc::Status S3LockService::tryMarkDelete(
     }
 }
 
-S3LockService::DataFileMutexPtr S3LockService::getDataFileLatch(const String & data_file_key)
+S3LockService::DataFileMutexPtr
+S3LockService::getDataFileLatch(const String & data_file_key)
 {
     std::unique_lock lock(file_latch_map_mutex);
     auto it = file_latch_map.find(data_file_key);
@@ -205,8 +199,7 @@ bool S3LockService::tryAddLockImpl(
 
     auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
     // make sure data file exists
-    auto object_key
-        = key_view.isDMFile() ? fmt::format("{}/{}", data_file_key, DM::DMFile::metav2FileName()) : data_file_key;
+    auto object_key = key_view.isDMFile() ? fmt::format("{}/{}", data_file_key, DM::DMFile::metav2FileName()) : data_file_key;
     if (!DB::S3::objectExists(*s3_client, object_key))
     {
         auto * e = response->mutable_result()->mutable_conflict();
@@ -242,11 +235,7 @@ bool S3LockService::tryAddLockImpl(
         // it is safe to return owner change and let the client retry.
         // the obsolete lock file will finally get removed by S3GCManager.
         response->mutable_result()->mutable_not_owner();
-        LOG_INFO(
-            log,
-            "data file lock conflict: owner changed after lock added, key={} lock_key={}",
-            data_file_key,
-            lock_key);
+        LOG_INFO(log, "data file lock conflict: owner changed after lock added, key={} lock_key={}", data_file_key, lock_key);
         return false;
     }
 
@@ -290,11 +279,7 @@ bool S3LockService::tryMarkDeleteImpl(const String & data_file_key, disaggregate
     {
         auto * e = response->mutable_result()->mutable_conflict();
         e->set_reason(fmt::format("data file is locked, key={} lock_by={}", data_file_key, lock_key.value()));
-        LOG_INFO(
-            log,
-            "data file mark delete conflict: file is locked, key={} lock_by={}",
-            data_file_key,
-            lock_key.value());
+        LOG_INFO(log, "data file mark delete conflict: file is locked, key={} lock_by={}", data_file_key, lock_key.value());
         return false;
     }
 
@@ -318,11 +303,7 @@ bool S3LockService::tryMarkDeleteImpl(const String & data_file_key, disaggregate
     {
         // owner changed happens when delmark is uploading, can not
         // ensure whether this is safe or not.
-        LOG_ERROR(
-            log,
-            "data file mark delete conflict: owner changed when marking file deleted! key={} delmark={}",
-            data_file_key,
-            delmark_key);
+        LOG_ERROR(log, "data file mark delete conflict: owner changed when marking file deleted! key={} delmark={}", data_file_key, delmark_key);
         GET_METRIC(tiflash_disaggregated_object_lock_request_count, type_delete_risk).Increment();
     }
 

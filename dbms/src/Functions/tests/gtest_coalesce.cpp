@@ -39,7 +39,10 @@ try
 
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"a"}),
-        executeFunction(func_name, createColumn<Nullable<String>>({"a"}), createOnlyNullColumnConst(1)));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<String>>({"a"}),
+            createOnlyNullColumnConst(1)));
 }
 CATCH
 } // namespace DB::tests

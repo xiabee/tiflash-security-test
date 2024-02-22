@@ -96,7 +96,9 @@ private:
     static constexpr auto NAME = "Multiplex";
 
 public:
-    MultiplexInputStream(std::shared_ptr<MultiPartitionStreamPool> & shared_pool, const String & req_id)
+    MultiplexInputStream(
+        std::shared_ptr<MultiPartitionStreamPool> & shared_pool,
+        const String & req_id)
         : log(Logger::get(req_id))
         , shared_pool(shared_pool)
     {
@@ -106,7 +108,10 @@ public:
         {
             Block header = children.at(0)->getHeader();
             for (size_t i = 1; i < num_children; ++i)
-                assertBlocksHaveEqualStructure(children[i]->getHeader(), header, "MULTIPLEX");
+                assertBlocksHaveEqualStructure(
+                    children[i]->getHeader(),
+                    header,
+                    "MULTIPLEX");
         }
     }
 
@@ -134,12 +139,16 @@ public:
             is_killed = true;
 
         bool old_val = false;
-        if (!is_cancelled.compare_exchange_strong(old_val, true, std::memory_order_seq_cst, std::memory_order_relaxed))
+        if (!is_cancelled.compare_exchange_strong(
+                old_val,
+                true,
+                std::memory_order_seq_cst,
+                std::memory_order_relaxed))
             return;
 
         if (cur_stream)
         {
-            if (auto * child = dynamic_cast<IProfilingBlockInputStream *>(&*cur_stream))
+            if (IProfilingBlockInputStream * child = dynamic_cast<IProfilingBlockInputStream *>(&*cur_stream))
             {
                 child->cancel(kill);
             }
@@ -152,7 +161,9 @@ public:
 
 protected:
     /// Do nothing, to make the preparation when underlying InputStream is picked from the pool
-    void readPrefix() override {}
+    void readPrefix() override
+    {
+    }
 
     /** The following options are possible:
       * 1. `readImpl` function is called until it returns an empty block.

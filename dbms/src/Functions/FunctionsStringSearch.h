@@ -54,9 +54,6 @@ public:
         case TiDB::ITiDBCollator::CollatorType::UTF8MB4_UNICODE_CI:
             collator = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_BIN);
             break;
-        case TiDB::ITiDBCollator::CollatorType::UTF8MB4_0900_AI_CI:
-            collator = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_0900_BIN);
-            break;
         default:
             break;
         }
@@ -231,13 +228,22 @@ class FunctionsStringSearch : public IFunction
 
 public:
     static constexpr auto name = Name::name;
-    static FunctionPtr create(const Context &) { return std::make_shared<FunctionsStringSearch>(); }
+    static FunctionPtr create(const Context &)
+    {
+        return std::make_shared<FunctionsStringSearch>();
+    }
 
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     void setCollator(const TiDB::TiDBCollatorPtr & collator_) override { collator = collator_; }
 
-    size_t getNumberOfArguments() const override { return 0; }
+    size_t getNumberOfArguments() const override
+    {
+        return 0;
+    }
 
     bool isVariadic() const override { return true; }
     ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {3}; }
@@ -269,9 +275,7 @@ public:
         }
         size_t max_arguments_number = Impl::need_customized_escape_char || Impl::support_match_type ? 3 : 2;
         if (arguments.size() > max_arguments_number)
-            throw Exception(
-                "Too many arguments, only " + std::to_string(max_arguments_number)
-                + " argument is supported for function " + getName());
+            throw Exception("Too many arguments, only " + std::to_string(max_arguments_number) + " argument is supported for function " + getName());
 
         return std::make_shared<DataTypeNumber<typename Impl::ResultType>>();
     }
@@ -281,10 +285,8 @@ public:
         auto block = result_block;
         if constexpr (name == std::string_view(NameIlike3Args::name))
         {
-            block.getByPosition(arguments[0]).column
-                = (*std::move(result_block.getByPosition(arguments[0]).column)).mutate();
-            block.getByPosition(arguments[1]).column
-                = (*std::move(result_block.getByPosition(arguments[1]).column)).mutate();
+            block.getByPosition(arguments[0]).column = (*std::move(result_block.getByPosition(arguments[0]).column)).mutate();
+            block.getByPosition(arguments[1]).column = (*std::move(result_block.getByPosition(arguments[1]).column)).mutate();
 
             IlikeLowerHelper::lowerAlphaASCII(block, arguments);
             IlikeLowerHelper::convertCollatorToBin(collator);
@@ -302,8 +304,7 @@ public:
         String match_type;
         if constexpr (Impl::need_customized_escape_char)
         {
-            const auto * col_escape_const
-                = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
+            const auto * col_escape_const = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
             bool valid_args = true;
             if (col_escape_const == nullptr)
             {
@@ -334,8 +335,7 @@ public:
         {
             if (arguments.size() > 2)
             {
-                const auto * col_match_type_const
-                    = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
+                const auto * col_match_type_const = typeid_cast<const ColumnConst *>(&*block.getByPosition(arguments[2]).column);
                 if (col_match_type_const == nullptr)
                     throw Exception("Match type argument of function " + getName() + " must be constant");
                 match_type = col_match_type_const->getValue<String>();
@@ -346,15 +346,8 @@ public:
         {
             ResultType res{};
             auto needle_string = col_needle_const->getValue<String>();
-            Impl::constantConstant(
-                col_haystack_const->getValue<String>(),
-                needle_string,
-                escape_char,
-                match_type,
-                collator,
-                res);
-            result_block.getByPosition(result).column
-                = result_block.getByPosition(result).type->createColumnConst(col_haystack_const->size(), toField(res));
+            Impl::constantConstant(col_haystack_const->getValue<String>(), needle_string, escape_char, match_type, collator, res);
+            result_block.getByPosition(result).column = result_block.getByPosition(result).type->createColumnConst(col_haystack_const->size(), toField(res));
             return;
         }
 
@@ -367,26 +360,18 @@ public:
         const auto * col_needle_vector = checkAndGetColumn<ColumnString>(&*column_needle);
 
         if (col_haystack_vector && col_needle_vector)
-            Impl::vectorVector(
-                col_haystack_vector->getChars(),
-                col_haystack_vector->getOffsets(),
-                col_needle_vector->getChars(),
-                col_needle_vector->getOffsets(),
-                escape_char,
-                match_type,
-                collator,
-                vec_res);
+            Impl::vectorVector(col_haystack_vector->getChars(),
+                               col_haystack_vector->getOffsets(),
+                               col_needle_vector->getChars(),
+                               col_needle_vector->getOffsets(),
+                               escape_char,
+                               match_type,
+                               collator,
+                               vec_res);
         else if (col_haystack_vector && col_needle_const)
         {
             auto needle_string = col_needle_const->getValue<String>();
-            Impl::vectorConstant(
-                col_haystack_vector->getChars(),
-                col_haystack_vector->getOffsets(),
-                needle_string,
-                escape_char,
-                match_type,
-                collator,
-                vec_res);
+            Impl::vectorConstant(col_haystack_vector->getChars(), col_haystack_vector->getOffsets(), needle_string, escape_char, match_type, collator, vec_res);
         }
         else if (col_haystack_const && col_needle_vector)
         {
@@ -396,10 +381,11 @@ public:
             Impl::constantVector(haystack, needle_chars, needle_offsets, escape_char, match_type, collator, vec_res);
         }
         else
-            throw Exception(
-                "Illegal columns " + block.getByPosition(arguments[0]).column->getName() + " and "
-                    + block.getByPosition(arguments[1]).column->getName() + " of arguments of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal columns " + block.getByPosition(arguments[0]).column->getName() + " and "
+                                + block.getByPosition(arguments[1]).column->getName()
+                                + " of arguments of function "
+                                + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN);
 
         result_block.getByPosition(result).column = std::move(col_res);
     }
@@ -414,11 +400,20 @@ class FunctionsStringSearchToString : public IFunction
 {
 public:
     static constexpr auto name = Name::name;
-    static FunctionPtr create(const Context &) { return std::make_shared<FunctionsStringSearchToString>(); }
+    static FunctionPtr create(const Context &)
+    {
+        return std::make_shared<FunctionsStringSearchToString>();
+    }
 
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
-    size_t getNumberOfArguments() const override { return 2; }
+    size_t getNumberOfArguments() const override
+    {
+        return 2;
+    }
 
     bool useDefaultImplementationForConstants() const override { return true; }
     ColumnNumbers getArgumentsThatAreAlwaysConstant() const override { return {1}; }
@@ -445,9 +440,7 @@ public:
 
         const auto * col_needle = typeid_cast<const ColumnConst *>(&*column_needle);
         if (!col_needle)
-            throw Exception(
-                "Second argument of function " + getName() + " must be constant string.",
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Second argument of function " + getName() + " must be constant string.", ErrorCodes::ILLEGAL_COLUMN);
 
         if (const auto * col = checkAndGetColumn<ColumnString>(column.get()))
         {
@@ -461,8 +454,7 @@ public:
         }
         else
             throw Exception(
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function "
-                    + getName(),
+                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function " + getName(),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };

@@ -32,7 +32,10 @@ struct ExecutionResult
             std::rethrow_exception(exception);
     }
 
-    static ExecutionResult success() { return {true, nullptr}; }
+    static ExecutionResult success()
+    {
+        return {true, nullptr};
+    }
 
     static ExecutionResult fail(const std::exception_ptr & exception)
     {

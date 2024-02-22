@@ -14,11 +14,10 @@
 
 #include "parseIdentifierOrStringLiteral.h"
 
-#include <Common/typeid_cast.h>
-
-#include "ASTIdentifier.h"
-#include "ASTLiteral.h"
 #include "ExpressionElementParsers.h"
+#include "ASTLiteral.h"
+#include "ASTIdentifier.h"
+#include <Common/typeid_cast.h>
 
 namespace DB
 {
@@ -40,4 +39,4 @@ bool parseIdentifierOrStringLiteral(IParser::Pos & pos, Expected & expected, Str
     return true;
 }
 
-} // namespace DB
+}

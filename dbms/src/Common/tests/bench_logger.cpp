@@ -31,20 +31,19 @@ static void UnifiedLogFormatterBM(benchmark::State & state)
     double elapsed_sec = 1.2;
     std::pair<int, int> beg{90, 0}, end{1024, 3}, min{1000, 0};
     size_t num_files = 1024, num_legacy = 1003, num_compact = 2, num_removed = 80;
-    auto text = fmt::format(
-        " GC exit within {:.2f} sec. PageFiles from {}_{} to {}_{}, min writing {}_{}"
-        ", num files: {}, num legacy:{}, compact legacy archive files: {}, remove data files: {}",
-        elapsed_sec,
-        beg.first,
-        beg.second,
-        end.first,
-        end.second,
-        min.first,
-        min.second,
-        num_files,
-        num_legacy,
-        num_compact,
-        num_removed);
+    auto text = fmt::format(" GC exit within {:.2f} sec. PageFiles from {}_{} to {}_{}, min writing {}_{}"
+                            ", num files: {}, num legacy:{}, compact legacy archive files: {}, remove data files: {}",
+                            elapsed_sec,
+                            beg.first,
+                            beg.second,
+                            end.first,
+                            end.second,
+                            min.first,
+                            min.second,
+                            num_files,
+                            num_legacy,
+                            num_compact,
+                            num_removed);
 
     UnifiedLogFormatter formatter;
     for (auto _ : state)
@@ -94,40 +93,46 @@ public:
         __VA_ARGS__;                           \
     }
 
-BENCHMARK_LOGGER(WithoutFmt, {
-    for (auto _ : state)
+BENCHMARK_LOGGER(
+    WithoutFmt,
     {
-        LOG_INFO(log, " GC exit within 5 sec.");
-    }
-})
+        for (auto _ : state)
+        {
+            LOG_INFO(log, " GC exit within 5 sec.");
+        }
+    })
 
-BENCHMARK_LOGGER(FmtShort, {
-    for (auto _ : state)
+BENCHMARK_LOGGER(
+    FmtShort,
     {
-        LOG_INFO(log, " GC exit within {} sec.", elapsed_sec);
-    }
-})
+        for (auto _ : state)
+        {
+            LOG_INFO(log, " GC exit within {} sec.", elapsed_sec);
+        }
+    })
 
-BENCHMARK_LOGGER(FmtLong, {
-    for (auto _ : state)
+BENCHMARK_LOGGER(
+    FmtLong,
     {
-        LOG_INFO(
-            log,
-            " GC exit within {:.2f} sec. PageFiles from {}_{} to {}_{}, min writing {}_{}"
-            ", num files: {}, num legacy:{}, compact legacy archive files: {}, remove data files: {}",
-            elapsed_sec,
-            beg.first,
-            beg.second,
-            end.first,
-            end.second,
-            min.first,
-            min.second,
-            num_files,
-            num_legacy,
-            num_compact,
-            num_removed);
-    }
-})
+        for (auto _ : state)
+        {
+            LOG_INFO(
+                log,
+                " GC exit within {:.2f} sec. PageFiles from {}_{} to {}_{}, min writing {}_{}"
+                ", num files: {}, num legacy:{}, compact legacy archive files: {}, remove data files: {}",
+                elapsed_sec,
+                beg.first,
+                beg.second,
+                end.first,
+                end.second,
+                min.first,
+                min.second,
+                num_files,
+                num_legacy,
+                num_compact,
+                num_removed);
+        }
+    })
 
 
 } // namespace bench

@@ -14,49 +14,45 @@
 #include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Flash/Planner/Plans/PhysicalAggregationConvergent.h>
 #include <Operators/AggregateConvergentSourceOp.h>
-#include <Operators/AggregateRestoreSourceOp.h>
 #include <Operators/NullSourceOp.h>
 
 namespace DB
 {
-void PhysicalAggregationConvergent::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalAggregationConvergent::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & /*context*/,
     size_t /*concurrency*/)
 {
     // For fine grained shuffle, PhysicalAggregation will not be broken into AggregateBuild and AggregateConvergent.
     // So only non fine grained shuffle is considered here.
-    RUNTIME_CHECK(!fine_grained_shuffle.enable());
+    assert(!fine_grained_shuffle.enable());
 
-    assert(aggregate_context);
-    if (aggregate_context->hasSpilledData())
+    aggregate_context->initConvergent();
+
+    if (unlikely(aggregate_context->useNullSource()))
     {
-        auto restorers = aggregate_context->buildSharedRestorer(exec_context);
-        for (auto & restorer : restorers)
-        {
-            group_builder.addConcurrency(std::make_unique<AggregateRestoreSourceOp>(
-                exec_context,
-                aggregate_context,
-                std::move(restorer),
+        group_builder.init(1);
+        group_builder.transform([&](auto & builder) {
+            builder.setSourceOp(std::make_unique<NullSourceOp>(
+                exec_status,
+                aggregate_context->getHeader(),
                 log->identifier()));
-        }
+        });
     }
     else
     {
-        aggregate_context->initConvergent();
-        for (size_t index = 0; index < aggregate_context->getConvergentConcurrency(); ++index)
-        {
-            group_builder.addConcurrency(std::make_unique<AggregateConvergentSourceOp>(
-                exec_context,
+        group_builder.init(aggregate_context->getConvergentConcurrency());
+        size_t index = 0;
+        group_builder.transform([&](auto & builder) {
+            builder.setSourceOp(std::make_unique<AggregateConvergentSourceOp>(
+                exec_status,
                 aggregate_context,
-                index,
+                index++,
                 log->identifier()));
-        }
+        });
     }
 
-    executeExpression(exec_context, group_builder, expr_after_agg, log);
-
-    aggregate_context.reset();
+    executeExpression(exec_status, group_builder, expr_after_agg, log);
 }
 } // namespace DB
