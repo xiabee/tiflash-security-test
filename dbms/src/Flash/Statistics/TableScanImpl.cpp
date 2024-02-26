@@ -21,11 +21,7 @@ namespace DB
 {
 String TableScanDetail::toJson() const
 {
-    return fmt::format(
-        R"({{"is_local":{},"packets":{},"bytes":{}}})",
-        is_local,
-        packets,
-        bytes);
+    return fmt::format(R"({{"is_local":{},"packets":{},"bytes":{}}})", is_local, packets, bytes);
 }
 
 void TableScanStatistics::appendExtraJson(FmtBuffer & fmt_buffer) const
@@ -40,32 +36,30 @@ void TableScanStatistics::appendExtraJson(FmtBuffer & fmt_buffer) const
     );
 }
 
+void TableScanStatistics::updateTableScanDetail(const std::vector<ConnectionProfileInfo> & connection_profile_infos)
+{
+    for (const auto & connection_profile_info : connection_profile_infos)
+    {
+        remote_table_scan_detail.packets += connection_profile_info.packets;
+        remote_table_scan_detail.bytes += connection_profile_info.bytes;
+    }
+}
+
 void TableScanStatistics::collectExtraRuntimeDetail()
 {
-    const auto & io_stream_map = dag_context.getInBoundIOInputStreamsMap();
-    auto it = io_stream_map.find(executor_id);
-    if (it != io_stream_map.end())
+    switch (dag_context.getExecutionMode())
     {
-        for (const auto & io_stream : it->second)
-        {
-            auto * cop_stream = dynamic_cast<CoprocessorBlockInputStream *>(io_stream.get());
-            /// In tiflash_compute node, TableScan will be converted to ExchangeReceiver.
-            auto * exchange_stream = dynamic_cast<ExchangeReceiverInputStream *>(io_stream.get());
-            if (cop_stream || exchange_stream)
+    case ExecutionMode::None:
+        break;
+    case ExecutionMode::Stream:
+        transformInBoundIOProfileForStream(dag_context, executor_id, [&](const IBlockInputStream & stream) {
+            if (const auto * cop_stream = dynamic_cast<const CoprocessorBlockInputStream *>(&stream); cop_stream)
             {
-                const std::vector<ConnectionProfileInfo> * connection_profile_infos = nullptr;
-                if (cop_stream)
-                    connection_profile_infos = &cop_stream->getConnectionProfileInfos();
-                else if (exchange_stream)
-                    connection_profile_infos = &exchange_stream->getConnectionProfileInfos();
-
-                for (const auto & connection_profile_info : *connection_profile_infos)
-                {
-                    remote_table_scan_detail.packets += connection_profile_info.packets;
-                    remote_table_scan_detail.bytes += connection_profile_info.bytes;
-                }
+                /// remote read
+                updateTableScanDetail(cop_stream->getConnectionProfileInfos());
             }
-            else if (auto * local_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get()); local_stream)
+            else if (const auto * local_stream = dynamic_cast<const IProfilingBlockInputStream *>(&stream);
+                     local_stream)
             {
                 /// local read input stream also is IProfilingBlockInputStream
                 local_table_scan_detail.bytes += local_stream->getProfileInfo().bytes;
@@ -74,7 +68,16 @@ void TableScanStatistics::collectExtraRuntimeDetail()
             {
                 /// Streams like: NullBlockInputStream.
             }
-        }
+        });
+        break;
+    case ExecutionMode::Pipeline:
+        transformInBoundIOProfileForPipeline(dag_context, executor_id, [&](const IOProfileInfo & profile_info) {
+            if (profile_info.is_local)
+                local_table_scan_detail.bytes += profile_info.operator_info->bytes;
+            else
+                updateTableScanDetail(profile_info.connection_profile_infos);
+        });
+        break;
     }
 }
 

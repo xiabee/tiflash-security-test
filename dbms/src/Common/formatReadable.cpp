@@ -13,16 +13,22 @@
 // limitations under the License.
 
 #include <Common/formatReadable.h>
+#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/DoubleConverter.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 #include <cmath>
 #include <iomanip>
 #include <sstream>
 
 
-static void formatReadable(double size, DB::WriteBuffer & out, int precision, const char ** units, size_t units_size, double delimiter)
+static void formatReadable(
+    double size,
+    DB::WriteBuffer & out,
+    int precision,
+    const char ** units,
+    size_t units_size,
+    double delimiter)
 {
     size_t i = 0;
     for (; i + 1 < units_size && fabs(size) >= delimiter; ++i)

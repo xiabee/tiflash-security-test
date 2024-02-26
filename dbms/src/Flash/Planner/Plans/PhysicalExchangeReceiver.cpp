@@ -24,7 +24,7 @@
 #include <Flash/Planner/Plans/PhysicalExchangeReceiver.h>
 #include <Interpreters/Context.h>
 #include <Operators/ExchangeReceiverSourceOp.h>
-#include <Storages/Transaction/TypeMapping.h>
+#include <TiDB/Decode/TypeMapping.h>
 #include <fmt/format.h>
 
 namespace DB
@@ -66,7 +66,7 @@ PhysicalPlanNodePtr PhysicalExchangeReceiver::build(
 
 void PhysicalExchangeReceiver::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    assert(pipeline.streams.empty());
+    RUNTIME_CHECK(pipeline.streams.empty());
 
     auto & dag_context = *context.getDAGContext();
     // todo choose a more reasonable stream number
@@ -93,27 +93,27 @@ void PhysicalExchangeReceiver::buildBlockInputStreamImpl(DAGPipeline & pipeline,
     }
 }
 
-void PhysicalExchangeReceiver::buildPipelineExecGroup(
-    PipelineExecutorStatus & exec_status,
+void PhysicalExchangeReceiver::buildPipelineExecGroupImpl(
+    PipelineExecutorContext & exec_context,
     PipelineExecGroupBuilder & group_builder,
-    Context & /*context*/,
+    Context & context,
     size_t concurrency)
 {
     if (fine_grained_shuffle.enable())
         concurrency = std::min(concurrency, fine_grained_shuffle.stream_count);
 
-    group_builder.init(concurrency);
-    size_t partition_id = 0;
-    group_builder.transform([&](auto & builder) {
-        builder.setSourceOp(std::make_unique<ExchangeReceiverSourceOp>(
-            exec_status,
+    for (size_t partition_id = 0; partition_id < concurrency; ++partition_id)
+    {
+        group_builder.addConcurrency(std::make_unique<ExchangeReceiverSourceOp>(
+            exec_context,
             log->identifier(),
             mpp_exchange_receiver,
-            /*stream_id=*/fine_grained_shuffle.enable() ? partition_id++ : 0));
-    });
+            /*stream_id=*/fine_grained_shuffle.enable() ? partition_id : 0));
+    }
+    context.getDAGContext()->addInboundIOProfileInfos(executor_id, group_builder.getCurIOProfileInfos());
 }
 
-void PhysicalExchangeReceiver::finalize(const Names & parent_require)
+void PhysicalExchangeReceiver::finalizeImpl(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
 }

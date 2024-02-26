@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Storages/Transaction/KeyspaceSnapshot.h>
-#include <Storages/Transaction/TiDB.h>
+#include <Storages/KVStore/TiKVHelpers/KeyspaceSnapshot.h>
+#include <TiDB/Schema/TiDB.h>
 #include <common/logger_useful.h>
 
 #include <optional>
@@ -23,6 +23,7 @@
 namespace DB
 {
 // The enum results are completely the same as the DDL Action listed in the "parser/model/ddl.go" of TiDB codebase, which must be keeping in sync.
+// https://github.com/pingcap/tidb/blob/9dfbccb01b76e6a5f2fc6f6562b8645dd5a151b1/pkg/parser/model/ddl.go#L29-L30
 enum class SchemaActionType : Int8
 {
     None = 0,
@@ -92,12 +93,17 @@ enum class SchemaActionType : Int8
     ActionReorganizePartition = 64,
     ActionAlterTTLInfo = 65,
     ActionAlterTTLRemove = 67,
+    ActionCreateResourceGroup = 68,
+    ActionAlterResourceGroup = 69,
+    ActionDropResourceGroup = 70,
+    ActionAlterTablePartitioning = 71,
+    ActionRemovePartitioning = 72,
 
 
-    // If we supporte new type from TiDB.
+    // If we support new type from TiDB.
     // MaxRecognizedType also needs to be changed.
     // It should always be equal to the maximum supported type + 1
-    MaxRecognizedType = 68,
+    MaxRecognizedType = 73,
 };
 
 struct AffectedOption
@@ -141,8 +147,7 @@ struct SchemaGetter
         : snap(keyspace_id_, cluster_, tso_)
         , keyspace_id(keyspace_id_)
         , log(Logger::get())
-    {
-    }
+    {}
 
     Int64 getVersion();
 
@@ -160,13 +165,27 @@ struct SchemaGetter
 
     TiDB::DBInfoPtr getDatabase(DatabaseID db_id);
 
-    TiDB::TableInfoPtr getTableInfo(DatabaseID db_id, TableID table_id);
+    TiDB::TableInfoPtr getTableInfo(DatabaseID db_id, TableID table_id, bool try_mvcc = true)
+    {
+        if (try_mvcc)
+            return getTableInfoImpl</*mvcc_get*/ true>(db_id, table_id).first;
+        return getTableInfoImpl</*mvcc_get*/ false>(db_id, table_id).first;
+    }
+
+    std::pair<TiDB::TableInfoPtr, bool> getTableInfoAndCheckMvcc(DatabaseID db_id, TableID table_id)
+    {
+        return getTableInfoImpl</*mvcc_get*/ true>(db_id, table_id);
+    }
 
     std::vector<TiDB::DBInfoPtr> listDBs();
 
     std::vector<TiDB::TableInfoPtr> listTables(DatabaseID db_id);
 
     KeyspaceID getKeyspaceID() const { return keyspace_id; }
+
+private:
+    template <bool mvcc_get>
+    std::pair<TiDB::TableInfoPtr, bool> getTableInfoImpl(DatabaseID db_id, TableID table_id);
 };
 
 } // namespace DB

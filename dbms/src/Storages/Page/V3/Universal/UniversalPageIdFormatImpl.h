@@ -14,14 +14,16 @@
 
 #pragma once
 
-#include <IO/Endian.h>
-#include <IO/WriteBuffer.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/WriteBuffer.h>
+#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/Util/Endian.h>
+#include <IO/Util/WriteHelpers.h>
+#include <Storages/KVStore/TiKVHelpers/TiKVKeyspaceIDImpl.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/Universal/UniversalPageId.h>
-#include <Storages/Transaction/TiKVKeyspaceIDImpl.h>
 #include <fmt/format.h>
+
+#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -95,6 +97,7 @@ public:
 
     static constexpr char RAFT_PREFIX = 0x01;
     static constexpr char KV_PREFIX = 0x02;
+    static constexpr char LOCAL_KV_PREFIX = 0x03;
 
     // data is in kv engine, so it is prepended by KV_PREFIX
     // KV_PREFIX LOCAL_PREFIX REGION_RAFT_PREFIX region_id APPLY_STATE_SUFFIX
@@ -102,6 +105,18 @@ public:
     {
         WriteBufferFromOwnString buff;
         writeChar(KV_PREFIX, buff);
+        writeChar(0x01, buff);
+        writeChar(0x02, buff);
+        encodeUInt64(region_id, buff);
+        writeChar(0x03, buff);
+        return buff.releaseStr();
+    }
+
+    // RAFT_PREFIX LOCAL_PREFIX REGION_RAFT_PREFIX region_id APPLY_STATE_SUFFIX
+    static UniversalPageId toRaftApplyStateKeyInRaftEngine(UInt64 region_id)
+    {
+        WriteBufferFromOwnString buff;
+        writeChar(RAFT_PREFIX, buff);
         writeChar(0x01, buff);
         writeChar(0x02, buff);
         encodeUInt64(region_id, buff);
@@ -134,6 +149,32 @@ public:
         return buff.releaseStr();
     }
 
+    enum class LocalKVKeyType : UInt64
+    {
+        FAPIngestInfo = 1,
+        EncryptionKey = 2,
+    };
+
+    // LOCAL_PREFIX LocalKVKeyType::FAPIngestInfo region_id
+    static String toFAPIngestInfoPageID(UInt64 region_id)
+    {
+        WriteBufferFromOwnString buff;
+        writeChar(LOCAL_KV_PREFIX, buff);
+        encodeUInt64(static_cast<UInt64>(LocalKVKeyType::FAPIngestInfo), buff);
+        encodeUInt64(region_id, buff);
+        return buff.releaseStr();
+    }
+
+    // LOCAL_PREFIX LocalKVKeyType::EncryptionKey keyspace_id(as 64bits)
+    static String toEncryptionKeyPageID(KeyspaceID keyspace_id)
+    {
+        WriteBufferFromOwnString buff;
+        writeChar(LOCAL_KV_PREFIX, buff);
+        encodeUInt64(static_cast<UInt64>(LocalKVKeyType::EncryptionKey), buff);
+        encodeUInt64(keyspace_id, buff);
+        return buff.releaseStr();
+    }
+
     // RAFT_PREFIX LOCAL_PREFIX REGION_RAFT_PREFIX region_id (RAFT_LOG_SUFFIX + 1)
     static String toFullRaftLogScanEnd(UInt64 region_id)
     {
@@ -143,6 +184,19 @@ public:
         writeChar(0x02, buff);
         encodeUInt64(region_id, buff);
         writeChar(0x02, buff);
+        return buff.releaseStr();
+    }
+
+    // RAFT_PREFIX LOCAL_PREFIX REGION_RAFT_PREFIX region_id RAFT_LOG_SUFFIX log_index
+    static String toRaftLogKey(RegionID region_id, UInt64 log_index)
+    {
+        WriteBufferFromOwnString buff;
+        writeChar(RAFT_PREFIX, buff);
+        writeChar(0x01, buff);
+        writeChar(0x02, buff);
+        encodeUInt64(region_id, buff);
+        writeChar(0x01, buff);
+        encodeUInt64(log_index, buff);
         return buff.releaseStr();
     }
 
@@ -190,7 +244,8 @@ public:
     static inline bool isType(const UniversalPageId & page_id, StorageType type)
     {
         const auto & page_id_str = page_id.asStr();
-        auto page_id_without_keyspace = TiKVKeyspaceID::removeKeyspaceID(std::string_view(page_id_str.data(), page_id_str.size()));
+        auto page_id_without_keyspace
+            = TiKVKeyspaceID::removeKeyspaceID(std::string_view(page_id_str.data(), page_id_str.size()));
         return page_id_without_keyspace.starts_with(getSubPrefix(type));
     }
 
@@ -208,9 +263,14 @@ public:
         {
             return StorageType::KVEngine;
         }
+        else if (page_id_str[0] == LOCAL_KV_PREFIX)
+        {
+            return StorageType::LocalKV;
+        }
         else
         {
-            auto page_id_without_keyspace = TiKVKeyspaceID::removeKeyspaceID(std::string_view(page_id_str.data(), page_id_str.size()));
+            auto page_id_without_keyspace
+                = TiKVKeyspaceID::removeKeyspaceID(std::string_view(page_id_str.data(), page_id_str.size()));
             if (page_id_without_keyspace.starts_with(getSubPrefix(StorageType::Log)))
             {
                 return StorageType::Log;
@@ -257,7 +317,9 @@ private:
         case StorageType::KVStore:
             return "kvs";
         default:
-            throw Exception(fmt::format("Unknown storage type {}", static_cast<UInt8>(type)), ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                fmt::format("Unknown storage type {}", static_cast<UInt8>(type)),
+                ErrorCodes::LOGICAL_ERROR);
         }
     }
 };

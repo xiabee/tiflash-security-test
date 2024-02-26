@@ -17,8 +17,8 @@
 #include <AggregateFunctions/IAggregateFunction.h>
 #include <Columns/ColumnVector.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 
 namespace DB
@@ -55,10 +55,7 @@ class AggregateFunctionBitwise final : public IAggregateFunctionDataHelper<Data,
 public:
     String getName() const override { return Data::name(); }
 
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeNumber<T>>();
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeNumber<T>>(); }
 
     void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena *) const override
     {

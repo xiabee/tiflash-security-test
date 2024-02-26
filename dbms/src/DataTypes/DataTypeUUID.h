@@ -17,8 +17,8 @@
 #include <Columns/ColumnsNumber.h>
 #include <DataTypes/DataTypeNumberBase.h>
 #include <DataTypes/IDataType.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 namespace DB
 {
@@ -36,7 +36,8 @@ public:
     void deserializeTextEscaped(IColumn & column, ReadBuffer & istr) const override;
     void serializeTextQuoted(const IColumn & column, size_t row_num, WriteBuffer & ostr) const override;
     void deserializeTextQuoted(IColumn & column, ReadBuffer & istr) const override;
-    void serializeTextJSON(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON &) const override;
+    void serializeTextJSON(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON &)
+        const override;
     void deserializeTextJSON(IColumn & column, ReadBuffer & istr) const override;
     void serializeTextCSV(const IColumn & column, size_t row_num, WriteBuffer & ostr) const override;
     void deserializeTextCSV(IColumn & column, ReadBuffer & istr, const char delimiter) const override;

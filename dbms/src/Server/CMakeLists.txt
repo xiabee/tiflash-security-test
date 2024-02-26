@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# 'clickhouse' binary is a multi purpose tool,
+# 'tiflash' binary is a multi purpose tool,
 # that contain multiple execution modes (client, server, etc.)
 # each of them is built and linked as a separate library, defined below.
 
@@ -24,6 +24,7 @@ option(ENABLE_TIFLASH_DTTOOL "Enable dttool: tools to manage dmfile" ${ENABLE_TI
 option(ENABLE_TIFLASH_DTWORKLOAD "Enable dtworkload: tools to test and stress DeltaTree" ${ENABLE_TIFLASH_ALL})
 option(ENABLE_TIFLASH_PAGEWORKLOAD "Enable pageworkload: tools to test and stress PageStorage" ${ENABLE_TIFLASH_ALL})
 option(ENABLE_TIFLASH_PAGECTL "Enable pagectl: tools to debug page storage" ${ENABLE_TIFLASH_ALL})
+option(ENABLE_TIFLASH_CHECKPOINTTOOL "Enable checkpoint tool: tools to debug checkpoint of PageStorage" ${ENABLE_TIFLASH_ALL})
 
 configure_file (config_tools.h.in ${CMAKE_CURRENT_BINARY_DIR}/config_tools.h)
 
@@ -52,6 +53,7 @@ target_link_libraries(tiflash-server-lib PRIVATE ${TIFLASH_PROXY_LIBRARY})
 
 target_link_libraries (tiflash-server-lib PUBLIC server_for_test tiflash_common_io daemon tiflash_storages_system tiflash_functions tiflash_aggregate_functions tiflash_table_functions)
 target_include_directories (tiflash-server-lib PUBLIC ${TiFlash_SOURCE_DIR}/libs/libdaemon/include)
+target_include_directories (tiflash-server-lib PRIVATE ${TiFlash_SOURCE_DIR}/contrib/GmSSL/include)
 
 add_library (tiflash-client-lib Client.cpp)
 target_link_libraries (tiflash-client-lib tiflash_functions tiflash_aggregate_functions ${LINE_EDITING_LIBS} ${Boost_PROGRAM_OPTIONS_LIBRARY})
@@ -166,9 +168,12 @@ endif()
 if (ENABLE_TIFLASH_PAGECTL)
     target_link_libraries(tiflash page-ctl-lib)
 endif ()
+if (ENABLE_TIFLASH_CHECKPOINTTOOL)
+    target_link_libraries(tiflash checkpoint-tool-lib)
+endif ()
 
 # install always because depian package want this files:
 install (TARGETS tiflash RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT tiflash)
 
 set (GLIBC_MAX_REQUIRED 2.4)
-add_test(NAME GLIBC_required_version COMMAND bash -c "readelf -s ${CMAKE_CURRENT_BINARY_DIR}/clickhouse-server | grep '@GLIBC' | grep -oP 'GLIBC_[\\d\\.]+' | sort | uniq | sort -r | perl -lnE 'exit 1 if $_ gt q{GLIBC_${GLIBC_MAX_REQUIRED}}'")
+add_test(NAME GLIBC_required_version COMMAND bash -c "readelf -s ${CMAKE_CURRENT_BINARY_DIR}/tiflash | grep '@GLIBC' | grep -oP 'GLIBC_[\\d\\.]+' | sort | uniq | sort -r | perl -lnE 'exit 1 if $_ gt q{GLIBC_${GLIBC_MAX_REQUIRED}}'")

@@ -13,19 +13,22 @@
 // limitations under the License.
 
 #include <DataStreams/TabSeparatedRowOutputStream.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 
 namespace DB
 {
 
-TabSeparatedRowOutputStream::TabSeparatedRowOutputStream(WriteBuffer & ostr_, const Block & sample_, bool with_names_, bool with_types_)
+TabSeparatedRowOutputStream::TabSeparatedRowOutputStream(
+    WriteBuffer & ostr_,
+    const Block & sample_,
+    bool with_names_,
+    bool with_types_)
     : ostr(ostr_)
     , sample(sample_)
     , with_names(with_names_)
     , with_types(with_types_)
-{
-}
+{}
 
 
 void TabSeparatedRowOutputStream::flush()

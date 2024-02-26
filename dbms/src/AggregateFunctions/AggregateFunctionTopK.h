@@ -21,8 +21,8 @@
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 
 namespace DB
@@ -124,7 +124,10 @@ struct AggregateFunctionTopKGenericData
  *  For such columns topK() can be implemented more efficently (especially for small numeric arrays).
  */
 template <bool is_plain_column = false>
-class AggregateFunctionTopKGeneric : public IAggregateFunctionDataHelper<AggregateFunctionTopKGenericData, AggregateFunctionTopKGeneric<is_plain_column>>
+class AggregateFunctionTopKGeneric
+    : public IAggregateFunctionDataHelper<
+          AggregateFunctionTopKGenericData,
+          AggregateFunctionTopKGeneric<is_plain_column>>
 {
 private:
     using State = AggregateFunctionTopKGenericData;
@@ -144,15 +147,9 @@ public:
 
     String getName() const override { return "topK"; }
 
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeArray>(input_data_type);
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeArray>(input_data_type); }
 
-    bool allocatesMemoryInArena() const override
-    {
-        return true;
-    }
+    bool allocatesMemoryInArena() const override { return true; }
 
     void serialize(ConstAggregateDataPtr __restrict place, WriteBuffer & buf) const override
     {

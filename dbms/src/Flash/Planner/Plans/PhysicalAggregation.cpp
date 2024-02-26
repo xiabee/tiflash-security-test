@@ -14,6 +14,7 @@
 
 #include <Common/Logger.h>
 #include <Common/TiFlashException.h>
+#include <Core/FineGrainedOperatorSpillContext.h>
 #include <DataStreams/AggregatingBlockInputStream.h>
 #include <DataStreams/ParallelAggregatingBlockInputStream.h>
 #include <Flash/Coprocessor/AggregationInterpreterHelper.h>
@@ -40,7 +41,7 @@ PhysicalPlanNodePtr PhysicalAggregation::build(
     const FineGrainedShuffle & fine_grained_shuffle,
     const PhysicalPlanNodePtr & child)
 {
-    assert(child);
+    RUNTIME_CHECK(child);
 
     if (unlikely(aggregation.group_by_size() == 0 && aggregation.agg_func_size() == 0))
     {
@@ -99,11 +100,13 @@ void PhysicalAggregation::buildBlockInputStreamImpl(DAGPipeline & pipeline, Cont
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        fmt::format("{}_aggregation", log->identifier()),
+        log->identifier(),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
-        context.getFileProvider());
+        context.getFileProvider(),
+        context.getSettingsRef().max_threads,
+        context.getSettingsRef().max_block_size);
     auto params = AggregationInterpreterHelper::buildParams(
         context,
         before_agg_header,
@@ -117,15 +120,27 @@ void PhysicalAggregation::buildBlockInputStreamImpl(DAGPipeline & pipeline, Cont
 
     if (fine_grained_shuffle.enable())
     {
+        std::shared_ptr<FineGrainedOperatorSpillContext> fine_grained_spill_context;
+        if (context.getDAGContext() != nullptr && context.getDAGContext()->isInAutoSpillMode()
+            && pipeline.hasMoreThanOneStream())
+            fine_grained_spill_context = std::make_shared<FineGrainedOperatorSpillContext>("aggregation", log);
         /// For fine_grained_shuffle, just do aggregation in streams independently
         pipeline.transform([&](auto & stream) {
             stream = std::make_shared<AggregatingBlockInputStream>(
                 stream,
                 params,
                 true,
-                log->identifier());
+                log->identifier(),
+                [&](const OperatorSpillContextPtr & operator_spill_context) {
+                    if (fine_grained_spill_context != nullptr)
+                        fine_grained_spill_context->addOperatorSpillContext(operator_spill_context);
+                    else if (context.getDAGContext() != nullptr)
+                        context.getDAGContext()->registerOperatorSpillContext(operator_spill_context);
+                });
             stream->setExtraInfo(String(enableFineGrainedShuffleExtraInfo));
         });
+        if (fine_grained_spill_context != nullptr)
+            context.getDAGContext()->registerOperatorSpillContext(fine_grained_spill_context);
     }
     else if (pipeline.streams.size() > 1)
     {
@@ -137,53 +152,77 @@ void PhysicalAggregation::buildBlockInputStreamImpl(DAGPipeline & pipeline, Cont
             params,
             true,
             max_streams,
-            settings.aggregation_memory_efficient_merge_threads ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads) : static_cast<size_t>(settings.max_threads),
-            log->identifier());
+            settings.max_buffered_bytes_in_executor,
+            settings.aggregation_memory_efficient_merge_threads
+                ? static_cast<size_t>(settings.aggregation_memory_efficient_merge_threads)
+                : static_cast<size_t>(settings.max_threads),
+            log->identifier(),
+            [&](const OperatorSpillContextPtr & operator_spill_context) {
+                if (context.getDAGContext() != nullptr)
+                {
+                    context.getDAGContext()->registerOperatorSpillContext(operator_spill_context);
+                }
+            });
 
         pipeline.streams.resize(1);
         pipeline.firstStream() = std::move(stream);
 
-        restoreConcurrency(pipeline, context.getDAGContext()->final_concurrency, log);
+        restoreConcurrency(
+            pipeline,
+            context.getDAGContext()->final_concurrency,
+            context.getSettingsRef().max_buffered_bytes_in_executor,
+            log);
     }
     else
     {
-        assert(pipeline.streams.size() == 1);
+        RUNTIME_CHECK(pipeline.streams.size() == 1);
         pipeline.firstStream() = std::make_shared<AggregatingBlockInputStream>(
             pipeline.firstStream(),
             params,
             true,
-            log->identifier());
+            log->identifier(),
+            [&](const OperatorSpillContextPtr & operator_spill_context) {
+                if (context.getDAGContext() != nullptr)
+                {
+                    context.getDAGContext()->registerOperatorSpillContext(operator_spill_context);
+                }
+            });
     }
 
     // we can record for agg after restore concurrency.
     // Because the streams of expr_after_agg will provide the correct ProfileInfo.
     // See #3804.
-    assert(expr_after_agg && !expr_after_agg->getActions().empty());
+    RUNTIME_CHECK(expr_after_agg && !expr_after_agg->getActions().empty());
     executeExpression(pipeline, expr_after_agg, log, "expr after aggregation");
 }
 
-void PhysicalAggregation::buildPipelineExecGroup(
-    PipelineExecutorStatus & exec_status,
+void PhysicalAggregation::buildPipelineExecGroupImpl(
+    PipelineExecutorContext & exec_context,
     PipelineExecGroupBuilder & group_builder,
     Context & context,
     size_t /*concurrency*/)
 {
     // For non fine grained shuffle, PhysicalAggregation will be broken into AggregateBuild and AggregateConvergent.
     // So only fine grained shuffle is considered here.
-    assert(fine_grained_shuffle.enable());
+    RUNTIME_CHECK(fine_grained_shuffle.enable());
 
-    executeExpression(exec_status, group_builder, before_agg_actions, log);
+    executeExpression(exec_context, group_builder, before_agg_actions, log);
 
     Block before_agg_header = group_builder.getCurrentHeader();
-    size_t concurrency = group_builder.concurrency;
+    size_t concurrency = group_builder.concurrency();
+    std::shared_ptr<FineGrainedOperatorSpillContext> fine_grained_spill_context;
+    if (context.getDAGContext() != nullptr && context.getDAGContext()->isInAutoSpillMode() && concurrency > 1)
+        fine_grained_spill_context = std::make_shared<FineGrainedOperatorSpillContext>("aggregation", log);
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        fmt::format("{}_aggregation", log->identifier()),
+        log->identifier(),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
-        context.getFileProvider());
+        context.getFileProvider(),
+        context.getSettingsRef().max_threads,
+        context.getSettingsRef().max_block_size);
     auto params = AggregationInterpreterHelper::buildParams(
         context,
         before_agg_header,
@@ -195,19 +234,28 @@ void PhysicalAggregation::buildPipelineExecGroup(
         is_final_agg,
         spill_config);
     group_builder.transform([&](auto & builder) {
-        builder.appendTransformOp(std::make_unique<LocalAggregateTransform>(exec_status, log->identifier(), params));
+        builder.appendTransformOp(std::make_unique<LocalAggregateTransform>(
+            exec_context,
+            log->identifier(),
+            params,
+            fine_grained_spill_context));
     });
+    if (fine_grained_spill_context != nullptr)
+        context.getDAGContext()->registerOperatorSpillContext(fine_grained_spill_context);
 
-    executeExpression(exec_status, group_builder, expr_after_agg, log);
+    executeExpression(exec_context, group_builder, expr_after_agg, log);
 }
 
-void PhysicalAggregation::buildPipeline(PipelineBuilder & builder)
+void PhysicalAggregation::buildPipeline(
+    PipelineBuilder & builder,
+    Context & context,
+    PipelineExecutorContext & exec_context)
 {
     auto aggregate_context = std::make_shared<AggregateContext>(log->identifier());
     if (fine_grained_shuffle.enable())
     {
         // For fine grained shuffle, Aggregate wouldn't be broken.
-        child->buildPipeline(builder);
+        child->buildPipeline(builder, context, exec_context);
         builder.addPlanNode(shared_from_this());
     }
     else
@@ -216,7 +264,7 @@ void PhysicalAggregation::buildPipeline(PipelineBuilder & builder)
         auto agg_build = std::make_shared<PhysicalAggregationBuild>(
             executor_id,
             schema,
-            log->identifier(),
+            req_id,
             child,
             before_agg_actions,
             aggregation_keys,
@@ -227,20 +275,20 @@ void PhysicalAggregation::buildPipeline(PipelineBuilder & builder)
         // Break the pipeline for agg_build.
         auto agg_build_builder = builder.breakPipeline(agg_build);
         // agg_build pipeline.
-        child->buildPipeline(agg_build_builder);
+        child->buildPipeline(agg_build_builder, context, exec_context);
         agg_build_builder.build();
         // agg_convergent pipeline.
         auto agg_convergent = std::make_shared<PhysicalAggregationConvergent>(
             executor_id,
             schema,
-            log->identifier(),
+            req_id,
             aggregate_context,
             expr_after_agg);
         builder.addPlanNode(agg_convergent);
     }
 }
 
-void PhysicalAggregation::finalize(const Names & parent_require)
+void PhysicalAggregation::finalizeImpl(const Names & parent_require)
 {
     // schema.size() >= parent_require.size()
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);

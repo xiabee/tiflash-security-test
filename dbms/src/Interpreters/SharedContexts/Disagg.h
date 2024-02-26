@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Core/TiFlashDisaggregatedMode.h>
-#include <Encryption/FileProvider_fwd.h>
+#include <IO/FileProvider_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/SharedContexts/Disagg_fwd.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore_fwd.h>
@@ -69,7 +69,10 @@ struct SharedContextDisagg : private boost::noncopyable
     /// It is a cache for the delta index, stores in the memory.
     DB::DM::Remote::RNDeltaIndexCachePtr rn_delta_index_cache;
 
-    static SharedContextDisaggPtr create(Context & global_context_) { return std::make_shared<SharedContextDisagg>(global_context_); }
+    static SharedContextDisaggPtr create(Context & global_context_)
+    {
+        return std::make_shared<SharedContextDisagg>(global_context_);
+    }
 
     /// Use `SharedContextDisagg::create` instead.
     explicit SharedContextDisagg(Context & global_context_)
@@ -86,22 +89,13 @@ struct SharedContextDisagg : private boost::noncopyable
 
     void initRemoteDataStore(const FileProviderPtr & file_provider, bool s3_enabled);
 
-    void initFastAddPeerContext();
+    void initFastAddPeerContext(UInt64 fap_concur);
 
-    bool isDisaggregatedComputeMode() const
-    {
-        return disaggregated_mode == DisaggregatedMode::Compute;
-    }
+    bool isDisaggregatedComputeMode() const { return disaggregated_mode == DisaggregatedMode::Compute; }
 
-    bool isDisaggregatedStorageMode() const
-    {
-        return disaggregated_mode == DisaggregatedMode::Storage;
-    }
+    bool isDisaggregatedStorageMode() const { return disaggregated_mode == DisaggregatedMode::Storage; }
 
-    bool notDisaggregatedMode() const
-    {
-        return disaggregated_mode == DisaggregatedMode::None;
-    }
+    bool notDisaggregatedMode() const { return disaggregated_mode == DisaggregatedMode::None; }
 };
 
 } // namespace DB

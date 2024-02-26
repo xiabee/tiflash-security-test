@@ -17,11 +17,11 @@
 #include <Common/ArenaWithFreeLists.h>
 #include <Common/HashTable/Hash.h>
 #include <Common/HashTable/HashMap.h>
-#include <IO/ReadBuffer.h>
-#include <IO/ReadHelpers.h>
-#include <IO/VarInt.h>
-#include <IO/WriteBuffer.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/ReadBuffer.h>
+#include <IO/Buffer/WriteBuffer.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/VarInt.h>
+#include <IO/Util/WriteHelpers.h>
 
 #include <boost/range/adaptor/reversed.hpp>
 #include <iostream>
@@ -74,9 +74,7 @@ private:
 };
 
 
-template <
-    typename TKey,
-    typename Hash = DefaultHash<TKey>>
+template <typename TKey, typename Hash = DefaultHash<TKey>>
 class SpaceSaving
 {
 private:
@@ -118,10 +116,7 @@ public:
         }
 
         // greater() taking slot error into account
-        bool operator>(const Counter & b) const
-        {
-            return (count > b.count) || (count == b.count && error < b.error);
-        }
+        bool operator>(const Counter & b) const { return (count > b.count) || (count == b.count && error < b.error); }
 
         TKey key;
         size_t slot;
@@ -137,20 +132,11 @@ public:
 
     ~SpaceSaving() { destroyElements(); }
 
-    inline size_t size() const
-    {
-        return counter_list.size();
-    }
+    inline size_t size() const { return counter_list.size(); }
 
-    inline size_t capacity() const
-    {
-        return m_capacity;
-    }
+    inline size_t capacity() const { return m_capacity; }
 
-    void clear()
-    {
-        return destroyElements();
-    }
+    void clear() { return destroyElements(); }
 
     void resize(size_t new_capacity)
     {
@@ -254,7 +240,8 @@ public:
             else
             {
                 // Counters not monitored in S1
-                counter_list.push_back(new Counter(arena.emplace(counter->key), counter->count + m1, counter->error + m1, hash));
+                counter_list.push_back(
+                    new Counter(arena.emplace(counter->key), counter->count + m1, counter->error + m1, hash));
             }
         }
 

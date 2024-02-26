@@ -23,10 +23,7 @@ namespace DB
 class PipelineIdGenerator
 {
 public:
-    UInt32 nextID()
-    {
-        return current_id++;
-    }
+    UInt32 nextID() { return current_id++; }
 
 private:
     UInt32 current_id = 0;
@@ -53,8 +50,8 @@ private:
             : pipeline(pipeline_)
             , breaker_node(breaker_node_)
         {
-            assert(pipeline);
-            assert(breaker_node);
+            RUNTIME_CHECK(pipeline);
+            RUNTIME_CHECK(breaker_node);
         }
 
         // the broken pipeline.
@@ -74,10 +71,7 @@ private:
     }
 
 public:
-    void addPlanNode(const PhysicalPlanNodePtr & node)
-    {
-        pipeline->addPlanNode(node);
-    }
+    void addPlanNode(const PhysicalPlanNodePtr & node) { pipeline->addPlanNode(node); }
 
     /// Break the current pipeline and return a new builder for the broken pipeline.
     PipelineBuilder breakPipeline(const PhysicalPlanNodePtr & breaker_node)
@@ -87,7 +81,7 @@ public:
 
     PipelinePtr build()
     {
-        assert(pipeline);
+        RUNTIME_CHECK(pipeline);
         if (pipeline_breaker)
         {
             // First add the breaker node as the last node in this pipeline.

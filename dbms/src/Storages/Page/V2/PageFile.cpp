@@ -17,8 +17,10 @@
 #include <Common/FailPoint.h>
 #include <Common/ProfileEvents.h>
 #include <Common/StringUtils/StringUtils.h>
-#include <IO/WriteBufferFromFile.h>
-#include <IO/WriteHelpers.h>
+#include <IO/BaseFile/RandomAccessFile.h>
+#include <IO/BaseFile/WritableFile.h>
+#include <IO/Buffer/WriteBufferFromFile.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Poco/File.h>
 #include <Storages/Page/PageUtil.h>
 #include <Storages/Page/V2/PageFile.h>
@@ -82,8 +84,8 @@ struct PageFlags
 static_assert(std::is_trivially_copyable_v<PageFlags>);
 static_assert(sizeof(PageFlags) == sizeof(UInt32));
 
-static const size_t PAGE_META_SIZE = sizeof(PageId) + sizeof(PageFileId) + sizeof(PageFileLevel) + sizeof(PageFlags) + sizeof(PageTag)
-    + sizeof(PageOffset) + sizeof(PageSize) + sizeof(Checksum);
+static const size_t PAGE_META_SIZE = sizeof(PageId) + sizeof(PageFileId) + sizeof(PageFileLevel) + sizeof(PageFlags)
+    + sizeof(PageTag) + sizeof(PageOffset) + sizeof(PageSize) + sizeof(Checksum);
 
 /// Return <data to write into meta file, data to write into data file>.
 std::pair<std::span<char>, std::span<char>> genWriteData( //
@@ -122,7 +124,10 @@ std::pair<std::span<char>, std::span<char>> genWriteData( //
             meta_write_bytes += (sizeof(PageId) + sizeof(PageId));
             break;
         case WriteBatchWriteType::PUT_EXTERNAL:
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Should not serialize with {}", magic_enum::enum_name(write.type));
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
+                "Should not serialize with {}",
+                magic_enum::enum_name(write.type));
             break;
         default:
             throw Exception(fmt::format("Unknown write {}", static_cast<Int32>(write.type)), ErrorCodes::LOGICAL_ERROR);
@@ -193,7 +198,8 @@ std::pair<std::span<char>, std::span<char>> genWriteData( //
 
             // UPSERT may point to another PageFile
             PageEntry entry;
-            entry.file_id = (write.type == WriteBatchWriteType::PUT ? page_file.getFileId() : write.target_file_id.first);
+            entry.file_id
+                = (write.type == WriteBatchWriteType::PUT ? page_file.getFileId() : write.target_file_id.first);
             entry.level = (write.type == WriteBatchWriteType::PUT ? page_file.getLevel() : write.target_file_id.second);
             entry.tag = write.tag;
             entry.size = write.size;
@@ -273,7 +279,9 @@ bool PageFile::LinkingMetaAdapter::initialize(const ReadLimiterPtr & read_limite
 
     Poco::File file(path);
     if (unlikely(!file.exists()))
-        throw Exception("Try to read meta of " + page_file.toString() + ", but not exists. Path: " + path, ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Try to read meta of " + page_file.toString() + ", but not exists. Path: " + path,
+            ErrorCodes::LOGICAL_ERROR);
 
     meta_size = file.getSize();
 
@@ -285,7 +293,9 @@ bool PageFile::LinkingMetaAdapter::initialize(const ReadLimiterPtr & read_limite
     auto underlying_file = page_file.file_provider->newRandomAccessFile(path, page_file.metaEncryptionPath());
     // File not exists.
     if (unlikely(underlying_file->getFd() == -1))
-        throw Exception("Try to read meta of " + page_file.toString() + ", but open file error. Path: " + path, ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Try to read meta of " + page_file.toString() + ", but open file error. Path: " + path,
+            ErrorCodes::LOGICAL_ERROR);
 
     SCOPE_EXIT({ underlying_file->close(); });
 
@@ -295,7 +305,9 @@ bool PageFile::LinkingMetaAdapter::initialize(const ReadLimiterPtr & read_limite
     return true;
 }
 
-PageFile::LinkingMetaAdapterPtr PageFile::LinkingMetaAdapter::createFrom(PageFile & page_file, const ReadLimiterPtr & read_limiter)
+PageFile::LinkingMetaAdapterPtr PageFile::LinkingMetaAdapter::createFrom(
+    PageFile & page_file,
+    const ReadLimiterPtr & read_limiter)
 {
     auto reader = std::make_shared<PageFile::LinkingMetaAdapter>(page_file);
     if (!reader->initialize(read_limiter))
@@ -310,17 +322,22 @@ bool PageFile::LinkingMetaAdapter::hasNext() const
     return meta_file_offset < meta_size;
 }
 
-bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID sid, PageEntriesEdit & edit, UInt64 file_id, UInt64 level)
+bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(
+    WriteBatch::SequenceID sid,
+    PageEntriesEdit & edit,
+    UInt64 file_id,
+    UInt64 level)
 {
     char * meta_data_end = meta_buffer + meta_size;
     char * pos = meta_buffer + meta_file_offset;
     if (pos + sizeof(PageMetaFormat::WBSize) > meta_data_end)
     {
-        LOG_WARNING(page_file.log,
-                    "[batch_start_pos={}] [meta_size={}] [file={}] ignored.",
-                    meta_file_offset,
-                    meta_size,
-                    page_file.metaPath());
+        LOG_WARNING(
+            page_file.log,
+            "[batch_start_pos={}] [meta_size={}] [file={}] ignored.",
+            meta_file_offset,
+            meta_size,
+            page_file.metaPath());
         return false;
     }
 
@@ -328,11 +345,12 @@ bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID 
     const auto wb_bytes = PageUtil::get<PageMetaFormat::WBSize>(pos);
     if (wb_start_pos + wb_bytes > meta_data_end)
     {
-        LOG_WARNING(page_file.log,
-                    "[expect_batch_bytes={}] [meta_size={}] [file={}] ignored.",
-                    wb_bytes,
-                    meta_size,
-                    page_file.metaPath());
+        LOG_WARNING(
+            page_file.log,
+            "[expect_batch_bytes={}] [meta_size={}] [file={}] ignored.",
+            wb_bytes,
+            meta_size,
+            page_file.metaPath());
         return false;
     }
 
@@ -348,8 +366,9 @@ bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID 
         wb_sequence = PageUtil::get<WriteBatch::SequenceID>(pos);
         break;
     default:
-        throw Exception("[unknown_version=" + DB::toString(binary_version) + "] [file=" + page_file.metaPath() + "]",
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "[unknown_version=" + DB::toString(binary_version) + "] [file=" + page_file.metaPath() + "]",
+            ErrorCodes::LOGICAL_ERROR);
     }
 
     if (wb_sequence > sid)
@@ -365,8 +384,9 @@ bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID 
     {
         std::stringstream ss;
         ss << "[expecte_checksum=" << std::hex << wb_checksum << "] [actual_checksum" << checksum_calc << "]";
-        throw Exception("[path=" + page_file.folderPath() + "] [batch_bytes=" + DB::toString(wb_bytes) + "] " + ss.str(),
-                        ErrorCodes::CHECKSUM_DOESNT_MATCH);
+        throw Exception(
+            "[path=" + page_file.folderPath() + "] [batch_bytes=" + DB::toString(wb_bytes) + "] " + ss.str(),
+            ErrorCodes::CHECKSUM_DOESNT_MATCH);
     }
 
     // update the wb sequence id
@@ -407,9 +427,10 @@ bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID 
                 break;
             }
             default:
-                throw Exception("PageFile binary version not match [unknown_version=" + DB::toString(binary_version)
-                                    + "] [file=" + page_file.metaPath() + "]",
-                                ErrorCodes::LOGICAL_ERROR);
+                throw Exception(
+                    "PageFile binary version not match [unknown_version=" + DB::toString(binary_version)
+                        + "] [file=" + page_file.metaPath() + "]",
+                    ErrorCodes::LOGICAL_ERROR);
             }
 
             entry.tag = PageUtil::get<PageMetaFormat::PageTag>(pos);
@@ -460,9 +481,10 @@ bool PageFile::LinkingMetaAdapter::linkToNewSequenceNext(WriteBatch::SequenceID 
     pos += sizeof(PageMetaFormat::Checksum);
 
     if (unlikely(pos != wb_start_pos + wb_bytes))
-        throw Exception("[batch_bytes=" + DB::toString(wb_bytes) + "] [actual_bytes=" + DB::toString(pos - wb_start_pos)
-                            + "] [file=" + page_file.metaPath() + "]",
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "[batch_bytes=" + DB::toString(wb_bytes) + "] [actual_bytes=" + DB::toString(pos - wb_start_pos)
+                + "] [file=" + page_file.metaPath() + "]",
+            ErrorCodes::LOGICAL_ERROR);
 
     meta_file_offset = pos - meta_buffer;
 
@@ -493,7 +515,10 @@ PageFile::MetaMergingReaderPtr PageFile::MetaMergingReader::createFrom(
     return reader;
 }
 
-PageFile::MetaMergingReaderPtr PageFile::MetaMergingReader::createFrom(PageFile & page_file, const ReadLimiterPtr & read_limiter, const bool background)
+PageFile::MetaMergingReaderPtr PageFile::MetaMergingReader::createFrom(
+    PageFile & page_file,
+    const ReadLimiterPtr & read_limiter,
+    const bool background)
 {
     auto reader = std::make_shared<PageFile::MetaMergingReader>(page_file);
     reader->initialize(std::nullopt, read_limiter, background);
@@ -503,7 +528,10 @@ PageFile::MetaMergingReaderPtr PageFile::MetaMergingReader::createFrom(PageFile 
 // Try to initiallize access to meta, read the whole metadata to memory.
 // Status -> Finished if metadata size is zero.
 //        -> Opened if metadata successfully load from disk.
-void PageFile::MetaMergingReader::initialize(std::optional<size_t> max_meta_offset, const ReadLimiterPtr & read_limiter, const bool background)
+void PageFile::MetaMergingReader::initialize(
+    std::optional<size_t> max_meta_offset,
+    const ReadLimiterPtr & read_limiter,
+    const bool background)
 {
     if (status == Status::Opened)
         return;
@@ -513,7 +541,9 @@ void PageFile::MetaMergingReader::initialize(std::optional<size_t> max_meta_offs
     const auto path = page_file.metaPath();
     Poco::File file(path);
     if (unlikely(!file.exists()))
-        throw Exception("Try to read meta of " + page_file.toString() + ", but not exists. Path: " + path, ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Try to read meta of " + page_file.toString() + ", but not exists. Path: " + path,
+            ErrorCodes::LOGICAL_ERROR);
 
     // If caller have not set the meta offset limit, we need to
     // initialize `meta_size` with the file size.
@@ -535,7 +565,9 @@ void PageFile::MetaMergingReader::initialize(std::optional<size_t> max_meta_offs
     auto underlying_file = page_file.file_provider->newRandomAccessFile(path, page_file.metaEncryptionPath());
     // File not exists.
     if (unlikely(underlying_file->getFd() == -1))
-        throw Exception("Try to read meta of " + page_file.toString() + ", but open file error. Path: " + path, ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Try to read meta of " + page_file.toString() + ", but open file error. Path: " + path,
+            ErrorCodes::LOGICAL_ERROR);
     SCOPE_EXIT({ underlying_file->close(); });
     meta_buffer = static_cast<char *>(page_file.alloc(meta_size));
     PageUtil::readFile(underlying_file, 0, meta_buffer, meta_size, read_limiter, background);
@@ -559,12 +591,13 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
     char * pos = meta_buffer + meta_file_offset;
     if (pos + sizeof(PageMetaFormat::WBSize) > meta_data_end)
     {
-        LOG_WARNING(page_file.log,
-                    "Incomplete write batch {{{}}} [batch_start_pos={}] [meta_size={}] [file={}] ignored.",
-                    toString(),
-                    meta_file_offset,
-                    meta_size,
-                    page_file.metaPath());
+        LOG_WARNING(
+            page_file.log,
+            "Incomplete write batch {{{}}} [batch_start_pos={}] [meta_size={}] [file={}] ignored.",
+            toString(),
+            meta_file_offset,
+            meta_size,
+            page_file.metaPath());
         status = Status::Finished;
         return;
     }
@@ -572,12 +605,13 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
     const auto wb_bytes = PageUtil::get<PageMetaFormat::WBSize>(pos);
     if (wb_start_pos + wb_bytes > meta_data_end)
     {
-        LOG_WARNING(page_file.log,
-                    "Incomplete write batch {{{}}} [expect_batch_bytes={}] [meta_size={}] [file={}] ignored.",
-                    toString(),
-                    wb_bytes,
-                    meta_size,
-                    page_file.metaPath());
+        LOG_WARNING(
+            page_file.log,
+            "Incomplete write batch {{{}}} [expect_batch_bytes={}] [meta_size={}] [file={}] ignored.",
+            toString(),
+            wb_bytes,
+            meta_size,
+            page_file.metaPath());
         status = Status::Finished;
         return;
     }
@@ -593,9 +627,10 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
         wb_sequence = PageUtil::get<WriteBatch::SequenceID>(pos);
         break;
     default:
-        throw Exception("PageFile binary version not match {" + toString() + "} [unknown_version=" + DB::toString(binary_version)
-                            + "] [file=" + page_file.metaPath() + "]",
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "PageFile binary version not match {" + toString() + "} [unknown_version=" + DB::toString(binary_version)
+                + "] [file=" + page_file.metaPath() + "]",
+            ErrorCodes::LOGICAL_ERROR);
     }
 
     // return the binary_version if `v` is not null
@@ -610,9 +645,10 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
     {
         std::stringstream ss;
         ss << "[expecte_checksum=" << std::hex << wb_checksum << "] [actual_checksum" << checksum_calc << "]";
-        throw Exception("Write batch checksum not match {" + toString() + "} [path=" + page_file.folderPath()
-                            + "] [batch_bytes=" + DB::toString(wb_bytes) + "] " + ss.str(),
-                        ErrorCodes::CHECKSUM_DOESNT_MATCH);
+        throw Exception(
+            "Write batch checksum not match {" + toString() + "} [path=" + page_file.folderPath()
+                + "] [batch_bytes=" + DB::toString(wb_bytes) + "] " + ss.str(),
+            ErrorCodes::CHECKSUM_DOESNT_MATCH);
     }
 
     // recover WriteBatch
@@ -648,9 +684,10 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
                 break;
             }
             default:
-                throw Exception("PageFile binary version not match {" + toString() + "} [unknown_version=" + DB::toString(binary_version)
-                                    + "] [file=" + page_file.metaPath() + "]",
-                                ErrorCodes::LOGICAL_ERROR);
+                throw Exception(
+                    "PageFile binary version not match {" + toString() + "} [unknown_version="
+                        + DB::toString(binary_version) + "] [file=" + page_file.metaPath() + "]",
+                    ErrorCodes::LOGICAL_ERROR);
             }
 
             entry.tag = PageUtil::get<PageMetaFormat::PageTag>(pos);
@@ -705,9 +742,10 @@ void PageFile::MetaMergingReader::moveNext(PageFormat::Version * v)
     pos += sizeof(PageMetaFormat::Checksum);
 
     if (unlikely(pos != wb_start_pos + wb_bytes))
-        throw Exception("pos not match {" + toString() + "} [batch_bytes=" + DB::toString(wb_bytes)
-                            + "] [actual_bytes=" + DB::toString(pos - wb_start_pos) + "] [file=" + page_file.metaPath() + "]",
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "pos not match {" + toString() + "} [batch_bytes=" + DB::toString(wb_bytes)
+                + "] [actual_bytes=" + DB::toString(pos - wb_start_pos) + "] [file=" + page_file.metaPath() + "]",
+            ErrorCodes::LOGICAL_ERROR);
 
     curr_write_batch_sequence = wb_sequence;
     meta_file_offset = pos - meta_buffer;
@@ -767,8 +805,13 @@ void PageFile::Writer::hardlinkFrom(PageFile & linked_file, WriteBatch::Sequence
     {
         if (!reader->linkToNewSequenceNext(sid, edit, page_file.getFileId(), page_file.getLevel()))
         {
-            throw Exception(fmt::format("Failed to update [sid={}] into [file_id={}] , [file_level={}]", sid, page_file.getFileId(), page_file.getLevel()),
-                            ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                fmt::format(
+                    "Failed to update [sid={}] into [file_id={}] , [file_level={}]",
+                    sid,
+                    page_file.getFileId(),
+                    page_file.getLevel()),
+                ErrorCodes::LOGICAL_ERROR);
         }
     }
 
@@ -788,7 +831,11 @@ const String & PageFile::Writer::parentPath() const
     return page_file.parent_path;
 }
 
-size_t PageFile::Writer::write(DB::WriteBatch & wb, PageEntriesEdit & edit, const WriteLimiterPtr & write_limiter, bool background)
+size_t PageFile::Writer::write(
+    DB::WriteBatch & wb,
+    PageEntriesEdit & edit,
+    const WriteLimiterPtr & write_limiter,
+    bool background)
 {
     ProfileEvents::increment(ProfileEvents::PSMWritePages, wb.putWriteCount());
 
@@ -821,20 +868,23 @@ size_t PageFile::Writer::write(DB::WriteBatch & wb, PageEntriesEdit & edit, cons
     write_buf(data_file, page_file.data_file_pos, data_buf, false);
     write_buf(meta_file, page_file.meta_file_pos, meta_buf, true);
 
-    fiu_do_on(FailPoints::exception_before_page_file_write_sync,
-              { // Mock that writing page file meta is not completed
-                  auto f = Poco::File(meta_file->getFileName());
-                  auto size = f.getSize();
-                  f.setSize(size - 2);
-                  auto size_after = f.getSize();
-                  LOG_WARNING(page_file.log,
-                              "Failpoint truncate [file={}] [origin_size={}] [truncated_size={}]",
-                              meta_file->getFileName(),
-                              size,
-                              size_after);
-                  throw Exception(String("Fail point ") + FailPoints::exception_before_page_file_write_sync + " is triggered.",
-                                  ErrorCodes::FAIL_POINT_ERROR);
-              });
+    fiu_do_on(
+        FailPoints::exception_before_page_file_write_sync,
+        { // Mock that writing page file meta is not completed
+            auto f = Poco::File(meta_file->getFileName());
+            auto size = f.getSize();
+            f.setSize(size - 2);
+            auto size_after = f.getSize();
+            LOG_WARNING(
+                page_file.log,
+                "Failpoint truncate [file={}] [origin_size={}] [truncated_size={}]",
+                meta_file->getFileName(),
+                size,
+                size_after);
+            throw Exception(
+                String("Fail point ") + FailPoints::exception_before_page_file_write_sync + " is triggered.",
+                ErrorCodes::FAIL_POINT_ERROR);
+        });
 
     page_file.data_file_pos += data_buf.size();
     page_file.meta_file_pos += meta_buf.size();
@@ -883,8 +933,7 @@ PageFile::Reader::Reader(PageFile & page_file)
     : data_file_path(page_file.dataPath())
     , data_file{page_file.file_provider->newRandomAccessFile(page_file.dataPath(), page_file.dataEncryptionPath())}
     , last_read_time(Clock::now())
-{
-}
+{}
 
 PageFile::Reader::~Reader()
 {
@@ -927,8 +976,10 @@ PageMap PageFile::Reader::read(PageIdAndEntries & to_read, const ReadLimiterPtr 
             {
                 std::stringstream ss;
                 ss << ", expected: " << std::hex << entry.checksum << ", but: " << checksum;
-                throw Exception("Page [" + DB::toString(page_id) + "] checksum not match, broken file: " + data_file_path + ss.str(),
-                                ErrorCodes::CHECKSUM_DOESNT_MATCH);
+                throw Exception(
+                    "Page [" + DB::toString(page_id) + "] checksum not match, broken file: " + data_file_path
+                        + ss.str(),
+                    ErrorCodes::CHECKSUM_DOESNT_MATCH);
             }
         }
 
@@ -961,10 +1012,9 @@ PageMap PageFile::Reader::read(PageFile::Reader::FieldReadInfos & to_read, const
     ProfileEvents::increment(ProfileEvents::PSMReadPages, to_read.size());
 
     // Sort in ascending order by offset in file.
-    std::sort(
-        to_read.begin(),
-        to_read.end(),
-        [](const FieldReadInfo & a, const FieldReadInfo & b) { return a.entry.offset < b.entry.offset; });
+    std::sort(to_read.begin(), to_read.end(), [](const FieldReadInfo & a, const FieldReadInfo & b) {
+        return a.entry.offset < b.entry.offset;
+    });
 
     // allocate data_buf that can hold all pages with specify fields
     size_t buf_size = 0;
@@ -1011,9 +1061,10 @@ PageMap PageFile::Reader::read(PageFile::Reader::FieldReadInfos & to_read, const
                 {
                     std::stringstream ss;
                     ss << ", expected: " << std::hex << expect_checksum << ", but: " << field_checksum;
-                    throw Exception("Page[" + DB::toString(page_id) + "] field[" + DB::toString(field_index)
-                                        + "] checksum not match, broken file: " + data_file_path + ss.str(),
-                                    ErrorCodes::CHECKSUM_DOESNT_MATCH);
+                    throw Exception(
+                        "Page[" + DB::toString(page_id) + "] field[" + DB::toString(field_index)
+                            + "] checksum not match, broken file: " + data_file_path + ss.str(),
+                        ErrorCodes::CHECKSUM_DOESNT_MATCH);
                 }
             }
 
@@ -1032,8 +1083,10 @@ PageMap PageFile::Reader::read(PageFile::Reader::FieldReadInfos & to_read, const
     }
 
     if (unlikely(pos != data_buf + buf_size))
-        throw Exception("Pos not match, expect to read " + DB::toString(buf_size) + " bytes, but only " + DB::toString(pos - data_buf),
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Pos not match, expect to read " + DB::toString(buf_size) + " bytes, but only "
+                + DB::toString(pos - data_buf),
+            ErrorCodes::LOGICAL_ERROR);
 
     last_read_time = Clock::now();
 
@@ -1074,16 +1127,18 @@ Page PageFile::Reader::read(FieldReadInfo & to_read, const ReadLimiterPtr & read
             auto field_checksum = CityHash_v1_0_2::CityHash64(write_offset, size_to_read);
             if (unlikely(to_read.entry.size != 0 && field_checksum != expect_checksum))
             {
-                throw Exception(fmt::format("Page [{}] field [{}], entry offset [{}], entry size[{}], checksum not match, "
-                                            "broken file: {},  expected: 0x{:X}, but: 0x{:X}",
-                                            to_read.page_id,
-                                            field_index,
-                                            to_read.entry.offset,
-                                            to_read.entry.size,
-                                            data_file_path,
-                                            expect_checksum,
-                                            field_checksum),
-                                ErrorCodes::CHECKSUM_DOESNT_MATCH);
+                throw Exception(
+                    fmt::format(
+                        "Page [{}] field [{}], entry offset [{}], entry size[{}], checksum not match, "
+                        "broken file: {},  expected: 0x{:X}, but: 0x{:X}",
+                        to_read.page_id,
+                        field_index,
+                        to_read.entry.offset,
+                        to_read.entry.size,
+                        data_file_path,
+                        expect_checksum,
+                        field_checksum),
+                    ErrorCodes::CHECKSUM_DOESNT_MATCH);
             }
 
             read_size_this_entry += size_to_read;
@@ -1098,8 +1153,9 @@ Page PageFile::Reader::read(FieldReadInfo & to_read, const ReadLimiterPtr & read
 
     if (unlikely(write_offset != data_buf + buf_size))
     {
-        throw Exception(fmt::format("Pos not match, expect to read {} bytes, but only {}.", buf_size, write_offset - data_buf),
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            fmt::format("Pos not match, expect to read {} bytes, but only {}.", buf_size, write_offset - data_buf),
+            ErrorCodes::LOGICAL_ERROR);
     }
 
     last_read_time = Clock::now();
@@ -1118,13 +1174,14 @@ bool PageFile::Reader::isIdle(const Seconds & max_idle_time)
 // PageFile
 // =========================================================
 
-PageFile::PageFile(PageFileId file_id_,
-                   UInt32 level_,
-                   const std::string & parent_path,
-                   const FileProviderPtr & file_provider_,
-                   PageFile::Type type_,
-                   bool is_create,
-                   Poco::Logger * log_)
+PageFile::PageFile(
+    PageFileId file_id_,
+    UInt32 level_,
+    const std::string & parent_path,
+    const FileProviderPtr & file_provider_,
+    PageFile::Type type_,
+    bool is_create,
+    LoggerPtr log_)
     : file_id(file_id_)
     , level(level_)
     , type(type_)
@@ -1146,8 +1203,11 @@ PageFile::PageFile(PageFileId file_id_,
     }
 }
 
-std::pair<PageFile, PageFile::Type>
-PageFile::recover(const String & parent_path, const FileProviderPtr & file_provider_, const String & page_file_name, Poco::Logger * log)
+std::pair<PageFile, PageFile::Type> PageFile::recover(
+    const String & parent_path,
+    const FileProviderPtr & file_provider_,
+    const String & page_file_name,
+    LoggerPtr log)
 {
     if (!startsWith(page_file_name, folder_prefix_formal) && !startsWith(page_file_name, folder_prefix_temp)
         && !startsWith(page_file_name, folder_prefix_legacy) && !startsWith(page_file_name, folder_prefix_checkpoint))
@@ -1217,12 +1277,13 @@ PageFile::recover(const String & parent_path, const FileProviderPtr & file_provi
     return {{}, Type::Invalid};
 }
 
-PageFile PageFile::newPageFile(PageFileId file_id,
-                               UInt32 level,
-                               const std::string & parent_path,
-                               const FileProviderPtr & file_provider_,
-                               PageFile::Type type,
-                               Poco::Logger * log)
+PageFile PageFile::newPageFile(
+    PageFileId file_id,
+    UInt32 level,
+    const std::string & parent_path,
+    const FileProviderPtr & file_provider_,
+    PageFile::Type type,
+    LoggerPtr log)
 {
 #ifndef NDEBUG
     // PageStorage may create a "Formal" PageFile for writing,
@@ -1233,12 +1294,13 @@ PageFile PageFile::newPageFile(PageFileId file_id,
     return PageFile(file_id, level, parent_path, file_provider_, type, true, log);
 }
 
-PageFile PageFile::openPageFileForRead(PageFileId file_id,
-                                       UInt32 level,
-                                       const std::string & parent_path,
-                                       const FileProviderPtr & file_provider_,
-                                       PageFile::Type type,
-                                       Poco::Logger * log)
+PageFile PageFile::openPageFileForRead(
+    PageFileId file_id,
+    UInt32 level,
+    const std::string & parent_path,
+    const FileProviderPtr & file_provider_,
+    PageFile::Type type,
+    LoggerPtr log)
 {
     return PageFile(file_id, level, parent_path, file_provider_, type, false, log);
 }
@@ -1248,7 +1310,7 @@ bool PageFile::isPageFileExist(
     const String & parent_path,
     const FileProviderPtr & file_provider_,
     Type type,
-    Poco::Logger * log)
+    LoggerPtr log)
 {
     PageFile pf = openPageFileForRead(file_id.first, file_id.second, parent_path, file_provider_, type, log);
     return pf.isExist();
@@ -1266,11 +1328,12 @@ void PageFile::setFileAppendPos(size_t meta_pos, size_t data_pos)
     const auto meta_size_on_disk = meta_on_disk.getSize();
     if (unlikely(meta_size_on_disk != meta_pos))
     {
-        LOG_WARNING(log,
-                    "Truncate incomplete write batches [orig_size={}] [set_size={}] [file={}]",
-                    meta_size_on_disk,
-                    meta_file_pos,
-                    metaPath());
+        LOG_WARNING(
+            log,
+            "Truncate incomplete write batches [orig_size={}] [set_size={}] [file={}]",
+            meta_size_on_disk,
+            meta_file_pos,
+            metaPath());
         meta_on_disk.setSize(meta_file_pos);
     }
 }
@@ -1331,9 +1394,10 @@ size_t PageFile::setCheckpoint()
         // The data part of checkpoint file should be empty.
         const auto data_size = getDataFileSize();
         if (data_size != 0)
-            throw Exception("Setting " + toString() + " to checkpoint, but data size is not zero: " + DB::toString(data_size)
-                                + ", path: " + folderPath(),
-                            ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                "Setting " + toString() + " to checkpoint, but data size is not zero: " + DB::toString(data_size)
+                    + ", path: " + folderPath(),
+                ErrorCodes::LOGICAL_ERROR);
     }
 
     auto old_meta_encryption_path = metaEncryptionPath();

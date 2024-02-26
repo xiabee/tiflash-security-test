@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Storages/DeltaMerge/Remote/ObjectId.h>
-#include <Storages/Transaction/Types.h>
+#include <Storages/KVStore/Types.h>
 #include <common/defines.h>
 #include <common/types.h>
 #include <fmt/format.h>
@@ -119,6 +119,8 @@ public:
 
     static S3FilenameView fromStoreKeyPrefix(std::string_view prefix);
 
+    // Return a view from the `fullpath` with a `s3://` prefix.
+    // Note: bucket and root should not be included in the `fullpath`.
     static S3FilenameView fromKeyWithPrefix(std::string_view fullpath);
 };
 
@@ -148,6 +150,7 @@ struct S3Filename
     // `toFullKeyWithPrefix` will as a `s3:://` prefix in full key.
     // You can pass a full key with prefix to `FileProvider` as file path,
     // if you want to read/write S3 object as file.
+    // Note: bucket and root are not included in the result.
     String toFullKeyWithPrefix() const;
 
     String toManifestPrefix() const;

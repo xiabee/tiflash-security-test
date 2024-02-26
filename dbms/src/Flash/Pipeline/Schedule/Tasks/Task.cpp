@@ -14,7 +14,9 @@
 
 #include <Common/FailPoint.h>
 #include <Common/TiFlashMetrics.h>
+#include <Flash/Executor/PipelineExecutorContext.h>
 #include <Flash/Pipeline/Schedule/Tasks/Task.h>
+#include <Flash/Pipeline/Schedule/Tasks/TaskHelper.h>
 #include <common/logger_useful.h>
 
 #include <magic_enum.hpp>
@@ -24,84 +26,175 @@ namespace DB
 namespace FailPoints
 {
 extern const char random_pipeline_model_task_construct_failpoint[];
+extern const char random_pipeline_model_task_run_failpoint[];
+extern const char random_pipeline_model_cancel_failpoint[];
+extern const char exception_during_query_run[];
 } // namespace FailPoints
 
 namespace
 {
 // TODO supports more detailed status transfer metrics, such as from waiting to running.
-void addToStatusMetrics(ExecTaskStatus to)
+ALWAYS_INLINE void addToStatusMetrics(ExecTaskStatus to)
 {
+#ifdef __APPLE__
 #define M(expect_status, metric_name)                                                \
     case (expect_status):                                                            \
     {                                                                                \
         GET_METRIC(tiflash_pipeline_task_change_to_status, metric_name).Increment(); \
         break;                                                                       \
     }
+#else
+#define M(expect_status, metric_name)                                                                                \
+    case (expect_status):                                                                                            \
+    {                                                                                                                \
+        thread_local auto & metrics_##metric_name = GET_METRIC(tiflash_pipeline_task_change_to_status, metric_name); \
+        (metrics_##metric_name).Increment();                                                                         \
+        break;                                                                                                       \
+    }
+#endif
 
     switch (to)
     {
-        M(ExecTaskStatus::INIT, type_to_init)
         M(ExecTaskStatus::WAITING, type_to_waiting)
         M(ExecTaskStatus::RUNNING, type_to_running)
-        M(ExecTaskStatus::IO, type_to_io)
+        M(ExecTaskStatus::IO_IN, type_to_io)
+        M(ExecTaskStatus::IO_OUT, type_to_io)
         M(ExecTaskStatus::FINISHED, type_to_finished)
         M(ExecTaskStatus::ERROR, type_to_error)
         M(ExecTaskStatus::CANCELLED, type_to_cancelled)
     default:
-        throw Exception(fmt::format("Unknown task status: {}.", magic_enum::enum_name(to)), ErrorCodes::LOGICAL_ERROR);
+        RUNTIME_ASSERT(false, "unexpected task status: {}.", magic_enum::enum_name(to));
     }
 
 #undef M
 }
 } // namespace
 
-Task::Task()
-    : mem_tracker(nullptr)
-    , log(Logger::get())
+Task::Task(PipelineExecutorContext & exec_context_, const String & req_id, ExecTaskStatus init_status)
+    : log(Logger::get(req_id))
+    , exec_context(exec_context_)
+    , mem_tracker_holder(exec_context_.getMemoryTracker())
+    , mem_tracker_ptr(mem_tracker_holder.get())
+    , task_status(init_status)
 {
+    assert(mem_tracker_holder.get() == mem_tracker_ptr);
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_pipeline_model_task_construct_failpoint);
-    GET_METRIC(tiflash_pipeline_task_change_to_status, type_to_init).Increment();
+    addToStatusMetrics(task_status);
+
+    exec_context.incActiveRefCount();
 }
 
-Task::Task(MemoryTrackerPtr mem_tracker_, const String & req_id)
-    : mem_tracker(std::move(mem_tracker_))
-    , log(Logger::get(req_id))
-{
-    FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_pipeline_model_task_construct_failpoint);
-    GET_METRIC(tiflash_pipeline_task_change_to_status, type_to_init).Increment();
-}
+Task::Task(PipelineExecutorContext & exec_context_)
+    : Task(exec_context_, "")
+{}
 
-ExecTaskStatus Task::execute() noexcept
+Task::~Task()
 {
-    assert(getMemTracker().get() == current_memory_tracker);
-    assert(exec_status == ExecTaskStatus::INIT || exec_status == ExecTaskStatus::RUNNING);
-    switchStatus(executeImpl());
-    return exec_status;
-}
-
-ExecTaskStatus Task::executeIO() noexcept
-{
-    assert(getMemTracker().get() == current_memory_tracker);
-    assert(exec_status == ExecTaskStatus::INIT || exec_status == ExecTaskStatus::IO);
-    switchStatus(executeIOImpl());
-    return exec_status;
-}
-
-ExecTaskStatus Task::await() noexcept
-{
-    assert(getMemTracker().get() == current_memory_tracker);
-    assert(exec_status == ExecTaskStatus::INIT || exec_status == ExecTaskStatus::WAITING);
-    switchStatus(awaitImpl());
-    return exec_status;
-}
-
-void Task::switchStatus(ExecTaskStatus to) noexcept
-{
-    if (exec_status != to)
+    if unlikely (!is_finalized)
     {
-        LOG_TRACE(log, "switch status: {} --> {}", magic_enum::enum_name(exec_status), magic_enum::enum_name(to));
-        addToStatusMetrics(to);
-        exec_status = to;
+        LOG_WARNING(
+            log,
+            "Task should be finalized before destructing, but not, the status at this time is {}. The possible reason "
+            "is that an error was reported during task creation",
+            magic_enum::enum_name(task_status));
     }
+
+    // In order to ensure that `PipelineExecutorContext` will not be destructed before `Task` is destructed.
+    exec_context.decActiveRefCount();
+}
+
+#define EXECUTE(function)                                                                   \
+    fiu_do_on(FailPoints::random_pipeline_model_cancel_failpoint, exec_context.cancel());   \
+    if unlikely (exec_context.isCancelled())                                                \
+    {                                                                                       \
+        switchStatus(ExecTaskStatus::CANCELLED);                                            \
+        return task_status;                                                                 \
+    }                                                                                       \
+    try                                                                                     \
+    {                                                                                       \
+        auto status = (function());                                                         \
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_pipeline_model_task_run_failpoint); \
+        FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_during_query_run);               \
+        switchStatus(status);                                                               \
+        return task_status;                                                                 \
+    }                                                                                       \
+    catch (...)                                                                             \
+    {                                                                                       \
+        LOG_WARNING(log, "error occurred and cancel the query");                            \
+        exec_context.onErrorOccurred(std::current_exception());                             \
+        switchStatus(ExecTaskStatus::ERROR);                                                \
+        return task_status;                                                                 \
+    }
+
+ExecTaskStatus Task::execute()
+{
+    assert(mem_tracker_ptr == current_memory_tracker);
+    assert(task_status == ExecTaskStatus::RUNNING);
+    EXECUTE(executeImpl);
+}
+
+ExecTaskStatus Task::executeIO()
+{
+    assert(mem_tracker_ptr == current_memory_tracker);
+    assert(task_status == ExecTaskStatus::IO_IN || task_status == ExecTaskStatus::IO_OUT);
+    EXECUTE(executeIOImpl);
+}
+
+ExecTaskStatus Task::await()
+{
+    // Because await only performs polling checks and does not involve computing/memory tracker memory allocation,
+    // await will not invoke MemoryTracker, so current_memory_tracker must be nullptr here.
+    assert(current_memory_tracker == nullptr);
+    assert(task_status == ExecTaskStatus::WAITING);
+    EXECUTE(awaitImpl);
+}
+
+#undef EXECUTE
+
+void Task::finalize()
+{
+    // To make sure that `finalize` only called once.
+    RUNTIME_ASSERT(!is_finalized, log, "finalize can only be called once.");
+    is_finalized = true;
+
+    try
+    {
+        finalizeImpl();
+    }
+    catch (...)
+    {
+        exec_context.onErrorOccurred(std::current_exception());
+    }
+
+    profile_info.reportMetrics();
+#ifndef NDEBUG
+    LOG_TRACE(
+        log,
+        "task(resource group: {}) finalize with profile info: {}",
+        getQueryExecContext().getResourceGroupName(),
+        profile_info.toJson());
+#endif // !NDEBUG
+}
+
+void Task::switchStatus(ExecTaskStatus to)
+{
+    if (task_status != to)
+    {
+#ifndef NDEBUG
+        LOG_TRACE(log, "switch status: {} --> {}", magic_enum::enum_name(task_status), magic_enum::enum_name(to));
+#endif // !NDEBUG
+        addToStatusMetrics(to);
+        task_status = to;
+    }
+}
+
+const String & Task::getQueryId() const
+{
+    return exec_context.getQueryId();
+}
+
+const String & Task::getResourceGroupName() const
+{
+    return exec_context.getResourceGroupName();
 }
 } // namespace DB

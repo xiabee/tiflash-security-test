@@ -26,7 +26,7 @@ public:
     explicit PageEntriesBuilder(
         const PageEntries * old_version_,
         bool ignore_invalid_ref_ = false,
-        Poco::Logger * log_ = nullptr)
+        LoggerPtr log_ = nullptr)
         : old_version(const_cast<PageEntries *>(old_version_))
         , current_version(new PageEntries)
         , ignore_invalid_ref(ignore_invalid_ref_)
@@ -42,22 +42,13 @@ public:
         current_version->copyEntries(*old_version);
     }
 
-    ~PageEntriesBuilder()
-    {
-        old_version->release();
-    }
+    ~PageEntriesBuilder() { old_version->release(); }
 
     void apply(const PageEntriesEdit & edit);
 
-    void gcApply(PageEntriesEdit & edit)
-    {
-        gcApplyTemplate(current_version, edit, current_version);
-    }
+    void gcApply(PageEntriesEdit & edit) { gcApplyTemplate(current_version, edit, current_version); }
 
-    PageEntries * build()
-    {
-        return current_version;
-    }
+    PageEntries * build() { return current_version; }
 
 public:
     template <typename OldVersionType, typename VersionType>
@@ -90,7 +81,7 @@ private:
     PageEntries * old_version;
     PageEntries * current_version;
     bool ignore_invalid_ref;
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 } // namespace DB::PS::V2

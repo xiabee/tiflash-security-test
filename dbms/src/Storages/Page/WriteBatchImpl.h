@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <IO/ReadBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/V3/PageEntryCheckpointInfo.h>
 
@@ -90,27 +90,29 @@ public:
         : namespace_id(namespace_id_)
     {}
 
-    void putPage(PageIdU64 page_id, UInt64 tag, const ReadBufferPtr & read_buffer, PageSize size, const PageFieldSizes & data_sizes = {})
+    void putPage(
+        PageIdU64 page_id,
+        UInt64 tag,
+        const ReadBufferPtr & read_buffer,
+        PageSize size,
+        const PageFieldSizes & data_sizes = {})
     {
         // Convert from data_sizes to the offset of each field
         PageFieldOffsetChecksums offsets;
         PageFieldOffset off = 0;
-        for (auto data_sz : data_sizes)
+        for (const auto data_sz : data_sizes)
         {
             offsets.emplace_back(off, 0);
             off += data_sz;
         }
-        if (unlikely(!data_sizes.empty() && off != size))
-        {
-            throw Exception(fmt::format(
-                                "Try to put Page with fields, but page size and fields total size not match "
-                                "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
-                                page_id,
-                                data_sizes.size(),
-                                size,
-                                off),
-                            ErrorCodes::LOGICAL_ERROR);
-        }
+        RUNTIME_CHECK_MSG(
+            data_sizes.empty() || off == size,
+            "Try to put Page with fields, but page size and fields total size not match "
+            "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
+            page_id,
+            data_sizes.size(),
+            size,
+            off);
 
         Write w{WriteBatchWriteType::PUT, page_id, tag, read_buffer, size, 0, std::move(offsets), 0, 0, {}};
         total_data_size += size;
@@ -132,12 +134,13 @@ public:
 
     // Upsert a page{page_id} and writer page's data to a new PageFile{file_id}.
     // Now it's used in DataCompactor to move page's data to new file.
-    void upsertPage(PageIdU64 page_id,
-                    UInt64 tag,
-                    const PageFileIdAndLevel & file_id,
-                    const ReadBufferPtr & read_buffer,
-                    UInt32 size,
-                    const PageFieldOffsetChecksums & offsets)
+    void upsertPage(
+        PageIdU64 page_id,
+        UInt64 tag,
+        const PageFileIdAndLevel & file_id,
+        const ReadBufferPtr & read_buffer,
+        UInt32 size,
+        const PageFieldOffsetChecksums & offsets)
     {
         Write w{WriteBatchWriteType::UPSERT, page_id, tag, read_buffer, size, 0, offsets, 0, 0, file_id};
         writes.emplace_back(std::move(w));
@@ -147,15 +150,26 @@ public:
     // Upserting a page{page_id} to PageFile{file_id}. This type of upsert is a simple mark and
     // only used for checkpoint. That page will be overwritten by WriteBatch with larger sequence,
     // so we don't need to write page's data.
-    void upsertPage(PageIdU64 page_id,
-                    UInt64 tag,
-                    const PageFileIdAndLevel & file_id,
-                    UInt64 page_offset,
-                    UInt32 size,
-                    UInt64 page_checksum,
-                    const PageFieldOffsetChecksums & offsets)
+    void upsertPage(
+        PageIdU64 page_id,
+        UInt64 tag,
+        const PageFileIdAndLevel & file_id,
+        UInt64 page_offset,
+        UInt32 size,
+        UInt64 page_checksum,
+        const PageFieldOffsetChecksums & offsets)
     {
-        Write w{WriteBatchWriteType::UPSERT, page_id, tag, nullptr, size, 0, offsets, page_offset, page_checksum, file_id};
+        Write w{
+            WriteBatchWriteType::UPSERT,
+            page_id,
+            tag,
+            nullptr,
+            size,
+            0,
+            offsets,
+            page_offset,
+            page_checksum,
+            file_id};
         writes.emplace_back(std::move(w));
     }
 
@@ -172,19 +186,10 @@ public:
         writes.emplace_back(std::move(w));
     }
 
-    bool empty() const
-    {
-        return writes.empty();
-    }
+    bool empty() const { return writes.empty(); }
 
-    const Writes & getWrites() const
-    {
-        return writes;
-    }
-    Writes & getMutWrites()
-    {
-        return writes;
-    }
+    const Writes & getWrites() const { return writes; }
+    Writes & getMutWrites() { return writes; }
 
     size_t putWriteCount() const
     {
@@ -194,10 +199,7 @@ public:
         return count;
     }
 
-    void copyWrite(const Write write)
-    {
-        writes.emplace_back(write);
-    }
+    void copyWrite(const Write write) { writes.emplace_back(write); }
 
     void copyWrites(const Writes & writes_)
     {
@@ -215,31 +217,18 @@ public:
         total_data_size = 0;
     }
 
-    SequenceID getSequence() const
-    {
-        return sequence;
-    }
+    size_t size() const { return writes.size(); }
 
-    size_t getTotalDataSize() const
-    {
-        return total_data_size;
-    }
+    SequenceID getSequence() const { return sequence; }
+
+    size_t getTotalDataSize() const { return total_data_size; }
 
     // `setSequence` should only called by internal method of PageStorage.
-    void setSequence(SequenceID seq)
-    {
-        sequence = seq;
-    }
+    void setSequence(SequenceID seq) { sequence = seq; }
 
-    NamespaceID getNamespaceID() const
-    {
-        return namespace_id;
-    }
+    NamespaceID getNamespaceID() const { return namespace_id; }
 
-    PageIdV3Internal getFullPageId(PageIdU64 id) const
-    {
-        return buildV3Id(namespace_id, id);
-    }
+    PageIdV3Internal getFullPageId(PageIdU64 id) const { return buildV3Id(namespace_id, id); }
 
     String toString() const
     {

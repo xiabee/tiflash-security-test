@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <IO/HexWriteBuffer.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/HexWriteBuffer.h>
+#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Interpreters/SecurityManager.h>
 #include <Poco/Net/IPAddress.h>
 #include <Poco/String.h>
@@ -57,7 +57,10 @@ void SecurityManager::loadFromConfig(Poco::Util::AbstractConfiguration & config)
     users = std::move(new_users);
 }
 
-UserPtr SecurityManager::authorizeAndGetUser(const String & user_name, const String & password, const Poco::Net::IPAddress & address) const
+UserPtr SecurityManager::authorizeAndGetUser(
+    const String & user_name,
+    const String & password,
+    const Poco::Net::IPAddress & address) const
 {
     auto user = getUser(user_name);
 

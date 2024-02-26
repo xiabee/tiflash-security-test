@@ -25,7 +25,7 @@
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/SetVariants.h>
 #include <Parsers/IAST.h>
-#include <Storages/Transaction/Collator.h>
+#include <TiDB/Collation/Collator.h>
 #include <common/logger_useful.h>
 
 #include <shared_mutex>
@@ -51,9 +51,9 @@ public:
         : log(&Poco::Logger::get("Set"))
         , limits(limits)
         , set_elements(std::make_unique<SetElements>())
+        , unique_set_elements(std::make_shared<std::set<Field>>())
         , collators(std::move(collators_))
-    {
-    }
+    {}
 
     bool empty() const { return data.empty(); }
 
@@ -70,7 +70,10 @@ public:
     /**
       * Create a Set from DAG Expr, used when processing DAG Request
       */
-    std::vector<const tipb::Expr *> createFromDAGExpr(const DataTypes & types, const tipb::Expr & expr, bool fill_set_elements);
+    std::vector<const tipb::Expr *> createFromDAGExpr(
+        const DataTypes & types,
+        const tipb::Expr & expr,
+        bool fill_set_elements);
 
     /** Create a Set from stream.
       * Call setHeader, then call insertFromBlock for each block.
@@ -91,6 +94,8 @@ public:
     const DataTypes & getDataTypes() const { return data_types; }
 
     SetElements & getSetElements() { return *set_elements.get(); }
+
+    std::set<Field> & getUniqueSetElements() { return *unique_set_elements.get(); }
 
     void setContainsNullValue(bool contains_null_value_) { contains_null_value = contains_null_value_; }
     bool containsNullValue() const { return contains_null_value; }
@@ -138,6 +143,10 @@ private:
     /// Vector of elements of `Set`.
     /// It is necessary for the index to work on the primary key in the IN statement.
     SetElementsPtr set_elements;
+
+    /// The unique elements of `Set`
+    /// Now, it only supports one key
+    std::shared_ptr<std::set<Field>> unique_set_elements;
 
     /** Protects work with the set in the functions `insertFromBlock` and `execute`.
       * These functions can be called simultaneously from different threads only when using StorageSet,

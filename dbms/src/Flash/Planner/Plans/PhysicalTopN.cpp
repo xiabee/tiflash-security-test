@@ -22,7 +22,6 @@
 #include <Flash/Planner/PhysicalPlanHelper.h>
 #include <Flash/Planner/Plans/PhysicalTopN.h>
 #include <Interpreters/Context.h>
-#include <Operators/LocalSortTransformOp.h>
 
 namespace DB
 {
@@ -33,7 +32,7 @@ PhysicalPlanNodePtr PhysicalTopN::build(
     const tipb::TopN & top_n,
     const PhysicalPlanNodePtr & child)
 {
-    assert(child);
+    RUNTIME_CHECK(child);
 
     if (unlikely(top_n.order_by_size() == 0))
     {
@@ -68,18 +67,34 @@ void PhysicalTopN::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & c
     orderStreams(pipeline, max_streams, order_descr, limit, false, context, log);
 }
 
-void PhysicalTopN::buildPipelineExecGroup(
-    PipelineExecutorStatus & exec_status,
+void PhysicalTopN::buildPipelineExecGroupImpl(
+    PipelineExecutorContext & exec_context,
     PipelineExecGroupBuilder & group_builder,
     Context & context,
-    size_t /*concurrency*/)
+    size_t concurrency)
 {
-    executeExpression(exec_status, group_builder, before_sort_actions, log);
+    executeExpression(exec_context, group_builder, before_sort_actions, log);
 
-    executeLocalSort(exec_status, group_builder, order_descr, limit, context, log);
+    // If the `limit` is very large, using a `final sort` can avoid outputting excessively large amounts of data.
+    // TODO find a suitable threshold is necessary; 10000 is just a value picked without much consideration.
+    if (group_builder.concurrency() * limit <= 10000)
+    {
+        executeLocalSort(exec_context, group_builder, order_descr, limit, false, context, log);
+    }
+    else
+    {
+        executeFinalSort(exec_context, group_builder, order_descr, limit, context, log);
+        if (is_restore_concurrency)
+            restoreConcurrency(
+                exec_context,
+                group_builder,
+                concurrency,
+                context.getSettingsRef().max_buffered_bytes_in_executor,
+                log);
+    }
 }
 
-void PhysicalTopN::finalize(const Names & parent_require)
+void PhysicalTopN::finalizeImpl(const Names & parent_require)
 {
     Names required_output = parent_require;
     required_output.reserve(required_output.size() + order_descr.size());

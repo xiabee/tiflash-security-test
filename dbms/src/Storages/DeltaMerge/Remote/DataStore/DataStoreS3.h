@@ -14,16 +14,15 @@
 
 #pragma once
 
-#include <Encryption/FileProvider.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
-#include <Storages/Transaction/Types.h>
+#include <Storages/KVStore/Types.h>
 
 namespace DB::DM::Remote
 {
 class DataStoreS3 final : public IDataStore
 {
 public:
-    explicit DataStoreS3(FileProviderPtr file_provider_)
+    explicit DataStoreS3(const FileProviderPtr & file_provider_)
         : file_provider(file_provider_)
         , log(Logger::get("DataStoreS3"))
     {}
@@ -49,7 +48,8 @@ public:
 
     IPreparedDMFileTokenPtr prepareDMFileByKey(const String & remote_key) override;
 
-    bool putCheckpointFiles(const PS::V3::LocalCheckpointFiles & local_files, StoreID store_id, UInt64 upload_seq) override;
+    bool putCheckpointFiles(const PS::V3::LocalCheckpointFiles & local_files, StoreID store_id, UInt64 upload_seq)
+        override;
 
     std::unordered_map<String, DataFileInfo> getDataFilesInfo(const std::unordered_set<String> & lock_keys) override;
 
@@ -60,7 +60,10 @@ private:
 public:
 #endif
 
-    static void copyToLocal(const S3::DMFileOID & remote_oid, const std::vector<String> & target_short_fnames, const String & local_dir);
+    static void copyToLocal(
+        const S3::DMFileOID & remote_oid,
+        const std::vector<String> & target_short_fnames,
+        const String & local_dir);
 
     FileProviderPtr file_provider;
     const LoggerPtr log;

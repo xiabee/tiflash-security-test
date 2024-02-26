@@ -18,10 +18,10 @@
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeTuple.h>
-#include <IO/Operators.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/Util/Operators.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Parsers/ASTNameTypePair.h>
 #include <Parsers/IAST.h>
 
@@ -61,7 +61,9 @@ DataTypeTuple::DataTypeTuple(const DataTypes & elems_, const Strings & names_)
 {
     size_t size = elems.size();
     if (names.size() != size)
-        throw Exception("Wrong number of names passed to constructor of DataTypeTuple", ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+        throw Exception(
+            "Wrong number of names passed to constructor of DataTypeTuple",
+            ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
     std::unordered_set<String> names_set;
     for (size_t i = 0; i < size; ++i)
@@ -70,7 +72,9 @@ DataTypeTuple::DataTypeTuple(const DataTypes & elems_, const Strings & names_)
             throw Exception("Names of tuple elements cannot be empty", ErrorCodes::BAD_ARGUMENTS);
 
         if (isNumericASCII(names[i][0]))
-            throw Exception("Explicitly specified names of tuple elements cannot start with digit", ErrorCodes::BAD_ARGUMENTS);
+            throw Exception(
+                "Explicitly specified names of tuple elements cannot start with digit",
+                ErrorCodes::BAD_ARGUMENTS);
 
         if (!names_set.insert(names[i]).second)
             throw Exception("Names of tuple elements must be unique", ErrorCodes::DUPLICATE_COLUMN);
@@ -220,7 +224,11 @@ void DataTypeTuple::deserializeTextQuoted(IColumn & column, ReadBuffer & istr) c
     deserializeText(column, istr);
 }
 
-void DataTypeTuple::serializeTextJSON(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON & settings) const
+void DataTypeTuple::serializeTextJSON(
+    const IColumn & column,
+    size_t row_num,
+    WriteBuffer & ostr,
+    const FormatSettingsJSON & settings) const
 {
     writeChar('[', ostr);
     for (const auto i : ext::range(0, ext::size(elems)))
@@ -374,7 +382,7 @@ bool DataTypeTuple::equals(const IDataType & rhs) const
     if (typeid(rhs) != typeid(*this))
         return false;
 
-    const DataTypeTuple & rhs_tuple = static_cast<const DataTypeTuple &>(rhs);
+    const auto & rhs_tuple = static_cast<const DataTypeTuple &>(rhs);
 
     size_t size = elems.size();
     if (size != rhs_tuple.elems.size())
@@ -443,7 +451,7 @@ static DataTypePtr create(const ASTPtr & arguments)
 
     for (const ASTPtr & child : arguments->children)
     {
-        if (const ASTNameTypePair * name_and_type_pair = typeid_cast<const ASTNameTypePair *>(child.get()))
+        if (const auto * name_and_type_pair = typeid_cast<const ASTNameTypePair *>(child.get()))
         {
             nested_types.emplace_back(DataTypeFactory::instance().get(name_and_type_pair->type));
             names.emplace_back(name_and_type_pair->name);

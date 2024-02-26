@@ -17,6 +17,7 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFilePersisted.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
+#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Remote/Serializer_fwd.h>
 #include <Storages/Page/PageStorage_fwd.h>
 
@@ -48,7 +49,12 @@ private:
     /// HACK: Currently this field is only available when ColumnFileTiny is restored from remote proto.
     /// It is not available when ColumnFileTiny is constructed or restored locally.
     /// Maybe we should just drop this field, and store the data_page_size in somewhere else.
-    UInt64 data_page_size;
+    UInt64 data_page_size = 0;
+
+    /// The id of the keyspace which this ColumnFileTiny belongs to.
+    KeyspaceID keyspace_id;
+    /// The global file_provider
+    const FileProviderPtr file_provider;
 
     /// The members below are not serialized.
 
@@ -60,21 +66,34 @@ private:
     /// Read a block of columns in `column_defines` from cache / disk,
     /// if `pack->schema` is not match with `column_defines`, take good care of ddl cast
     Columns readFromCache(const ColumnDefines & column_defines, size_t col_start, size_t col_end) const;
-    Columns readFromDisk(const IColumnFileDataProviderPtr & data_provider, const ColumnDefines & column_defines, size_t col_start, size_t col_end) const;
+    Columns readFromDisk(
+        const IColumnFileDataProviderPtr & data_provider,
+        const ColumnDefines & column_defines,
+        size_t col_start,
+        size_t col_end) const;
 
-    void fillColumns(const IColumnFileDataProviderPtr & data_provider, const ColumnDefines & col_defs, size_t col_count, Columns & result) const;
+    void fillColumns(
+        const IColumnFileDataProviderPtr & data_provider,
+        const ColumnDefines & col_defs,
+        size_t col_count,
+        Columns & result) const;
 
-    const DataTypePtr & getDataType(ColId column_id) const
-    {
-        return schema->getDataType(column_id);
-    }
+    const DataTypePtr & getDataType(ColId column_id) const { return schema->getDataType(column_id); }
 
 public:
-    ColumnFileTiny(const ColumnFileSchemaPtr & schema_, UInt64 rows_, UInt64 bytes_, PageIdU64 data_page_id_, const CachePtr & cache_ = nullptr)
+    ColumnFileTiny(
+        const ColumnFileSchemaPtr & schema_,
+        UInt64 rows_,
+        UInt64 bytes_,
+        PageIdU64 data_page_id_,
+        const DMContext & dm_context,
+        const CachePtr & cache_ = nullptr)
         : schema(schema_)
         , rows(rows_)
         , bytes(bytes_)
         , data_page_id(data_page_id_)
+        , keyspace_id(dm_context.keyspace_id)
+        , file_provider(dm_context.global_context.getFileProvider())
         , cache(cache_)
     {}
 
@@ -113,13 +132,33 @@ public:
 
     Block readBlockForMinorCompaction(const PageReader & page_reader) const;
 
-    static ColumnFileTinyPtr writeColumnFile(const DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs, const CachePtr & cache = nullptr);
+    static ColumnFileTinyPtr writeColumnFile(
+        const DMContext & context,
+        const Block & block,
+        size_t offset,
+        size_t limit,
+        WriteBatches & wbs,
+        const CachePtr & cache = nullptr);
 
-    static PageIdU64 writeColumnFileData(const DMContext & context, const Block & block, size_t offset, size_t limit, WriteBatches & wbs);
+    static PageIdU64 writeColumnFileData(
+        const DMContext & context,
+        const Block & block,
+        size_t offset,
+        size_t limit,
+        WriteBatches & wbs);
 
-    static ColumnFilePersistedPtr deserializeMetadata(const DMContext & context, ReadBuffer & buf, ColumnFileSchemaPtr & last_schema);
+    static ColumnFilePersistedPtr deserializeMetadata(
+        const DMContext & context,
+        ReadBuffer & buf,
+        ColumnFileSchemaPtr & last_schema);
 
-    static std::tuple<ColumnFilePersistedPtr, BlockPtr> createFromCheckpoint(const DMContext & context, ReadBuffer & buf, UniversalPageStoragePtr temp_ps, const BlockPtr & last_schema, WriteBatches & wbs);
+    static std::tuple<ColumnFilePersistedPtr, BlockPtr> createFromCheckpoint(
+        const LoggerPtr & parent_log,
+        const DMContext & context,
+        ReadBuffer & buf,
+        UniversalPageStoragePtr temp_ps,
+        const BlockPtr & last_schema,
+        WriteBatches & wbs);
 
     bool mayBeFlushedFrom(ColumnFile * from_file) const override
     {
@@ -167,8 +206,7 @@ public:
         , data_provider(data_provider_)
         , col_defs(col_defs_)
         , cols_data_cache(cols_data_cache_)
-    {
-    }
+    {}
 
     ColumnFileTinyReader(
         const ColumnFileTiny & tiny_file_,
@@ -177,14 +215,17 @@ public:
         : tiny_file(tiny_file_)
         , data_provider(data_provider_)
         , col_defs(col_defs_)
-    {
-    }
+    {}
 
     /// This is a ugly hack to fast return PK & Version column.
     ColumnPtr getPKColumn();
     ColumnPtr getVersionColumn();
 
-    std::pair<size_t, size_t> readRows(MutableColumns & output_cols, size_t rows_offset, size_t rows_limit, const RowKeyRange * range) override;
+    std::pair<size_t, size_t> readRows(
+        MutableColumns & output_cols,
+        size_t rows_offset,
+        size_t rows_limit,
+        const RowKeyRange * range) override;
 
     Block readNextBlock() override;
 

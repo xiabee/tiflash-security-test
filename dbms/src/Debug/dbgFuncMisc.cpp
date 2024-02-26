@@ -17,7 +17,8 @@
 #include <Debug/dbgFuncMisc.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTLiteral.h>
-#include <Storages/DeltaMerge/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool/GlobalStoragePool.h>
+#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 
 #include <fstream>
 #include <regex>
@@ -119,7 +120,8 @@ void dbgFuncSearchLogForKey(Context & context, const ASTs & args, DBGInvoker::Pr
     }
     catch (std::exception & e)
     {
-        throw Exception(fmt::format("Parse 'RSFilter exclude rate' failed, exception: {}, target_line {}", e.what(), target_line));
+        throw Exception(
+            fmt::format("Parse 'RSFilter exclude rate' failed, exception: {}, target_line {}", e.what(), target_line));
     }
 }
 

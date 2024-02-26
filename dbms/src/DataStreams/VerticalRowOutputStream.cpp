@@ -14,18 +14,15 @@
 
 #include <Common/UTF8Helpers.h>
 #include <DataStreams/VerticalRowOutputStream.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/Util/WriteHelpers.h>
 
 #include <cmath>
 
 
 namespace DB
 {
-VerticalRowOutputStream::VerticalRowOutputStream(
-    WriteBuffer & ostr_,
-    const Block & sample_,
-    size_t max_rows_)
+VerticalRowOutputStream::VerticalRowOutputStream(WriteBuffer & ostr_, const Block & sample_, size_t max_rows_)
     : ostr(ostr_)
     , sample(sample_)
     , max_rows(max_rows_)
@@ -49,7 +46,8 @@ VerticalRowOutputStream::VerticalRowOutputStream(
             writeEscapedString(name, out);
         }
 
-        name_widths[i] = UTF8::countCodePoints(reinterpret_cast<const UInt8 *>(serialized_value.data()), serialized_value.size());
+        name_widths[i]
+            = UTF8::countCodePoints(reinterpret_cast<const UInt8 *>(serialized_value.data()), serialized_value.size());
 
         if (name_widths[i] > max_name_width)
             max_name_width = name_widths[i];

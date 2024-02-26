@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Encryption/RateLimiter.h>
+#include <IO/BaseFile/RateLimiter.h>
 
 namespace DB
 {
@@ -25,8 +25,7 @@ public:
         LimiterType type_ = LimiterType::UNKNOW,
         UInt64 refill_period_ms_ = 100)
         : ReadLimiter(getIOStatistic_, rate_limit_per_sec_, type_, refill_period_ms_)
-    {
-    }
+    {}
 
 protected:
     void consumeBytes(Int64 bytes) override

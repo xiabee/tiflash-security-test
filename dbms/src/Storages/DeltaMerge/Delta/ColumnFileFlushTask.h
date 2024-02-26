@@ -15,10 +15,9 @@
 #pragma once
 
 #include <Core/Block.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/DeltaIndex.h>
-#include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <common/logger_useful.h>

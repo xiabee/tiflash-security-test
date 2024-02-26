@@ -16,29 +16,34 @@
 
 #include <Flash/Pipeline/Exec/PipelineExec.h>
 #include <Flash/Pipeline/Schedule/Tasks/EventTask.h>
+#include <Flash/Pipeline/Schedule/Tasks/PipelineTaskBase.h>
 
 namespace DB
 {
-class PipelineTask : public EventTask
+class PipelineTask
+    : public EventTask
+    , public PipelineTaskBase
 {
 public:
     PipelineTask(
-        MemoryTrackerPtr mem_tracker_,
+        PipelineExecutorContext & exec_context_,
         const String & req_id,
-        PipelineExecutorStatus & exec_status_,
         const EventPtr & event_,
-        PipelineExecPtr && pipeline_exec_);
+        PipelineExecPtr && pipeline_exec_)
+        : EventTask(exec_context_, req_id, event_, ExecTaskStatus::RUNNING)
+        , PipelineTaskBase(std::move(pipeline_exec_))
+    {}
 
 protected:
-    ExecTaskStatus doExecuteImpl() override;
+    ExecTaskStatus executeImpl() override { return runExecute(); }
 
-    ExecTaskStatus doExecuteIOImpl() override;
+    ExecTaskStatus executeIOImpl() override { return runExecuteIO(); }
 
-    ExecTaskStatus doAwaitImpl() override;
+    ExecTaskStatus awaitImpl() override { return runAwait(); }
 
-    void finalizeImpl() override;
-
-private:
-    PipelineExecPtr pipeline_exec;
+    void doFinalizeImpl() override
+    {
+        runFinalize(profile_info.getCPUPendingTimeNs() + profile_info.getIOPendingTimeNs() + getScheduleDuration());
+    }
 };
 } // namespace DB

@@ -15,7 +15,7 @@
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeArray.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 #include <WindowFunctions/WindowFunctionFactory.h>
 
 
@@ -40,9 +40,7 @@ void WindowFunctionFactory::registerFunction(const String & name, Creator creato
             ErrorCodes::LOGICAL_ERROR);
 }
 
-WindowFunctionPtr WindowFunctionFactory::get(
-    const String & name,
-    const DataTypes & argument_types) const
+WindowFunctionPtr WindowFunctionFactory::get(const String & name, const DataTypes & argument_types) const
 {
     auto res = getImpl(name, argument_types);
     if (!res)
@@ -51,9 +49,7 @@ WindowFunctionPtr WindowFunctionFactory::get(
 }
 
 
-WindowFunctionPtr WindowFunctionFactory::getImpl(
-    const String & name,
-    const DataTypes & argument_types) const
+WindowFunctionPtr WindowFunctionFactory::getImpl(const String & name, const DataTypes & argument_types) const
 {
     /// Find by exact match.
     auto it = window_functions.find(name);
@@ -66,9 +62,7 @@ WindowFunctionPtr WindowFunctionFactory::getImpl(
 
 WindowFunctionPtr WindowFunctionFactory::tryGet(const String & name, const DataTypes & argument_types) const
 {
-    return isWindowFunctionName(name)
-        ? get(name, argument_types)
-        : nullptr;
+    return isWindowFunctionName(name) ? get(name, argument_types) : nullptr;
 }
 
 

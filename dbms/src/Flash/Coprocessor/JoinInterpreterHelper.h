@@ -16,11 +16,13 @@
 
 #include <Core/Block.h>
 #include <Core/NamesAndTypes.h>
+#include <DataStreams/RuntimeFilter.h>
 #include <DataTypes/IDataType.h>
+#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/JoinUtils.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
-#include <Storages/Transaction/Collator.h>
+#include <TiDB/Collation/Collator.h>
 #include <tipb/executor.pb.h>
 
 #include <functional>
@@ -90,11 +92,11 @@ struct JoinNonEqualConditions
     ExpressionActionsPtr null_aware_eq_cond_expr;
 
     /// Validate this JoinNonEqualConditions and return error message if any.
-    String validate(ASTTableJoin::Kind kind) const
+    const char * validate(ASTTableJoin::Kind kind) const
     {
-        if (unlikely(!left_filter_column.empty() && !isLeftOuterJoin(kind)))
+        if unlikely (!left_filter_column.empty() && !isLeftOuterJoin(kind))
             return "non left join with left conditions";
-        if (unlikely(!right_filter_column.empty() && !isRightOuterJoin(kind)))
+        if unlikely (!right_filter_column.empty() && !isRightOuterJoin(kind))
             return "non right join with right conditions";
 
         if unlikely ((!other_cond_name.empty() || !other_eq_cond_from_in_name.empty()) && other_cond_expr == nullptr)
@@ -105,12 +107,13 @@ struct JoinNonEqualConditions
         if (isNullAwareSemiFamily(kind))
         {
             if unlikely (null_aware_eq_cond_name.empty() || null_aware_eq_cond_expr == nullptr)
-                return "null-aware semi join does not have null_aware_eq_cond_name or null_aware_eq_cond_expr is nullptr";
+                return "null-aware semi join does not have null_aware_eq_cond_name or null_aware_eq_cond_expr is "
+                       "nullptr";
             if unlikely (!other_eq_cond_from_in_name.empty())
                 return "null-aware semi join should not have other_eq_cond_from_in_name";
         }
 
-        return "";
+        return nullptr;
     }
 };
 
@@ -128,12 +131,18 @@ struct TiFlashJoin
     JoinKeyTypes join_key_types;
     TiDB::TiDBCollators join_key_collators;
 
-    ASTTableJoin::Strictness strictness;
-
     /// (cartesian) (anti) left outer semi join.
-    bool isLeftOuterSemiFamily() const { return join.join_type() == tipb::JoinType::TypeLeftOuterSemiJoin || join.join_type() == tipb::JoinType::TypeAntiLeftOuterSemiJoin; }
+    bool isLeftOuterSemiFamily() const
+    {
+        return join.join_type() == tipb::JoinType::TypeLeftOuterSemiJoin
+            || join.join_type() == tipb::JoinType::TypeAntiLeftOuterSemiJoin;
+    }
 
-    bool isSemiJoin() const { return join.join_type() == tipb::JoinType::TypeSemiJoin || join.join_type() == tipb::JoinType::TypeAntiSemiJoin || isLeftOuterSemiFamily(); }
+    /// (anti) semi join.
+    bool isSemiFamily() const
+    {
+        return join.join_type() == tipb::JoinType::TypeSemiJoin || join.join_type() == tipb::JoinType::TypeAntiSemiJoin;
+    }
 
     const google::protobuf::RepeatedPtrField<tipb::Expr> & getBuildJoinKeys() const
     {
@@ -155,30 +164,25 @@ struct TiFlashJoin
         return build_side_index == 0 ? join.right_conditions() : join.left_conditions();
     }
 
-    bool isTiFlashLeftOuterJoin() const { return kind == ASTTableJoin::Kind::LeftOuter || kind == ASTTableJoin::Kind::Cross_LeftOuter; }
-
-    /// Cross_RightOuter join will be converted to Cross_LeftOuter join, so no need to check Cross_RightOuter
-    bool isTiFlashRightOuterJoin() const { return kind == ASTTableJoin::Kind::RightOuter; }
-
     /// return a name that is unique in header1 and header2 for left outer semi family join,
     /// return "" for everything else.
     String genMatchHelperName(const Block & header1, const Block & header2) const;
 
-    /// return a name that is unique in header1 and header2 for right semi/anti joins that has_other_condition,
+    /// return a name that is unique in header1 and header2 for right semi/anti/outer joins that has_other_condition,
     /// return "" for everything else.
     String genFlagMappedEntryHelperName(const Block & header1, const Block & header2, bool has_other_condition) const;
 
     /// The columns output by join will be:
     /// {columns of left_input, columns of right_input, match_helper_name}
     NamesAndTypes genJoinOutputColumns(
-        const Block & left_input_header,
-        const Block & right_input_header,
+        const NamesAndTypes & left_cols,
+        const NamesAndTypes & right_cols,
         const String & match_helper_name) const;
 
     void fillJoinOtherConditionsAction(
         const Context & context,
-        const Block & left_input_header,
-        const Block & right_input_header,
+        const NamesAndTypes & left_cols,
+        const NamesAndTypes & right_cols,
         const ExpressionActionsPtr & probe_side_prepare_join,
         const Names & probe_key_names,
         const Names & build_key_names,
@@ -194,9 +198,15 @@ struct TiFlashJoin
     ///  -`other_columns_added_by_probe_join_actions` is added to avoid duplicated columns error
     ///  -`match_helper_col` is not handled explicitly because `other_condition` never use that column.
     NamesAndTypes genColumnsForOtherJoinFilter(
-        const Block & left_input_header,
-        const Block & right_input_header,
+        const NamesAndTypes & left_cols,
+        const NamesAndTypes & right_cols,
         const ExpressionActionsPtr & probe_prepare_join_actions) const;
+
+    std::vector<RuntimeFilterPtr> genRuntimeFilterList(
+        const Context & context,
+        const NamesAndTypes & source_columns,
+        const std::unordered_map<String, String> & key_names_map,
+        const LoggerPtr & log);
 };
 
 /// @join_prepare_expr_actions: generates join key columns and join filter column
@@ -205,11 +215,15 @@ struct TiFlashJoin
 /// @filter_column_name: column name of `and(filters)`
 std::tuple<ExpressionActionsPtr, Names, Names, String> prepareJoin(
     const Context & context,
-    const Block & input_header,
+    const NamesAndTypes & source_columns,
     const google::protobuf::RepeatedPtrField<tipb::Expr> & keys,
     const JoinKeyTypes & join_key_types,
     bool left,
     bool is_right_out_join,
     const google::protobuf::RepeatedPtrField<tipb::Expr> & filters);
+
+/// generate source_columns that is used to compile tipb::Expr, the rule is columns in `tidb_schema`
+/// must be the first part of the source_columns
+NamesAndTypes genDAGExpressionAnalyzerSourceColumns(Block block, const NamesAndTypes & tidb_schema);
 } // namespace JoinInterpreterHelper
 } // namespace DB

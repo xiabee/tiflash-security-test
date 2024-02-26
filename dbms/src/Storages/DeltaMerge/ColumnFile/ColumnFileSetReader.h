@@ -42,18 +42,22 @@ private:
 
     std::vector<ColumnFileReaderPtr> column_file_readers;
 
+    LACBytesCollector lac_bytes_collector;
+
 private:
     explicit ColumnFileSetReader(const DMContext & context_)
         : context(context_)
+        , lac_bytes_collector(context_.scan_context ? context_.scan_context->resource_group_name : "")
     {}
 
     Block readPKVersion(size_t offset, size_t limit);
 
 public:
-    ColumnFileSetReader(const DMContext & context_,
-                        const ColumnFileSetSnapshotPtr & snapshot_,
-                        const ColumnDefinesPtr & col_defs_,
-                        const RowKeyRange & segment_range_);
+    ColumnFileSetReader(
+        const DMContext & context_,
+        const ColumnFileSetSnapshotPtr & snapshot_,
+        const ColumnDefinesPtr & col_defs_,
+        const RowKeyRange & segment_range_);
 
     // If we need to read columns besides pk and version, a ColumnFileSetReader can NOT be used more than once.
     // This method create a new reader based on the current one. It will reuse some caches in the current reader.
@@ -63,14 +67,26 @@ public:
     // This method will check whether offset and limit are valid. It only return those valid rows.
     // The returned rows is not continuous, since records may be filtered by `range`. When `row_ids` is not null,
     // this function will fill corresponding offset of each row into `*row_ids`.
-    size_t readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range, std::vector<UInt32> * row_ids = nullptr);
+    size_t readRows(
+        MutableColumns & output_columns,
+        size_t offset,
+        size_t limit,
+        const RowKeyRange * range,
+        std::vector<UInt32> * row_ids = nullptr);
 
-    void getPlaceItems(BlockOrDeletes & place_items, size_t rows_begin, size_t deletes_begin, size_t rows_end, size_t deletes_end, size_t place_rows_offset = 0);
+    void getPlaceItems(
+        BlockOrDeletes & place_items,
+        size_t rows_begin,
+        size_t deletes_begin,
+        size_t rows_end,
+        size_t deletes_end,
+        size_t place_rows_offset = 0);
 
-    bool shouldPlace(const DMContext & context,
-                     const RowKeyRange & relevant_range,
-                     UInt64 max_version,
-                     size_t placed_rows);
+    bool shouldPlace(
+        const DMContext & context,
+        const RowKeyRange & relevant_range,
+        UInt64 max_version,
+        size_t placed_rows);
 };
 
 class ColumnFileSetInputStream : public SkippableBlockInputStream
@@ -84,10 +100,11 @@ private:
     size_t next_file_index = 0;
 
 public:
-    ColumnFileSetInputStream(const DMContext & context_,
-                             const ColumnFileSetSnapshotPtr & delta_snap_,
-                             const ColumnDefinesPtr & col_defs_,
-                             const RowKeyRange & segment_range_)
+    ColumnFileSetInputStream(
+        const DMContext & context_,
+        const ColumnFileSetSnapshotPtr & delta_snap_,
+        const ColumnDefinesPtr & col_defs_,
+        const RowKeyRange & segment_range_)
         : reader(context_, delta_snap_, col_defs_, segment_range_)
         , column_files(reader.snapshot->getColumnFiles())
         , column_files_count(column_files.size())
@@ -150,7 +167,10 @@ public:
         return {};
     }
 
-    Block readWithFilter(const IColumn::Filter &) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
+    Block readWithFilter(const IColumn::Filter &) override
+    {
+        throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED);
+    }
 };
 } // namespace DM
 } // namespace DB

@@ -14,11 +14,11 @@
 
 #include <Common/FileChecker.h>
 #include <Common/escapeForFileName.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteBufferFromFile.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Buffer/ReadBufferFromFile.h>
+#include <IO/Buffer/WriteBufferFromFile.h>
+#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 #include <Poco/Path.h>
 #include <common/JSON.h>
 
@@ -76,7 +76,12 @@ bool FileChecker::check() const
         size_t real_size = file.getSize();
         if (real_size != name_size.second)
         {
-            LOG_ERROR(log, "Size of {} is wrong. Size is {} but should be {}", file.path(), real_size, name_size.second);
+            LOG_ERROR(
+                log,
+                "Size of {} is wrong. Size is {} but should be {}",
+                file.path(),
+                real_size,
+                name_size.second);
             return false;
         }
     }

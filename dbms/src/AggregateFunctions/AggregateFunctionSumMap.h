@@ -20,8 +20,8 @@
 #include <Common/FieldVisitors.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeTuple.h>
-#include <IO/ReadHelpers.h>
-#include <IO/WriteHelpers.h>
+#include <IO/Util/ReadHelpers.h>
+#include <IO/Util/WriteHelpers.h>
 
 #include <map>
 
@@ -60,7 +60,10 @@ struct AggregateFunctionSumMapData
   */
 
 template <typename T>
-class AggregateFunctionSumMap final : public IAggregateFunctionDataHelper<AggregateFunctionSumMapData<typename NearestFieldType<T>::Type>, AggregateFunctionSumMap<T>>
+class AggregateFunctionSumMap final
+    : public IAggregateFunctionDataHelper<
+          AggregateFunctionSumMapData<typename NearestFieldType<T>::Type>,
+          AggregateFunctionSumMap<T>>
 {
 private:
     DataTypePtr keys_type;

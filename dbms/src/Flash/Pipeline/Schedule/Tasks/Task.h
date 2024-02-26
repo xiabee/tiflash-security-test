@@ -16,68 +16,113 @@
 
 #include <Common/Logger.h>
 #include <Common/MemoryTracker.h>
+#include <Flash/Executor/PipelineExecutorContext.h>
+#include <Flash/Pipeline/Schedule/Tasks/TaskProfileInfo.h>
 #include <memory.h>
 
 namespace DB
 {
 /**
- *    CANCELLED/ERROR/FINISHED
- *               ▲
- *               │
- *  ┌────────────────────────┐
- *  │     ┌──►RUNNING◄──┐    │
- *  │     │             │    │
- *  │     ▼             ▼    │
- *  │ WATITING◄────────►IO   │
- *  └────────────────────────┘
+ *           CANCELLED/ERROR/FINISHED
+ *                      ▲
+ *                      │
+ *         ┌───────────────────────────────┐
+ *         │     ┌──►RUNNING◄──┐           │
+ * INIT───►│     │             │           │
+ *         │     ▼             ▼           │
+ *         │ WATITING◄────────►IO_IN/OUT   │
+ *         └───────────────────────────────┘
  */
 enum class ExecTaskStatus
 {
-    INIT,
     WAITING,
     RUNNING,
-    IO,
+    IO_IN,
+    IO_OUT,
     FINISHED,
     ERROR,
     CANCELLED,
 };
 
+class PipelineExecutorContext;
+
 class Task
 {
 public:
-    Task();
+    Task(
+        PipelineExecutorContext & exec_context_,
+        const String & req_id,
+        ExecTaskStatus init_status = ExecTaskStatus::RUNNING);
 
-    Task(MemoryTrackerPtr mem_tracker_, const String & req_id);
+    // Only used for unit test.
+    explicit Task(PipelineExecutorContext & exec_context_);
 
-    virtual ~Task() = default;
+    virtual ~Task();
 
-    MemoryTrackerPtr getMemTracker() const
+    ExecTaskStatus getStatus() const { return task_status; }
+
+    ExecTaskStatus execute();
+
+    ExecTaskStatus executeIO();
+
+    ExecTaskStatus await();
+
+    // `finalize` must be called before destructuring.
+    // `TaskHelper::FINALIZE_TASK` can help this.
+    void finalize();
+
+    ALWAYS_INLINE void startTraceMemory()
     {
-        return mem_tracker;
+        assert(nullptr == current_memory_tracker);
+        assert(0 == CurrentMemoryTracker::getLocalDeltaMemory());
+        current_memory_tracker = mem_tracker_ptr;
+    }
+    ALWAYS_INLINE static void endTraceMemory()
+    {
+        CurrentMemoryTracker::submitLocalDeltaMemory();
+        current_memory_tracker = nullptr;
     }
 
-    ExecTaskStatus execute() noexcept;
+    const String & getQueryId() const;
 
-    ExecTaskStatus executeIO() noexcept;
+    const String & getResourceGroupName() const;
 
-    ExecTaskStatus await() noexcept;
+    const PipelineExecutorContext & getQueryExecContext() { return exec_context; }
 
-protected:
-    virtual ExecTaskStatus executeImpl() noexcept = 0;
-    virtual ExecTaskStatus executeIOImpl() noexcept { return ExecTaskStatus::RUNNING; }
-    // Avoid allocating memory in `await` if possible.
-    virtual ExecTaskStatus awaitImpl() noexcept { return ExecTaskStatus::RUNNING; }
+    void onErrorOccurred(const String & err_msg) { exec_context.onErrorOccurred(err_msg); }
 
-private:
-    void switchStatus(ExecTaskStatus to) noexcept;
-
-protected:
-    MemoryTrackerPtr mem_tracker;
+public:
     LoggerPtr log;
 
+protected:
+    virtual ExecTaskStatus executeImpl() = 0;
+    virtual ExecTaskStatus executeIOImpl() { return ExecTaskStatus::RUNNING; }
+    // Avoid allocating memory in `await` if possible.
+    virtual ExecTaskStatus awaitImpl() { return ExecTaskStatus::RUNNING; }
+
+    // Used to release held resources, just like `Event::finishImpl`.
+    virtual void finalizeImpl() {}
+
 private:
-    ExecTaskStatus exec_status{ExecTaskStatus::INIT};
+    inline void switchStatus(ExecTaskStatus to);
+
+public:
+    TaskProfileInfo profile_info;
+
+    // level of multi-level feedback queue.
+    size_t mlfq_level{0};
+
+private:
+    PipelineExecutorContext & exec_context;
+
+    // To ensure that the memory tracker will not be destructed prematurely and prevent crashes due to accessing invalid memory tracker pointers.
+    MemoryTrackerPtr mem_tracker_holder;
+    // To reduce the overheads of `mem_tracker_holder.get()`
+    MemoryTracker * mem_tracker_ptr;
+
+    ExecTaskStatus task_status;
+
+    bool is_finalized = false;
 };
 using TaskPtr = std::unique_ptr<Task>;
-
 } // namespace DB
