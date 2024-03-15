@@ -18,8 +18,8 @@
 #include <Columns/ColumnDecimal.h>
 #include <Columns/ColumnsNumber.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/Util/ReadHelpers.h>
-#include <IO/Util/WriteHelpers.h>
+#include <IO/ReadHelpers.h>
+#include <IO/WriteHelpers.h>
 
 namespace DB
 {
@@ -47,6 +47,7 @@ class AggregateFunctionAvg final
     ScaleType scale;
     PrecType result_prec;
     ScaleType result_scale;
+    ScaleType div_precincrement;
 
 public:
     AggregateFunctionAvg() = default;

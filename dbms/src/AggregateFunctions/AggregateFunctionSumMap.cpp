@@ -17,7 +17,7 @@
 #include <AggregateFunctions/FactoryHelpers.h>
 #include <AggregateFunctions/Helpers.h>
 #include <Functions/FunctionHelpers.h>
-#include <IO/Util/WriteHelpers.h>
+#include <IO/WriteHelpers.h>
 
 
 namespace DB
@@ -25,6 +25,7 @@ namespace DB
 namespace
 {
 AggregateFunctionPtr createAggregateFunctionSumMap(
+    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & arguments,
     const Array & params)
