@@ -43,7 +43,8 @@ struct NumericArraySource : public ArraySourceImpl<NumericArraySource<T>>
     explicit NumericArraySource(const ColumnArray & arr)
         : elements(typeid_cast<const ColumnVector<T> &>(arr.getData()).getData())
         , offsets(arr.getOffsets())
-    {}
+    {
+    }
 
     void next()
     {
@@ -51,20 +52,41 @@ struct NumericArraySource : public ArraySourceImpl<NumericArraySource<T>>
         ++row_num;
     }
 
-    bool isEnd() const { return row_num == offsets.size(); }
+    bool isEnd() const
+    {
+        return row_num == offsets.size();
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    const typename ColumnArray::Offsets & getOffsets() const override { return offsets; }
+    const typename ColumnArray::Offsets & getOffsets() const override
+    {
+        return offsets;
+    }
 
     /// Get size for corresponding call or Sink::reserve to reserve memory for elements.
-    size_t getSizeForReserve() const override { return elements.size(); }
+    size_t getSizeForReserve() const override
+    {
+        return elements.size();
+    }
 
-    size_t getColumnSize() const override { return offsets.size(); }
+    size_t getColumnSize() const override
+    {
+        return offsets.size();
+    }
 
-    size_t getElementSize() const { return offsets[row_num] - prev_offset; }
+    size_t getElementSize() const
+    {
+        return offsets[row_num] - prev_offset;
+    }
 
-    Slice getWhole() const { return {&elements[prev_offset], offsets[row_num] - prev_offset}; }
+    Slice getWhole() const
+    {
+        return {&elements[prev_offset], offsets[row_num] - prev_offset};
+    }
 
     Slice getSliceFromLeft(size_t offset) const
     {
@@ -94,9 +116,7 @@ struct NumericArraySource : public ArraySourceImpl<NumericArraySource<T>>
     {
         size_t elem_size = offsets[row_num] - prev_offset;
         if (offset > elem_size)
-            return {
-                &elements[prev_offset],
-                length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
+            return {&elements[prev_offset], length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
         return {&elements[offsets[row_num] - offset], std::min(length, offset)};
     }
 };
@@ -113,19 +133,22 @@ struct ConstSource : public Base
     explicit ConstSource(const ColumnConst & col)
         : Base(static_cast<const typename Base::Column &>(col.getDataColumn()))
         , total_rows(col.size())
-    {}
+    {
+    }
 
     template <typename ColumnType>
     ConstSource(const ColumnType & col, size_t total_rows)
         : Base(col)
         , total_rows(total_rows)
-    {}
+    {
+    }
 
     template <typename ColumnType>
     ConstSource(const ColumnType & col, const NullMap & null_map, size_t total_rows)
         : Base(col, null_map)
         , total_rows(total_rows)
-    {}
+    {
+    }
 
     virtual ~ConstSource() = default;
 
@@ -149,17 +172,35 @@ struct ConstSource : public Base
                 + " because " + demangle(typeid(Base).name()) + " is not derived from IValueSource ");
     }
 
-    void next() { ++row_num; }
+    void next()
+    {
+        ++row_num;
+    }
 
-    bool isEnd() const { return row_num == total_rows; }
+    bool isEnd() const
+    {
+        return row_num == total_rows;
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    size_t getSizeForReserve() const { return total_rows * Base::getSizeForReserve(); }
+    size_t getSizeForReserve() const
+    {
+        return total_rows * Base::getSizeForReserve();
+    }
 
-    size_t getColumnSize() const { return total_rows; }
+    size_t getColumnSize() const
+    {
+        return total_rows;
+    }
 
-    bool isConst() const { return true; }
+    bool isConst() const
+    {
+        return true;
+    }
 };
 
 struct StringSource
@@ -176,7 +217,8 @@ struct StringSource
     explicit StringSource(const ColumnString & col)
         : elements(col.getChars())
         , offsets(col.getOffsets())
-    {}
+    {
+    }
 
     void next()
     {
@@ -184,15 +226,30 @@ struct StringSource
         ++row_num;
     }
 
-    bool isEnd() const { return row_num == offsets.size(); }
+    bool isEnd() const
+    {
+        return row_num == offsets.size();
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    size_t getSizeForReserve() const { return elements.size(); }
+    size_t getSizeForReserve() const
+    {
+        return elements.size();
+    }
 
-    size_t getElementSize() const { return offsets[row_num] - prev_offset; }
+    size_t getElementSize() const
+    {
+        return offsets[row_num] - prev_offset;
+    }
 
-    Slice getWhole() const { return {&elements[prev_offset], offsets[row_num] - prev_offset - 1}; }
+    Slice getWhole() const
+    {
+        return {&elements[prev_offset], offsets[row_num] - prev_offset - 1};
+    }
 
     Slice getSliceFromLeft(size_t offset) const
     {
@@ -222,9 +279,7 @@ struct StringSource
     {
         size_t elem_size = offsets[row_num] - prev_offset - 1;
         if (offset > elem_size)
-            return {
-                &elements[prev_offset],
-                length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
+            return {&elements[prev_offset], length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
         return {&elements[prev_offset + elem_size - offset], std::min(length, offset)};
     }
 };
@@ -254,15 +309,30 @@ struct FixedStringSource
         ++row_num;
     }
 
-    bool isEnd() const { return pos == end; }
+    bool isEnd() const
+    {
+        return pos == end;
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    size_t getSizeForReserve() const { return end - pos; }
+    size_t getSizeForReserve() const
+    {
+        return end - pos;
+    }
 
-    size_t getElementSize() const { return string_size; }
+    size_t getElementSize() const
+    {
+        return string_size;
+    }
 
-    Slice getWhole() const { return {pos, string_size}; }
+    Slice getWhole() const
+    {
+        return {pos, string_size};
+    }
 
     Slice getSliceFromLeft(size_t offset) const
     {
@@ -351,7 +421,8 @@ struct GenericArraySource : public ArraySourceImpl<GenericArraySource>
     explicit GenericArraySource(const ColumnArray & arr)
         : elements(arr.getData())
         , offsets(arr.getOffsets())
-    {}
+    {
+    }
 
     void next()
     {
@@ -359,19 +430,40 @@ struct GenericArraySource : public ArraySourceImpl<GenericArraySource>
         ++row_num;
     }
 
-    bool isEnd() const { return row_num == offsets.size(); }
+    bool isEnd() const
+    {
+        return row_num == offsets.size();
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    const typename ColumnArray::Offsets & getOffsets() const override { return offsets; }
+    const typename ColumnArray::Offsets & getOffsets() const override
+    {
+        return offsets;
+    }
 
-    size_t getSizeForReserve() const override { return elements.size(); }
+    size_t getSizeForReserve() const override
+    {
+        return elements.size();
+    }
 
-    size_t getColumnSize() const override { return elements.size(); }
+    size_t getColumnSize() const override
+    {
+        return elements.size();
+    }
 
-    size_t getElementSize() const { return offsets[row_num] - prev_offset; }
+    size_t getElementSize() const
+    {
+        return offsets[row_num] - prev_offset;
+    }
 
-    Slice getWhole() const { return {&elements, prev_offset, offsets[row_num] - prev_offset}; }
+    Slice getWhole() const
+    {
+        return {&elements, prev_offset, offsets[row_num] - prev_offset};
+    }
 
     Slice getSliceFromLeft(size_t offset) const
     {
@@ -401,10 +493,7 @@ struct GenericArraySource : public ArraySourceImpl<GenericArraySource>
     {
         size_t elem_size = offsets[row_num] - prev_offset;
         if (offset > elem_size)
-            return {
-                &elements,
-                prev_offset,
-                length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
+            return {&elements, prev_offset, length + elem_size > offset ? std::min(elem_size, length + elem_size - offset) : 0};
         return {&elements, offsets[row_num] - offset, std::min(length, offset)};
     }
 };
@@ -423,7 +512,8 @@ struct NullableArraySource : public ArraySource
     NullableArraySource(const ColumnArray & arr, const NullMap & null_map)
         : ArraySource(arr)
         , null_map(null_map)
-    {}
+    {
+    }
 
     void accept(ArraySourceVisitor & visitor) override { visitor.visit(*this); }
 
@@ -474,7 +564,10 @@ struct NullableArraySource : public ArraySource
         return slice;
     }
 
-    bool isNullable() const override { return true; }
+    bool isNullable() const override
+    {
+        return true;
+    }
 };
 
 
@@ -495,13 +588,25 @@ struct NumericValueSource : ValueSourceImpl<NumericValueSource<T>>
         total_rows = container.size();
     }
 
-    void next() { ++row_num; }
+    void next()
+    {
+        ++row_num;
+    }
 
-    bool isEnd() const { return row_num == total_rows; }
+    bool isEnd() const
+    {
+        return row_num == total_rows;
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    size_t getSizeForReserve() const { return total_rows; }
+    size_t getSizeForReserve() const
+    {
+        return total_rows;
+    }
 
     Slice getWhole() const
     {
@@ -525,13 +630,25 @@ struct GenericValueSource : public ValueSourceImpl<GenericValueSource>
         total_rows = col.size();
     }
 
-    void next() { ++row_num; }
+    void next()
+    {
+        ++row_num;
+    }
 
-    bool isEnd() const { return row_num == total_rows; }
+    bool isEnd() const
+    {
+        return row_num == total_rows;
+    }
 
-    size_t rowNum() const { return row_num; }
+    size_t rowNum() const
+    {
+        return row_num;
+    }
 
-    size_t getSizeForReserve() const { return total_rows; }
+    size_t getSizeForReserve() const
+    {
+        return total_rows;
+    }
 
     Slice getWhole() const
     {

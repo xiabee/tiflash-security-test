@@ -26,7 +26,7 @@ export storage_server="127.0.0.1"
 export storage_port="9000"
 
 # Default database for scripts
-export storage_db="system"
+export storage_db="default"
 
 # TiDB address
 export tidb_server="tidb0"

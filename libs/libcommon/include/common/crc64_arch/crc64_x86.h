@@ -26,7 +26,8 @@ using simd_t = __m128i;
 class SIMD
 {
 public:
-    SIMD(uint64_t high, uint64_t low) noexcept;
+    SIMD(uint64_t high, uint64_t low)
+    noexcept;
 
     [[nodiscard]] SIMD fold16(SIMD coeff) const noexcept;
 

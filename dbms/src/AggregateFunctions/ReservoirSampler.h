@@ -16,7 +16,7 @@
 
 #include <Common/NaNUtils.h>
 #include <Common/PODArray.h>
-#include <IO/Buffer/ReadBuffer.h>
+#include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/Exception.h>
@@ -49,18 +49,21 @@ enum Enum
 template <typename ResultType, bool IsFloatingPoint>
 struct NanLikeValueConstructor
 {
-    static ResultType getValue() { return std::numeric_limits<ResultType>::quiet_NaN(); }
+    static ResultType getValue()
+    {
+        return std::numeric_limits<ResultType>::quiet_NaN();
+    }
 };
 template <typename ResultType>
 struct NanLikeValueConstructor<ResultType, false>
 {
-    static ResultType getValue() { return ResultType(); }
+    static ResultType getValue()
+    {
+        return ResultType();
+    }
 };
 
-template <
-    typename T,
-    ReservoirSamplerOnEmpty::Enum OnEmpty = ReservoirSamplerOnEmpty::THROW,
-    typename Comparer = std::less<T>>
+template <typename T, ReservoirSamplerOnEmpty::Enum OnEmpty = ReservoirSamplerOnEmpty::THROW, typename Comparer = std::less<T>>
 class ReservoirSampler
 {
 public:
@@ -97,7 +100,10 @@ public:
         }
     }
 
-    size_t size() const { return total_values; }
+    size_t size() const
+    {
+        return total_values;
+    }
 
     T quantileNearest(double level)
     {
@@ -199,18 +205,12 @@ public:
     }
 
 private:
-    friend void qdigest_test(
-        int normal_size,
-        UInt64 value_limit,
-        const std::vector<UInt64> & values,
-        int queries_count,
-        bool verbose);
+    friend void qdigest_test(int normal_size, UInt64 value_limit, const std::vector<UInt64> & values, int queries_count, bool verbose);
     friend void rs_perf_test();
 
     /// We allocate a little memory on the stack - to avoid allocations when there are many objects with a small number of elements.
     static constexpr size_t bytes_on_stack = 64;
-    using Array
-        = DB::PODArray<T, bytes_on_stack / sizeof(T), AllocatorWithStackMemory<Allocator<false>, bytes_on_stack>>;
+    using Array = DB::PODArray<T, bytes_on_stack / sizeof(T), AllocatorWithStackMemory<Allocator<false>, bytes_on_stack>>;
 
     size_t sample_count;
     size_t total_values = 0;
@@ -225,8 +225,7 @@ private:
         if (lim <= static_cast<UInt64>(rng.max()))
             return static_cast<UInt32>(rng()) % static_cast<UInt32>(lim);
         else
-            return (static_cast<UInt64>(rng()) * (static_cast<UInt64>(rng.max()) + 1ULL) + static_cast<UInt64>(rng()))
-                % lim;
+            return (static_cast<UInt64>(rng()) * (static_cast<UInt64>(rng.max()) + 1ULL) + static_cast<UInt64>(rng())) % lim;
     }
 
     void randomShuffle(Array & v)

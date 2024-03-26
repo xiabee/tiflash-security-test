@@ -19,7 +19,7 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/ReadBufferFromString.h>
 
 namespace DB
 {
@@ -50,7 +50,8 @@ public:
     DataTypes expected_types;
 };
 
-CHBlockChunkCodec::CHBlockChunkCodec(const Block & header_)
+CHBlockChunkCodec::CHBlockChunkCodec(
+    const Block & header_)
     : header(header_)
 {
     for (const auto & column : header)
@@ -65,15 +66,13 @@ CHBlockChunkCodec::CHBlockChunkCodec(const DAGSchema & schema)
 
 size_t getExtraInfoSize(const Block & block)
 {
-    size_t size = 8 + 8; /// to hold some length of structures, such as column number, row number...
+    size_t size = 64; /// to hold some length of structures, such as column number, row number...
     size_t columns = block.columns();
     for (size_t i = 0; i < columns; ++i)
     {
         const ColumnWithTypeAndName & column = block.safeGetByPosition(i);
         size += column.name.size();
-        size += 8;
         size += column.type->getName().size();
-        size += 8;
         if (column.column->isColumnConst())
         {
             size += column.column->byteSize() * column.column->size();
@@ -82,7 +81,7 @@ size_t getExtraInfoSize(const Block & block)
     return size;
 }
 
-void WriteColumnData(const IDataType & type, const ColumnPtr & column, WriteBuffer & ostr, size_t offset, size_t limit)
+void writeData(const IDataType & type, const ColumnPtr & column, WriteBuffer & ostr, size_t offset, size_t limit)
 {
     /** If there are columns-constants - then we materialize them.
       * (Since the data type does not know how to serialize / deserialize constants.)
@@ -108,11 +107,6 @@ void CHBlockChunkCodec::readData(const IDataType & type, IColumn & column, ReadB
     type.deserializeBinaryBulkWithMultipleStreams(column, input_stream_getter, rows, 0, false, {});
 }
 
-size_t ApproxBlockBytes(const Block & block)
-{
-    return block.bytes() + getExtraInfoSize(block);
-}
-
 void CHBlockChunkCodecStream::encode(const Block & block, size_t start, size_t end)
 {
     /// only check block schema in CHBlock codec because for both
@@ -124,7 +118,7 @@ void CHBlockChunkCodecStream::encode(const Block & block, size_t start, size_t e
         throw TiFlashException("CHBlock encode only support encode whole block", Errors::Coprocessor::Internal);
 
     assert(output == nullptr);
-    output = std::make_unique<WriteBufferFromOwnString>(ApproxBlockBytes(block));
+    output = std::make_unique<WriteBufferFromOwnString>(block.bytes() + getExtraInfoSize(block));
 
     block.checkNumberOfRows();
     size_t columns = block.columns();
@@ -141,7 +135,7 @@ void CHBlockChunkCodecStream::encode(const Block & block, size_t start, size_t e
         writeStringBinary(column.type->getName(), *output);
 
         if (rows)
-            WriteColumnData(*column.type, column.column, *output, 0, 0);
+            writeData(*column.type, column.column, *output, 0, 0);
     }
 }
 
@@ -170,7 +164,8 @@ Block CHBlockChunkCodec::decodeImpl(ReadBuffer & istr, size_t reserve_size)
 
         /// Data
         MutableColumnPtr read_column = column.type->createColumn();
-        if (column.type->haveMaximumSizeOfValue())
+        const auto & type_removed_nullable = removeNullable(column.type);
+        if (type_removed_nullable->isValueRepresentedByNumber() || type_removed_nullable->isFixedString())
         {
             if (reserve_size > 0)
                 read_column->reserve(std::max(rows, reserve_size));
@@ -233,11 +228,4 @@ Block CHBlockChunkCodec::decode(const String & str, const Block & header)
     ReadBufferFromString read_buffer(str);
     return CHBlockChunkCodec(header).decodeImpl(read_buffer);
 }
-
-Block CHBlockChunkCodec::decode(const String & str)
-{
-    ReadBufferFromString read_buffer(str);
-    return decodeImpl(read_buffer);
-}
-
 } // namespace DB

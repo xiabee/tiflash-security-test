@@ -13,6 +13,8 @@
 # limitations under the License.
 
 add_subdirectory(StringUtils)
+# after common_io
+#add_subdirectory(ConfigProcessor)
 
 if (ENABLE_TESTS)
     add_subdirectory (tests EXCLUDE_FROM_ALL)

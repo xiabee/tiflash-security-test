@@ -47,7 +47,10 @@ public:
     ExecutableTask(ExecutableTask && other) = default;
     ExecutableTask & operator=(ExecutableTask && other) = default;
 
-    void execute() override { func(); }
+    void execute() override
+    {
+        func();
+    }
 
 private:
     Func func;

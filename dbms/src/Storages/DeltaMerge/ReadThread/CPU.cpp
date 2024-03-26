@@ -11,14 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include <Common/Exception.h>
-#include <Common/Logger.h>
 #include <Poco/DirectoryIterator.h>
 #include <Poco/File.h>
+#include <Poco/Logger.h>
 #include <Storages/DeltaMerge/ReadThread/CPU.h>
 #include <common/logger_useful.h>
-#include <stdlib.h>
 
 #include <exception>
 #include <string>
@@ -28,15 +26,13 @@ namespace DB::DM
 // In Linux a numa node is represented by a device directory, such as '/sys/devices/system/node/node0', '/sys/devices/system/node/node01'.
 static inline bool isNodeDir(const std::string & name)
 {
-    return name.size() > 4 && name.substr(0, 4) == "node"
-        && std::all_of(name.begin() + 4, name.end(), [](unsigned char c) { return std::isdigit(c); });
+    return name.size() > 4 && name.substr(0, 4) == "node" && std::all_of(name.begin() + 4, name.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
 // Under a numa node directory is CPU cores and memory, such as  '/sys/devices/system/node/node0/cpu0' and '/sys/devices/system/node/node0/memory0'.
 static inline bool isCPU(const std::string & name)
 {
-    return name.size() > 3 && name.substr(0, 3) == "cpu"
-        && std::all_of(name.begin() + 3, name.end(), [](unsigned char c) { return std::isdigit(c); });
+    return name.size() > 3 && name.substr(0, 3) == "cpu" && std::all_of(name.begin() + 3, name.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
 static inline int parseCPUNumber(const std::string & name)
@@ -97,7 +93,7 @@ std::vector<std::vector<int>> getLinuxNumaNodes()
     return numa_nodes;
 }
 
-std::vector<std::vector<int>> getNumaNodes(const LoggerPtr & log)
+std::vector<std::vector<int>> getNumaNodes(Poco::Logger * log)
 {
 #ifndef __APPLE__ // Apple macbooks does not support NUMA
     try
@@ -120,31 +116,5 @@ std::vector<std::vector<int>> getNumaNodes(const LoggerPtr & log)
     LOG_WARNING(log, "Cannot recognize the CPU NUMA infomation, use the CPU as 'one numa node'");
     std::vector<std::vector<int>> numa_nodes(1); // "One numa node"
     return numa_nodes;
-}
-
-void setCPUAffinity(const std::vector<int> & cpus, const LoggerPtr & log [[maybe_unused]])
-{
-    if (cpus.empty())
-    {
-        return;
-    }
-#ifdef __linux__
-    cpu_set_t cpu_set;
-    CPU_ZERO(&cpu_set);
-    for (int i : cpus)
-    {
-        CPU_SET(i, &cpu_set);
-    }
-    int ret = sched_setaffinity(0, sizeof(cpu_set), &cpu_set);
-    if (ret != 0)
-    {
-        // It can be failed due to some CPU core cannot access, such as CPU offline.
-        LOG_WARNING(log, "sched_setaffinity fail, cpus={} errno={}", cpus, errno);
-    }
-    else
-    {
-        LOG_DEBUG(log, "sched_setaffinity succ, cpus={}", cpus);
-    }
-#endif
 }
 } // namespace DB::DM

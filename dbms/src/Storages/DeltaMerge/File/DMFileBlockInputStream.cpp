@@ -31,23 +31,14 @@ DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & con
     setFromSettings(context.getSettingsRef());
 }
 
-DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
-    const DMFilePtr & dmfile,
-    const ColumnDefines & read_columns,
-    const RowKeyRanges & rowkey_ranges,
-    const ScanContextPtr & scan_context)
+DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr & dmfile, const ColumnDefines & read_columns, const RowKeyRanges & rowkey_ranges, const ScanContextPtr & scan_context)
 {
-    RUNTIME_CHECK(
-        dmfile->getStatus() == DMFile::Status::READABLE,
-        dmfile->fileId(),
-        magic_enum::enum_name(dmfile->getStatus()));
+    RUNTIME_CHECK(dmfile->getStatus() == DMFile::Status::READABLE, dmfile->fileId(), DMFile::statusString(dmfile->getStatus()));
 
     // if `rowkey_ranges` is empty, we unconditionally read all packs
     // `rowkey_ranges` and `is_common_handle`  will only be useful in clean read mode.
     // It is safe to ignore them here.
-    RUNTIME_CHECK_MSG(
-        !(rowkey_ranges.empty() && enable_handle_clean_read),
-        "rowkey ranges shouldn't be empty with clean-read enabled");
+    RUNTIME_CHECK_MSG(!(rowkey_ranges.empty() && enable_handle_clean_read), "rowkey ranges shouldn't be empty with clean-read enabled");
 
     bool is_common_handle = !rowkey_ranges.empty() && rowkey_ranges[0].is_common_handle;
 
@@ -72,7 +63,7 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
     }
     else if (
         shared_column_data_mem_tracker != nullptr
-        && std::cmp_greater_equal(shared_column_data_mem_tracker->get(), max_sharing_column_bytes_for_all))
+        && shared_column_data_mem_tracker->get() >= static_cast<Int64>(max_sharing_column_bytes_for_all))
     {
         // The memory used reaches the limitation by running queries, disable the data sharing for this DMFile
         max_sharing_column_count = 0;
@@ -91,6 +82,7 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
         mark_cache,
         enable_column_cache,
         column_cache,
+        aio_threshold,
         max_read_buffer_size,
         file_provider,
         read_limiter,

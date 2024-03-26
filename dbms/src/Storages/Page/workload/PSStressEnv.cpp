@@ -31,18 +31,15 @@
 
 namespace DB::PS::tests
 {
-LoggerPtr StressEnv::buildLogger(bool enable_color)
+Poco::Logger * StressEnv::logger;
+void StressEnv::initGlobalLogger()
 {
     Poco::AutoPtr<Poco::ConsoleChannel> channel = new Poco::ConsoleChannel(std::cerr);
-    Poco::AutoPtr<Poco::Formatter> formatter;
-    if (enable_color)
-        formatter = new DB::UnifiedLogFormatter<true>();
-    else
-        formatter = new DB::UnifiedLogFormatter<false>();
+    Poco::AutoPtr<Poco::Formatter> formatter(new DB::UnifiedLogFormatter);
     Poco::AutoPtr<Poco::FormattingChannel> formatting_channel(new Poco::FormattingChannel(formatter, channel));
     Poco::Logger::root().setChannel(formatting_channel);
     Poco::Logger::root().setLevel("trace");
-    return Logger::get();
+    logger = &Poco::Logger::get("root");
 }
 
 StressEnv StressEnv::parse(int argc, char ** argv)
@@ -58,21 +55,14 @@ StressEnv StressEnv::parse(int argc, char ** argv)
         ("timeout,T", value<UInt32>()->default_value(600), "maximum run time (seconds). 0 means run infinitely") //
         ("writer_slots", value<UInt32>()->default_value(4), "number of PageStorage writer slots (for V2)") //
         ("read_delay_ms", value<UInt32>()->default_value(0), "millionseconds of read delay") //
-        ("avg_page_size",
-         value<UInt32>()->default_value(2 * 1024 * 1024),
-         "avg size for each page(bytes). 2 MiB by default") //
+        ("avg_page_size", value<UInt32>()->default_value(2 * 1024 * 1024), "avg size for each page(bytes). 2 MiB by default") //
         ("paths,P", value<std::vector<std::string>>(), "store path(s)") //
         ("failpoints", value<std::vector<std::string>>(), "failpoint(s) to enable") //
         ("gc_interval", value<UInt32>()->default_value(30), "GC interval(seconds). 0 means no gc") //
-        ("status_interval",
-         value<UInt32>()->default_value(5),
-         "Status statistics interval(seconds). 0 means no statistics") //
+        ("status_interval", value<UInt32>()->default_value(5), "Status statistics interval(seconds). 0 means no statistics") //
         ("situation_mask,M", value<UInt64>()->default_value(0), "Run special tests sequentially, example -M 2") //
         ("verify", value<bool>()->default_value(true), "Run special tests sequentially with verify.") //
-        ("running_ps_version,V",
-         value<UInt16>()->default_value(3),
-         "Select a version of PageStorage. 2 or 3 can used") //
-        ("color", value<bool>()->default_value(true), "enable color output");
+        ("running_ps_version,V", value<UInt16>()->default_value(3), "Select a version of PageStorage. 2 or 3 can used");
 
     po::variables_map options;
     po::store(po::parse_command_line(argc, argv, desc), options);
@@ -99,7 +89,6 @@ StressEnv StressEnv::parse(int argc, char ** argv)
     opt.situation_mask = options["situation_mask"].as<UInt64>();
     opt.verify = options["verify"].as<bool>();
     opt.running_ps_version = options["running_ps_version"].as<UInt16>();
-    opt.logger = buildLogger(options["color"].as<bool>());
 
     if (opt.running_ps_version != 2 && opt.running_ps_version != 3)
     {
@@ -123,7 +112,7 @@ StressEnv StressEnv::parse(int argc, char ** argv)
 void setupSignal()
 {
     signal(SIGINT, [](int /*signal*/) {
-        LOG_INFO(Logger::get(), "Receive finish signal. Wait for the threads finish");
+        LOG_INFO(StressEnv::logger, "Receive finish signal. Wait for the threads finish");
         StressEnvStatus::getInstance().setStat(STATUS_INTERRUPT);
         PageWorkloadFactory::getInstance().stopWorkload();
     });
@@ -157,7 +146,7 @@ void StressEnv::setup()
     }
 
     if (dropdata)
-        LOG_INFO(logger, "All pages have been drop.");
+        LOG_INFO(StressEnv::logger, "All pages have been drop.");
 
     if (dropdata || all_directories_not_exist)
         init_pages = true;

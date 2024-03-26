@@ -43,7 +43,10 @@ struct ExchangeSenderImpl
 
     static constexpr auto type = "ExchangeSender";
 
-    static bool isMatch(const tipb::Executor * executor) { return executor->has_exchange_sender(); }
+    static bool isMatch(const tipb::Executor * executor)
+    {
+        return executor->has_exchange_sender();
+    }
 };
 
 using ExchangeSenderStatisticsBase = ExecutorStatistics<ExchangeSenderImpl>;

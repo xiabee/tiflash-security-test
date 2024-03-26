@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/RandomData.h>
 #include <Common/TiFlashMetrics.h>
-#include <IO/Checksum/ChecksumBuffer.h>
-#include <IO/Encryption/MockKeyManager.h>
+#include <Encryption/MockKeyManager.h>
+#include <IO/ChecksumBuffer.h>
 #include <Poco/Path.h>
 #include <Server/DTTool/DTTool.h>
 #include <Server/RaftConfigParser.h>
@@ -25,10 +24,10 @@
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/FormatVersion.h>
-#include <Storages/KVStore/TMTContext.h>
 #include <Storages/PathPool.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <pingcap/Config.h>
 
 #include <boost/program_options.hpp>
@@ -78,28 +77,33 @@ ColumnDefinesPtr createColumnDefines(size_t column_number)
     auto str_num = column_number - int_num;
     for (size_t i = 0; i < int_num; ++i)
     {
-        primitive->emplace_back(ColumnDefine{
-            static_cast<ColId>(3 + i),
-            fmt::format("int_{}", i),
-            DB::DataTypeFactory::instance().get("Int64")});
+        primitive->emplace_back(
+            ColumnDefine{static_cast<ColId>(3 + i), fmt::format("int_{}", i), DB::DataTypeFactory::instance().get("Int64")});
     }
     for (size_t i = 0; i < str_num; ++i)
     {
-        primitive->emplace_back(ColumnDefine{
-            static_cast<ColId>(3 + int_num + i),
-            fmt::format("str_{}", i),
-            DB::DataTypeFactory::instance().get("String")});
+        primitive->emplace_back(
+            ColumnDefine{static_cast<ColId>(3 + int_num + i), fmt::format("str_{}", i), DB::DataTypeFactory::instance().get("String")});
     }
     return primitive;
 }
 
-DB::Block createBlock(
-    size_t column_number,
-    size_t start,
-    size_t row_number,
-    std::size_t limit,
-    std::mt19937_64 & eng,
-    size_t & acc)
+String createRandomString(std::size_t limit, std::mt19937_64 & eng, size_t & acc)
+{
+    // libc++-15 forbids instantiate `std::uniform_int_distribution<char>`.
+    // see https://github.com/llvm/llvm-project/blob/bfcd536a8ef6b1d6e9dd211925be3b078d06fe77/libcxx/include/__random/is_valid.h#L28
+    // and https://github.com/llvm/llvm-project/blob/bfcd536a8ef6b1d6e9dd211925be3b078d06fe77/libcxx/include/__random/uniform_int_distribution.h#L162
+    std::uniform_int_distribution<uint8_t> dist('a', 'z');
+    std::string buffer((eng() % limit) + 1, 0);
+    for (auto & i : buffer)
+    {
+        i = dist(eng);
+    }
+    acc += buffer.size();
+    return buffer;
+}
+
+DB::Block createBlock(size_t column_number, size_t start, size_t row_number, std::size_t limit, std::mt19937_64 & eng, size_t & acc)
 {
     using namespace DB;
     auto int_num = column_number / 2;
@@ -177,7 +181,7 @@ DB::Block createBlock(
         IColumn::MutablePtr m_col = str_col.type->createColumn();
         for (size_t j = 0; j < row_number; j++)
         {
-            Field field = DB::random::randomString(limit);
+            Field field = createRandomString(limit, eng, acc);
             m_col->insert(field);
         }
         str_col.column = std::move(m_col);
@@ -209,12 +213,11 @@ int benchEntry(const std::vector<std::string> & opts)
         ("workdir", bpo::value<String>()->default_value("/tmp"));
     // clang-format on
 
-    bpo::store(
-        bpo::command_line_parser(opts)
-            .options(options)
-            .style(bpo::command_line_style::unix_style | bpo::command_line_style::allow_long_disguise)
-            .run(),
-        vm);
+    bpo::store(bpo::command_line_parser(opts)
+                   .options(options)
+                   .style(bpo::command_line_style::unix_style | bpo::command_line_style::allow_long_disguise)
+                   .run(),
+               vm);
 
     bpo::notify(vm);
 
@@ -308,18 +311,7 @@ int benchEntry(const std::vector<std::string> & opts)
         }
         else
         {
-            LOG_INFO(
-                logger,
-                SUMMARY_TEMPLATE_V2,
-                version,
-                column,
-                size,
-                field,
-                random,
-                workdir,
-                frame,
-                encryption,
-                algorithm_config);
+            LOG_INFO(logger, SUMMARY_TEMPLATE_V2, version, column, size, field, random, workdir, frame, encryption, algorithm_config);
             opt.emplace(std::map<std::string, std::string>{}, frame, algorithm);
             DB::STORAGE_FORMAT_CURRENT = DB::STORAGE_FORMAT_V3;
         }
@@ -346,18 +338,15 @@ int benchEntry(const std::vector<std::string> & opts)
         size_t write_records = 0;
         auto settings = DB::Settings();
         auto db_context = env.getContext();
-        auto path_pool
-            = std::make_shared<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
-        auto storage_pool
-            = std::make_shared<DB::DM::StoragePool>(*db_context, NullspaceID, /*ns_id*/ 1, *path_pool, "test.t1");
+        auto path_pool = std::make_unique<DB::StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
+        auto storage_pool = std::make_unique<DB::DM::StoragePool>(*db_context, /*ns_id*/ 1, *path_pool, "test.t1");
         auto dm_settings = DB::DM::DeltaMergeStore::Settings{};
-        auto dm_context = DB::DM::DMContext::createUnique(
+        auto dm_context = std::make_unique<DB::DM::DMContext>( //
             *db_context,
-            path_pool,
-            storage_pool,
+            *path_pool,
+            *storage_pool,
             /*min_version_*/ 0,
-            NullspaceID,
-            /*physical_table_id*/ 1,
+            dm_settings.not_compress_columns,
             false,
             1,
             db_context->getSettingsRef());
@@ -367,7 +356,7 @@ int benchEntry(const std::vector<std::string> & opts)
         for (size_t i = 0; i < repeat; ++i)
         {
             using namespace std::chrono;
-            dmfile = DB::DM::DMFile::create(1, workdir, opt);
+            dmfile = DB::DM::DMFile::create(1, workdir, false, opt);
             auto start = high_resolution_clock::now();
             {
                 auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfile, *defines);
@@ -384,15 +373,11 @@ int benchEntry(const std::vector<std::string> & opts)
             LOG_INFO(logger, "attemp {} finished in {} ns", i, duration);
         }
 
-        LOG_INFO(
-            logger,
-            "average write time: {} ns",
-            (static_cast<double>(write_records) / static_cast<double>(repeat)));
+        LOG_INFO(logger, "average write time: {} ns", (static_cast<double>(write_records) / static_cast<double>(repeat)));
         LOG_INFO(
             logger,
             "throughput (MB/s): {}",
-            (static_cast<double>(effective_size) * 1'000'000'000 * static_cast<double>(repeat)
-             / static_cast<double>(write_records) / 1024 / 1024));
+            (static_cast<double>(effective_size) * 1'000'000'000 * static_cast<double>(repeat) / static_cast<double>(write_records) / 1024 / 1024));
 
         // Read
         LOG_INFO(logger, "start reading");
@@ -404,12 +389,7 @@ int benchEntry(const std::vector<std::string> & opts)
             auto start = high_resolution_clock::now();
             {
                 auto builder = DB::DM::DMFileBlockInputStreamBuilder(*db_context);
-                auto stream = builder.setColumnCache(std::make_shared<DB::DM::ColumnCache>())
-                                  .build(
-                                      dmfile,
-                                      *defines,
-                                      {DB::DM::RowKeyRange::newAll(false, 1)},
-                                      std::make_shared<ScanContext>());
+                auto stream = builder.setColumnCache(std::make_shared<DB::DM::ColumnCache>()).build(dmfile, *defines, {DB::DM::RowKeyRange::newAll(false, 1)}, std::make_shared<ScanContext>());
                 for (size_t j = 0; j < blocks.size(); ++j)
                 {
                     TIFLASH_NO_OPTIMIZE(stream->read());
@@ -426,8 +406,7 @@ int benchEntry(const std::vector<std::string> & opts)
         LOG_INFO(
             logger,
             "throughput (MB/s): {}",
-            (static_cast<double>(effective_size) * 1'000'000'000 * static_cast<double>(repeat)
-             / static_cast<double>(read_records) / 1024 / 1024));
+            (static_cast<double>(effective_size) * 1'000'000'000 * static_cast<double>(repeat) / static_cast<double>(read_records) / 1024 / 1024));
     }
     catch (const boost::wrapexcept<boost::bad_any_cast> & e)
     {

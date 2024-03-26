@@ -14,10 +14,10 @@
 
 #include <Common/Logger.h>
 #include <Poco/Logger.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V3/Blob/BlobStat.h>
-#include <Storages/Page/V3/PageDefines.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/MockDiskDelegator.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
 namespace DB::PS::V3::tests
@@ -69,8 +69,8 @@ TEST_F(BlobStoreStatsTest, RestoreEmpty)
     auto stats_copy = stats.getStats();
     ASSERT_TRUE(stats_copy.empty());
 
-    EXPECT_EQ(stats.cur_max_id, 1);
-    EXPECT_NO_THROW(stats.createStat(stats.cur_max_id, config.file_limit_size, stats.lock()));
+    EXPECT_EQ(stats.roll_id, 1);
+    EXPECT_NO_THROW(stats.createStat(stats.roll_id, config.file_limit_size, stats.lock()));
 }
 
 TEST_F(BlobStoreStatsTest, Restore)
@@ -78,20 +78,13 @@ try
 {
     BlobStats stats(logger, delegator, config);
 
-    BlobFileId file_id1 = 1;
-    BlobFileId file_id2 = PageTypeUtils::nextFileID(PageType::Normal, file_id1);
-    BlobFileId file_id3 = PageTypeUtils::nextFileID(PageType::RaftData, file_id2);
-    BlobFileId file_id4 = PageTypeUtils::nextFileID(PageType::Normal, file_id3);
-    ASSERT_EQ(file_id2, 10);
-    ASSERT_EQ(file_id3, 21);
-    ASSERT_EQ(file_id4, 30);
+    BlobFileId file_id1 = 10;
+    BlobFileId file_id2 = 12;
 
     {
-        std::lock_guard lock(stats.lock_stats);
+        const auto & lock = stats.lock();
         stats.createStatNotChecking(file_id1, config.file_limit_size, lock);
         stats.createStatNotChecking(file_id2, config.file_limit_size, lock);
-        stats.createStatNotChecking(file_id3, config.file_limit_size, lock);
-        stats.createStatNotChecking(file_id4, config.file_limit_size, lock);
     }
 
     {
@@ -119,31 +112,14 @@ try
             .offset = 2048,
             .checksum = 0x4567,
         });
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id3,
-            .size = 512,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 2048,
-            .checksum = 0x4567,
-        });
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id4,
-            .size = 512,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 2048,
-            .checksum = 0x4567,
-        });
         stats.restore();
     }
 
     auto stats_copy = stats.getStats();
 
     ASSERT_EQ(stats_copy.size(), std::min(getTotalStatsNum(stats_copy), path_num));
-    ASSERT_EQ(getTotalStatsNum(stats_copy), 4);
-    EXPECT_EQ(stats.cur_max_id, file_id4);
-
+    ASSERT_EQ(getTotalStatsNum(stats_copy), 2);
+    EXPECT_EQ(stats.roll_id, 13);
 
     auto stat1 = stats.blobIdToStat(file_id1);
     EXPECT_EQ(stat1->sm_total_size, 2048 + 512);
@@ -151,101 +127,38 @@ try
     auto stat2 = stats.blobIdToStat(file_id2);
     EXPECT_EQ(stat2->sm_total_size, 2048 + 512);
     EXPECT_EQ(stat2->sm_valid_size, 512);
-    auto stat3 = stats.blobIdToStat(file_id3);
-    EXPECT_EQ(stat2->sm_total_size, 2048 + 512);
-    EXPECT_EQ(stat2->sm_valid_size, 512);
-    auto stat4 = stats.blobIdToStat(file_id4);
-    EXPECT_EQ(stat2->sm_total_size, 2048 + 512);
-    EXPECT_EQ(stat2->sm_valid_size, 512);
+
+    // This will throw exception since we try to create
+    // a new file bigger than restored `roll_id`
+    EXPECT_ANY_THROW({ stats.createStat(14, config.file_limit_size, stats.lock()); });
 
     EXPECT_ANY_THROW({ stats.createStat(file_id1, config.file_limit_size, stats.lock()); });
     EXPECT_ANY_THROW({ stats.createStat(file_id2, config.file_limit_size, stats.lock()); });
-    EXPECT_ANY_THROW({ stats.createStat(file_id3, config.file_limit_size, stats.lock()); });
-    EXPECT_ANY_THROW({ stats.createStat(file_id4, config.file_limit_size, stats.lock()); });
-}
-CATCH
-
-TEST_F(BlobStoreStatsTest, RestoreWithEmptyPage)
-try
-{
-    BlobStats stats(logger, delegator, config);
-
-    BlobFileId file_id1 = 11;
-
-    {
-        std::lock_guard lock(stats.lock_stats);
-        stats.createStatNotChecking(file_id1, config.file_limit_size, lock);
-    }
-
-    {
-        // one entry before
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id1,
-            .size = 1024,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 1024,
-            .checksum = 0x4567,
-        });
-        // the entry with the same position
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id1,
-            .size = 512,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 2048,
-            .checksum = 0x4567,
-        });
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id1,
-            .size = 0, // empty
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 2048, // an empty page shared the same position
-            .checksum = 0x4567,
-        });
-        stats.restore();
-    }
-
-    auto stats_copy = stats.getStats();
-
-    ASSERT_EQ(stats_copy.size(), std::min(getTotalStatsNum(stats_copy), path_num));
-    ASSERT_EQ(getTotalStatsNum(stats_copy), 1);
-    EXPECT_EQ(stats.cur_max_id, file_id1);
-
-    auto stat = stats.blobIdToStat(file_id1);
-    EXPECT_EQ(stat->sm_total_size, 2048 + 512);
-    EXPECT_EQ(stat->sm_valid_size, 1024 + 512);
-
-    EXPECT_ANY_THROW({ stats.createStat(file_id1, config.file_limit_size, stats.lock()); });
+    EXPECT_ANY_THROW({ stats.createStat(stats.roll_id + 1, config.file_limit_size, stats.lock()); });
 }
 CATCH
 
 TEST_F(BlobStoreStatsTest, testStats)
 {
     BlobStats stats(logger, delegator, config);
-    BlobFileId file_id0 = 10;
-    auto stat = stats.createStat(file_id0, config.file_limit_size, stats.lock());
+
+    auto stat = stats.createStat(0, config.file_limit_size, stats.lock());
 
     ASSERT_TRUE(stat);
     ASSERT_TRUE(stat->smap);
-    BlobFileId file_id1 = PageTypeUtils::nextFileID(PageType::Normal, file_id0);
-    BlobFileId file_id2 = PageTypeUtils::nextFileID(PageType::Normal, file_id1);
-    {
-        std::lock_guard lock(stats.lock_stats);
-        stats.createStat(file_id1, config.file_limit_size, lock);
-        stats.createStat(file_id2, config.file_limit_size, lock);
-    }
-
+    stats.createStat(1, config.file_limit_size, stats.lock());
+    stats.createStat(2, config.file_limit_size, stats.lock());
 
     auto stats_copy = stats.getStats();
 
     ASSERT_EQ(stats_copy.size(), std::min(getTotalStatsNum(stats_copy), path_num));
     ASSERT_EQ(getTotalStatsNum(stats_copy), 3);
+    ASSERT_EQ(stats.roll_id, 3);
 
-    stats.eraseStat(10, stats.lock());
-    stats.eraseStat(20, stats.lock());
+    stats.eraseStat(0, stats.lock());
+    stats.eraseStat(1, stats.lock());
     ASSERT_EQ(getTotalStatsNum(stats.getStats()), 1);
+    ASSERT_EQ(stats.roll_id, 3);
 }
 
 
@@ -256,25 +169,19 @@ TEST_F(BlobStoreStatsTest, testStat)
 
     BlobStats stats(logger, delegator, config);
 
-    std::tie(stat, blob_file_id) = stats.chooseStat(10, PageType::Normal, stats.lock());
-    ASSERT_EQ(blob_file_id, 10);
-    ASSERT_EQ(stat, nullptr);
+    std::tie(stat, blob_file_id) = stats.chooseStat(10, stats.lock());
+    ASSERT_EQ(blob_file_id, 1);
+    ASSERT_FALSE(stat);
 
-    std::tie(stat, blob_file_id) = stats.chooseStat(10, PageType::Normal, stats.lock());
-    ASSERT_EQ(blob_file_id, 20);
-    ASSERT_EQ(stat, nullptr);
+    // still 0
+    std::tie(stat, blob_file_id) = stats.chooseStat(10, stats.lock());
+    ASSERT_EQ(blob_file_id, 1);
+    ASSERT_FALSE(stat);
 
     stats.createStat(0, config.file_limit_size, stats.lock());
-    std::tie(stat, blob_file_id) = stats.chooseStat(10, PageType::Normal, stats.lock());
+    std::tie(stat, blob_file_id) = stats.chooseStat(10, stats.lock());
     ASSERT_EQ(blob_file_id, INVALID_BLOBFILE_ID);
-    ASSERT_NE(stat, nullptr);
-
-    // PageType::RaftData should not use the same stat with PageType::Normal
-    BlobStats::BlobStatPtr raft_stat;
-    std::tie(raft_stat, blob_file_id) = stats.chooseStat(10, PageType::RaftData, stats.lock());
-    ASSERT_EQ(blob_file_id, 31);
-    ASSERT_FALSE(raft_stat);
-
+    ASSERT_TRUE(stat);
 
     auto offset = stat->getPosFromStat(10, stat->lock());
     ASSERT_EQ(offset, 0);
@@ -327,91 +234,48 @@ TEST_F(BlobStoreStatsTest, testStat)
     ASSERT_LE(stat->sm_valid_rate, 1);
 }
 
-TEST_F(BlobStoreStatsTest, StatWithEmptyBlob)
+TEST_F(BlobStoreStatsTest, testFullStats)
 {
     BlobFileId blob_file_id = 0;
     BlobStats::BlobStatPtr stat;
+    BlobFileOffset offset = 0;
 
     BlobStats stats(logger, delegator, config);
 
-    stats.createStat(0, config.file_limit_size, stats.lock());
-    std::tie(stat, blob_file_id) = stats.chooseStat(10, PageType::Normal, stats.lock());
-    ASSERT_EQ(blob_file_id, INVALID_BLOBFILE_ID);
-    ASSERT_NE(stat, nullptr);
-
-    auto offset = stat->getPosFromStat(10, stat->lock());
+    stat = stats.createStat(1, config.file_limit_size, stats.lock());
+    offset = stat->getPosFromStat(BLOBFILE_LIMIT_SIZE - 1, stat->lock());
     ASSERT_EQ(offset, 0);
 
-    offset = stat->getPosFromStat(0, stat->lock()); // empty
-    ASSERT_EQ(offset, 10);
-
-    offset = stat->getPosFromStat(20, stat->lock());
-    ASSERT_EQ(offset, 10);
-
+    // Can't get pos from a full stat
     offset = stat->getPosFromStat(100, stat->lock());
-    ASSERT_EQ(offset, 30);
+    ASSERT_EQ(offset, INVALID_BLOBFILE_OFFSET);
 
-    ASSERT_EQ(stat->sm_total_size, 10 + 20 + 100);
-    ASSERT_EQ(stat->sm_valid_size, 10 + 20 + 100);
-    ASSERT_EQ(stat->sm_valid_rate, 1);
-
-    stat->removePosFromStat(10, 0, stat->lock());
-    ASSERT_EQ(stat->sm_total_size, 10 + 20 + 100);
-    ASSERT_EQ(stat->sm_valid_size, 10 + 20 + 100);
-    ASSERT_EQ(stat->sm_valid_rate, 1.0);
-
-    stat->removePosFromStat(10, 20, stat->lock());
-    ASSERT_EQ(stat->sm_total_size, 10 + 20 + 100);
-    ASSERT_EQ(stat->sm_valid_size, 10 + 100);
+    // Stat internal property should not changed
+    ASSERT_EQ(stat->sm_total_size, BLOBFILE_LIMIT_SIZE - 1);
+    ASSERT_EQ(stat->sm_valid_size, BLOBFILE_LIMIT_SIZE - 1);
     ASSERT_LE(stat->sm_valid_rate, 1);
-}
-
-TEST_F(BlobStoreStatsTest, testFullStats)
-{
-    BlobStats stats(logger, delegator, config);
-
-    {
-        std::lock_guard lock(stats.lock_stats);
-        BlobFileId file_id = 10;
-        BlobStats::BlobStatPtr stat = stats.createStat(file_id, config.file_limit_size, lock);
-        auto offset = stat->getPosFromStat(BLOBFILE_LIMIT_SIZE - 1, stat->lock());
-        ASSERT_EQ(offset, 0);
-        stats.cur_max_id = file_id;
-
-        // Can't get pos from a full stat
-        offset = stat->getPosFromStat(100, stat->lock());
-        ASSERT_EQ(offset, INVALID_BLOBFILE_OFFSET);
-
-        // Stat internal property should not changed
-        ASSERT_EQ(stat->sm_total_size, BLOBFILE_LIMIT_SIZE - 1);
-        ASSERT_EQ(stat->sm_valid_size, BLOBFILE_LIMIT_SIZE - 1);
-        ASSERT_LE(stat->sm_valid_rate, 1);
-    }
 
     // Won't choose full one
-    {
-        auto [stat, blob_file_id] = stats.chooseStat(100, PageType::Normal, stats.lock());
-        ASSERT_EQ(blob_file_id, 20);
-        ASSERT_FALSE(stat);
-    }
+    std::tie(stat, blob_file_id) = stats.chooseStat(100, stats.lock());
+    ASSERT_EQ(blob_file_id, 2);
+    ASSERT_FALSE(stat);
 
     // A new stat can use
-    {
-        stats.cur_max_id = PageTypeUtils::nextFileID(PageType::Normal, stats.cur_max_id);
-        ASSERT_EQ(stats.cur_max_id, 30);
-        auto stat = stats.createStat(stats.cur_max_id, config.file_limit_size, stats.lock());
-        ASSERT_EQ(stat->getPosFromStat(100, stat->lock()), 0);
+    stat = stats.createStat(blob_file_id, config.file_limit_size, stats.lock());
+    offset = stat->getPosFromStat(100, stat->lock());
+    ASSERT_EQ(offset, 0);
 
-        // Then full the stat which id 2
-        auto offset = stat->getPosFromStat(BLOBFILE_LIMIT_SIZE - 100, stat->lock());
-        ASSERT_EQ(offset, 100);
-    }
+    // Remove the stat which id is 0 , now remain the stat which id is 1
+    stats.eraseStat(1, stats.lock());
 
-    {
-        // Then choose stat, it should return a new blob_file_id
-        auto [stat, blob_file_id] = stats.chooseStat(100, PageType::Normal, stats.lock());
-        ASSERT_EQ(blob_file_id, 40);
-        ASSERT_FALSE(stat);
-    }
+    // Then full the stat which id 2
+    offset = stat->getPosFromStat(BLOBFILE_LIMIT_SIZE - 100, stat->lock());
+    ASSERT_EQ(offset, 100);
+
+    // Then choose stat , it should return the stat id 3
+    // Stat which id is 2 is full.
+    std::tie(stat, blob_file_id) = stats.chooseStat(100, stats.lock());
+    ASSERT_EQ(blob_file_id, 3);
+    ASSERT_FALSE(stat);
 }
 } // namespace DB::PS::V3::tests

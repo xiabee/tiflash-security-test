@@ -13,9 +13,8 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/FileProvider/FileProvider.h>
-#include <Interpreters/Context.h>
+#include <Encryption/FileProvider.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/File.h>
 #include <Poco/Logger.h>
@@ -23,12 +22,12 @@
 #include <Poco/ThreadPool.h>
 #include <Poco/Timer.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/V2/PageDefines.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V2/PageFile.h>
 #include <Storages/Page/V2/PageStorage.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/WriteBatch.h>
 #include <Storages/PathPool.h>
-#include <TestUtils/TiFlashStorageTestBasic.h>
+#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <common/logger_useful.h>
 
@@ -42,11 +41,11 @@ namespace DB::PS::V2::tests
 {
 using PSPtr = std::shared_ptr<PageStorage>;
 
-class PageStorageMultiWritersTest : public DB::base::TiFlashStorageTestBasic
+class PageStorageMultiWriters_test : public DB::base::TiFlashStorageTestBasic
 {
 public:
-    PageStorageMultiWritersTest()
-        : file_provider{DB::tests::TiFlashTestEnv::getDefaultFileProvider()}
+    PageStorageMultiWriters_test()
+        : file_provider{DB::tests::TiFlashTestEnv::getContext().getFileProvider()}
     {}
 
 protected:
@@ -118,7 +117,8 @@ public:
         , bytes_written(0)
         , pages_written(0)
         , ctx(ctx_)
-    {}
+    {
+    }
 
     static void setApproxPageSize(size_t size_kb)
     {
@@ -130,7 +130,7 @@ public:
     {
         // fill page with random bytes
         const size_t buff_sz = approx_page_kb * 1024 + random() % 300;
-        char * buff = static_cast<char *>(malloc(buff_sz));
+        char * buff = (char *)malloc(buff_sz);
         const char buff_ch = pageId % 0xFF;
         memset(buff, buff_ch, buff_sz);
 
@@ -198,7 +198,8 @@ public:
         , pages_read(0)
         , bytes_read(0)
         , ctx(ctx_)
-    {}
+    {
+    }
 
     void run() override
     {
@@ -295,13 +296,7 @@ struct StressTimeout
 // A full set of writers, readers, gc.
 struct Suit
 {
-    Suit(
-        TestContext & ctx_,
-        PSPtr storage_,
-        size_t num_writers_,
-        size_t num_readers_,
-        UInt64 gc_interval_sec,
-        UInt64 cancel_sec_)
+    Suit(TestContext & ctx_, PSPtr storage_, size_t num_writers_, size_t num_readers_, UInt64 gc_interval_sec, UInt64 cancel_sec_)
         : ctx(ctx_)
         , storage(storage_)
         , num_writers(num_writers_)
@@ -315,10 +310,9 @@ struct Suit
         , cancel_timer(cancel_sec * 1000)
         , cancel_runner(ctx)
     {
-        LOG_INFO(
-            &Poco::Logger::get("root"),
-            "start running with these threads: W:" + DB::toString(num_writers) + ",R:" + DB::toString(num_readers)
-                + ",Gc:1, config.num_writer_slots:" + DB::toString(storage->config.num_write_slots.get()));
+        LOG_INFO(&Poco::Logger::get("root"),
+                 "start running with these threads: W:" + DB::toString(num_writers) + ",R:" + DB::toString(num_readers)
+                     + ",Gc:1, config.num_writer_slots:" + DB::toString(storage->config.num_write_slots.get()));
     }
 
     void run()
@@ -365,7 +359,7 @@ struct Suit
     StressTimeout cancel_runner;
 };
 
-TEST_F(PageStorageMultiWritersTest, DISABLED_MultiWriteReadRestore)
+TEST_F(PageStorageMultiWriters_test, DISABLED_MultiWriteReadRestore)
 try
 {
     size_t num_writers = 4;
@@ -412,7 +406,7 @@ try
         ASSERT_EQ(old_entry.checksum, entry.checksum) << "of Page[" << page_id << "]";
 
         auto old_page = old_storage->read(page_id, nullptr, old_snapshot);
-        const char * buf = old_page.data.begin();
+        char * buf = old_page.data.begin();
         for (size_t i = 0; i < old_page.data.size(); ++i)
             ASSERT_EQ(((size_t) * (buf + i)) % 0xFF, page_id % 0xFF);
 

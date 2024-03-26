@@ -47,7 +47,6 @@ class AggregateFunctionAvg final
     ScaleType scale;
     PrecType result_prec;
     ScaleType result_scale;
-    ScaleType div_precincrement;
 
 public:
     AggregateFunctionAvg() = default;
@@ -107,15 +106,13 @@ public:
         }
         else
         {
-            static_cast<ColumnFloat64 &>(to).getData().push_back(
-                static_cast<Float64>(this->data(place).sum) / this->data(place).count);
+            static_cast<ColumnFloat64 &>(to).getData().push_back(static_cast<Float64>(this->data(place).sum) / this->data(place).count);
         }
     }
 
     void create(AggregateDataPtr __restrict place) const override
     {
-        using Data
-            = AggregateFunctionAvgData<std::conditional_t<IsDecimal<T>, TResult, typename NearestFieldType<T>::Type>>;
+        using Data = AggregateFunctionAvgData<std::conditional_t<IsDecimal<T>, TResult, typename NearestFieldType<T>::Type>>;
         new (place) Data;
     }
 

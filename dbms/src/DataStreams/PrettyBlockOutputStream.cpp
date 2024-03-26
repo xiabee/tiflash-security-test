@@ -12,38 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/UTF8Helpers.h>
-#include <DataStreams/PrettyBlockOutputStream.h>
-#include <IO/Buffer/WriteBuffer.h>
-#include <IO/Buffer/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
-#include <port/unistd.h>
 #include <sys/ioctl.h>
+#include <port/unistd.h>
+#include <DataStreams/PrettyBlockOutputStream.h>
+#include <IO/WriteBuffer.h>
+#include <IO/WriteHelpers.h>
+#include <IO/WriteBufferFromString.h>
+#include <Common/UTF8Helpers.h>
 
 
 namespace DB
 {
+
 namespace ErrorCodes
 {
-extern const int ILLEGAL_COLUMN;
+    extern const int ILLEGAL_COLUMN;
 }
 
 
 PrettyBlockOutputStream::PrettyBlockOutputStream(
-    WriteBuffer & ostr_,
-    const Block & header_,
-    bool no_escapes_,
-    size_t max_rows_,
-    const Context & context_)
-    : ostr(ostr_)
-    , header(header_)
-    , max_rows(max_rows_)
-    , no_escapes(no_escapes_)
-    , context(context_)
+    WriteBuffer & ostr_, const Block & header_, bool no_escapes_, size_t max_rows_, const Context & context_)
+     : ostr(ostr_), header(header_), max_rows(max_rows_), no_escapes(no_escapes_), context(context_)
 {
-    struct winsize w
-    {
-    };
+    struct winsize w;
     if (0 == ioctl(STDOUT_FILENO, TIOCGWINSZ, &w))
         terminal_width = w.ws_col;
 }
@@ -57,11 +48,7 @@ void PrettyBlockOutputStream::flush()
 
 /// Evaluate the visible width of the values and column names.
 /// Note that number of code points is just a rough approximation of visible string width.
-void PrettyBlockOutputStream::calculateWidths(
-    const Block & block,
-    WidthsPerColumn & widths,
-    Widths & max_widths,
-    Widths & name_widths)
+void PrettyBlockOutputStream::calculateWidths(const Block & block, WidthsPerColumn & widths, Widths & max_widths, Widths & name_widths)
 {
     size_t rows = block.rows();
     size_t columns = block.columns();
@@ -85,9 +72,7 @@ void PrettyBlockOutputStream::calculateWidths(
                 elem.type->serializeTextEscaped(*elem.column, j, out);
             }
 
-            widths[i][j] = UTF8::countCodePoints(
-                reinterpret_cast<const UInt8 *>(serialized_value.data()),
-                serialized_value.size());
+            widths[i][j] = UTF8::countCodePoints(reinterpret_cast<const UInt8 *>(serialized_value.data()), serialized_value.size());
             max_widths[i] = std::max(max_widths[i], widths[i][j]);
         }
 
@@ -99,9 +84,7 @@ void PrettyBlockOutputStream::calculateWidths(
                 writeEscapedString(elem.name, out);
             }
 
-            name_widths[i] = UTF8::countCodePoints(
-                reinterpret_cast<const UInt8 *>(serialized_value.data()),
-                serialized_value.size());
+            name_widths[i] = UTF8::countCodePoints(reinterpret_cast<const UInt8 *>(serialized_value.data()), serialized_value.size());
             max_widths[i] = std::max(max_widths[i], name_widths[i]);
         }
     }
@@ -130,32 +113,32 @@ void PrettyBlockOutputStream::write(const Block & block)
     std::stringstream middle_values_separator;
     std::stringstream bottom_separator;
 
-    top_separator << "┏";
-    middle_names_separator << "┡";
+    top_separator           << "┏";
+    middle_names_separator  << "┡";
     middle_values_separator << "├";
-    bottom_separator << "└";
+    bottom_separator        << "└";
     for (size_t i = 0; i < columns; ++i)
     {
         if (i != 0)
         {
-            top_separator << "┳";
-            middle_names_separator << "╇";
+            top_separator           << "┳";
+            middle_names_separator  << "╇";
             middle_values_separator << "┼";
-            bottom_separator << "┴";
+            bottom_separator        << "┴";
         }
 
         for (size_t j = 0; j < max_widths[i] + 2; ++j)
         {
-            top_separator << "━";
-            middle_names_separator << "━";
+            top_separator           << "━";
+            middle_names_separator  << "━";
             middle_values_separator << "─";
-            bottom_separator << "─";
+            bottom_separator        << "─";
         }
     }
-    top_separator << "┓\n";
-    middle_names_separator << "┩\n";
+    top_separator           << "┓\n";
+    middle_names_separator  << "┩\n";
     middle_values_separator << "┤\n";
-    bottom_separator << "┘\n";
+    bottom_separator        << "┘\n";
 
     std::string top_separator_s = top_separator.str();
     std::string middle_names_separator_s = middle_names_separator.str();
@@ -211,11 +194,7 @@ void PrettyBlockOutputStream::write(const Block & block)
             if (j != 0)
                 writeCString(" │ ", ostr);
 
-            writeValueWithPadding(
-                block.getByPosition(j),
-                i,
-                widths[j].empty() ? max_widths[j] : widths[j][i],
-                max_widths[j]);
+            writeValueWithPadding(block.getByPosition(j), i, widths[j].empty() ? max_widths[j] : widths[j][i], max_widths[j]);
         }
 
         writeCString(" │\n", ostr);
@@ -227,26 +206,23 @@ void PrettyBlockOutputStream::write(const Block & block)
 }
 
 
-void PrettyBlockOutputStream::writeValueWithPadding(
-    const ColumnWithTypeAndName & elem,
-    size_t row_num,
-    size_t value_width,
-    size_t pad_to_width)
+void PrettyBlockOutputStream::writeValueWithPadding(const ColumnWithTypeAndName & elem, size_t row_num, size_t value_width, size_t pad_to_width)
 {
-    auto write_padding = [&]() {
+    auto writePadding = [&]()
+    {
         for (size_t k = 0; k < pad_to_width - value_width; ++k)
             writeChar(' ', ostr);
     };
 
     if (elem.type->shouldAlignRightInPrettyFormats())
     {
-        write_padding();
+        writePadding();
         elem.type->serializeTextEscaped(*elem.column.get(), row_num, ostr);
     }
     else
     {
         elem.type->serializeTextEscaped(*elem.column.get(), row_num, ostr);
-        write_padding();
+        writePadding();
     }
 }
 
@@ -261,8 +237,20 @@ void PrettyBlockOutputStream::writeSuffix()
     }
 
     total_rows = 0;
+    writeTotals();
     writeExtremes();
 }
+
+
+void PrettyBlockOutputStream::writeTotals()
+{
+    if (totals)
+    {
+        writeCString("\nTotals:\n", ostr);
+        write(totals);
+    }
+}
+
 
 void PrettyBlockOutputStream::writeExtremes()
 {
@@ -274,4 +262,4 @@ void PrettyBlockOutputStream::writeExtremes()
 }
 
 
-} // namespace DB
+}

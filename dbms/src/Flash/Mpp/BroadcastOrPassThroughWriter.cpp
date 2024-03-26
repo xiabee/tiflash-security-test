@@ -14,10 +14,8 @@
 
 #include <Common/TiFlashException.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
-#include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Mpp/BroadcastOrPassThroughWriter.h>
-#include <Flash/Mpp/MPPTunnelSetWriter.h>
+#include <Flash/Mpp/MPPTunnelSet.h>
 
 namespace DB
 {
@@ -25,54 +23,21 @@ template <class ExchangeWriterPtr>
 BroadcastOrPassThroughWriter<ExchangeWriterPtr>::BroadcastOrPassThroughWriter(
     ExchangeWriterPtr writer_,
     Int64 batch_send_min_limit_,
-    DAGContext & dag_context_,
-    MPPDataPacketVersion data_codec_version_,
-    tipb::CompressionMode compression_mode_,
-    tipb::ExchangeType exchange_type_)
+    DAGContext & dag_context_)
     : DAGResponseWriter(/*records_per_chunk=*/-1, dag_context_)
     , batch_send_min_limit(batch_send_min_limit_)
     , writer(writer_)
-    , exchange_type(exchange_type_)
-    , data_codec_version(data_codec_version_)
-    , compression_method(ToInternalCompressionMethod(compression_mode_))
 {
     rows_in_blocks = 0;
     RUNTIME_CHECK(dag_context.encode_type == tipb::EncodeType::TypeCHBlock);
-    RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Broadcast || exchange_type == tipb::ExchangeType::PassThrough);
-
-    switch (data_codec_version)
-    {
-    case MPPDataPacketV0:
-        break;
-    case MPPDataPacketV1:
-    default:
-    {
-        // make `batch_send_min_limit` always GT 0
-        if (batch_send_min_limit <= 0)
-        {
-            // set upper limit if not specified
-            batch_send_min_limit = 8 * 1024 /* 8K */;
-        }
-        for (const auto & field_type : dag_context.result_field_types)
-        {
-            expected_types.emplace_back(getDataTypeByFieldTypeForComputingLayer(field_type));
-        }
-        break;
-    }
-    }
+    chunk_codec_stream = std::make_unique<CHBlockChunkCodec>()->newCodecStream(dag_context.result_field_types);
 }
 
 template <class ExchangeWriterPtr>
 void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::flush()
 {
     if (rows_in_blocks > 0)
-        writeBlocks();
-}
-
-template <class ExchangeWriterPtr>
-bool BroadcastOrPassThroughWriter<ExchangeWriterPtr>::isWritable() const
-{
-    return writer->isWritable();
+        encodeThenWriteBlocks();
 }
 
 template <class ExchangeWriterPtr>
@@ -89,30 +54,29 @@ void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::write(const Block & block)
     }
 
     if (static_cast<Int64>(rows_in_blocks) > batch_send_min_limit)
-        writeBlocks();
+        encodeThenWriteBlocks();
 }
 
 template <class ExchangeWriterPtr>
-void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::writeBlocks()
+void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::encodeThenWriteBlocks()
 {
-    if unlikely (blocks.empty())
+    if (unlikely(blocks.empty()))
         return;
 
-    // check schema
-    if (!expected_types.empty())
+    auto tracked_packet = std::make_shared<TrackedMppDataPacket>();
+    while (!blocks.empty())
     {
-        for (auto && block : blocks)
-            assertBlockSchema(expected_types, block, "BroadcastOrPassThroughWriter");
+        const auto & block = blocks.back();
+        chunk_codec_stream->encode(block, 0, block.rows());
+        blocks.pop_back();
+        tracked_packet->addChunk(chunk_codec_stream->getString());
+        chunk_codec_stream->clear();
     }
-
-    if (exchange_type == tipb::ExchangeType::Broadcast)
-        writer->broadcastWrite(blocks, data_codec_version, compression_method);
-    else
-        writer->passThroughWrite(blocks, data_codec_version, compression_method);
-    blocks.clear();
+    assert(blocks.empty());
     rows_in_blocks = 0;
+    writer->broadcastOrPassThroughWrite(std::move(tracked_packet));
 }
 
-template class BroadcastOrPassThroughWriter<SyncMPPTunnelSetWriterPtr>;
-template class BroadcastOrPassThroughWriter<AsyncMPPTunnelSetWriterPtr>;
+template class BroadcastOrPassThroughWriter<MPPTunnelSetPtr>;
+
 } // namespace DB

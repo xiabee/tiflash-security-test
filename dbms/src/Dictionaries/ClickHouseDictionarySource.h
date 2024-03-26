@@ -32,12 +32,11 @@ namespace DB
 class ClickHouseDictionarySource final : public IDictionarySource
 {
 public:
-    ClickHouseDictionarySource(
-        const DictionaryStructure & dict_struct_,
-        const Poco::Util::AbstractConfiguration & config,
-        const std::string & config_prefix,
-        const Block & sample_block,
-        Context & context);
+    ClickHouseDictionarySource(const DictionaryStructure & dict_struct_,
+                               const Poco::Util::AbstractConfiguration & config,
+                               const std::string & config_prefix,
+                               const Block & sample_block,
+                               Context & context);
 
     /// copy-constructor is provided in order to support cloneability
     ClickHouseDictionarySource(const ClickHouseDictionarySource & other);
@@ -48,7 +47,9 @@ public:
 
     BlockInputStreamPtr loadIds(const std::vector<UInt64> & ids) override;
 
-    BlockInputStreamPtr loadKeys(const Columns & key_columns, const std::vector<size_t> & requested_rows) override;
+    BlockInputStreamPtr loadKeys(
+        const Columns & key_columns,
+        const std::vector<size_t> & requested_rows) override;
 
     bool isModified() const override { return true; }
     bool supportsSelectiveLoad() const override { return true; }

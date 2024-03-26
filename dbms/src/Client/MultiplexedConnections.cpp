@@ -25,10 +25,7 @@ extern const int TIMEOUT_EXCEEDED;
 } // namespace ErrorCodes
 
 
-MultiplexedConnections::MultiplexedConnections(
-    Connection & connection,
-    const Settings & settings_,
-    const ThrottlerPtr & throttler)
+MultiplexedConnections::MultiplexedConnections(Connection & connection, const Settings & settings_, const ThrottlerPtr & throttler)
     : settings(settings_)
 {
     connection.setThrottler(throttler);
@@ -108,13 +105,15 @@ void MultiplexedConnections::sendQuery(
     if (replica_states.size() > 1)
     {
         Settings query_settings = settings;
+        query_settings.parallel_replicas_count = replica_states.size();
 
-        for (auto & replica_state : replica_states)
+        for (size_t i = 0; i < replica_states.size(); ++i)
         {
-            Connection * connection = replica_state.connection;
+            Connection * connection = replica_states[i].connection;
             if (connection == nullptr)
                 throw Exception("MultiplexedConnections: Internal error", ErrorCodes::LOGICAL_ERROR);
 
+            query_settings.parallel_replica_offset = i;
             connection->sendQuery(query, query_id, stage, &query_settings, client_info, with_pending_data);
         }
     }
@@ -147,9 +146,8 @@ Connection::Packet MultiplexedConnections::receivePacket()
 BlockExtraInfo MultiplexedConnections::getBlockExtraInfo() const
 {
     if (!block_extra_info)
-        throw Exception(
-            "MultiplexedConnections object not configured for block extra info support",
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("MultiplexedConnections object not configured for block extra info support",
+                        ErrorCodes::LOGICAL_ERROR);
     return *block_extra_info;
 }
 
@@ -204,6 +202,7 @@ Connection::Packet MultiplexedConnections::drain()
         case Protocol::Server::Data:
         case Protocol::Server::Progress:
         case Protocol::Server::ProfileInfo:
+        case Protocol::Server::Totals:
         case Protocol::Server::Extremes:
         case Protocol::Server::EndOfStream:
             break;
@@ -261,6 +260,7 @@ Connection::Packet MultiplexedConnections::receivePacketUnlocked()
     case Protocol::Server::Data:
     case Protocol::Server::Progress:
     case Protocol::Server::ProfileInfo:
+    case Protocol::Server::Totals:
     case Protocol::Server::Extremes:
         break;
 
@@ -311,9 +311,7 @@ MultiplexedConnections::ReplicaState & MultiplexedConnections::getReplicaForRead
         int n = Poco::Net::Socket::select(read_list, write_list, except_list, settings.receive_timeout);
 
         if (n == 0)
-            throw Exception(
-                "Timeout exceeded while reading from " + dumpAddressesUnlocked(),
-                ErrorCodes::TIMEOUT_EXCEEDED);
+            throw Exception("Timeout exceeded while reading from " + dumpAddressesUnlocked(), ErrorCodes::TIMEOUT_EXCEEDED);
     }
 
     /// TODO Absolutely wrong code: read_list could be empty; rand() is not thread safe and has low quality; motivation of rand is unclear.

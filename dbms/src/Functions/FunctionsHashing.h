@@ -160,7 +160,10 @@ struct SHA256Impl
 
 struct SipHash64Impl
 {
-    static UInt64 apply(const char * begin, size_t size) { return sipHash64(begin, size); }
+    static UInt64 apply(const char * begin, size_t size)
+    {
+        return sipHash64(begin, size);
+    }
 };
 
 struct SipHash128Impl
@@ -192,7 +195,10 @@ struct IntHash64Impl
 {
     using ReturnType = UInt64;
 
-    static UInt64 apply(UInt64 x) { return intHash64(x ^ 0x4CF2D2BAAE6DA887ULL); }
+    static UInt64 apply(UInt64 x)
+    {
+        return intHash64(x ^ 0x4CF2D2BAAE6DA887ULL);
+    }
 };
 
 
@@ -203,16 +209,18 @@ public:
     static constexpr auto name = Name::name;
     static FunctionPtr create(const Context &) { return std::make_shared<FunctionStringHash64>(); };
 
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     size_t getNumberOfArguments() const override { return 1; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
         if (!arguments[0]->isString())
-            throw Exception(
-                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception("Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeUInt64>();
     }
@@ -221,8 +229,7 @@ public:
 
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
-        if (const ColumnString * col_from
-            = checkAndGetColumn<ColumnString>(block.getByPosition(arguments[0]).column.get()))
+        if (const ColumnString * col_from = checkAndGetColumn<ColumnString>(block.getByPosition(arguments[0]).column.get()))
         {
             auto col_to = ColumnUInt64::create();
 
@@ -240,10 +247,9 @@ public:
             block.getByPosition(result).column = std::move(col_to);
         }
         else
-            throw Exception(
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName()
-                    + " of first argument of function " + Name::name,
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + block.getByPosition(arguments[0]).column->getName()
+                                + " of first argument of function " + Name::name,
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 };
 
@@ -255,16 +261,18 @@ public:
     static constexpr auto name = Impl::name;
     static FunctionPtr create(const Context &) { return std::make_shared<FunctionStringHashFixedString>(); };
 
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     size_t getNumberOfArguments() const override { return 1; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
         if (!arguments[0]->isString())
-            throw Exception(
-                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception("Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeFixedString>(Impl::length);
     }
@@ -273,8 +281,7 @@ public:
 
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
-        if (const ColumnString * col_from
-            = checkAndGetColumn<ColumnString>(block.getByPosition(arguments[0]).column.get()))
+        if (const ColumnString * col_from = checkAndGetColumn<ColumnString>(block.getByPosition(arguments[0]).column.get()))
         {
             auto col_to = ColumnFixedString::create(Impl::length);
 
@@ -293,10 +300,9 @@ public:
             block.getByPosition(result).column = std::move(col_to);
         }
         else
-            throw Exception(
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName()
-                    + " of first argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + block.getByPosition(arguments[0]).column->getName()
+                                + " of first argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 };
 
@@ -329,23 +335,24 @@ private:
             block.getByPosition(result).column = std::move(col_to);
         }
         else
-            throw Exception(
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName()
-                    + " of first argument of function " + Name::name,
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + block.getByPosition(arguments[0]).column->getName()
+                                + " of first argument of function " + Name::name,
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 
 public:
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     size_t getNumberOfArguments() const override { return 1; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
         if (!arguments[0]->isValueRepresentedByNumber())
-            throw Exception(
-                "Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception("Illegal type " + arguments[0]->getName() + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
         return std::make_shared<DataTypeNumber<typename Impl::ReturnType>>();
     }
@@ -377,10 +384,8 @@ public:
         else if (checkDataType<DataTypeDateTime>(from_type))
             executeType<UInt32>(block, arguments, result);
         else
-            throw Exception(
-                "Illegal type " + block.getByPosition(arguments[0]).type->getName() + " of argument of function "
-                    + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception("Illegal type " + block.getByPosition(arguments[0]).type->getName() + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 };
 
@@ -440,9 +445,9 @@ private:
             }
         }
         else
-            throw Exception(
-                "Illegal column " + column->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + column->getName()
+                                + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 
     template <bool first>
@@ -497,9 +502,9 @@ private:
             }
         }
         else
-            throw Exception(
-                "Illegal column " + column->getName() + " of first argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + column->getName()
+                                + " of first argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 
     template <bool first>
@@ -540,9 +545,9 @@ private:
             executeArray<first>(type, &*full_column, vec_to);
         }
         else
-            throw Exception(
-                "Illegal column " + column->getName() + " of first argument of function " + getName(),
-                ErrorCodes::ILLEGAL_COLUMN);
+            throw Exception("Illegal column " + column->getName()
+                                + " of first argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_COLUMN);
     }
 
     template <bool first>
@@ -583,16 +588,11 @@ private:
         else if (checkDataType<DataTypeArray>(from_type))
             executeArray<first>(from_type, icolumn, vec_to);
         else
-            throw Exception(
-                "Unexpected type " + from_type->getName() + " of argument of function " + getName(),
-                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+            throw Exception("Unexpected type " + from_type->getName() + " of argument of function " + getName(),
+                            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
     }
 
-    void executeForArgument(
-        const IDataType * type,
-        const IColumn * column,
-        ColumnUInt64::Container & vec_to,
-        bool & is_first) const
+    void executeForArgument(const IDataType * type, const IColumn * column, ColumnUInt64::Container & vec_to, bool & is_first) const
     {
         /// Flattening of tuples.
         if (const ColumnTuple * tuple = typeid_cast<const ColumnTuple *>(column))
@@ -626,7 +626,10 @@ private:
     }
 
 public:
-    String getName() const override { return name; }
+    String getName() const override
+    {
+        return name;
+    }
 
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
@@ -693,8 +696,7 @@ struct URLHierarchyHashImpl
         *    (http, file - fit, mailto, magnet - do not fit), and after two slashes there is still something
         *    For the rest, simply return the full URL as the only element of the hierarchy.
         */
-        if (pos == begin || pos == end
-            || !(*pos++ == ':' && pos < end && *pos++ == '/' && pos < end && *pos++ == '/' && pos < end))
+        if (pos == begin || pos == end || !(*pos++ == ':' && pos < end && *pos++ == '/' && pos < end && *pos++ == '/' && pos < end))
         {
             pos = end;
             return 0 == level ? pos - begin : 0;
@@ -754,8 +756,7 @@ public:
         const auto arg_count = arguments.size();
         if (arg_count != 1 && arg_count != 2)
             throw Exception{
-                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(arg_count)
-                    + ", should be 1 or 2.",
+                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(arg_count) + ", should be 1 or 2.",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH};
 
         const auto first_arg = arguments.front().get();
@@ -788,9 +789,7 @@ public:
         else if (arg_count == 2)
             executeTwoArgs(block, arguments, result);
         else
-            throw Exception{
-                "got into IFunction::execute with unexpected number of arguments",
-                ErrorCodes::LOGICAL_ERROR};
+            throw Exception{"got into IFunction::execute with unexpected number of arguments", ErrorCodes::LOGICAL_ERROR};
     }
 
 private:
@@ -816,8 +815,7 @@ private:
         }
         else
             throw Exception{
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function "
-                    + getName(),
+                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function " + getName(),
                 ErrorCodes::ILLEGAL_COLUMN};
     }
 
@@ -842,17 +840,15 @@ private:
             auto & out = col_to->getData();
 
             for (const auto i : ext::range(0, size))
-                out[i] = URLHierarchyHashImpl::apply(
-                    level,
-                    reinterpret_cast<const char *>(&chars[i == 0 ? 0 : offsets[i - 1]]),
-                    i == 0 ? offsets[i] - 1 : (offsets[i] - 1 - offsets[i - 1]));
+                out[i] = URLHierarchyHashImpl::apply(level,
+                                                     reinterpret_cast<const char *>(&chars[i == 0 ? 0 : offsets[i - 1]]),
+                                                     i == 0 ? offsets[i] - 1 : (offsets[i] - 1 - offsets[i - 1]));
 
             block.getByPosition(result).column = std::move(col_to);
         }
         else
             throw Exception{
-                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function "
-                    + getName(),
+                "Illegal column " + block.getByPosition(arguments[0]).column->getName() + " of argument of function " + getName(),
                 ErrorCodes::ILLEGAL_COLUMN};
     }
 };

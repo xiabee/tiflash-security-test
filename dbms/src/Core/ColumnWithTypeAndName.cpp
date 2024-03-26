@@ -14,8 +14,8 @@
 
 #include <Core/ColumnWithTypeAndName.h>
 #include <Core/ColumnsWithTypeAndName.h>
-#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/Operators.h>
+#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 
 
@@ -23,8 +23,7 @@ namespace DB
 {
 ColumnWithTypeAndName ColumnWithTypeAndName::cloneEmpty() const
 {
-    ColumnWithTypeAndName
-        res{(column != nullptr ? column->cloneEmpty() : nullptr), type, name, column_id, default_value};
+    ColumnWithTypeAndName res{(column != nullptr ? column->cloneEmpty() : nullptr), type, name, column_id, default_value};
     return res;
 }
 
@@ -61,12 +60,11 @@ String ColumnWithTypeAndName::dumpStructure() const
 
 void ColumnWithTypeAndName::dumpJsonStructure(WriteBuffer & out) const
 {
-    out << fmt::format(
-        R"json({{"name":"{}","id":{},"type":{},"column":{}}})json",
-        name,
-        column_id,
-        (type ? "\"" + type->getName() + "\"" : "null"),
-        (column ? "\"" + column->dumpStructure() + "\"" : "null"));
+    out << fmt::format(R"json({{"name":"{}","id":{},"type":{},"column":{}}})json",
+                       name,
+                       column_id,
+                       (type ? "\"" + type->getName() + "\"" : "null"),
+                       (column ? "\"" + column->dumpStructure() + "\"" : "null"));
 }
 
 String ColumnWithTypeAndName::dumpJsonStructure() const

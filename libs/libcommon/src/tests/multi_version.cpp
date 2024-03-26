@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Poco/Exception.h>
-#include <common/MultiVersion.h>
-#include <common/ThreadPool.h>
 #include <string.h>
-
-#include <functional>
 #include <iostream>
+#include <common/ThreadPool.h>
+#include <functional>
+#include <common/MultiVersion.h>
+#include <Poco/Exception.h>
 
 
 using T = std::string;

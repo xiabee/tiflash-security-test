@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <ext/range.h>
+#include <boost/range/join.hpp>
+#include <IO/WriteBuffer.h>
+#include <IO/WriteBufferFromString.h>
+#include <IO/WriteHelpers.h>
+#include <Dictionaries/writeParenthesisedString.h>
 #include <Dictionaries/DictionaryStructure.h>
 #include <Dictionaries/ExternalQueryBuilder.h>
-#include <Dictionaries/writeParenthesisedString.h>
-#include <IO/Buffer/WriteBuffer.h>
-#include <IO/Buffer/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
-
-#include <boost/range/join.hpp>
-#include <ext/range.h>
 
 
 namespace DB
@@ -28,7 +27,7 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int UNSUPPORTED_METHOD;
+    extern const int UNSUPPORTED_METHOD;
 }
 
 
@@ -38,29 +37,26 @@ ExternalQueryBuilder::ExternalQueryBuilder(
     const std::string & table,
     const std::string & where,
     QuotingStyle quoting_style)
-    : dict_struct(dict_struct)
-    , db(db)
-    , table(table)
-    , where(where)
-    , quoting_style(quoting_style)
-{}
+    : dict_struct(dict_struct), db(db), table(table), where(where), quoting_style(quoting_style)
+{
+}
 
 
 void ExternalQueryBuilder::writeQuoted(const std::string & s, WriteBuffer & out) const
 {
     switch (quoting_style)
     {
-    case None:
-        writeString(s, out);
-        break;
+        case None:
+            writeString(s, out);
+            break;
 
-    case Backticks:
-        writeBackQuotedString(s, out);
-        break;
+        case Backticks:
+            writeBackQuotedString(s, out);
+            break;
 
-    case DoubleQuotes:
-        writeDoubleQuotedString(s, out);
-        break;
+        case DoubleQuotes:
+            writeDoubleQuotedString(s, out);
+            break;
     }
 }
 
@@ -156,8 +152,7 @@ std::string ExternalQueryBuilder::composeLoadAllQuery() const
 }
 
 
-std::string ExternalQueryBuilder::composeUpdateQuery(const std::string & update_field, const std::string & time_point)
-    const
+std::string ExternalQueryBuilder::composeUpdateQuery(const std::string &update_field, const std::string &time_point) const
 {
     std::string out = composeLoadAllQuery();
     std::string update_query;
@@ -167,7 +162,7 @@ std::string ExternalQueryBuilder::composeUpdateQuery(const std::string & update_
     else
         update_query = " WHERE " + update_field + " >= '" + time_point + "'";
 
-    return out.insert(out.size() - 1, update_query); ///This is done to insert "update_query" before "out"'s semicolon
+    return out.insert(out.size()-1, update_query); ///This is done to insert "update_query" before "out"'s semicolon
 }
 
 
@@ -388,4 +383,4 @@ void ExternalQueryBuilder::composeKeyTuple(const Columns & key_columns, const si
 }
 
 
-} // namespace DB
+}

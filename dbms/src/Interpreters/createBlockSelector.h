@@ -32,6 +32,8 @@ namespace DB
   * T is type of column elements.
   */
 template <typename T>
-IColumn::Selector createBlockSelector(const IColumn & column, const std::vector<UInt64> & slots);
+IColumn::Selector createBlockSelector(
+    const IColumn & column,
+    const std::vector<UInt64> & slots);
 
 } // namespace DB

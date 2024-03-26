@@ -16,8 +16,8 @@
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeNothing.h>
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ReadBuffer.h>
+#include <IO/WriteBuffer.h>
 
 
 namespace DB
@@ -38,11 +38,7 @@ void DataTypeNothing::serializeBinaryBulk(const IColumn & column, WriteBuffer & 
         ostr.write('0');
 }
 
-void DataTypeNothing::deserializeBinaryBulk(
-    IColumn & column,
-    ReadBuffer & istr,
-    size_t limit,
-    double /*avg_value_size_hint*/) const
+void DataTypeNothing::deserializeBinaryBulk(IColumn & column, ReadBuffer & istr, size_t limit, double /*avg_value_size_hint*/) const
 {
     typeid_cast<ColumnNothing &>(column).addSize(istr.tryIgnore(limit));
 }

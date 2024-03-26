@@ -14,7 +14,7 @@
 
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/ArrowColCodec.h>
-#include <IO/copyData.h>
+#include <IO/Endian.h>
 
 namespace DB
 {

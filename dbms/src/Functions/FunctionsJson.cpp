@@ -19,24 +19,8 @@ namespace DB
 {
 void registerFunctionsJson(FunctionFactory & factory)
 {
-    factory.registerFunction<FunctionJsonExtract>();
-    factory.registerFunction<FunctionJsonUnquote>();
-    factory.registerFunction<FunctionCastJsonAsString>();
-    factory.registerFunction<FunctionJsonLength>();
-    factory.registerFunction<FunctionJsonArray>();
-    factory.registerFunction<FunctionCastJsonAsJson>();
-    factory.registerFunction<FunctionCastRealAsJson>();
-    factory.registerFunction<FunctionCastDecimalAsJson>();
-    factory.registerFunction<FunctionCastIntAsJson>();
-    factory.registerFunction<FunctionCastStringAsJson>();
-    factory.registerFunction<FunctionCastTimeAsJson>();
-    factory.registerFunction<FunctionCastDurationAsJson>();
-    factory.registerFunction<FunctionJsonDepth>();
-    factory.registerFunction<FunctionJsonContainsPath>();
-    factory.registerFunction<FunctionJsonValidOthers>();
-    factory.registerFunction<FunctionJsonValidJson>();
-    factory.registerFunction<FunctionJsonValidString>();
-    factory.registerFunction<FunctionJsonKeys>();
-    factory.registerFunction<FunctionJsonKeys2Args>();
+    factory.registerFunction<FunctionsJsonExtract>();
+    factory.registerFunction<FunctionsJsonUnquote>();
+    factory.registerFunction<FunctionsCastJsonAsString>();
 }
 } // namespace DB

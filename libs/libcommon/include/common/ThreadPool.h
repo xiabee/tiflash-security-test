@@ -23,8 +23,6 @@
 #include <vector>
 
 
-namespace legacy
-{
 /** Very simple thread pool similar to boost::threadpool.
   * Advantages:
   * - catches exceptions and rethrows on wait.
@@ -77,4 +75,3 @@ private:
     void worker();
     void finalize();
 };
-} // namespace legacy

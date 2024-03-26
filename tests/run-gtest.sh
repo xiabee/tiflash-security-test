@@ -56,23 +56,12 @@ function run_test_parallel() {
 		args="--gtest_break_on_failure --gtest_catch_exceptions=0"
 	fi
 
-	# run with 45 min timeout
-	python ${SRC_TESTS_PATH}/gtest_parallel.py ${test_bins} --workers=${NPROC} ${args} --print_test_times --timeout=2700
+	python ${SRC_TESTS_PATH}/gtest_parallel.py ${test_bins} --workers=${NPROC} ${args} --print_test_times
 }
 
 set -e
 
 cd "${build_dir}"
-
-# ThreadSanitizerFlags
-# Reference: https://github.com/google/sanitizers/wiki/ThreadSanitizerFlags
-if [ -z $TSAN_OPTIONS ]; then
-	# Ignore false positive error, related issue
-	# https://github.com/pingcap/tiflash/issues/6766
-	export TSAN_OPTIONS="report_atomic_races=0"
-else
-	export TSAN_OPTIONS="report_atomic_races=0 ${TSAN_OPTIONS}"
-fi
 
 # Set env variable to run test cases with test data
 export ALSO_RUN_WITH_TEST_DATA=1

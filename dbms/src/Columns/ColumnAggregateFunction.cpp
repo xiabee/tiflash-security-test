@@ -14,16 +14,12 @@
 
 #include <AggregateFunctions/AggregateFunctionState.h>
 #include <Columns/ColumnAggregateFunction.h>
-#include <Columns/ColumnString.h>
 #include <Columns/ColumnsCommon.h>
 #include <Common/HashTable/Hash.h>
 #include <Common/SipHash.h>
 #include <Common/typeid_cast.h>
 #include <DataStreams/ColumnGathererStream.h>
-#include <DataTypes/DataTypeFixedString.h>
-#include <DataTypes/DataTypeNullable.h>
-#include <Functions/FunctionHelpers.h>
-#include <IO/Buffer/WriteBufferFromArena.h>
+#include <IO/WriteBufferFromArena.h>
 #include <fmt/format.h>
 
 namespace DB
@@ -47,6 +43,58 @@ void ColumnAggregateFunction::addArena(ArenaPtr arena_)
     arenas.push_back(arena_);
 }
 
+MutableColumnPtr ColumnAggregateFunction::convertToValues() const
+{
+    const IAggregateFunction * function = func.get();
+
+    /** If the aggregate function returns an unfinalized/unfinished state,
+        * then you just need to copy pointers to it and also shared ownership of data.
+        *
+        * Also replace the aggregate function with the nested function.
+        * That is, if this column is the states of the aggregate function `aggState`,
+        * then we return the same column, but with the states of the aggregate function `agg`.
+        * These are the same states, changing only the function to which they correspond.
+        *
+        * Further is quite difficult to understand.
+        * Example when this happens:
+        *
+        * SELECT k, finalizeAggregation(quantileTimingState(0.5)(x)) FROM ... GROUP BY k WITH TOTALS
+        *
+        * This calculates the aggregate function `quantileTimingState`.
+        * Its return type AggregateFunction(quantileTiming(0.5), UInt64)`.
+        * Due to the presence of WITH TOTALS, during aggregation the states of this aggregate function will be stored
+        *  in the ColumnAggregateFunction column of type
+        *  AggregateFunction(quantileTimingState(0.5), UInt64).
+        * Then, in `TotalsHavingBlockInputStream`, it will be called `convertToValues` method,
+        *  to get the "ready" values.
+        * But it just converts a column of type
+        *   `AggregateFunction(quantileTimingState(0.5), UInt64)`
+        * into `AggregateFunction(quantileTiming(0.5), UInt64)`
+        * - in the same states.
+        *
+        * Then `finalizeAggregation` function will be calculated, which will call `convertToValues` already on the result.
+        * And this converts a column of type
+        *   AggregateFunction(quantileTiming(0.5), UInt64)
+        * into UInt16 - already finished result of `quantileTiming`.
+        */
+    if (const auto * function_state = typeid_cast<const AggregateFunctionState *>(function))
+    {
+        auto res = createView();
+        res->set(function_state->getNestedFunction());
+        res->getData().assign(getData().begin(), getData().end());
+        return res;
+    }
+
+    MutableColumnPtr res = function->getReturnType()->createColumn();
+    res->reserve(getData().size());
+
+    for (auto * val : getData())
+        function->insertResultInto(val, *res, nullptr);
+
+    return res;
+}
+
+
 void ColumnAggregateFunction::insertRangeFrom(const IColumn & from, size_t start, size_t length)
 {
     const auto & from_concrete = static_cast<const ColumnAggregateFunction &>(from);
@@ -54,8 +102,7 @@ void ColumnAggregateFunction::insertRangeFrom(const IColumn & from, size_t start
     if (start + length > from_concrete.getData().size())
         throw Exception(
             fmt::format(
-                "Parameters are out of bound in ColumnAggregateFunction::insertRangeFrom method, start={}, length={}, "
-                "from.size()={}",
+                "Parameters are out of bound in ColumnAggregateFunction::insertRangeFrom method, start={}, length={}, from.size()={}",
                 start,
                 length,
                 from_concrete.getData().size()),
@@ -137,18 +184,14 @@ ColumnPtr ColumnAggregateFunction::permute(const Permutation & perm, size_t limi
 }
 
 /// Is required to support operations with Set
-void ColumnAggregateFunction::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &)
-    const
+void ColumnAggregateFunction::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const
 {
     WriteBufferFromOwnString wbuf;
     func->serialize(getData()[n], wbuf);
     hash.update(wbuf.str().c_str(), wbuf.str().size());
 }
 
-void ColumnAggregateFunction::updateHashWithValues(
-    IColumn::HashValues & hash_values,
-    const TiDB::TiDBCollatorPtr &,
-    String &) const
+void ColumnAggregateFunction::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const
 {
     for (size_t i = 0, size = getData().size(); i < size; ++i)
     {
@@ -163,10 +206,7 @@ void ColumnAggregateFunction::updateWeakHash32(WeakHash32 & hash, const TiDB::Ti
     auto s = data.size();
     if (hash.getData().size() != data.size())
         throw Exception(
-            fmt::format(
-                "Size of WeakHash32 does not match size of column: column size is {}, hash size is {}",
-                s,
-                hash.getData().size()),
+            fmt::format("Size of WeakHash32 does not match size of column: column size is {}, hash size is {}", s, hash.getData().size()),
             ErrorCodes::LOGICAL_ERROR);
 
     auto & hash_data = hash.getData();
@@ -202,27 +242,6 @@ size_t ColumnAggregateFunction::allocatedBytes() const
         res += arena->size();
 
     return res;
-}
-
-size_t ColumnAggregateFunction::estimateByteSizeForSpill() const
-{
-    static const std::unordered_set<String>
-        trivial_agg_func_name{"sum", "min", "max", "count", "avg", "first_row", "any"};
-    if (trivial_agg_func_name.find(func->getName()) != trivial_agg_func_name.end())
-    {
-        size_t res = func->sizeOfData() * size();
-        /// For trivial agg, we can estimate each element's size as `func->sizeofData()`, and
-        /// if the result is String, use `APPROX_STRING_SIZE` as the average size of the String
-        if (removeNullable(func->getReturnType())->isString())
-            res += size() * ColumnString::APPROX_STRING_SIZE;
-        return res;
-    }
-    else
-    {
-        /// For non-trivial agg like uniqXXX/group_concat, can't estimate the memory usage, so just return allocateBytes(),
-        /// it will highly overestimates size of a column if it was produced in AggregatingBlockInputStream (it contains size of other columns)
-        return allocatedBytes();
-    }
 }
 
 MutableColumnPtr ColumnAggregateFunction::cloneEmpty() const
@@ -313,12 +332,7 @@ void ColumnAggregateFunction::insertDefault()
     function->create(getData().back());
 }
 
-StringRef ColumnAggregateFunction::serializeValueIntoArena(
-    size_t n,
-    Arena & dst,
-    const char *& begin,
-    const TiDB::TiDBCollatorPtr &,
-    String &) const
+StringRef ColumnAggregateFunction::serializeValueIntoArena(size_t n, Arena & dst, const char *& begin, const TiDB::TiDBCollatorPtr &, String &) const
 {
     IAggregateFunction * function = func.get();
     WriteBufferFromArena out(dst, begin);
@@ -326,9 +340,7 @@ StringRef ColumnAggregateFunction::serializeValueIntoArena(
     return out.finish();
 }
 
-const char * ColumnAggregateFunction::deserializeAndInsertFromArena(
-    const char * src_arena,
-    const TiDB::TiDBCollatorPtr &)
+const char * ColumnAggregateFunction::deserializeAndInsertFromArena(const char * src_arena, const TiDB::TiDBCollatorPtr &)
 {
     IAggregateFunction * function = func.get();
 
@@ -365,25 +377,21 @@ void ColumnAggregateFunction::popBack(size_t n)
     data.resize_assume_reserved(new_size);
 }
 
-ColumnPtr ColumnAggregateFunction::replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets)
-    const
+ColumnPtr ColumnAggregateFunction::replicate(const IColumn::Offsets & offsets) const
 {
     size_t size = data.size();
     if (size != offsets.size())
         throw Exception("Size of offsets doesn't match size of column.", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
-
-    assert(start_row < end_row);
-    assert(end_row <= size);
 
     if (size == 0)
         return cloneEmpty();
 
     auto res = createView();
     auto & res_data = res->getData();
-    res_data.reserve(offsets[end_row - 1]);
+    res_data.reserve(offsets.back());
 
     IColumn::Offset prev_offset = 0;
-    for (size_t i = start_row; i < end_row; ++i)
+    for (size_t i = 0; i < size; ++i)
     {
         size_t size_to_replicate = offsets[i] - prev_offset;
         prev_offset = offsets[i];
@@ -395,8 +403,7 @@ ColumnPtr ColumnAggregateFunction::replicateRange(size_t start_row, size_t end_r
     return res;
 }
 
-MutableColumns ColumnAggregateFunction::scatter(IColumn::ColumnIndex num_columns, const IColumn::Selector & selector)
-    const
+MutableColumns ColumnAggregateFunction::scatter(IColumn::ColumnIndex num_columns, const IColumn::Selector & selector) const
 {
     /// Columns with scattered values will point to this column as the owner of values.
     MutableColumns columns(num_columns);
@@ -419,18 +426,12 @@ MutableColumns ColumnAggregateFunction::scatter(IColumn::ColumnIndex num_columns
     return columns;
 }
 
-void ColumnAggregateFunction::scatterTo(
-    ScatterColumns & columns [[maybe_unused]],
-    const Selector & selector [[maybe_unused]]) const
+void ColumnAggregateFunction::scatterTo(ScatterColumns & columns [[maybe_unused]], const Selector & selector [[maybe_unused]]) const
 {
     throw TiFlashException("ColumnAggregateFunction does not support scatterTo", Errors::Coprocessor::Unimplemented);
 }
 
-void ColumnAggregateFunction::getPermutation(
-    bool /*reverse*/,
-    size_t /*limit*/,
-    int /*nan_direction_hint*/,
-    IColumn::Permutation & res) const
+void ColumnAggregateFunction::getPermutation(bool /*reverse*/, size_t /*limit*/, int /*nan_direction_hint*/, IColumn::Permutation & res) const
 {
     size_t s = getData().size();
     res.resize(s);

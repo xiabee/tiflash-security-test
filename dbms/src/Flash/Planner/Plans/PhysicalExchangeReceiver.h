@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Flash/Mpp/ExchangeReceiver.h>
-#include <Flash/Planner/Plans/PhysicalLeaf.h>
+#include <Flash/Planner/plans/PhysicalLeaf.h>
 
 namespace DB
 {
@@ -27,33 +27,27 @@ public:
     static PhysicalPlanNodePtr build(
         const Context & context,
         const String & executor_id,
-        const LoggerPtr & log,
-        const FineGrainedShuffle & fine_grained_shuffle);
+        const LoggerPtr & log);
 
     PhysicalExchangeReceiver(
         const String & executor_id_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle,
         const String & req_id,
         const Block & sample_block_,
         const std::shared_ptr<ExchangeReceiver> & mpp_exchange_receiver_);
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
-    size_t getSourceNum() const { return mpp_exchange_receiver->getSourceNum(); }
+    size_t getSourceNum() const
+    {
+        return mpp_exchange_receiver->getSourceNum();
+    }
 
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        Context & /*context*/,
-        size_t /*concurrency*/) override;
-
-private:
     Block sample_block;
 
     std::shared_ptr<ExchangeReceiver> mpp_exchange_receiver;

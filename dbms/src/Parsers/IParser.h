@@ -14,13 +14,13 @@
 
 #pragma once
 
+#include <set>
+#include <memory>
+
 #include <Core/Defines.h>
 #include <Core/Types.h>
 #include <Parsers/IAST.h>
 #include <Parsers/TokenIterator.h>
-
-#include <memory>
-#include <set>
 
 
 namespace DB
@@ -46,7 +46,10 @@ struct Expected
             variants.insert(description);
     }
 
-    void add(TokenIterator it, const char * description) { add(it->begin, description); }
+    void add(TokenIterator it, const char * description)
+    {
+        add(it->begin, description);
+    }
 };
 
 
@@ -102,4 +105,4 @@ public:
 
 using ParserPtr = std::unique_ptr<IParser>;
 
-} // namespace DB
+}

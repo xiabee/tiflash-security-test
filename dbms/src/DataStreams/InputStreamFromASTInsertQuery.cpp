@@ -14,8 +14,8 @@
 
 #include <DataStreams/BlockIO.h>
 #include <DataStreams/InputStreamFromASTInsertQuery.h>
-#include <IO/Buffer/ConcatReadBuffer.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
+#include <IO/ConcatReadBuffer.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTInsertQuery.h>
 
@@ -34,12 +34,10 @@ InputStreamFromASTInsertQuery::InputStreamFromASTInsertQuery(
     const BlockIO & streams,
     Context & context)
 {
-    const auto * ast_insert_query = dynamic_cast<const ASTInsertQuery *>(ast.get());
+    const ASTInsertQuery * ast_insert_query = dynamic_cast<const ASTInsertQuery *>(ast.get());
 
     if (!ast_insert_query)
-        throw Exception(
-            "Logical error: query requires data to insert, but it is not INSERT query",
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Logical error: query requires data to insert, but it is not INSERT query", ErrorCodes::LOGICAL_ERROR);
 
     String format = ast_insert_query->format;
     if (format.empty())
@@ -62,11 +60,7 @@ InputStreamFromASTInsertQuery::InputStreamFromASTInsertQuery(
 
     input_buffer_contacenated = std::make_unique<ConcatReadBuffer>(buffers);
 
-    res_stream = context.getInputFormat(
-        format,
-        *input_buffer_contacenated,
-        streams.out->getHeader(),
-        context.getSettingsRef().max_insert_block_size);
+    res_stream = context.getInputFormat(format, *input_buffer_contacenated, streams.out->getHeader(), context.getSettingsRef().max_insert_block_size);
 }
 
 } // namespace DB

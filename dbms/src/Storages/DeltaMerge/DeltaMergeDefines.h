@@ -20,16 +20,16 @@
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <DataTypes/DataTypeFactory.h>
-#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/FormatVersion.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/MutableSupport.h>
+#include <Storages/Transaction/Types.h>
 
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <type_traits>
 
 namespace TiDB
 {
@@ -59,6 +59,7 @@ class DTEntryIterator;
 template <size_t M, size_t F, size_t S, typename TAllocator = Allocator<false>>
 class DTEntriesCopy;
 
+struct RefTuple;
 
 struct EmptyValueSpace
 {
@@ -93,8 +94,13 @@ struct ColumnDefine
         , name(std::move(name_))
         , type(std::move(type_))
         , default_value(std::move(default_value_))
-    {}
+    {
+    }
 };
+
+using ColumnDefines = std::vector<ColumnDefine>;
+using ColumnDefinesPtr = std::shared_ptr<ColumnDefines>;
+using ColumnDefineMap = std::unordered_map<ColId, ColumnDefine>;
 
 using ColumnMap = std::unordered_map<ColId, ColumnPtr>;
 using MutableColumnMap = std::unordered_map<ColId, MutableColumnPtr>;
@@ -121,18 +127,12 @@ inline static const UInt64 INITIAL_EPOCH = 0;
 
 inline const ColumnDefine & getExtraIntHandleColumnDefine()
 {
-    static ColumnDefine EXTRA_HANDLE_COLUMN_DEFINE_{
-        EXTRA_HANDLE_COLUMN_ID,
-        EXTRA_HANDLE_COLUMN_NAME,
-        EXTRA_HANDLE_COLUMN_INT_TYPE};
+    static ColumnDefine EXTRA_HANDLE_COLUMN_DEFINE_{EXTRA_HANDLE_COLUMN_ID, EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_INT_TYPE};
     return EXTRA_HANDLE_COLUMN_DEFINE_;
 }
 inline const ColumnDefine & getExtraStringHandleColumnDefine()
 {
-    static ColumnDefine EXTRA_HANDLE_COLUMN_DEFINE_{
-        EXTRA_HANDLE_COLUMN_ID,
-        EXTRA_HANDLE_COLUMN_NAME,
-        EXTRA_HANDLE_COLUMN_STRING_TYPE};
+    static ColumnDefine EXTRA_HANDLE_COLUMN_DEFINE_{EXTRA_HANDLE_COLUMN_ID, EXTRA_HANDLE_COLUMN_NAME, EXTRA_HANDLE_COLUMN_STRING_TYPE};
     return EXTRA_HANDLE_COLUMN_DEFINE_;
 }
 inline const ColumnDefine & getExtraHandleColumnDefine(bool is_common_handle)
@@ -153,32 +153,14 @@ inline const ColumnDefine & getTagColumnDefine()
 }
 inline const ColumnDefine & getExtraTableIDColumnDefine()
 {
-    static ColumnDefine EXTRA_TABLE_ID_COLUMN_DEFINE_{
-        EXTRA_TABLE_ID_COLUMN_ID,
-        EXTRA_TABLE_ID_COLUMN_NAME,
-        EXTRA_TABLE_ID_COLUMN_TYPE};
+    static ColumnDefine EXTRA_TABLE_ID_COLUMN_DEFINE_{EXTRA_TABLE_ID_COLUMN_ID, EXTRA_TABLE_ID_COLUMN_NAME, EXTRA_TABLE_ID_COLUMN_TYPE};
     return EXTRA_TABLE_ID_COLUMN_DEFINE_;
 }
 
-static_assert(
-    static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::min())) == std::numeric_limits<Int64>::min(),
-    "Unsupported compiler!");
-static_assert(
-    static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::max())) == std::numeric_limits<Int64>::max(),
-    "Unsupported compiler!");
+static_assert(static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::min())) == std::numeric_limits<Int64>::min(), "Unsupported compiler!");
+static_assert(static_cast<Int64>(static_cast<UInt64>(std::numeric_limits<Int64>::max())) == std::numeric_limits<Int64>::max(), "Unsupported compiler!");
 
 static constexpr bool DM_RUN_CHECK = true;
 
 } // namespace DM
 } // namespace DB
-
-template <>
-struct fmt::formatter<DB::DM::ColumnDefine>
-{
-    template <typename FormatContext>
-    auto format(const DB::DM::ColumnDefine & cd, FormatContext & ctx) const -> decltype(ctx.out())
-    {
-        // Use '/' as separators because column names often have '_'.
-        return fmt::format_to(ctx.out(), "{}/{}/{}", cd.id, cd.name, cd.type->getName());
-    }
-};

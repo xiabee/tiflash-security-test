@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Databases/IDatabase.h>
-#include <IO/WriteHelpers.h>
-#include <Interpreters/Context.h>
-#include <Interpreters/InterpreterAlterQuery.h>
-#include <Storages/StorageFactory.h>
 #include <Storages/StorageNull.h>
+#include <Storages/StorageFactory.h>
+
+#include <Interpreters/InterpreterAlterQuery.h>
+#include <Databases/IDatabase.h>
+
+#include <IO/WriteHelpers.h>
 
 
 namespace DB
@@ -25,17 +26,17 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
 
 void registerStorageNull(StorageFactory & factory)
 {
-    factory.registerStorage("Null", [](const StorageFactory::Arguments & args) {
+    factory.registerStorage("Null", [](const StorageFactory::Arguments & args)
+    {
         if (!args.engine_args.empty())
             throw Exception(
-                "Engine " + args.engine_name + " doesn't support any arguments (" + toString(args.engine_args.size())
-                    + " given)",
+                "Engine " + args.engine_name + " doesn't support any arguments (" + toString(args.engine_args.size()) + " given)",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
         return StorageNull::create(args.table_name, args.columns);
@@ -43,11 +44,7 @@ void registerStorageNull(StorageFactory & factory)
 }
 
 void StorageNull::alter(
-    const TableLockHolder &,
-    const AlterCommands & params,
-    const String & database_name,
-    const String & table_name,
-    const Context & context)
+    const TableLockHolder &, const AlterCommands & params, const String & database_name, const String & table_name, const Context & context)
 {
     ColumnsDescription new_columns = getColumns();
     params.apply(new_columns);
@@ -55,4 +52,4 @@ void StorageNull::alter(
     setColumns(std::move(new_columns));
 }
 
-} // namespace DB
+}

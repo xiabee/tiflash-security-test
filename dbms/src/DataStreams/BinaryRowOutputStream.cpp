@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <IO/WriteBuffer.h>
 #include <Columns/IColumn.h>
-#include <DataStreams/BinaryRowOutputStream.h>
 #include <DataTypes/IDataType.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <DataStreams/BinaryRowOutputStream.h>
 
 
 namespace DB
@@ -23,7 +23,8 @@ namespace DB
 
 BinaryRowOutputStream::BinaryRowOutputStream(WriteBuffer & ostr_)
     : ostr(ostr_)
-{}
+{
+}
 
 void BinaryRowOutputStream::flush()
 {
@@ -35,4 +36,4 @@ void BinaryRowOutputStream::writeField(const IColumn & column, const IDataType &
     type.serializeBinary(column, row_num, ostr);
 }
 
-} // namespace DB
+}

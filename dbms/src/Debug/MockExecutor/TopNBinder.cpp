@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Debug/MockExecutor/AstToPB.h>
 #include <Debug/MockExecutor/ExecutorBinder.h>
 #include <Debug/MockExecutor/TopNBinder.h>
-#include <Parsers/ASTLiteral.h>
 #include <Parsers/ASTOrderByElement.h>
 
 namespace DB::mock
 {
-bool TopNBinder::toTiPBExecutor(
-    tipb::Executor * tipb_executor,
-    int32_t collator_id,
-    const MPPInfo & mpp_info,
-    const Context & context)
+bool TopNBinder::toTiPBExecutor(tipb::Executor * tipb_executor, int32_t collator_id, const MPPInfo & mpp_info, const Context & context)
 {
     tipb_executor->set_tp(tipb::ExecType::TypeTopN);
     tipb_executor->set_executor_id(name);
@@ -65,8 +59,7 @@ ExecutorBinderPtr compileTopN(ExecutorBinderPtr input, size_t & executor_index, 
         compileExpr(input->output_schema, elem->children[0]);
     }
     auto limit = safeGet<UInt64>(typeid_cast<ASTLiteral &>(*limit_expr).value);
-    auto top_n
-        = std::make_shared<mock::TopNBinder>(executor_index, input->output_schema, std::move(order_columns), limit);
+    auto top_n = std::make_shared<mock::TopNBinder>(executor_index, input->output_schema, std::move(order_columns), limit);
     top_n->children.push_back(input);
     return top_n;
 }

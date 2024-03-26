@@ -14,14 +14,13 @@
 
 #pragma once
 
-#include <Columns/ColumnString.h>
-#include <Common/HashTable/HashMap.h>
-#include <Dictionaries/DictionaryStructure.h>
 #include <Dictionaries/IDictionary.h>
 #include <Dictionaries/IDictionarySource.h>
-
-#include <atomic>
+#include <Dictionaries/DictionaryStructure.h>
+#include <Common/HashTable/HashMap.h>
+#include <Columns/ColumnString.h>
 #include <ext/range.h>
+#include <atomic>
 #include <memory>
 #include <tuple>
 
@@ -34,13 +33,8 @@ using BlockPtr = std::shared_ptr<Block>;
 class HashedDictionary final : public IDictionary
 {
 public:
-    HashedDictionary(
-        const std::string & name,
-        const DictionaryStructure & dict_struct,
-        DictionarySourcePtr source_ptr,
-        const DictionaryLifetime dict_lifetime,
-        bool require_nonempty,
-        BlockPtr saved_block = nullptr);
+    HashedDictionary(const std::string & name, const DictionaryStructure & dict_struct,
+        DictionarySourcePtr source_ptr, const DictionaryLifetime dict_lifetime, bool require_nonempty, BlockPtr saved_block = nullptr);
 
     HashedDictionary(const HashedDictionary & other);
 
@@ -70,7 +64,10 @@ public:
 
     const DictionaryStructure & getStructure() const override { return dict_struct; }
 
-    std::chrono::time_point<std::chrono::system_clock> getCreationTime() const override { return creation_time; }
+    std::chrono::time_point<std::chrono::system_clock> getCreationTime() const override
+    {
+        return creation_time;
+    }
 
     bool isInjective(const std::string & attribute_name) const override
     {
@@ -81,9 +78,8 @@ public:
 
     void toParent(const PaddedPODArray<Key> & ids, PaddedPODArray<Key> & out) const override;
 
-#define DECLARE(TYPE)                                                                                               \
-    void get##TYPE(const std::string & attribute_name, const PaddedPODArray<Key> & ids, PaddedPODArray<TYPE> & out) \
-        const;
+#define DECLARE(TYPE)\
+    void get##TYPE(const std::string & attribute_name, const PaddedPODArray<Key> & ids, PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
     DECLARE(UInt32)
@@ -99,11 +95,9 @@ public:
 
     void getString(const std::string & attribute_name, const PaddedPODArray<Key> & ids, ColumnString * out) const;
 
-#define DECLARE(TYPE)                       \
-    void get##TYPE(                         \
-        const std::string & attribute_name, \
-        const PaddedPODArray<Key> & ids,    \
-        const PaddedPODArray<TYPE> & def,   \
+#define DECLARE(TYPE)\
+    void get##TYPE(\
+        const std::string & attribute_name, const PaddedPODArray<Key> & ids, const PaddedPODArray<TYPE> & def,\
         PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
@@ -119,17 +113,12 @@ public:
 #undef DECLARE
 
     void getString(
-        const std::string & attribute_name,
-        const PaddedPODArray<Key> & ids,
-        const ColumnString * const def,
+        const std::string & attribute_name, const PaddedPODArray<Key> & ids, const ColumnString * const def,
         ColumnString * const out) const;
 
-#define DECLARE(TYPE)                       \
-    void get##TYPE(                         \
-        const std::string & attribute_name, \
-        const PaddedPODArray<Key> & ids,    \
-        const TYPE & def,                   \
-        PaddedPODArray<TYPE> & out) const;
+#define DECLARE(TYPE)\
+    void get##TYPE(\
+        const std::string & attribute_name, const PaddedPODArray<Key> & ids, const TYPE & def, PaddedPODArray<TYPE> & out) const;
     DECLARE(UInt8)
     DECLARE(UInt16)
     DECLARE(UInt32)
@@ -144,49 +133,36 @@ public:
 #undef DECLARE
 
     void getString(
-        const std::string & attribute_name,
-        const PaddedPODArray<Key> & ids,
-        const String & def,
+        const std::string & attribute_name, const PaddedPODArray<Key> & ids, const String & def,
         ColumnString * const out) const;
 
     void has(const PaddedPODArray<Key> & ids, PaddedPODArray<UInt8> & out) const override;
 
-    void isInVectorVector(
-        const PaddedPODArray<Key> & child_ids,
-        const PaddedPODArray<Key> & ancestor_ids,
-        PaddedPODArray<UInt8> & out) const override;
-    void isInVectorConstant(const PaddedPODArray<Key> & child_ids, const Key ancestor_id, PaddedPODArray<UInt8> & out)
-        const override;
-    void isInConstantVector(const Key child_id, const PaddedPODArray<Key> & ancestor_ids, PaddedPODArray<UInt8> & out)
-        const override;
+    void isInVectorVector(const PaddedPODArray<Key> & child_ids, const PaddedPODArray<Key> & ancestor_ids, PaddedPODArray<UInt8> & out) const override;
+    void isInVectorConstant(const PaddedPODArray<Key> & child_ids, const Key ancestor_id, PaddedPODArray<UInt8> & out) const override;
+    void isInConstantVector(const Key child_id, const PaddedPODArray<Key> & ancestor_ids, PaddedPODArray<UInt8> & out) const override;
 
     BlockInputStreamPtr getBlockInputStream(const Names & column_names, size_t max_block_size) const override;
 
 private:
-    template <typename Value>
-    using CollectionType = HashMap<UInt64, Value>;
-    template <typename Value>
-    using CollectionPtrType = std::unique_ptr<CollectionType<Value>>;
+    template <typename Value> using CollectionType = HashMap<UInt64, Value>;
+    template <typename Value> using CollectionPtrType = std::unique_ptr<CollectionType<Value>>;
 
     struct Attribute final
     {
         AttributeUnderlyingType type;
-        std::tuple<UInt8, UInt16, UInt32, UInt64, UInt128, Int8, Int16, Int32, Int64, Float32, Float64, String>
-            null_values;
         std::tuple<
-            CollectionPtrType<UInt8>,
-            CollectionPtrType<UInt16>,
-            CollectionPtrType<UInt32>,
-            CollectionPtrType<UInt64>,
+            UInt8, UInt16, UInt32, UInt64,
+            UInt128,
+            Int8, Int16, Int32, Int64,
+            Float32, Float64,
+            String> null_values;
+        std::tuple<
+            CollectionPtrType<UInt8>, CollectionPtrType<UInt16>, CollectionPtrType<UInt32>, CollectionPtrType<UInt64>,
             CollectionPtrType<UInt128>,
-            CollectionPtrType<Int8>,
-            CollectionPtrType<Int16>,
-            CollectionPtrType<Int32>,
-            CollectionPtrType<Int64>,
-            CollectionPtrType<Float32>,
-            CollectionPtrType<Float64>,
-            CollectionPtrType<StringRef>>
-            maps;
+            CollectionPtrType<Int8>, CollectionPtrType<Int16>, CollectionPtrType<Int32>, CollectionPtrType<Int64>,
+            CollectionPtrType<Float32>, CollectionPtrType<Float64>,
+            CollectionPtrType<StringRef>> maps;
         std::unique_ptr<Arena> string_arena;
     };
 
@@ -238,7 +214,10 @@ private:
     PaddedPODArray<Key> getIds() const;
 
     template <typename ChildType, typename AncestorType>
-    void isInImpl(const ChildType & child_ids, const AncestorType & ancestor_ids, PaddedPODArray<UInt8> & out) const;
+    void isInImpl(
+        const ChildType & child_ids,
+        const AncestorType & ancestor_ids,
+        PaddedPODArray<UInt8> & out) const;
 
     const std::string name;
     const DictionaryStructure dict_struct;
@@ -262,4 +241,4 @@ private:
     BlockPtr saved_block;
 };
 
-} // namespace DB
+}

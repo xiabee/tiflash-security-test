@@ -14,14 +14,11 @@
 
 #pragma once
 
-#include <Dictionaries/DictionaryStructure.h>
 #include <Dictionaries/IDictionarySource.h>
+#include <Dictionaries/DictionaryStructure.h>
 
 
-namespace Poco
-{
-class Logger;
-}
+namespace Poco { class Logger; }
 
 
 namespace DB
@@ -46,7 +43,8 @@ public:
 
     BlockInputStreamPtr loadIds(const std::vector<UInt64> & ids) override;
 
-    BlockInputStreamPtr loadKeys(const Columns & key_columns, const std::vector<size_t> & requested_rows) override;
+    BlockInputStreamPtr loadKeys(
+        const Columns & key_columns, const std::vector<size_t> & requested_rows) override;
 
     bool isModified() const override;
 
@@ -73,4 +71,4 @@ private:
     const Context & context;
 };
 
-} // namespace DB
+}

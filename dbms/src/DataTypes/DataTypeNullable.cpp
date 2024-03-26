@@ -18,11 +18,11 @@
 #include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/Buffer/ConcatReadBuffer.h>
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ConcatReadBuffer.h>
+#include <IO/ReadBuffer.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 #include <Parsers/IAST.h>
 
@@ -40,9 +40,7 @@ DataTypeNullable::DataTypeNullable(const DataTypePtr & nested_data_type_)
     : nested_data_type{nested_data_type_}
 {
     if (!nested_data_type->canBeInsideNullable())
-        throw Exception(
-            "Nested type " + nested_data_type->getName() + " cannot be inside Nullable type",
-            ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+        throw Exception("Nested type " + nested_data_type->getName() + " cannot be inside Nullable type", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 }
 
 
@@ -69,23 +67,17 @@ void DataTypeNullable::serializeBinaryBulkWithMultipleStreams(
     bool position_independent_encoding,
     SubstreamPath & path) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
     col.checkConsistency();
 
     /// First serialize null map.
     path.push_back(Substream::NullMap);
-    if (auto * stream = getter(path))
+    if (auto stream = getter(path))
         DataTypeUInt8().serializeBinaryBulk(col.getNullMapColumn(), *stream, offset, limit);
 
     /// Then serialize contents of arrays.
     path.back() = Substream::NullableElements;
-    nested_data_type->serializeBinaryBulkWithMultipleStreams(
-        col.getNestedColumn(),
-        getter,
-        offset,
-        limit,
-        position_independent_encoding,
-        path);
+    nested_data_type->serializeBinaryBulkWithMultipleStreams(col.getNestedColumn(), getter, offset, limit, position_independent_encoding, path);
 }
 
 
@@ -97,26 +89,61 @@ void DataTypeNullable::deserializeBinaryBulkWithMultipleStreams(
     bool position_independent_encoding,
     SubstreamPath & path) const
 {
-    auto & col = static_cast<ColumnNullable &>(column);
+    ColumnNullable & col = static_cast<ColumnNullable &>(column);
 
     path.push_back(Substream::NullMap);
-    if (auto * stream = getter(path))
+    if (auto stream = getter(path))
         DataTypeUInt8().deserializeBinaryBulk(col.getNullMapColumn(), *stream, limit, 0);
 
     path.back() = Substream::NullableElements;
-    nested_data_type->deserializeBinaryBulkWithMultipleStreams(
-        col.getNestedColumn(),
-        getter,
-        limit,
-        avg_value_size_hint,
-        position_independent_encoding,
-        path);
+    nested_data_type->deserializeBinaryBulkWithMultipleStreams(col.getNestedColumn(), getter, limit, avg_value_size_hint, position_independent_encoding, path);
+}
+
+
+void DataTypeNullable::serializeWidenBinaryBulkWithMultipleStreams(
+    const IColumn & column,
+    const OutputStreamGetter & getter,
+    size_t offset,
+    size_t limit,
+    bool position_independent_encoding,
+    SubstreamPath & path) const
+{
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
+    col.checkConsistency();
+
+    /// First serialize null map.
+    path.push_back(Substream::NullMap);
+    if (auto stream = getter(path))
+        DataTypeUInt8().serializeBinaryBulk(col.getNullMapColumn(), *stream, offset, limit);
+
+    /// Then serialize contents of arrays.
+    path.back() = Substream::NullableElements;
+    nested_data_type->serializeWidenBinaryBulkWithMultipleStreams(col.getNestedColumn(), getter, offset, limit, position_independent_encoding, path);
+}
+
+
+void DataTypeNullable::deserializeWidenBinaryBulkWithMultipleStreams(
+    IColumn & column,
+    const InputStreamGetter & getter,
+    size_t limit,
+    double avg_value_size_hint,
+    bool position_independent_encoding,
+    SubstreamPath & path) const
+{
+    ColumnNullable & col = static_cast<ColumnNullable &>(column);
+
+    path.push_back(Substream::NullMap);
+    if (auto stream = getter(path))
+        DataTypeUInt8().deserializeBinaryBulk(col.getNullMapColumn(), *stream, limit, 0);
+
+    path.back() = Substream::NullableElements;
+    nested_data_type->deserializeWidenBinaryBulkWithMultipleStreams(col.getNestedColumn(), getter, limit, avg_value_size_hint, position_independent_encoding, path);
 }
 
 
 void DataTypeNullable::serializeBinary(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     bool is_null = col.isNullAt(row_num);
     writeBinary(is_null, ostr);
@@ -127,9 +154,12 @@ void DataTypeNullable::serializeBinary(const IColumn & column, size_t row_num, W
 
 /// We need to insert both to nested column and to null byte map, or, in case of exception, to not insert at all.
 template <typename CheckForNull, typename DeserializeNested>
-static void safeDeserialize(IColumn & column, CheckForNull && check_for_null, DeserializeNested && deserialize_nested)
+static void safeDeserialize(
+    IColumn & column,
+    CheckForNull && check_for_null,
+    DeserializeNested && deserialize_nested)
 {
-    auto & col = static_cast<ColumnNullable &>(column);
+    ColumnNullable & col = static_cast<ColumnNullable &>(column);
 
     if (check_for_null())
     {
@@ -156,18 +186,14 @@ void DataTypeNullable::deserializeBinary(IColumn & column, ReadBuffer & istr) co
 {
     safeDeserialize(
         column,
-        [&istr] {
-            bool is_null = false;
-            readBinary(is_null, istr);
-            return is_null;
-        },
+        [&istr] { bool is_null = 0; readBinary(is_null, istr); return is_null; },
         [this, &istr](IColumn & nested) { nested_data_type->deserializeBinary(nested, istr); });
 }
 
 
 void DataTypeNullable::serializeTextEscaped(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("\\N", ostr);
@@ -181,9 +207,7 @@ void DataTypeNullable::deserializeTextEscaped(IColumn & column, ReadBuffer & ist
     /// Little tricky, because we cannot discriminate null from first character.
 
     if (istr.eof())
-        throw Exception(
-            "Unexpected end of stream, while parsing value of Nullable type",
-            ErrorCodes::CANNOT_READ_ALL_DATA);
+        throw Exception("Unexpected end of stream, while parsing value of Nullable type", ErrorCodes::CANNOT_READ_ALL_DATA);
 
     /// This is not null, surely.
     if (*istr.position() != '\\')
@@ -199,9 +223,7 @@ void DataTypeNullable::deserializeTextEscaped(IColumn & column, ReadBuffer & ist
         ++istr.position();
 
         if (istr.eof())
-            throw Exception(
-                "Unexpected end of stream, while parsing value of Nullable type, after backslash",
-                ErrorCodes::CANNOT_READ_ALL_DATA);
+            throw Exception("Unexpected end of stream, while parsing value of Nullable type, after backslash", ErrorCodes::CANNOT_READ_ALL_DATA);
 
         safeDeserialize(
             column,
@@ -239,7 +261,7 @@ void DataTypeNullable::deserializeTextEscaped(IColumn & column, ReadBuffer & ist
 
 void DataTypeNullable::serializeTextQuoted(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("NULL", ostr);
@@ -258,7 +280,7 @@ void DataTypeNullable::deserializeTextQuoted(IColumn & column, ReadBuffer & istr
 
 void DataTypeNullable::serializeTextCSV(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("\\N", ostr);
@@ -276,7 +298,7 @@ void DataTypeNullable::deserializeTextCSV(IColumn & column, ReadBuffer & istr, c
 
 void DataTypeNullable::serializeText(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("NULL", ostr);
@@ -284,13 +306,9 @@ void DataTypeNullable::serializeText(const IColumn & column, size_t row_num, Wri
         nested_data_type->serializeText(col.getNestedColumn(), row_num, ostr);
 }
 
-void DataTypeNullable::serializeTextJSON(
-    const IColumn & column,
-    size_t row_num,
-    WriteBuffer & ostr,
-    const FormatSettingsJSON & settings) const
+void DataTypeNullable::serializeTextJSON(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettingsJSON & settings) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("null", ostr);
@@ -308,7 +326,7 @@ void DataTypeNullable::deserializeTextJSON(IColumn & column, ReadBuffer & istr) 
 
 void DataTypeNullable::serializeTextXML(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & col = static_cast<const ColumnNullable &>(column);
+    const ColumnNullable & col = static_cast<const ColumnNullable &>(column);
 
     if (col.isNullAt(row_num))
         writeCString("\\N", ostr);
@@ -337,9 +355,7 @@ bool DataTypeNullable::equals(const IDataType & rhs) const
 static DataTypePtr create(const ASTPtr & arguments)
 {
     if (!arguments || arguments->children.size() != 1)
-        throw Exception(
-            "Nullable data type family must have exactly one argument - nested type",
-            ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+        throw Exception("Nullable data type family must have exactly one argument - nested type", ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
 
     DataTypePtr nested_type = DataTypeFactory::instance().get(arguments->children[0]);
 

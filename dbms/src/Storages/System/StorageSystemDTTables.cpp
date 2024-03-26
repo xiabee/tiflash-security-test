@@ -217,9 +217,7 @@ BlockInputStreams StorageSystemDTTables::read(
         }
     }
 
-    return BlockInputStreams(
-        1,
-        std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
+    return BlockInputStreams(1, std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
 }
 
 

@@ -46,7 +46,10 @@ struct StringHashSetCell<StringKey16> : public HashTableCell<StringKey16, String
     bool isZero(const HashTableNoState & state) const { return isZero(this->key, state); }
     // Zero means unoccupied cells in hash table. Use key with last word = 0 as
     // zero keys, because such keys are unrepresentable (no way to encode length).
-    static bool isZero(const StringKey16 & key_, const HashTableNoState &) { return key_ == 0; }
+    static bool isZero(const StringKey16 & key_, const HashTableNoState &)
+    {
+        return key_ == 0;
+    }
     void setZero() { this->key = 0; }
 };
 
@@ -65,7 +68,10 @@ struct StringHashSetCell<StringKey24> : public HashTableCell<StringKey24, String
     bool isZero(const HashTableNoState & state) const { return isZero(this->key, state); }
     // Zero means unoccupied cells in hash table. Use key with last word = 0 as
     // zero keys, because such keys are unrepresentable (no way to encode length).
-    static bool isZero(const StringKey24 & key_, const HashTableNoState &) { return key_.c == 0; }
+    static bool isZero(const StringKey24 & key_, const HashTableNoState &)
+    {
+        return key_.c == 0;
+    }
     void setZero() { this->key.c = 0; }
 };
 
@@ -86,30 +92,10 @@ template <typename Allocator>
 struct StringHashSetSubMaps
 {
     using T0 = StringHashTableEmpty<StringHashSetCell<StringRef>>;
-    using T1 = HashSetTable<
-        StringKey8,
-        StringHashSetCell<StringKey8>,
-        StringHashTableHash,
-        StringHashTableGrower<>,
-        Allocator>;
-    using T2 = HashSetTable<
-        StringKey16,
-        StringHashSetCell<StringKey16>,
-        StringHashTableHash,
-        StringHashTableGrower<>,
-        Allocator>;
-    using T3 = HashSetTable<
-        StringKey24,
-        StringHashSetCell<StringKey24>,
-        StringHashTableHash,
-        StringHashTableGrower<>,
-        Allocator>;
-    using Ts = HashSetTable<
-        StringRef,
-        StringHashSetCell<StringRef>,
-        StringHashTableHash,
-        StringHashTableGrower<>,
-        Allocator>;
+    using T1 = HashSetTable<StringKey8, StringHashSetCell<StringKey8>, StringHashTableHash, StringHashTableGrower<>, Allocator>;
+    using T2 = HashSetTable<StringKey16, StringHashSetCell<StringKey16>, StringHashTableHash, StringHashTableGrower<>, Allocator>;
+    using T3 = HashSetTable<StringKey24, StringHashSetCell<StringKey24>, StringHashTableHash, StringHashTableGrower<>, Allocator>;
+    using Ts = HashSetTable<StringRef, StringHashSetCell<StringRef>, StringHashTableHash, StringHashTableGrower<>, Allocator>;
 };
 
 template <typename Allocator = HashTableAllocator>

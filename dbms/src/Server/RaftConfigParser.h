@@ -13,44 +13,45 @@
 // limitations under the License.
 
 #pragma once
-#include <Common/Logger.h>
 #include <Core/Types.h>
-#include <Storages/KVStore/StorageEngineType.h>
+#include <Storages/Transaction/StorageEngineType.h>
 
 #include <unordered_set>
 
-namespace Poco::Util
+namespace Poco
+{
+class Logger;
+namespace Util
 {
 class LayeredConfiguration;
-} // namespace Poco::Util
+}
+} // namespace Poco
 
 namespace DB
 {
 struct TiFlashRaftConfig
 {
+    const std::string engine_key = "engine";
+    const std::string engine_value = "tiflash";
     Strings pd_addrs;
     std::unordered_set<std::string> ignore_databases{"system"};
-
-    // The addr that is bound for flash service
-    // Actually its value is read from "flash.service_addr"
+    // Actually it is "flash.service_addr"
     std::string flash_server_addr;
-    // The addr that other TiFlash nodes connect to this tiflash. Its value is set by
-    // following configurations. The previous configuration will override the later
-    // items.
-    //   - "flash.proxy.advertise-engine-addr".
-    //   - "flash.proxy.engine-addr"
-    //   - "flash_server_addr"
-    std::string advertise_engine_addr;
+
+    // Use PageStorage V1 for kvstore or not.
+    // TODO: remove this config
+    bool enable_compatible_mode = true;
 
     bool for_unit_test = false;
 
     static constexpr TiDB::StorageEngine DEFAULT_ENGINE = TiDB::StorageEngine::DT;
     TiDB::StorageEngine engine = DEFAULT_ENGINE;
+    TiDB::SnapshotApplyMethod snapshot_apply_method = TiDB::SnapshotApplyMethod::DTFile_Directory;
 
 public:
     TiFlashRaftConfig() = default;
 
-    static TiFlashRaftConfig parseSettings(Poco::Util::AbstractConfiguration & config, const LoggerPtr & log);
+    static TiFlashRaftConfig parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
 };
 
 } // namespace DB

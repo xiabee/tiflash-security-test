@@ -43,8 +43,7 @@ public:
     }
 
 protected:
-    void formatImplWithoutAlias(const FormatSettings & settings, FormatState & state, FormatStateStacked frame)
-        const override
+    void formatImplWithoutAlias(const FormatSettings & settings, FormatState & state, FormatStateStacked frame) const override
     {
         std::string indent_str = settings.one_line ? "" : std::string(4 * frame.indent, ' ');
         std::string nl_or_nothing = settings.one_line ? "" : "\n";
@@ -60,4 +59,4 @@ protected:
     String getColumnNameImpl() const override;
 };
 
-} // namespace DB
+}

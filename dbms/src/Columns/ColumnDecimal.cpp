@@ -50,12 +50,7 @@ int ColumnDecimal<T>::compareAt(size_t n, size_t m, const IColumn & rhs_, int) c
 }
 
 template <typename T>
-StringRef ColumnDecimal<T>::serializeValueIntoArena(
-    size_t n,
-    Arena & arena,
-    char const *& begin,
-    const TiDB::TiDBCollatorPtr &,
-    String &) const
+StringRef ColumnDecimal<T>::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const
 {
     if constexpr (is_Decimal256)
     {
@@ -134,8 +129,7 @@ void ColumnDecimal<T>::updateHashWithValue(size_t n, SipHash & hash, const TiDB:
 }
 
 template <typename T>
-void ColumnDecimal<T>::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
-    const
+void ColumnDecimal<T>::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const
 {
     for (size_t i = 0; i < data.size(); ++i)
     {
@@ -149,10 +143,7 @@ void ColumnDecimal<T>::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBColla
     auto s = data.size();
 
     if (hash.getData().size() != s)
-        throw Exception(
-            "Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is "
-                + std::to_string(hash.getData().size()),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is " + std::to_string(hash.getData().size()), ErrorCodes::LOGICAL_ERROR);
 
     const T * begin = data.data();
     const T * end = begin + s;
@@ -260,21 +251,15 @@ void ColumnDecimal<T>::insertData(const char * src [[maybe_unused]], size_t /*le
 }
 
 template <typename T>
-bool ColumnDecimal<T>::decodeTiDBRowV2Datum(
-    size_t cursor,
-    const String & raw_value,
-    size_t /* length */,
-    bool /* force_decode */)
+bool ColumnDecimal<T>::decodeTiDBRowV2Datum(size_t cursor, const String & raw_value, size_t /* length */, bool /* force_decode */)
 {
     PrecType dec_prec = static_cast<uint8_t>(raw_value[cursor++]);
     ScaleType dec_scale = static_cast<uint8_t>(raw_value[cursor++]);
     auto dec_type = createDecimal(dec_prec, dec_scale);
     if (unlikely(!checkDecimal<T>(*dec_type)))
     {
-        throw Exception(
-            "Detected unmatched decimal value type: Decimal( " + std::to_string(dec_prec) + ", "
-                + std::to_string(dec_scale) + ") when decoding with column type " + this->getName(),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Detected unmatched decimal value type: Decimal( " + std::to_string(dec_prec) + ", " + std::to_string(dec_scale) + ") when decoding with column type " + this->getName(),
+                        ErrorCodes::LOGICAL_ERROR);
     }
     auto res = DecodeDecimalImpl<T>(cursor, raw_value, dec_prec, dec_scale);
     data.push_back(DecimalField<T>(res, dec_scale));
@@ -289,8 +274,7 @@ void ColumnDecimal<T>::insertRangeFrom(const IColumn & src, size_t start, size_t
     if (start + length > src_vec.data.size())
         throw Exception(
             fmt::format(
-                "Parameters are out of bound in ColumnDecimal<T>::insertRangeFrom method, start={}, length={}, "
-                "src.size()={}",
+                "Parameters are out of bound in ColumnDecimal<T>::insertRangeFrom method, start={}, length={}, src.size()={}",
                 start,
                 length,
                 src_vec.data.size()),
@@ -307,25 +291,6 @@ void ColumnDecimal<T>::insertRangeFrom(const IColumn & src, size_t start, size_t
     {
         memcpy(data.data() + old_size, &src_vec.data[start], length * sizeof(data[0]));
     }
-}
-
-template <typename T>
-void ColumnDecimal<T>::insertManyFrom(const IColumn & src, size_t position, size_t length)
-{
-    size_t old_size = data.size();
-    auto & value = static_cast<const Self &>(src).getData()[position];
-    data.resize_fill(old_size + length, value);
-}
-
-template <typename T>
-void ColumnDecimal<T>::insertDisjunctFrom(const IColumn & src, const std::vector<size_t> & position_vec)
-{
-    const auto & src_data = static_cast<const ColumnDecimal &>(src).data;
-    size_t old_size = data.size();
-    size_t to_add_size = position_vec.size();
-    data.resize(old_size + to_add_size);
-    for (size_t i = 0; i < to_add_size; ++i)
-        data[i + old_size] = src_data[position_vec[i]];
 }
 
 #pragma GCC diagnostic pop
@@ -364,24 +329,21 @@ ColumnPtr ColumnDecimal<T>::filter(const IColumn::Filter & filt, ssize_t result_
 }
 
 template <typename T>
-ColumnPtr ColumnDecimal<T>::replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const
+ColumnPtr ColumnDecimal<T>::replicate(const IColumn::Offsets & offsets) const
 {
     size_t size = data.size();
     if (size != offsets.size())
         throw Exception("Size of offsets doesn't match size of column.", ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
-
-    assert(start_row < end_row);
-    assert(end_row <= size);
 
     auto res = this->create(0, scale);
     if (0 == size)
         return res;
 
     typename Self::Container & res_data = res->getData();
-    res_data.reserve(offsets[end_row - 1]);
+    res_data.reserve(offsets.back());
 
     IColumn::Offset prev_offset = 0;
-    for (size_t i = start_row; i < end_row; ++i)
+    for (size_t i = 0; i < size; ++i)
     {
         size_t size_to_replicate = offsets[i] - prev_offset;
         prev_offset = offsets[i];
@@ -392,7 +354,6 @@ ColumnPtr ColumnDecimal<T>::replicateRange(size_t start_row, size_t end_row, con
 
     return res;
 }
-
 
 template <typename T>
 void ColumnDecimal<T>::gather(ColumnGathererStream & gatherer)

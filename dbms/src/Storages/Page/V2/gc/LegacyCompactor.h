@@ -15,12 +15,12 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <Interpreters/Context_fwd.h>
+#include <Interpreters/Context.h>
 #include <Poco/Logger.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V2/PageFile.h>
 #include <Storages/Page/V2/PageStorage.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/WriteBatch.h>
 
 #include <boost/core/noncopyable.hpp>
 #include <tuple>
@@ -36,10 +36,7 @@ using WritingFilesSnapshot = PageStorage::WritingFilesSnapshot;
 class LegacyCompactor : private boost::noncopyable
 {
 public:
-    LegacyCompactor(
-        const PageStorage & storage,
-        const WriteLimiterPtr & write_limiter_,
-        const ReadLimiterPtr & read_limiter_);
+    LegacyCompactor(const PageStorage & storage, const WriteLimiterPtr & write_limiter_, const ReadLimiterPtr & read_limiter_);
 
     std::tuple<PageFileSet, PageFileSet, size_t> //
     tryCompact(PageFileSet && page_files, const WritingFilesSnapshot & writing_files);
@@ -54,13 +51,13 @@ private:
 
     static WriteBatch prepareCheckpointWriteBatch(
         const PageStorage::ConcreteSnapshotPtr & snapshot,
-        WriteBatch::SequenceID wb_sequence);
+        const WriteBatch::SequenceID wb_sequence);
     [[nodiscard]] static size_t writeToCheckpoint(
         const String & storage_path,
         const PageFileIdAndLevel & file_id,
         WriteBatch && wb,
         FileProviderPtr & file_provider,
-        LoggerPtr log,
+        Poco::Logger * log,
         const WriteLimiterPtr & write_limiter);
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -73,8 +70,8 @@ private:
 
     const PageStorageConfig & config;
 
-    LoggerPtr log;
-    LoggerPtr page_file_log;
+    Poco::Logger * log;
+    Poco::Logger * page_file_log;
 
     PageStorage::VersionedPageEntries version_set;
     PageStorage::StatisticsInfo info;

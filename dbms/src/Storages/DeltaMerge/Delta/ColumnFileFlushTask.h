@@ -18,15 +18,16 @@
 #include <IO/WriteHelpers.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/DeltaIndex.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
+#include <Storages/Page/PageDefines.h>
 #include <common/logger_useful.h>
 
 namespace DB
 {
 namespace DM
 {
-struct WriteBatches;
 class MemTableSet;
 using MemTableSetPtr = std::shared_ptr<MemTableSet>;
 class ColumnFilePersistedSet;
@@ -46,7 +47,7 @@ public:
         ColumnFilePtr column_file;
 
         Block block_data;
-        PageIdU64 data_page = 0;
+        PageId data_page = 0;
 
         bool sorted = false;
         size_t rows_offset = 0;
