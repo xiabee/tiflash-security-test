@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <IO/MemoryReadWriteBuffer.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileDataProvider.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/DeltaValueSpace.h>
 #include <Storages/DeltaMerge/RowKeyFilter.h>
@@ -36,12 +37,14 @@ DeltaSnapshotPtr DeltaValueSpace::createSnapshot(const DMContext & context, bool
 
     auto snap = std::make_shared<DeltaValueSnapshot>(type);
     snap->is_update = for_update;
-    snap->_delta = this->shared_from_this();
+    snap->delta = this->shared_from_this();
 
-    auto storage_snap = std::make_shared<StorageSnapshot>(context.storage_pool, context.getReadLimiter(), context.tracing_id, /*snapshot_read*/ true);
-    snap->persisted_files_snap = persisted_file_set->createSnapshot(storage_snap);
+    auto storage_snap = std::make_shared<StorageSnapshot>(*context.storage_pool, context.getReadLimiter(), context.tracing_id, /*snapshot_read*/ true);
+    auto data_from_storage_snap = ColumnFileDataProviderLocalStoragePool::create(storage_snap);
+    snap->persisted_files_snap = persisted_file_set->createSnapshot(data_from_storage_snap);
+    snap->mem_table_snap = mem_table_set->createSnapshot(data_from_storage_snap, for_update);
     snap->shared_delta_index = delta_index;
-    snap->mem_table_snap = mem_table_set->createSnapshot(storage_snap, for_update);
+    snap->delta_index_epoch = delta_index_epoch;
 
     return snap;
 }
@@ -73,7 +76,7 @@ DeltaValueReaderPtr DeltaValueReader::createNewReader(const ColumnDefinesPtr & n
 {
     auto * new_reader = new DeltaValueReader();
     new_reader->delta_snap = delta_snap;
-    new_reader->_compacted_delta_index = _compacted_delta_index;
+    new_reader->compacted_delta_index = compacted_delta_index;
     new_reader->persisted_files_reader = persisted_files_reader->createNewReader(new_col_defs);
     new_reader->mem_table_reader = mem_table_reader->createNewReader(new_col_defs);
     new_reader->col_defs = new_col_defs;
@@ -82,7 +85,7 @@ DeltaValueReaderPtr DeltaValueReader::createNewReader(const ColumnDefinesPtr & n
     return std::shared_ptr<DeltaValueReader>(new_reader);
 }
 
-size_t DeltaValueReader::readRows(MutableColumns & output_cols, size_t offset, size_t limit, const RowKeyRange * range)
+size_t DeltaValueReader::readRows(MutableColumns & output_cols, size_t offset, size_t limit, const RowKeyRange * range, std::vector<UInt32> * row_ids)
 {
     // Note that DeltaMergeBlockInputStream could ask for rows with larger index than total_delta_rows,
     // because DeltaIndex::placed_rows could be larger than total_delta_rows.
@@ -104,10 +107,23 @@ size_t DeltaValueReader::readRows(MutableColumns & output_cols, size_t offset, s
     auto mem_table_end = offset + limit <= mem_table_rows_offset ? 0 : std::min(offset + limit - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
 
     size_t actual_read = 0;
+    size_t persisted_read_rows = 0;
     if (persisted_files_start < persisted_files_end)
-        actual_read += persisted_files_reader->readRows(output_cols, persisted_files_start, persisted_files_end - persisted_files_start, range);
+    {
+        persisted_read_rows = persisted_files_reader->readRows(output_cols, persisted_files_start, persisted_files_end - persisted_files_start, range, row_ids);
+        actual_read += persisted_read_rows;
+    }
     if (mem_table_start < mem_table_end)
-        actual_read += mem_table_reader->readRows(output_cols, mem_table_start, mem_table_end - mem_table_start, range);
+    {
+        actual_read += mem_table_reader->readRows(output_cols, mem_table_start, mem_table_end - mem_table_start, range, row_ids);
+    }
+
+    if (row_ids != nullptr)
+    {
+        std::transform(row_ids->cbegin() + persisted_read_rows, row_ids->cend(),
+                       row_ids->begin() + persisted_read_rows, // write to the same location
+                       [mem_table_rows_offset](UInt32 id) { return id + mem_table_rows_offset; });
+    }
 
     return actual_read;
 }

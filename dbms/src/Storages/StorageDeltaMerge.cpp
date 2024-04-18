@@ -20,11 +20,14 @@
 #include <Common/formatReadable.h>
 #include <Common/typeid_cast.h>
 #include <Core/Defines.h>
+#include <DataStreams/GeneratedColumnPlaceholderBlockInputStream.h>
 #include <DataStreams/IBlockOutputStream.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/isSupportedDataTypeCast.h>
 #include <Databases/IDatabase.h>
 #include <Debug/MockTiDB.h>
+#include <Flash/Coprocessor/DAGQueryInfo.h>
+#include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTCreateQuery.h>
 #include <Parsers/ASTExpressionList.h>
@@ -36,11 +39,15 @@
 #include <Parsers/ASTSelectQuery.h>
 #include <Poco/File.h>
 #include <Storages/AlterCommands.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
+#include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/FilterParser/FilterParser.h>
+#include <Storages/DeltaMerge/Remote/DisaggSnapshot.h>
 #include <Storages/MutableSupport.h>
+#include <Storages/PathPool.h>
 #include <Storages/PrimaryKeyNotMatchException.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/StorageDeltaMergeHelpers.h>
@@ -49,7 +56,6 @@
 #include <Storages/Transaction/TiKVRecordFormat.h>
 #include <Storages/Transaction/TypeMapping.h>
 #include <TiDB/Schema/SchemaNameMapper.h>
-#include <common/ThreadPool.h>
 #include <common/config_common.h>
 #include <common/logger_useful.h>
 
@@ -614,38 +620,38 @@ void setColumnsToRead(const DeltaMergeStorePtr & store, ColumnDefines & columns_
 }
 
 // Check whether tso is smaller than TiDB GcSafePoint
-void checkReadTso(UInt64 read_tso, const TMTContext & tmt, const Context & context, const Context & global_context)
+void checkReadTso(UInt64 read_tso, const Context & context, const String & req_id)
 {
+    auto & tmt = context.getTMTContext();
+    RUNTIME_CHECK(tmt.isInitialized());
     auto pd_client = tmt.getPDClient();
-    if (likely(!pd_client->isMock()))
+    if (unlikely(pd_client->isMock()))
+        return;
+    auto safe_point = PDClientHelper::getGCSafePointWithRetry(
+        pd_client,
+        /* ignore_cache= */ false,
+        context.getSettingsRef().safe_point_update_interval_seconds);
+    if (read_tso < safe_point)
     {
-        auto safe_point = PDClientHelper::getGCSafePointWithRetry(
-            pd_client,
-            /* ignore_cache= */ false,
-            global_context.getSettingsRef().safe_point_update_interval_seconds);
-        if (read_tso < safe_point)
-        {
-            throw Exception(
-                fmt::format("query id: {}, read tso: {} is smaller than tidb gc safe point: {}",
-                            context.getCurrentQueryId(),
-                            read_tso,
-                            safe_point),
-                ErrorCodes::LOGICAL_ERROR);
-        }
+        throw TiFlashException(
+            Errors::Coprocessor::BadRequest,
+            "read tso is smaller than tidb gc safe point! read_tso={} safepoint={} req={}",
+            read_tso,
+            safe_point,
+            req_id);
     }
 }
 
-DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(const DB::MvccQueryInfo & mvcc_query_info,
-                                                       unsigned num_streams,
-                                                       const Context & context,
-                                                       const LoggerPtr & tracing_logger)
+DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(
+    const DB::MvccQueryInfo & mvcc_query_info,
+    unsigned num_streams,
+    const Context & context,
+    const String & req_id,
+    const LoggerPtr & tracing_logger)
 {
-    TMTContext & tmt = context.getTMTContext();
-    RUNTIME_CHECK(tmt.isInitialized());
-
     LOG_DEBUG(tracing_logger, "Read with tso: {}", mvcc_query_info.read_tso);
 
-    checkReadTso(mvcc_query_info.read_tso, tmt, context, global_context);
+    checkReadTso(mvcc_query_info.read_tso, context, req_id);
 
     FmtBuffer fmt_buf;
     if (unlikely(tracing_logger->is(Poco::Message::Priority::PRIO_TRACE)))
@@ -699,13 +705,13 @@ DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(const DB::MvccQueryInfo &
     return ranges;
 }
 
-
-DM::RSOperatorPtr StorageDeltaMerge::parseRoughSetFilter(const SelectQueryInfo & query_info,
-                                                         const ColumnDefines & columns_to_read,
-                                                         const Context & context,
-                                                         const LoggerPtr & tracing_logger)
+DM::RSOperatorPtr StorageDeltaMerge::buildRSOperator(const SelectQueryInfo & query_info,
+                                                     const ColumnDefines & columns_to_read,
+                                                     const Context & context,
+                                                     const LoggerPtr & tracing_logger)
 {
-    DM::RSOperatorPtr rs_operator = DM::EMPTY_FILTER;
+    // build rough set operator
+    DM::RSOperatorPtr rs_operator = DM::EMPTY_RS_OPERATOR;
     const bool enable_rs_filter = context.getSettingsRef().dt_enable_rough_set_filter;
     if (enable_rs_filter)
     {
@@ -725,13 +731,152 @@ DM::RSOperatorPtr StorageDeltaMerge::parseRoughSetFilter(const SelectQueryInfo &
             };
             rs_operator = FilterParser::parseDAGQuery(*query_info.dag_query, columns_to_read, std::move(create_attr_by_column_id), log);
         }
-        if (likely(rs_operator != DM::EMPTY_FILTER))
+        if (likely(rs_operator != DM::EMPTY_RS_OPERATOR))
             LOG_DEBUG(tracing_logger, "Rough set filter: {}", rs_operator->toDebugString());
     }
     else
         LOG_DEBUG(tracing_logger, "Rough set filter is disabled.");
 
     return rs_operator;
+}
+
+DM::PushDownFilterPtr StorageDeltaMerge::buildPushDownFilter(const RSOperatorPtr & rs_operator,
+                                                             const ColumnInfos & table_scan_column_info,
+                                                             const google::protobuf::RepeatedPtrField<tipb::Expr> & pushed_down_filters,
+                                                             const ColumnDefines & columns_to_read,
+                                                             const Context & context,
+                                                             const LoggerPtr & tracing_logger)
+{
+    if (!pushed_down_filters.empty())
+    {
+        // Note: table_scan_column_info is a light copy of column_info from TiDB, so some attributes are missing.
+        std::unordered_map<ColumnID, ColumnDefine> columns_to_read_map;
+        for (const auto & column : columns_to_read)
+            columns_to_read_map.emplace(column.id, column);
+
+        // The source_columns_of_analyzer should be the same as the size of table_scan_column_info
+        // The columns_to_read is a subset of table_scan_column_info, when there are generated columns and extra table id column.
+        NamesAndTypes source_columns_of_analyzer;
+        source_columns_of_analyzer.reserve(table_scan_column_info.size());
+        for (size_t i = 0; i < table_scan_column_info.size(); ++i)
+        {
+            auto const & ci = table_scan_column_info[i];
+            const auto cid = ci.id;
+            if (ci.hasGeneratedColumnFlag())
+            {
+                const auto & col_name = GeneratedColumnPlaceholderBlockInputStream::getColumnName(i);
+                const auto & data_type = getDataTypeByColumnInfoForComputingLayer(ci);
+                source_columns_of_analyzer.emplace_back(col_name, data_type);
+                continue;
+            }
+            if (cid == EXTRA_TABLE_ID_COLUMN_ID)
+            {
+                source_columns_of_analyzer.emplace_back(EXTRA_TABLE_ID_COLUMN_NAME, EXTRA_TABLE_ID_COLUMN_TYPE);
+                continue;
+            }
+            RUNTIME_CHECK_MSG(columns_to_read_map.contains(cid), "ColumnID({}) not found in columns_to_read_map", cid);
+            source_columns_of_analyzer.emplace_back(columns_to_read_map.at(cid).name, columns_to_read_map.at(cid).type);
+        }
+        // Get the columns of the filter, is a subset of columns_to_read
+        std::unordered_set<ColumnID> filter_col_id_set;
+        for (const auto & expr : pushed_down_filters)
+        {
+            getColumnIDsFromExpr(expr, table_scan_column_info, filter_col_id_set);
+        }
+        ColumnDefines filter_columns;
+        filter_columns.reserve(filter_col_id_set.size());
+        for (const auto & id : filter_col_id_set)
+        {
+            auto iter = std::find_if(
+                columns_to_read.begin(),
+                columns_to_read.end(),
+                [&id](const ColumnDefine & d) -> bool { return d.id == id; });
+            RUNTIME_CHECK(iter != columns_to_read.end());
+            filter_columns.push_back(*iter);
+        }
+
+        // need_cast_column should be the same size as table_scan_column_info and source_columns_of_analyzer
+        std::vector<ExtraCastAfterTSMode> need_cast_column;
+        need_cast_column.reserve(table_scan_column_info.size());
+        for (const auto & col : table_scan_column_info)
+        {
+            if (!filter_col_id_set.contains(col.id))
+                need_cast_column.push_back(ExtraCastAfterTSMode::None);
+            else
+            {
+                if (col.id != -1 && col.tp == TiDB::TypeTimestamp)
+                    need_cast_column.push_back(ExtraCastAfterTSMode::AppendTimeZoneCast);
+                else if (col.id != -1 && col.tp == TiDB::TypeTime)
+                    need_cast_column.push_back(ExtraCastAfterTSMode::AppendDurationCast);
+                else
+                    need_cast_column.push_back(ExtraCastAfterTSMode::None);
+            }
+        }
+
+        std::unique_ptr<DAGExpressionAnalyzer> analyzer = std::make_unique<DAGExpressionAnalyzer>(source_columns_of_analyzer, context);
+        ExpressionActionsChain chain;
+        auto & step = analyzer->initAndGetLastStep(chain);
+        auto & actions = step.actions;
+        ExpressionActionsPtr extra_cast = nullptr;
+        if (auto [has_cast, casted_columns] = analyzer->buildExtraCastsAfterTS(actions, need_cast_column, table_scan_column_info); has_cast)
+        {
+            NamesWithAliases project_cols;
+            for (size_t i = 0; i < columns_to_read.size(); ++i)
+            {
+                if (filter_col_id_set.contains(columns_to_read[i].id))
+                {
+                    project_cols.emplace_back(casted_columns[i], columns_to_read[i].name);
+                }
+            }
+            actions->add(ExpressionAction::project(project_cols));
+
+            for (auto & col : filter_columns)
+                step.required_output.push_back(col.name);
+
+            extra_cast = chain.getLastActions();
+            assert(extra_cast);
+            chain.finalize();
+            chain.clear();
+            LOG_DEBUG(tracing_logger, "Extra cast: {}", extra_cast->dumpActions());
+        }
+
+        // build filter expression actions
+        auto [before_where, filter_column_name, _] = ::DB::buildPushDownFilter(pushed_down_filters, *analyzer);
+        LOG_DEBUG(tracing_logger, "Push down filter: {}", before_where->dumpActions());
+
+        auto columns_after_cast = std::make_shared<ColumnDefines>();
+        if (extra_cast != nullptr)
+        {
+            columns_after_cast->reserve(columns_to_read.size());
+            const auto & current_names_and_types = analyzer->getCurrentInputColumns();
+            for (size_t i = 0; i < table_scan_column_info.size(); ++i)
+            {
+                if (table_scan_column_info[i].hasGeneratedColumnFlag() || table_scan_column_info[i].id == EXTRA_TABLE_ID_COLUMN_ID)
+                    continue;
+                auto col = columns_to_read_map.at(table_scan_column_info[i].id);
+                RUNTIME_CHECK_MSG(col.name == current_names_and_types[i].name, "Column name mismatch, expect: {}, actual: {}", col.name, current_names_and_types[i].name);
+                columns_after_cast->push_back(col);
+                columns_after_cast->back().type = current_names_and_types[i].type;
+            }
+        }
+        return std::make_shared<PushDownFilter>(rs_operator, before_where, filter_columns, filter_column_name, extra_cast, columns_after_cast);
+    }
+    LOG_DEBUG(tracing_logger, "Push down filter is empty");
+    return std::make_shared<PushDownFilter>(rs_operator);
+}
+
+DM::PushDownFilterPtr StorageDeltaMerge::parsePushDownFilter(const SelectQueryInfo & query_info,
+                                                             const ColumnDefines & columns_to_read,
+                                                             const Context & context,
+                                                             const LoggerPtr & tracing_logger)
+{
+    // build rough set operator
+    DM::RSOperatorPtr rs_operator = buildRSOperator(query_info, columns_to_read, context, tracing_logger);
+
+    // build push down filter
+    const auto & pushed_down_filters = query_info.dag_query != nullptr ? query_info.dag_query->pushed_down_filters : google::protobuf::RepeatedPtrField<tipb::Expr>{};
+    const auto & columns_to_read_info = query_info.dag_query != nullptr ? query_info.dag_query->source_columns : ColumnInfos{};
+    return buildPushDownFilter(rs_operator, columns_to_read_info, pushed_down_filters, columns_to_read, context, tracing_logger);
 }
 
 BlockInputStreams StorageDeltaMerge::read(
@@ -770,9 +915,11 @@ BlockInputStreams StorageDeltaMerge::read(
     RUNTIME_CHECK(query_info.mvcc_query_info != nullptr);
     const auto & mvcc_query_info = *query_info.mvcc_query_info;
 
-    auto ranges = parseMvccQueryInfo(mvcc_query_info, num_streams, context, tracing_logger);
+    auto ranges = parseMvccQueryInfo(mvcc_query_info, num_streams, context, query_info.req_id, tracing_logger);
 
-    auto rs_operator = parseRoughSetFilter(query_info, columns_to_read, context, tracing_logger);
+    auto filter = parsePushDownFilter(query_info, columns_to_read, context, tracing_logger);
+
+    const auto & scan_context = mvcc_query_info.scan_context;
 
     auto streams = store->read(
         context,
@@ -781,30 +928,30 @@ BlockInputStreams StorageDeltaMerge::read(
         ranges,
         num_streams,
         /*max_version=*/mvcc_query_info.read_tso,
-        rs_operator,
+        filter,
         query_info.req_id,
         query_info.keep_order,
         /* is_fast_scan */ query_info.is_fast_scan,
         max_block_size,
         parseSegmentSet(select_query.segment_expression_list),
-        extra_table_id_index);
+        extra_table_id_index,
+        scan_context);
 
     /// Ensure read_tso info after read.
-    checkReadTso(mvcc_query_info.read_tso, context.getTMTContext(), context, global_context);
+    checkReadTso(mvcc_query_info.read_tso, context, query_info.req_id);
 
     LOG_TRACE(tracing_logger, "[ranges: {}] [streams: {}]", ranges.size(), streams.size());
 
     return streams;
 }
 
-BlockInputStreams StorageDeltaMerge::read(
+SourceOps StorageDeltaMerge::readSourceOps(
+    PipelineExecutorStatus & exec_status_,
     const Names & column_names,
     const SelectQueryInfo & query_info,
     const Context & context,
-    QueryProcessingStage::Enum & /*processed_stage*/,
     size_t max_block_size,
-    unsigned num_streams,
-    const ScanContextPtr & scan_context)
+    unsigned num_streams)
 {
     auto & store = getAndMaybeInitStore();
     // Note that `columns_to_read` should keep the same sequence as ColumnRef
@@ -815,18 +962,8 @@ BlockInputStreams StorageDeltaMerge::read(
     setColumnsToRead(store, columns_to_read, extra_table_id_index, column_names);
 
     const ASTSelectQuery & select_query = typeid_cast<const ASTSelectQuery &>(*query_info.query);
-    if (select_query.raw_for_mutable) // for selraw
-    {
-        // Read without MVCC filtering and del_mark = 1 filtering
-        return store->readRaw(
-            context,
-            context.getSettingsRef(),
-            columns_to_read,
-            num_streams,
-            query_info.keep_order,
-            parseSegmentSet(select_query.segment_expression_list),
-            extra_table_id_index);
-    }
+
+    RUNTIME_CHECK(!select_query.raw_for_mutable, select_query.raw_for_mutable);
 
     auto tracing_logger = log->getChild(query_info.req_id);
 
@@ -834,18 +971,21 @@ BlockInputStreams StorageDeltaMerge::read(
     RUNTIME_CHECK(query_info.mvcc_query_info != nullptr);
     const auto & mvcc_query_info = *query_info.mvcc_query_info;
 
-    auto ranges = parseMvccQueryInfo(mvcc_query_info, num_streams, context, tracing_logger);
+    auto ranges = parseMvccQueryInfo(mvcc_query_info, num_streams, context, query_info.req_id, tracing_logger);
 
-    auto rs_operator = parseRoughSetFilter(query_info, columns_to_read, context, tracing_logger);
+    auto filter = parsePushDownFilter(query_info, columns_to_read, context, tracing_logger);
 
-    auto streams = store->read(
+    const auto & scan_context = mvcc_query_info.scan_context;
+
+    auto source_ops = store->readSourceOps(
+        exec_status_,
         context,
         context.getSettingsRef(),
         columns_to_read,
         ranges,
         num_streams,
         /*max_version=*/mvcc_query_info.read_tso,
-        rs_operator,
+        filter,
         query_info.req_id,
         query_info.keep_order,
         /* is_fast_scan */ query_info.is_fast_scan,
@@ -855,11 +995,47 @@ BlockInputStreams StorageDeltaMerge::read(
         scan_context);
 
     /// Ensure read_tso info after read.
-    checkReadTso(mvcc_query_info.read_tso, context.getTMTContext(), context, global_context);
+    checkReadTso(mvcc_query_info.read_tso, context, query_info.req_id);
 
-    LOG_TRACE(tracing_logger, "[ranges: {}] [streams: {}]", ranges.size(), streams.size());
+    LOG_TRACE(tracing_logger, "[ranges: {}] [sources: {}]", ranges.size(), source_ops.size());
 
-    return streams;
+    return source_ops;
+}
+
+DM::Remote::DisaggPhysicalTableReadSnapshotPtr
+StorageDeltaMerge::writeNodeBuildRemoteReadSnapshot(
+    const Names & column_names,
+    const SelectQueryInfo & query_info,
+    const Context & context,
+    unsigned num_streams)
+{
+    auto & store = getAndMaybeInitStore();
+    ColumnDefines columns_to_read;
+    size_t extra_table_id_index = InvalidColumnID;
+    setColumnsToRead(store, columns_to_read, extra_table_id_index, column_names);
+
+    auto tracing_logger = log->getChild(query_info.req_id);
+
+    const ASTSelectQuery & select_query = typeid_cast<const ASTSelectQuery &>(*query_info.query);
+    RUNTIME_CHECK(query_info.mvcc_query_info != nullptr);
+    const auto & mvcc_query_info = *query_info.mvcc_query_info;
+    auto ranges = parseMvccQueryInfo(mvcc_query_info, num_streams, context, query_info.req_id, tracing_logger);
+    auto read_segments = parseSegmentSet(select_query.segment_expression_list);
+
+    auto snap = store->writeNodeBuildRemoteReadSnapshot(
+        context,
+        context.getSettingsRef(),
+        ranges,
+        num_streams,
+        query_info.req_id,
+        read_segments,
+        mvcc_query_info.scan_context);
+
+    snap->column_defines = std::make_shared<ColumnDefines>(columns_to_read);
+
+    // Ensure read_tso is valid after snapshot is built
+    checkReadTso(mvcc_query_info.read_tso, context, query_info.req_id);
+    return snap;
 }
 
 void StorageDeltaMerge::checkStatus(const Context & context)
@@ -906,6 +1082,19 @@ void StorageDeltaMerge::ingestFiles(
         range,
         external_files,
         clear_data_in_range);
+}
+
+void StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
+    const DM::RowKeyRange & range,
+    CheckpointInfoPtr checkpoint_info,
+    const Settings & settings)
+{
+    GET_METRIC(tiflash_storage_command_count, type_ingest_checkpoint).Increment();
+    return getAndMaybeInitStore()->ingestSegmentsFromCheckpointInfo(
+        global_context,
+        settings,
+        range,
+        checkpoint_info);
 }
 
 UInt64 StorageDeltaMerge::onSyncGc(Int64 limit, const GCOptions & gc_options)
@@ -997,7 +1186,7 @@ void StorageDeltaMerge::deleteRows(const Context & context, size_t delete_rows)
         LOG_ERROR(log, "Rows after delete range not match, expected: {}, got: {}", (total_rows - delete_rows), after_delete_rows);
 }
 
-DM::DeltaMergeStorePtr StorageDeltaMerge::getStoreIfInited()
+DM::DeltaMergeStorePtr StorageDeltaMerge::getStoreIfInited() const
 {
     if (storeInited())
     {
@@ -1022,7 +1211,29 @@ std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> StorageDeltaMerg
     {
         if (cache_blocks.empty())
         {
-            return std::make_pair(decoding_schema_snapshot, std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot)));
+            BlockUPtr block = std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot));
+            auto digest = hashSchema(*block);
+            auto schema = global_context.getSharedBlockSchemas()->find(digest);
+            if (schema)
+            {
+                // Because we use sha256 to calculate the hash of schema, so schemas has extremely low probability of collision
+                // while we can't guarantee that there will be no collision forever,
+                // so (when schema changes) we will check if this schema causes a hash collision, i.e.
+                // the two different schemas have the same digest.
+                // Considering there is extremely low probability for same digest but different schema,
+                // we choose just throw exception when this happens.
+                // If unfortunately it happens,
+                // we can rename some columns in this table and then restart tiflash to workaround.
+                RUNTIME_CHECK_MSG(
+                    isSameSchema(*block, schema->getSchema()),
+                    "new table's schema's digest is the same as one previous table schemas' digest, \
+                    but schema info is not the same .So please change the new tables' schema, \
+                    whose table_info is {}. The collisioned schema is {}",
+                    tidb_table_info.serialize(),
+                    schema->toString());
+            }
+
+            return std::make_pair(decoding_schema_snapshot, std::move(block));
         }
         else
         {
@@ -1578,8 +1789,10 @@ void StorageDeltaMerge::removeFromTMTContext()
 {
     // remove this table from TMTContext
     TMTContext & tmt_context = global_context.getTMTContext();
-    tmt_context.getStorages().remove(tidb_table_info.id);
-    tmt_context.getRegionTable().removeTable(tidb_table_info.id);
+    auto keyspace_id = tidb_table_info.keyspace_id;
+    auto table_id = tidb_table_info.id;
+    tmt_context.getStorages().remove(keyspace_id, table_id);
+    tmt_context.getRegionTable().removeTable(keyspace_id, table_id);
 }
 
 StorageDeltaMerge::~StorageDeltaMerge()
@@ -1617,7 +1830,7 @@ SortDescription StorageDeltaMerge::getPrimarySortDescription() const
     return desc;
 }
 
-DeltaMergeStorePtr & StorageDeltaMerge::getAndMaybeInitStore()
+DeltaMergeStorePtr & StorageDeltaMerge::getAndMaybeInitStore(ThreadPool * thread_pool)
 {
     if (storeInited())
     {
@@ -1631,20 +1844,22 @@ DeltaMergeStorePtr & StorageDeltaMerge::getAndMaybeInitStore()
             data_path_contains_database_name,
             table_column_info->db_name,
             table_column_info->table_name,
+            tidb_table_info.keyspace_id,
             tidb_table_info.id,
             tidb_table_info.replica_info.count > 0,
             std::move(table_column_info->table_column_defines),
             std::move(table_column_info->handle_column_define),
             is_common_handle,
             rowkey_column_size,
-            DeltaMergeStore::Settings());
+            DeltaMergeStore::Settings(),
+            thread_pool);
         table_column_info.reset(nullptr);
         store_inited.store(true, std::memory_order_release);
     }
     return _store;
 }
 
-bool StorageDeltaMerge::initStoreIfDataDirExist()
+bool StorageDeltaMerge::initStoreIfDataDirExist(ThreadPool * thread_pool)
 {
     if (shutdown_called.load(std::memory_order_relaxed) || isTombstone())
     {
@@ -1659,7 +1874,7 @@ bool StorageDeltaMerge::initStoreIfDataDirExist()
     {
         return false;
     }
-    getAndMaybeInitStore();
+    getAndMaybeInitStore(thread_pool);
     return true;
 }
 

@@ -19,10 +19,10 @@
 #include <Storages/DeltaMerge/File/DMFileReader.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/ScanContext.h>
+#include <Storages/DeltaMerge/ScanContext_fwd.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 
-#include <memory>
+
 namespace DB
 {
 class Context;
@@ -43,7 +43,7 @@ public:
         }
     }
 
-    ~DMFileBlockInputStream()
+    ~DMFileBlockInputStream() override
     {
         if (enable_data_sharing)
         {
@@ -57,12 +57,20 @@ public:
 
     bool getSkippedRows(size_t & skip_rows) override { return reader.getSkippedRows(skip_rows); }
 
+    size_t skipNextBlock() override { return reader.skipNextBlock(); }
+
     Block read() override
     {
         return reader.read();
     }
 
+    Block readWithFilter(const IColumn::Filter & filter) override
+    {
+        return reader.readWithFilter(filter);
+    }
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#endif
     DMFileReader reader;
     bool enable_data_sharing;
 };
@@ -154,7 +162,6 @@ private:
         aio_threshold = settings.min_bytes_to_use_direct_io;
         max_read_buffer_size = settings.max_read_buffer_size;
         max_sharing_column_bytes_for_all = settings.dt_max_sharing_column_bytes_for_all;
-        max_sharing_column_count = settings.dt_max_sharing_column_count;
         return *this;
     }
     DMFileBlockInputStreamBuilder & setCaches(const MarkCachePtr & mark_cache_, const MinMaxIndexCachePtr & index_cache_)
@@ -188,7 +195,6 @@ private:
     size_t rows_threshold_per_read = DMFILE_READ_ROWS_THRESHOLD;
     bool read_one_pack_every_time = false;
     size_t max_sharing_column_bytes_for_all = 0;
-    size_t max_sharing_column_count = 0;
     String tracing_id;
 };
 

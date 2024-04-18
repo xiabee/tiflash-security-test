@@ -15,7 +15,6 @@
 #include <Common/TiFlashException.h>
 #include <Storages/Transaction/DatumCodec.h>
 #include <TiDB/Schema/SchemaGetter.h>
-#include <pingcap/kv/Scanner.h>
 
 namespace DB
 {
@@ -102,14 +101,14 @@ struct TxnStructure
     }
 
 public:
-    static String get(pingcap::kv::Snapshot & snap, const String & key)
+    static String get(KeyspaceSnapshot & snap, const String & key)
     {
         String encode_key = encodeStringDataKey(key);
         String value = snap.Get(encode_key);
         return value;
     }
 
-    static String hGet(pingcap::kv::Snapshot & snap, const String & key, const String & field)
+    static String hGet(KeyspaceSnapshot & snap, const String & key, const String & field)
     {
         String encode_key = encodeHashDataKey(key, field);
         String value = snap.Get(encode_key);
@@ -117,7 +116,7 @@ public:
     }
 
     // For convinient, we only return values.
-    static std::vector<std::pair<String, String>> hGetAll(pingcap::kv::Snapshot & snap, const String & key)
+    static std::vector<std::pair<String, String>> hGetAll(KeyspaceSnapshot & snap, const String & key)
     {
         auto tikv_key_prefix = hashDataKeyPrefix(key);
         String tikv_key_end = pingcap::kv::prefixNext(tikv_key_prefix);
@@ -156,26 +155,43 @@ void AffectedOption::deserialize(Poco::JSON::Object::Ptr json)
 void SchemaDiff::deserialize(const String & data)
 {
     Poco::JSON::Parser parser;
-    Poco::Dynamic::Var result = parser.parse(data);
-    auto obj = result.extract<Poco::JSON::Object::Ptr>();
-    version = obj->getValue<Int64>("version");
-    type = static_cast<SchemaActionType>(obj->getValue<Int32>("type"));
-    schema_id = obj->getValue<Int64>("schema_id");
-    table_id = obj->getValue<Int64>("table_id");
-
-    old_table_id = obj->getValue<Int64>("old_table_id");
-    old_schema_id = obj->getValue<Int64>("old_schema_id");
-
-    affected_opts.clear();
-    auto affected_arr = obj->getArray("affected_options");
-    if (!affected_arr.isNull())
+    try
     {
-        for (size_t i = 0; i < affected_arr->size(); i++)
+        Poco::Dynamic::Var result = parser.parse(data);
+        if (result.isEmpty())
         {
-            auto affected_opt_json = affected_arr->getObject(i);
-            AffectedOption affected_option(affected_opt_json);
-            affected_opts.emplace_back(affected_option);
+            throw Exception("The schema diff deserialize failed " + data);
         }
+        auto obj = result.extract<Poco::JSON::Object::Ptr>();
+        version = obj->getValue<Int64>("version");
+        type = static_cast<SchemaActionType>(obj->getValue<Int32>("type"));
+        schema_id = obj->getValue<Int64>("schema_id");
+        table_id = obj->getValue<Int64>("table_id");
+
+        old_table_id = obj->getValue<Int64>("old_table_id");
+        old_schema_id = obj->getValue<Int64>("old_schema_id");
+
+        if (obj->has("regenerate_schema_map"))
+        {
+            regenerate_schema_map = obj->getValue<bool>("regenerate_schema_map");
+        }
+
+        affected_opts.clear();
+        auto affected_arr = obj->getArray("affected_options");
+        if (!affected_arr.isNull())
+        {
+            for (size_t i = 0; i < affected_arr->size(); i++)
+            {
+                auto affected_opt_json = affected_arr->getObject(i);
+                AffectedOption affected_option(affected_opt_json);
+                affected_opts.emplace_back(affected_option);
+            }
+        }
+    }
+    catch (...)
+    {
+        LOG_INFO(Logger::get(), "failed to deserialize {}", data);
+        throw;
     }
 }
 
@@ -183,7 +199,7 @@ Int64 SchemaGetter::getVersion()
 {
     String ver = TxnStructure::get(snap, schemaVersionKey);
     if (ver.empty())
-        return 0;
+        return SchemaVersionNotExist;
     return std::stoll(ver);
 }
 
@@ -232,7 +248,7 @@ TiDB::DBInfoPtr SchemaGetter::getDatabase(DatabaseID db_id)
         return nullptr;
 
     LOG_DEBUG(log, "Get DatabaseInfo from TiKV, database_id={} {}", db_id, json);
-    return std::make_shared<TiDB::DBInfo>(json);
+    return std::make_shared<TiDB::DBInfo>(json, keyspace_id);
 }
 
 TiDB::TableInfoPtr SchemaGetter::getTableInfo(DatabaseID db_id, TableID table_id)
@@ -247,7 +263,7 @@ TiDB::TableInfoPtr SchemaGetter::getTableInfo(DatabaseID db_id, TableID table_id
     if (table_info_json.empty())
         return nullptr;
     LOG_DEBUG(log, "Get TableInfo from TiKV, table_id={} {}", table_id, table_info_json);
-    return std::make_shared<TiDB::TableInfo>(table_info_json);
+    return std::make_shared<TiDB::TableInfo>(table_info_json, keyspace_id);
 }
 
 std::vector<TiDB::DBInfoPtr> SchemaGetter::listDBs()
@@ -256,7 +272,7 @@ std::vector<TiDB::DBInfoPtr> SchemaGetter::listDBs()
     auto pairs = TxnStructure::hGetAll(snap, DBs);
     for (const auto & pair : pairs)
     {
-        auto db_info = std::make_shared<TiDB::DBInfo>(pair.second);
+        auto db_info = std::make_shared<TiDB::DBInfo>(pair.second, keyspace_id);
         res.push_back(db_info);
     }
     return res;
@@ -288,7 +304,7 @@ std::vector<TiDB::TableInfoPtr> SchemaGetter::listTables(DatabaseID db_id)
             continue;
         }
         const String & json = kv_pair.second;
-        auto table_info = std::make_shared<TiDB::TableInfo>(json);
+        auto table_info = std::make_shared<TiDB::TableInfo>(json, keyspace_id);
 
         res.push_back(table_info);
     }

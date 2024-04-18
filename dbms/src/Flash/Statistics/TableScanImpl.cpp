@@ -15,6 +15,7 @@
 #include <DataStreams/TiRemoteBlockInputStream.h>
 #include <Flash/Statistics/TableScanImpl.h>
 #include <Interpreters/Join.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB
 {
@@ -29,14 +30,13 @@ String TableScanDetail::toJson() const
 
 void TableScanStatistics::appendExtraJson(FmtBuffer & fmt_buffer) const
 {
-    DM::ScanContextPtr scan_context;
-    if (auto it = dag_context.scan_context_map.find(executor_id); it != dag_context.scan_context_map.end())
-        scan_context = it->second;
+    auto scan_ctx_it = dag_context.scan_context_map.find(executor_id);
     fmt_buffer.fmtAppend(
         R"("connection_details":[{},{}],"scan_details":{})",
         local_table_scan_detail.toJson(),
-        cop_table_scan_detail.toJson(),
-        scan_context ? scan_context->toJson() : "{}" // empty json object for nullptr
+        remote_table_scan_detail.toJson(),
+        scan_ctx_it != dag_context.scan_context_map.end() ? scan_ctx_it->second->toJson()
+                                                          : "{}" // empty json object for nullptr
     );
 }
 
@@ -48,18 +48,31 @@ void TableScanStatistics::collectExtraRuntimeDetail()
     {
         for (const auto & io_stream : it->second)
         {
-            if (auto * cop_stream = dynamic_cast<CoprocessorBlockInputStream *>(io_stream.get()); cop_stream)
+            auto * cop_stream = dynamic_cast<CoprocessorBlockInputStream *>(io_stream.get());
+            /// In tiflash_compute node, TableScan will be converted to ExchangeReceiver.
+            auto * exchange_stream = dynamic_cast<ExchangeReceiverInputStream *>(io_stream.get());
+            if (cop_stream || exchange_stream)
             {
-                for (const auto & connection_profile_info : cop_stream->getConnectionProfileInfos())
+                const std::vector<ConnectionProfileInfo> * connection_profile_infos = nullptr;
+                if (cop_stream)
+                    connection_profile_infos = &cop_stream->getConnectionProfileInfos();
+                else if (exchange_stream)
+                    connection_profile_infos = &exchange_stream->getConnectionProfileInfos();
+
+                for (const auto & connection_profile_info : *connection_profile_infos)
                 {
-                    cop_table_scan_detail.packets += connection_profile_info.packets;
-                    cop_table_scan_detail.bytes += connection_profile_info.bytes;
+                    remote_table_scan_detail.packets += connection_profile_info.packets;
+                    remote_table_scan_detail.bytes += connection_profile_info.bytes;
                 }
             }
             else if (auto * local_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get()); local_stream)
             {
                 /// local read input stream also is IProfilingBlockInputStream
                 local_table_scan_detail.bytes += local_stream->getProfileInfo().bytes;
+            }
+            else
+            {
+                /// Streams like: NullBlockInputStream.
             }
         }
     }

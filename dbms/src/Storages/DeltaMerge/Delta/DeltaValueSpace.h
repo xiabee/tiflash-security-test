@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Columns/ColumnsCommon.h>
 #include <Common/CurrentMetrics.h>
 #include <Common/Exception.h>
 #include <Core/Block.h>
@@ -30,14 +31,15 @@
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/StoragePool.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/DeltaMerge/SkippableBlockInputStream.h>
+#include <Storages/Page/PageDefinesBase.h>
+
 
 namespace DB
 {
 namespace DM
 {
-using GenPageId = std::function<PageId()>;
+using GenPageId = std::function<PageIdU64()>;
 class DeltaValueSpace;
 class DeltaValueSnapshot;
 
@@ -92,6 +94,7 @@ private:
     std::atomic<size_t> last_try_place_delta_index_rows = 0;
 
     DeltaIndexPtr delta_index;
+    UInt64 delta_index_epoch = 0;
 
     // Protects the operations in this instance.
     // It is a recursive_mutex because the lock may be also used by the parent segment as its update lock.
@@ -100,13 +103,20 @@ private:
     LoggerPtr log;
 
 public:
-    explicit DeltaValueSpace(PageId id_, const ColumnFilePersisteds & persisted_files = {}, const ColumnFiles & in_memory_files = {});
+    explicit DeltaValueSpace(PageIdU64 id_, const ColumnFilePersisteds & persisted_files = {}, const ColumnFiles & in_memory_files = {});
 
     explicit DeltaValueSpace(ColumnFilePersistedSetPtr && persisted_file_set_);
 
     /// Restore the metadata of this instance.
     /// Only called after reboot.
-    static DeltaValueSpacePtr restore(DMContext & context, const RowKeyRange & segment_range, PageId id);
+    static DeltaValueSpacePtr restore(DMContext & context, const RowKeyRange & segment_range, PageIdU64 id);
+
+    static DeltaValueSpacePtr createFromCheckpoint( //
+        DMContext & context,
+        UniversalPageStoragePtr temp_ps,
+        const RowKeyRange & segment_range,
+        PageIdU64 delta_id,
+        WriteBatches & wbs);
 
     /**
      * Resets the logger by using the one from the segment.
@@ -167,7 +177,7 @@ public:
         const RowKeyRange & target_range,
         WriteBatches & wbs) const;
 
-    PageId getId() const { return persisted_file_set->getId(); }
+    PageIdU64 getId() const { return persisted_file_set->getId(); }
 
     size_t getColumnFileCount() const { return persisted_file_set->getColumnFileCount() + mem_table_set->getColumnFileCount(); }
     size_t getRows(bool use_unsaved = true) const
@@ -298,19 +308,21 @@ class DeltaValueSnapshot
     , private boost::noncopyable
 {
     friend class DeltaValueSpace;
+    friend struct DB::DM::Remote::Serializer;
 
 private:
-    bool is_update;
+    bool is_update{false};
 
     // The delta index of cached.
     DeltaIndexPtr shared_delta_index;
+    UInt64 delta_index_epoch = 0;
 
     ColumnFileSetSnapshotPtr mem_table_snap;
 
     ColumnFileSetSnapshotPtr persisted_files_snap;
 
     // We need a reference to original delta object, to release the "is_updating" lock.
-    DeltaValueSpacePtr _delta;
+    DeltaValueSpacePtr delta;
 
     const CurrentMetrics::Metric type;
 
@@ -323,10 +335,11 @@ public:
         auto c = std::make_shared<DeltaValueSnapshot>(type);
         c->is_update = is_update;
         c->shared_delta_index = shared_delta_index;
+        c->delta_index_epoch = delta_index_epoch;
         c->mem_table_snap = mem_table_snap->clone();
         c->persisted_files_snap = persisted_files_snap->clone();
 
-        c->_delta = _delta;
+        c->delta = delta;
 
         return c;
     }
@@ -340,7 +353,7 @@ public:
     ~DeltaValueSnapshot()
     {
         if (is_update)
-            _delta->releaseUpdating();
+            delta->releaseUpdating();
         CurrentMetrics::sub(type);
     }
 
@@ -358,6 +371,7 @@ public:
     RowKeyRange getSquashDeleteRange() const;
 
     const auto & getSharedDeltaIndex() { return shared_delta_index; }
+    size_t getDeltaIndexEpoch() const { return delta_index_epoch; }
 
     bool isForUpdate() const { return is_update; }
 };
@@ -370,7 +384,7 @@ private:
     DeltaSnapshotPtr delta_snap;
     // The delta index which we actually use. Could be cloned from shared_delta_index with some updates and compacts.
     // We only keep this member here to prevent it from being released.
-    DeltaIndexCompactedPtr _compacted_delta_index;
+    DeltaIndexCompactedPtr compacted_delta_index;
 
     ColumnFileSetReaderPtr mem_table_reader;
 
@@ -393,13 +407,13 @@ public:
     // This method create a new reader based on then current one. It will reuse some caches in the current reader.
     DeltaValueReaderPtr createNewReader(const ColumnDefinesPtr & new_col_defs);
 
-    void setDeltaIndex(const DeltaIndexCompactedPtr & delta_index_) { _compacted_delta_index = delta_index_; }
+    void setDeltaIndex(const DeltaIndexCompactedPtr & delta_index_) { compacted_delta_index = delta_index_; }
 
     const auto & getDeltaSnap() { return delta_snap; }
 
     // Use for DeltaMergeBlockInputStream to read delta rows, and merge with stable rows.
     // This method will check whether offset and limit are valid. It only return those valid rows.
-    size_t readRows(MutableColumns & output_cols, size_t offset, size_t limit, const RowKeyRange * range);
+    size_t readRows(MutableColumns & output_cols, size_t offset, size_t limit, const RowKeyRange * range, std::vector<UInt32> * row_ids = nullptr);
 
     // Get blocks or delete_ranges of `ExtraHandleColumn` and `VersionColumn`.
     // If there are continuous blocks, they will be squashed into one block.
@@ -413,13 +427,14 @@ public:
                      UInt64 max_version);
 };
 
-class DeltaValueInputStream : public IBlockInputStream
+class DeltaValueInputStream : public SkippableBlockInputStream
 {
 private:
     ColumnFileSetInputStream mem_table_input_stream;
     ColumnFileSetInputStream persisted_files_input_stream;
 
     bool persisted_files_done = false;
+    size_t read_rows = 0;
 
 public:
     DeltaValueInputStream(const DMContext & context_,
@@ -433,7 +448,58 @@ public:
     String getName() const override { return "DeltaValue"; }
     Block getHeader() const override { return persisted_files_input_stream.getHeader(); }
 
+    bool getSkippedRows(size_t &) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
+
+    /// Skip next block in the stream.
+    /// Return the number of rows skipped.
+    /// Return 0 if meet the end of the stream.
+    size_t skipNextBlock() override
+    {
+        size_t skipped_rows = 0;
+        if (persisted_files_done)
+        {
+            skipped_rows = mem_table_input_stream.skipNextBlock();
+            read_rows += skipped_rows;
+            return skipped_rows;
+        }
+
+        if (skipped_rows = persisted_files_input_stream.skipNextBlock(); skipped_rows > 0)
+        {
+            read_rows += skipped_rows;
+            return skipped_rows;
+        }
+        else
+        {
+            persisted_files_done = true;
+            skipped_rows = mem_table_input_stream.skipNextBlock();
+            read_rows += skipped_rows;
+            return skipped_rows;
+        }
+    }
+
+    Block readWithFilter(const IColumn::Filter & filter) override
+    {
+        auto block = read();
+        if (size_t passed_count = countBytesInFilter(filter); passed_count != block.rows())
+        {
+            for (auto & col : block)
+            {
+                col.column = col.column->filter(filter, passed_count);
+            }
+        }
+        return block;
+    }
+
     Block read() override
+    {
+        auto block = doRead();
+        block.setStartOffset(read_rows);
+        read_rows += block.rows();
+        return block;
+    }
+
+    // Read block from old to new.
+    Block doRead()
     {
         if (persisted_files_done)
             return mem_table_input_stream.read();

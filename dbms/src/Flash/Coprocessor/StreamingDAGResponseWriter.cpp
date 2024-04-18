@@ -16,10 +16,11 @@
 #include <Common/TiFlashException.h>
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
 #include <Flash/Coprocessor/StreamWriter.h>
 #include <Flash/Coprocessor/StreamingDAGResponseWriter.h>
-#include <Flash/Mpp/MPPTunnelSet.h>
+#include <Flash/Mpp/MPPTunnelSetWriter.h>
 
 namespace DB
 {
@@ -68,6 +69,12 @@ void StreamingDAGResponseWriter<StreamWriterPtr>::flush()
 }
 
 template <class StreamWriterPtr>
+bool StreamingDAGResponseWriter<StreamWriterPtr>::isReadyForWrite() const
+{
+    return writer->isReadyForWrite();
+}
+
+template <class StreamWriterPtr>
 void StreamingDAGResponseWriter<StreamWriterPtr>::write(const Block & block)
 {
     RUNTIME_CHECK_MSG(
@@ -95,21 +102,20 @@ void StreamingDAGResponseWriter<StreamWriterPtr>::encodeThenWriteBlocks()
     if (dag_context.encode_type == tipb::EncodeType::TypeCHBlock)
     {
         /// passthrough data to a non-TiFlash node, like sending data to TiSpark
-        while (!blocks.empty())
+        for (auto & block : blocks)
         {
-            const auto & block = blocks.back();
             chunk_codec_stream->encode(block, 0, block.rows());
-            blocks.pop_back();
+            block.clear();
             response.addChunk(chunk_codec_stream->getString());
             chunk_codec_stream->clear();
         }
+        blocks.clear();
     }
     else /// passthrough data to a TiDB node
     {
         Int64 current_records_num = 0;
-        while (!blocks.empty())
+        for (auto & block : blocks)
         {
-            const auto & block = blocks.back();
             size_t rows = block.rows();
             for (size_t row_index = 0; row_index < rows;)
             {
@@ -124,8 +130,9 @@ void StreamingDAGResponseWriter<StreamWriterPtr>::encodeThenWriteBlocks()
                 current_records_num += (upper - row_index);
                 row_index = upper;
             }
-            blocks.pop_back();
+            block.clear();
         }
+        blocks.clear();
 
         if (current_records_num > 0)
         {
@@ -140,5 +147,6 @@ void StreamingDAGResponseWriter<StreamWriterPtr>::encodeThenWriteBlocks()
 }
 
 template class StreamingDAGResponseWriter<StreamWriterPtr>;
-template class StreamingDAGResponseWriter<MPPTunnelSetPtr>;
+template class StreamingDAGResponseWriter<SyncMPPTunnelSetWriterPtr>;
+template class StreamingDAGResponseWriter<AsyncMPPTunnelSetWriterPtr>;
 } // namespace DB

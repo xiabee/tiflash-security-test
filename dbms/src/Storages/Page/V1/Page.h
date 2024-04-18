@@ -15,13 +15,17 @@
 #pragma once
 
 #include <Storages/Page/Page.h>
+#include <Storages/Page/V2/PageDefines.h>
 namespace DB::PS::V1
 {
+using PageId = DB::PS::V2::PageId;
+using PageIds = PS::V2::PageIds;
+using PageIdSet = PS::V2::PageIdSet;
+
 struct Page
 {
     PageId page_id;
-    ByteBuffer data;
-
+    std::string_view data;
     MemHolder mem_holder;
 };
 using Pages = std::vector<Page>;

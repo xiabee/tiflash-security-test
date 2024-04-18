@@ -15,10 +15,12 @@
 #include <Functions/FunctionHelpers.h>
 #include <IO/MemoryReadWriteBuffer.h>
 #include <IO/ReadHelpers.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
 #include <Storages/DeltaMerge/DeltaIndexManager.h>
-#include <Storages/DeltaMerge/WriteBatches.h>
+#include <Storages/DeltaMerge/WriteBatchesImpl.h>
+#include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/PathPool.h>
 
 #include <ext/scope_guard.h>
@@ -27,7 +29,7 @@ namespace DB
 {
 namespace DM
 {
-inline void serializeColumnFilePersisteds(WriteBatches & wbs, PageId id, const ColumnFilePersisteds & persisted_files)
+inline void serializeColumnFilePersisteds(WriteBatches & wbs, PageIdU64 id, const ColumnFilePersisteds & persisted_files)
 {
     MemoryWriteBuffer buf(0, COLUMN_FILE_SERIALIZE_BUFFER_SIZE);
     serializeSavedColumnFiles(buf, persisted_files);
@@ -75,7 +77,7 @@ void ColumnFilePersistedSet::checkColumnFiles(const ColumnFilePersisteds & new_c
 }
 
 ColumnFilePersistedSet::ColumnFilePersistedSet( //
-    PageId metadata_id_,
+    PageIdU64 metadata_id_,
     const ColumnFilePersisteds & persisted_column_files)
     : metadata_id(metadata_id_)
     , persisted_files(persisted_column_files)
@@ -87,12 +89,32 @@ ColumnFilePersistedSet::ColumnFilePersistedSet( //
 ColumnFilePersistedSetPtr ColumnFilePersistedSet::restore( //
     DMContext & context,
     const RowKeyRange & segment_range,
-    PageId id)
+    PageIdU64 id)
 {
-    Page page = context.storage_pool.metaReader()->read(id);
+    Page page = context.storage_pool->metaReader()->read(id);
     ReadBufferFromMemory buf(page.data.begin(), page.data.size());
     auto column_files = deserializeSavedColumnFiles(context, segment_range, buf);
     return std::make_shared<ColumnFilePersistedSet>(id, column_files);
+}
+
+ColumnFilePersistedSetPtr ColumnFilePersistedSet::createFromCheckpoint( //
+    DMContext & context,
+    UniversalPageStoragePtr temp_ps,
+    const RowKeyRange & segment_range,
+    PageIdU64 delta_id,
+    WriteBatches & wbs)
+{
+    auto delta_page_id = UniversalPageIdFormat::toFullPageId(UniversalPageIdFormat::toFullPrefix(context.keyspace_id, StorageType::Meta, context.physical_table_id), delta_id);
+    auto meta_page = temp_ps->read(delta_page_id);
+    ReadBufferFromMemory meta_buf(meta_page.data.begin(), meta_page.data.size());
+    auto column_files = createColumnFilesFromCheckpoint(
+        context,
+        segment_range,
+        meta_buf,
+        temp_ps,
+        wbs);
+    auto new_persisted_set = std::make_shared<ColumnFilePersistedSet>(delta_id, column_files);
+    return new_persisted_set;
 }
 
 void ColumnFilePersistedSet::saveMeta(WriteBatches & wbs) const
@@ -105,17 +127,6 @@ void ColumnFilePersistedSet::recordRemoveColumnFilesPages(WriteBatches & wbs) co
     for (const auto & file : persisted_files)
         file->removeData(wbs);
 }
-
-BlockPtr ColumnFilePersistedSet::getLastSchema()
-{
-    for (auto it = persisted_files.rbegin(); it != persisted_files.rend(); ++it)
-    {
-        if (auto * t_file = (*it)->tryToTinyFile(); t_file)
-            return t_file->getSchema();
-    }
-    return {};
-}
-
 
 ColumnFilePersisteds ColumnFilePersistedSet::diffColumnFiles(const ColumnFiles & previous_column_files) const
 {
@@ -350,9 +361,9 @@ bool ColumnFilePersistedSet::installCompactionResults(const MinorCompactionPtr &
     return true;
 }
 
-ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const StorageSnapshotPtr & storage_snap)
+ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const IColumnFileDataProviderPtr & data_provider)
 {
-    auto snap = std::make_shared<ColumnFileSetSnapshot>(storage_snap);
+    auto snap = std::make_shared<ColumnFileSetSnapshot>(data_provider);
     snap->rows = rows;
     snap->bytes = bytes;
     snap->deletes = deletes;

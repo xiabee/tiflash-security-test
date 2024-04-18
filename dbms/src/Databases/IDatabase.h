@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Common/UniThreadPool.h>
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/ColumnsDescription.h>
@@ -28,9 +29,6 @@ namespace TiDB
 struct DBInfo;
 using DBInfoPtr = std::shared_ptr<DBInfo>;
 } // namespace TiDB
-
-class ThreadPool;
-
 
 namespace DB
 {

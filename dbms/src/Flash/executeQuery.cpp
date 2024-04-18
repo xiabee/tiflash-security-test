@@ -13,10 +13,16 @@
 // limitations under the License.
 
 #include <Common/FailPoint.h>
+#include <Common/MemoryTracker.h>
 #include <Common/ProfileEvents.h>
+#include <Core/QueryProcessingStage.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Flash/Executor/DataStreamExecutor.h>
+#include <Flash/Executor/PipelineExecutor.h>
+#include <Flash/Pipeline/Pipeline.h>
+#include <Flash/Pipeline/Schedule/TaskScheduler.h>
+#include <Flash/Planner/PhysicalPlan.h>
 #include <Flash/Planner/PlanQuerySource.h>
 #include <Flash/executeQuery.h>
 #include <Interpreters/Context.h>
@@ -35,6 +41,7 @@ namespace FailPoints
 {
 extern const char random_interpreter_failpoint[];
 } // namespace FailPoints
+
 namespace
 {
 void prepareForExecute(Context & context)
@@ -67,7 +74,7 @@ ProcessList::EntryPtr getProcessListEntry(Context & context, DAGContext & dag_co
     }
 }
 
-BlockIO executeDAG(IQuerySource & dag, Context & context, bool internal)
+QueryExecutorPtr doExecuteAsBlockIO(IQuerySource & dag, Context & context, bool internal)
 {
     RUNTIME_ASSERT(context.getDAGContext());
     auto & dag_context = *context.getDAGContext();
@@ -86,8 +93,13 @@ BlockIO executeDAG(IQuerySource & dag, Context & context, bool internal)
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_interpreter_failpoint);
     auto interpreter = dag.interpreter(context, QueryProcessingStage::Complete);
     BlockIO res = interpreter->execute();
+    MemoryTrackerPtr memory_tracker;
     if (likely(process_list_entry))
+    {
         (*process_list_entry)->setQueryStreams(res);
+        memory_tracker = (*process_list_entry)->getMemoryTrackerPtr();
+    }
+
 
     /// Hold element of process list till end of query execution.
     res.process_list_entry = process_list_entry;
@@ -95,26 +107,72 @@ BlockIO executeDAG(IQuerySource & dag, Context & context, bool internal)
     if (likely(!internal))
         logQueryPipeline(logger, res.in);
 
-    return res;
+    return std::make_unique<DataStreamExecutor>(memory_tracker, context, logger->identifier(), res.in);
 }
-} // namespace
 
-BlockIO executeQuery(Context & context, bool internal)
+std::optional<QueryExecutorPtr> executeAsPipeline(Context & context, bool internal)
+{
+    RUNTIME_ASSERT(context.getDAGContext());
+    auto & dag_context = *context.getDAGContext();
+    const auto & logger = dag_context.log;
+    RUNTIME_ASSERT(logger);
+
+    if (!TaskScheduler::instance || !Pipeline::isSupported(*dag_context.dag_request))
+    {
+        LOG_DEBUG(logger, "Can't run by pipeline model, fallback to block inputstream model");
+        return {};
+    }
+
+    prepareForExecute(context);
+
+    ProcessList::EntryPtr process_list_entry;
+    if (likely(!internal))
+    {
+        process_list_entry = getProcessListEntry(context, dag_context);
+        logQuery(dag_context.dummy_query_string, context, logger);
+    }
+
+    MemoryTrackerPtr memory_tracker;
+    if (likely(process_list_entry))
+        memory_tracker = (*process_list_entry)->getMemoryTrackerPtr();
+
+    FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_interpreter_failpoint);
+
+    PhysicalPlan physical_plan{context, logger->identifier()};
+    physical_plan.build(dag_context.dag_request());
+    physical_plan.outputAndOptimize();
+    auto pipeline = physical_plan.toPipeline();
+    auto executor = std::make_unique<PipelineExecutor>(memory_tracker, context, logger->identifier(), pipeline);
+    if (likely(!internal))
+        LOG_INFO(logger, fmt::format("Query pipeline:\n{}", executor->toString()));
+    return {std::move(executor)};
+}
+
+QueryExecutorPtr executeAsBlockIO(Context & context, bool internal)
 {
     if (context.getSettingsRef().enable_planner)
     {
         PlanQuerySource plan(context);
-        return executeDAG(plan, context, internal);
+        return doExecuteAsBlockIO(plan, context, internal);
     }
     else
     {
         DAGQuerySource dag(context);
-        return executeDAG(dag, context, internal);
+        return doExecuteAsBlockIO(dag, context, internal);
     }
 }
+} // namespace
 
 QueryExecutorPtr queryExecute(Context & context, bool internal)
 {
-    return std::make_unique<DataStreamExecutor>(executeQuery(context, internal));
+    // now only support pipeline model in test mode.
+    if (context.isTest()
+        && context.getSettingsRef().enable_planner
+        && context.getSettingsRef().enable_pipeline)
+    {
+        if (auto res = executeAsPipeline(context, internal); res)
+            return std::move(*res);
+    }
+    return executeAsBlockIO(context, internal);
 }
 } // namespace DB

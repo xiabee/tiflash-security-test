@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Common/Checksum.h>
+#include <Encryption/FileProvider_fwd.h>
 #include <Interpreters/SettingsCommon.h>
 #include <Storages/Page/FileUsage.h>
 #include <Storages/Page/V3/LogFile/LogFilename.h>
@@ -28,8 +29,6 @@
 
 namespace DB
 {
-class FileProvider;
-using FileProviderPtr = std::shared_ptr<FileProvider>;
 class WriteLimiter;
 using WriteLimiterPtr = std::shared_ptr<WriteLimiter>;
 class PSDiskDelegator;
@@ -57,12 +56,11 @@ public:
         String storage_name_,
         FileProviderPtr & provider,
         PSDiskDelegatorPtr & delegator,
-        WALConfig config);
+        const WALConfig & config);
 
     WALStoreReaderPtr createReaderForFiles(const String & identifier, const LogFilenameSet & log_filenames, const ReadLimiterPtr & read_limiter);
 
     void apply(String && serialized_edit, const WriteLimiterPtr & write_limiter = nullptr);
-
 
     FileUsageStatistics getFileUsageStatistics() const
     {
@@ -110,7 +108,7 @@ private:
              const PSDiskDelegatorPtr & delegator_,
              const FileProviderPtr & provider_,
              Format::LogNumberType last_log_num_,
-             WALConfig config);
+             const WALConfig & config);
 
     std::tuple<std::unique_ptr<LogWriter>, LogFilename>
     createLogWriter(

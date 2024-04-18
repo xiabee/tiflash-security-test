@@ -16,18 +16,13 @@
 
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/MPPTunnel.h>
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <tipb/select.pb.h>
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-#include <boost/noncopyable.hpp>
+#include <Flash/Mpp/MppVersion.h>
+#include <IO/CompressedStream.h>
 
 namespace DB
 {
+class DAGContext;
+
 template <typename Tunnel>
 class MPPTunnelSetBase : private boost::noncopyable
 {
@@ -37,15 +32,14 @@ public:
         : log(Logger::get(req_id))
     {}
 
-    // this is a root mpp writing.
-    void write(tipb::SelectResponse & response);
-    // this is a broadcast or pass through writing.
-    void broadcastOrPassThroughWrite(TrackedMppDataPacketPtr && packet);
-    // this is a partition writing.
-    void partitionWrite(TrackedMppDataPacketPtr && packet, int16_t partition_id);
+    void write(TrackedMppDataPacketPtr && data, size_t index);
+    void nonBlockingWrite(TrackedMppDataPacketPtr && data, size_t index);
+
+    void write(tipb::SelectResponse & response, size_t index);
+    void nonBlockingWrite(tipb::SelectResponse & response, size_t index);
+
     /// this is a execution summary writing.
-    /// for both broadcast writing and partition writing, only
-    /// return meaningful execution summary for the first tunnel,
+    /// only return meaningful execution summary for the first tunnel,
     /// because in TiDB, it does not know enough information
     /// about the execution details for the mpp query, it just
     /// add up all the execution summaries for the same executor,
@@ -66,8 +60,16 @@ public:
     {
         return external_thread_cnt;
     }
+    size_t getLocalTunnelCnt()
+    {
+        return local_tunnel_cnt;
+    }
 
     const std::vector<TunnelPtr> & getTunnels() const { return tunnels; }
+
+    bool isReadyForWrite() const;
+
+    bool isLocal(size_t index) const;
 
 private:
     std::vector<TunnelPtr> tunnels;
@@ -75,6 +77,7 @@ private:
     const LoggerPtr log;
 
     int external_thread_cnt = 0;
+    size_t local_tunnel_cnt = 0;
 };
 
 class MPPTunnelSet : public MPPTunnelSetBase<MPPTunnel>

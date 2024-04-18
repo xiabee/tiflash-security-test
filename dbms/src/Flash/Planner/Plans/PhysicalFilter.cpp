@@ -16,10 +16,12 @@
 #include <DataStreams/FilterBlockInputStream.h>
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
+#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/plans/PhysicalFilter.h>
+#include <Flash/Planner/Plans/PhysicalFilter.h>
 #include <Interpreters/Context.h>
+#include <Operators/FilterTransformOp.h>
 
 namespace DB
 {
@@ -33,16 +35,14 @@ PhysicalPlanNodePtr PhysicalFilter::build(
     assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
-    ExpressionActionsPtr before_filter_actions = PhysicalPlanHelper::newActions(child->getSampleBlock(), context);
+    ExpressionActionsPtr before_filter_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
 
-    std::vector<const tipb::Expr *> conditions;
-    for (const auto & c : selection.conditions())
-        conditions.push_back(&c);
-    String filter_column_name = analyzer.buildFilterColumn(before_filter_actions, conditions);
+    String filter_column_name = analyzer.buildFilterColumn(before_filter_actions, selection.conditions());
 
     auto physical_filter = std::make_shared<PhysicalFilter>(
         executor_id,
         child->getSchema(),
+        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         filter_column_name,
@@ -51,11 +51,23 @@ PhysicalPlanNodePtr PhysicalFilter::build(
     return physical_filter;
 }
 
-void PhysicalFilter::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalFilter::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->transform(pipeline, context, max_streams);
+    child->buildBlockInputStream(pipeline, context, max_streams);
 
     pipeline.transform([&](auto & stream) { stream = std::make_shared<FilterBlockInputStream>(stream, before_filter_actions, filter_column, log->identifier()); });
+}
+
+void PhysicalFilter::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
+    PipelineExecGroupBuilder & group_builder,
+    Context & /*context*/,
+    size_t /*concurrency*/)
+{
+    auto input_header = group_builder.getCurrentHeader();
+    group_builder.transform([&](auto & builder) {
+        builder.appendTransformOp(std::make_unique<FilterTransformOp>(exec_status, log->identifier(), input_header, before_filter_actions, filter_column));
+    });
 }
 
 void PhysicalFilter::finalize(const Names & parent_require)

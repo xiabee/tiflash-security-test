@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/FailPoint.h>
+#include <Common/UniThreadPool.h>
+#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/GCOptions.h>
 #include <Storages/DeltaMerge/tests/gtest_dm_simple_pk_test_basic.h>
 #include <TestUtils/InputStreamTestUtils.h>
-#include <common/ThreadPool.h>
 
 #include <future>
+#include <random>
 
 namespace DB
 {
@@ -78,35 +81,35 @@ try
 }
 CATCH
 
-//TEST_P(StoreIngestTest, RangeSmallerThanData)
-//try
-//{
-//    ASSERT_EQ(0, getRowsN());
-//    auto block1 = fillBlock({.range = {0, 100}});
-//    ASSERT_THROW({
-//        ingestFiles({.range = {20, 40}, .blocks = {block1}, .clear = false});
-//    },
-//                 DB::Exception);
-//}
-//CATCH
-//
-//TEST_P(StoreIngestTest, RangeLargerThanData)
-//try
-//{
-//    ASSERT_EQ(0, getRowsN());
-//    auto block1 = fillBlock({.range = {0, 100}});
-//    ingestFiles({.range = {-100, 110}, .blocks = {block1}, .clear = false});
-//    ASSERT_TRUE(isFilled(0, 100));
-//    ASSERT_EQ(100, getRowsN());
-//
-//    fill(-500, 500);
-//    ingestFiles({.range = {-100, 110}, .blocks = {block1}, .clear = true});
-//    ASSERT_TRUE(isFilled(-500, -100));
-//    ASSERT_TRUE(isFilled(0, 100));
-//    ASSERT_TRUE(isFilled(110, 500));
-//    ASSERT_EQ(890, getRowsN());
-//}
-//CATCH
+TEST_P(StoreIngestTest, RangeSmallerThanData)
+try
+{
+    ASSERT_EQ(0, getRowsN());
+    auto block1 = fillBlock({.range = {0, 100}});
+    ASSERT_THROW({
+        ingestFiles({.range = {20, 40}, .blocks = {block1}, .clear = false});
+    },
+                 DB::Exception);
+}
+CATCH
+
+TEST_P(StoreIngestTest, RangeLargerThanData)
+try
+{
+    ASSERT_EQ(0, getRowsN());
+    auto block1 = fillBlock({.range = {0, 100}});
+    ingestFiles({.range = {-100, 110}, .blocks = {block1}, .clear = false});
+    ASSERT_TRUE(isFilled(0, 100));
+    ASSERT_EQ(100, getRowsN());
+
+    fill(-500, 500);
+    ingestFiles({.range = {-100, 110}, .blocks = {block1}, .clear = true});
+    ASSERT_TRUE(isFilled(-500, -100));
+    ASSERT_TRUE(isFilled(0, 100));
+    ASSERT_TRUE(isFilled(110, 500));
+    ASSERT_EQ(890, getRowsN());
+}
+CATCH
 
 TEST_P(StoreIngestTest, OverlappedFiles)
 try
@@ -231,7 +234,7 @@ try
     auto pool = std::make_shared<ThreadPool>(4);
     for (const auto & op : ops)
     {
-        pool->schedule([=, &log] {
+        pool->scheduleOrThrowOnError([=, &log] {
             try
             {
                 LOG_INFO(

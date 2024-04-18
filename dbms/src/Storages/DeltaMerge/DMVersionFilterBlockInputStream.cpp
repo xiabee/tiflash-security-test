@@ -75,7 +75,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
 
             ProfileEvents::increment(ProfileEvents::DMCleanReadRows, rows);
 
-            return getNewBlockByHeader(header, cur_raw_block);
+            return getNewBlock(cur_raw_block);
         }
 
         filter.resize(rows);
@@ -393,7 +393,6 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
             scan_context->mvcc_input_rows += rows;
             scan_context->mvcc_input_bytes += cur_raw_block.bytes();
             scan_context->mvcc_output_rows += passed_count;
-            // When `return_filter != nullptr`, the output bytes is not accurate
         }
 
         // This block is empty after filter, continue to process next block
@@ -406,23 +405,27 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
         if (passed_count == rows)
         {
             ++complete_passed;
-            return getNewBlockByHeader(header, cur_raw_block);
+            return getNewBlock(cur_raw_block);
         }
 
         if (return_filter)
         {
             // The caller of this method should do the filtering, we just need to return the original block.
             res_filter = &filter;
-            return getNewBlockByHeader(header, cur_raw_block);
+            return getNewBlock(cur_raw_block);
         }
         else
         {
             Block res;
-            for (const auto & c : header)
+            if (cur_raw_block.segmentRowIdCol() == nullptr)
             {
-                auto & column = cur_raw_block.getByName(c.name);
-                column.column = column.column->filter(filter, passed_count);
-                res.insert(std::move(column));
+                res = select_by_colid_action.filterAndTransform(cur_raw_block, filter, passed_count);
+            }
+            else
+            {
+                // `DMVersionFilterBlockInputStream` is the last stage for generating segment row id.
+                // In the way we use it, the other columns are not used subsequently.
+                res.setSegmentRowIdCol(cur_raw_block.segmentRowIdCol()->filter(filter, passed_count));
             }
             return res;
         }

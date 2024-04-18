@@ -12,21 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/DNSCache.h>
+#include <Flash/Disaggregated/S3LockClient.h>
 #include <Flash/Mpp/MPPHandler.h>
 #include <Flash/Mpp/MPPTaskManager.h>
 #include <Flash/Mpp/MinTSOScheduler.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/SharedContexts/Disagg.h>
 #include <Server/RaftConfigParser.h>
+#include <Storages/S3/S3Common.h>
+#include <Storages/S3/S3GCManager.h>
 #include <Storages/Transaction/BackgroundService.h>
 #include <Storages/Transaction/KVStore.h>
 #include <Storages/Transaction/RegionExecutionResult.h>
-#include <Storages/Transaction/RegionRangeKeys.h>
 #include <Storages/Transaction/TMTContext.h>
+#include <TiDB/Etcd/Client.h>
+#include <TiDB/OwnerInfo.h>
+#include <TiDB/OwnerManager.h>
 #include <TiDB/Schema/SchemaSyncer.h>
 #include <TiDB/Schema/TiDBSchemaSyncer.h>
+#include <common/logger_useful.h>
 #include <pingcap/pd/MockPDClient.h>
 
+#include <magic_enum.hpp>
 #include <memory>
 
 namespace DB
@@ -40,8 +47,11 @@ const int64_t DEFAULT_WAIT_REGION_READY_TIMEOUT_SEC = 20 * 60;
 
 const int64_t DEFAULT_READ_INDEX_WORKER_TICK_MS = 10;
 
-static SchemaSyncerPtr createSchemaSyncer(bool exist_pd_addr, bool for_unit_test, const KVClusterPtr & cluster)
+static SchemaSyncerPtr createSchemaSyncer(bool exist_pd_addr, bool for_unit_test, const KVClusterPtr & cluster, bool disaggregated_compute_mode)
 {
+    // Doesn't need SchemaSyncer for tiflash_compute mode.
+    if (disaggregated_compute_mode)
+        return nullptr;
     if (exist_pd_addr)
     {
         // product env
@@ -62,31 +72,85 @@ static SchemaSyncerPtr createSchemaSyncer(bool exist_pd_addr, bool for_unit_test
         std::make_shared<TiDBSchemaSyncer</*mock_getter*/ true, /*mock_mapper*/ false>>(cluster));
 }
 
-TMTContext::TMTContext(Context & context_, const TiFlashRaftConfig & raft_config, const pingcap::ClusterConfig & cluster_config)
+TMTContext::TMTContext(
+    Context & context_,
+    const TiFlashRaftConfig & raft_config,
+    const pingcap::ClusterConfig & cluster_config)
     : context(context_)
-    , kvstore(std::make_shared<KVStore>(context, raft_config.snapshot_apply_method))
+    , kvstore(context_.getSharedContextDisagg()->isDisaggregatedComputeMode() && context_.getSharedContextDisagg()->use_autoscaler ? nullptr : std::make_shared<KVStore>(context))
     , region_table(context)
     , background_service(nullptr)
     , gc_manager(context)
     , cluster(raft_config.pd_addrs.empty() ? std::make_shared<pingcap::kv::Cluster>()
                                            : std::make_shared<pingcap::kv::Cluster>(raft_config.pd_addrs, cluster_config))
     , ignore_databases(raft_config.ignore_databases)
-    , schema_syncer(createSchemaSyncer(!raft_config.pd_addrs.empty(), raft_config.for_unit_test, cluster))
+    , schema_syncer(createSchemaSyncer(!raft_config.pd_addrs.empty(), raft_config.for_unit_test, cluster, context_.getSharedContextDisagg()->isDisaggregatedComputeMode()))
     , mpp_task_manager(std::make_shared<MPPTaskManager>(
           std::make_unique<MinTSOScheduler>(
               context.getSettingsRef().task_scheduler_thread_soft_limit,
               context.getSettingsRef().task_scheduler_thread_hard_limit,
               context.getSettingsRef().task_scheduler_active_set_soft_limit)))
     , engine(raft_config.engine)
-    , replica_read_max_thread(1)
     , batch_read_index_timeout_ms(DEFAULT_BATCH_READ_INDEX_TIMEOUT_MS)
     , wait_index_timeout_ms(DEFAULT_WAIT_INDEX_TIMEOUT_MS)
     , read_index_worker_tick_ms(DEFAULT_READ_INDEX_WORKER_TICK_MS)
     , wait_region_ready_timeout_sec(DEFAULT_WAIT_REGION_READY_TIMEOUT_SEC)
-{}
+{
+    if (!raft_config.pd_addrs.empty() && S3::ClientFactory::instance().isEnabled() && !context.getSharedContextDisagg()->isDisaggregatedComputeMode())
+    {
+        etcd_client = Etcd::Client::create(cluster->pd_client, cluster_config);
+        s3gc_owner = OwnerManager::createS3GCOwner(context, /*id*/ raft_config.advertise_engine_addr, etcd_client);
+        s3gc_owner->campaignOwner(); // start campaign
+        s3lock_client = std::make_shared<S3::S3LockClient>(cluster.get(), s3gc_owner);
+
+        S3::S3GCConfig remote_gc_config;
+        {
+            Int64 gc_method_int = context.getSettingsRef().remote_gc_method;
+            if (gc_method_int == 1)
+            {
+                remote_gc_config.method = S3::S3GCMethod::Lifecycle;
+                LOG_INFO(Logger::get(), "Using remote_gc_method={}", magic_enum::enum_name(remote_gc_config.method));
+            }
+            else if (gc_method_int == 2)
+            {
+                remote_gc_config.method = S3::S3GCMethod::ScanThenDelete;
+                LOG_INFO(Logger::get(), "Using remote_gc_method={}", magic_enum::enum_name(remote_gc_config.method));
+            }
+            else
+            {
+                LOG_WARNING(Logger::get(), "Unknown remote gc method from settings, using default method, value={} remote_gc_method={}", gc_method_int, magic_enum::enum_name(remote_gc_config.method));
+            }
+        }
+        remote_gc_config.interval_seconds = context.getSettingsRef().remote_gc_interval_seconds; // TODO: make it reloadable
+        remote_gc_config.verify_locks = context.getSettingsRef().remote_gc_verify_consistency > 0;
+        // set the gc_method so that S3LockService can set tagging when create delmark
+        S3::ClientFactory::instance().gc_method = remote_gc_config.method;
+        s3gc_manager = std::make_unique<S3::S3GCManagerService>(context, cluster->pd_client, s3gc_owner, s3lock_client, remote_gc_config);
+    }
+}
+
+TMTContext::~TMTContext() = default;
+
+void TMTContext::updateSecurityConfig(const TiFlashRaftConfig & raft_config, const pingcap::ClusterConfig & cluster_config)
+{
+    if (!raft_config.pd_addrs.empty())
+    {
+        // update the client config including pd_client
+        cluster->update(raft_config.pd_addrs, cluster_config);
+        if (etcd_client)
+        {
+            // update the etcd_client after pd_client get updated
+            etcd_client->update(cluster_config);
+        }
+    }
+}
 
 void TMTContext::restore(PathPool & path_pool, const TiFlashRaftProxyHelper * proxy_helper)
 {
+    // For tiflash_compute mode, kvstore should be nullptr, no need to restore region_table.
+    if (context.getSharedContextDisagg()->isDisaggregatedComputeMode() && context.getSharedContextDisagg()->use_autoscaler)
+        return;
+
     kvstore->restore(path_pool, proxy_helper);
     region_table.restore();
     store_status = StoreStatus::Ready;
@@ -95,6 +159,34 @@ void TMTContext::restore(PathPool & path_pool, const TiFlashRaftProxyHelper * pr
     {
         // Only create when running with Raft threads
         background_service = std::make_unique<BackgroundService>(*this);
+    }
+}
+
+void TMTContext::shutdown()
+{
+    if (s3gc_owner)
+    {
+        // stop the campaign loop, so the S3LockService will
+        // let client retry
+        s3gc_owner->cancel();
+        s3gc_owner = nullptr;
+    }
+
+    if (s3gc_manager)
+    {
+        s3gc_manager->shutdown();
+        s3gc_manager = nullptr;
+    }
+
+    if (s3lock_client)
+    {
+        s3lock_client = nullptr;
+    }
+
+    if (background_service)
+    {
+        background_service->shutdown();
+        background_service = nullptr;
     }
 }
 
@@ -179,6 +271,11 @@ pingcap::pd::ClientPtr TMTContext::getPDClient() const
     return cluster->pd_client;
 }
 
+const OwnerManagerPtr & TMTContext::getS3GCOwnerManager() const
+{
+    return s3gc_owner;
+}
+
 MPPTaskManagerPtr TMTContext::getMPPTaskManager()
 {
     return mpp_task_manager;
@@ -191,10 +288,12 @@ const std::unordered_set<std::string> & TMTContext::getIgnoreDatabases() const
 
 void TMTContext::reloadConfig(const Poco::Util::AbstractConfiguration & config)
 {
+    if (context.getSharedContextDisagg()->isDisaggregatedComputeMode() && context.getSharedContextDisagg()->use_autoscaler)
+        return;
+
     static constexpr const char * COMPACT_LOG_MIN_PERIOD = "flash.compact_log_min_period";
     static constexpr const char * COMPACT_LOG_MIN_ROWS = "flash.compact_log_min_rows";
     static constexpr const char * COMPACT_LOG_MIN_BYTES = "flash.compact_log_min_bytes";
-    static constexpr const char * REPLICA_READ_MAX_THREAD = "flash.replica_read_max_thread";
     static constexpr const char * BATCH_READ_INDEX_TIMEOUT_MS = "flash.batch_read_index_timeout_ms";
     static constexpr const char * WAIT_INDEX_TIMEOUT_MS = "flash.wait_index_timeout_ms";
     static constexpr const char * WAIT_REGION_READY_TIMEOUT_SEC = "flash.wait_region_ready_timeout_sec";
@@ -205,7 +304,6 @@ void TMTContext::reloadConfig(const Poco::Util::AbstractConfiguration & config)
                                             std::max(config.getUInt64(COMPACT_LOG_MIN_ROWS, 40 * 1024), 1),
                                             std::max(config.getUInt64(COMPACT_LOG_MIN_BYTES, 32 * 1024 * 1024), 1));
     {
-        replica_read_max_thread = std::max(config.getUInt64(REPLICA_READ_MAX_THREAD, 1), 1);
         batch_read_index_timeout_ms = config.getUInt64(BATCH_READ_INDEX_TIMEOUT_MS, DEFAULT_BATCH_READ_INDEX_TIMEOUT_MS);
         wait_index_timeout_ms = config.getUInt64(WAIT_INDEX_TIMEOUT_MS, DEFAULT_WAIT_INDEX_TIMEOUT_MS);
         wait_region_ready_timeout_sec = ({
@@ -218,8 +316,7 @@ void TMTContext::reloadConfig(const Poco::Util::AbstractConfiguration & config)
     {
         LOG_INFO(
             Logger::get(),
-            "read-index max thread num: {}, timeout: {}ms; wait-index timeout: {}ms; wait-region-ready timeout: {}s; read-index-worker-tick: {}ms",
-            replicaReadMaxThread(),
+            "read-index timeout: {}ms; wait-index timeout: {}ms; wait-region-ready timeout: {}s; read-index-worker-tick: {}ms",
             batchReadIndexTimeout(),
             waitIndexTimeout(),
             waitRegionReadyTimeout(),
@@ -252,10 +349,6 @@ void TMTContext::setStatusTerminated()
     store_status = StoreStatus::Terminated;
 }
 
-UInt64 TMTContext::replicaReadMaxThread() const
-{
-    return replica_read_max_thread.load(std::memory_order_relaxed);
-}
 UInt64 TMTContext::batchReadIndexTimeout() const
 {
     return batch_read_index_timeout_ms.load(std::memory_order_relaxed);
@@ -263,6 +356,10 @@ UInt64 TMTContext::batchReadIndexTimeout() const
 UInt64 TMTContext::waitIndexTimeout() const
 {
     return wait_index_timeout_ms.load(std::memory_order_relaxed);
+}
+void TMTContext::debugSetWaitIndexTimeout(UInt64 timeout)
+{
+    return wait_index_timeout_ms.store(timeout, std::memory_order_relaxed);
 }
 Int64 TMTContext::waitRegionReadyTimeout() const
 {

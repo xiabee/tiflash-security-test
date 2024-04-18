@@ -18,9 +18,10 @@
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
+#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Flash/Planner/FinalizeHelper.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
-#include <Flash/Planner/plans/PhysicalProjection.h>
+#include <Flash/Planner/Plans/PhysicalProjection.h>
 #include <Interpreters/Context.h>
 
 namespace DB
@@ -35,7 +36,7 @@ PhysicalPlanNodePtr PhysicalProjection::build(
     assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
-    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock(), context);
+    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
 
     NamesAndTypes schema;
     for (const auto & expr : projection.exprs())
@@ -48,6 +49,7 @@ PhysicalPlanNodePtr PhysicalProjection::build(
     auto physical_projection = std::make_shared<PhysicalProjection>(
         executor_id,
         schema,
+        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         "projection",
@@ -64,7 +66,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildNonRootFinal(
     assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
-    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock(), context);
+    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
     auto final_project_aliases = analyzer.genNonRootFinalProjectAliases(column_prefix);
     project_actions->add(ExpressionAction::project(final_project_aliases));
 
@@ -80,6 +82,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildNonRootFinal(
     auto physical_projection = std::make_shared<PhysicalProjection>(
         child->execId(),
         schema,
+        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         "final projection",
@@ -101,7 +104,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildRootFinal(
     assert(child);
 
     DAGExpressionAnalyzer analyzer{child->getSchema(), context};
-    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock(), context);
+    ExpressionActionsPtr project_actions = PhysicalPlanHelper::newActions(child->getSampleBlock());
 
     NamesWithAliases final_project_aliases = analyzer.buildFinalProjection(
         project_actions,
@@ -125,6 +128,7 @@ PhysicalPlanNodePtr PhysicalProjection::buildRootFinal(
     auto physical_projection = std::make_shared<PhysicalProjection>(
         child->execId(),
         schema,
+        child->getFineGrainedShuffle(),
         log->identifier(),
         child,
         "final projection",
@@ -134,11 +138,20 @@ PhysicalPlanNodePtr PhysicalProjection::buildRootFinal(
     return physical_projection;
 }
 
-void PhysicalProjection::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalProjection::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->transform(pipeline, context, max_streams);
+    child->buildBlockInputStream(pipeline, context, max_streams);
 
     executeExpression(pipeline, project_actions, log, extra_info);
+}
+
+void PhysicalProjection::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
+    PipelineExecGroupBuilder & group_builder,
+    Context & /*context*/,
+    size_t /*concurrency*/)
+{
+    executeExpression(exec_status, group_builder, project_actions, log);
 }
 
 void PhysicalProjection::finalize(const Names & parent_require)
