@@ -17,9 +17,9 @@
 #include <Common/NaNUtils.h>
 #include <Common/PODArray.h>
 #include <Core/Types.h>
-#include <IO/ReadBuffer.h>
+#include <IO/Buffer/ReadBuffer.h>
+#include <IO/Buffer/WriteBuffer.h>
 #include <IO/VarInt.h>
-#include <IO/WriteBuffer.h>
 
 
 namespace DB
@@ -57,10 +57,7 @@ struct QuantileExact
         throw Exception("Method add with weight is not implemented for QuantileExact", ErrorCodes::NOT_IMPLEMENTED);
     }
 
-    void merge(const QuantileExact & rhs)
-    {
-        array.insert(rhs.array.begin(), rhs.array.end());
-    }
+    void merge(const QuantileExact & rhs) { array.insert(rhs.array.begin(), rhs.array.end()); }
 
     void serialize(WriteBuffer & buf) const
     {
@@ -82,11 +79,12 @@ struct QuantileExact
     {
         if (!array.empty())
         {
-            size_t n = level < 1
-                ? level * array.size()
-                : (array.size() - 1);
+            size_t n = level < 1 ? level * array.size() : (array.size() - 1);
 
-            std::nth_element(array.begin(), array.begin() + n, array.end()); /// NOTE You can think of the radix-select algorithm.
+            std::nth_element(
+                array.begin(),
+                array.begin() + n,
+                array.end()); /// NOTE You can think of the radix-select algorithm.
             return array[n];
         }
 
@@ -104,9 +102,7 @@ struct QuantileExact
             {
                 auto level = levels[indices[i]];
 
-                size_t n = level < 1
-                    ? level * array.size()
-                    : (array.size() - 1);
+                size_t n = level < 1 ? level * array.size() : (array.size() - 1);
 
                 std::nth_element(array.begin() + prev_n, array.begin() + n, array.end());
 

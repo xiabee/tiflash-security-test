@@ -16,41 +16,33 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB
+namespace DB::DM
 {
-namespace DM
-{
+
 class Unsupported : public RSOperator
 {
     String content;
     String reason;
-    bool is_not;
 
 public:
     Unsupported(const String & content_, const String & reason_)
-        : Unsupported(content_, reason_, false)
-    {}
-    Unsupported(const String & content_, const String & reason_, bool is_not_)
         : content(content_)
         , reason(reason_)
-        , is_not(is_not_)
     {}
 
     String name() override { return "unsupported"; }
 
-    Attrs getAttrs() override { return {}; }
+    ColIds getColumnIDs() override { return {}; }
 
     String toDebugString() override
     {
-        return R"({"op":")" + name() + //
-            R"(","reason":")" + reason + //
-            R"(","content":")" + content + //
-            R"(","is_not":")" + DB::toString(is_not) + "\"}";
+        return fmt::format(R"({{"op":"{}","reason":"{}","content":"{}"}})", name(), reason, content);
     }
 
-    RSResult roughCheck(size_t /*pack_id*/, const RSCheckParam & /*param*/) override { return Some; }
+    RSResults roughCheck(size_t /*start_pack*/, size_t pack_count, const RSCheckParam & /*param*/) override
+    {
+        return RSResults(pack_count, Some);
+    }
 };
 
-} // namespace DM
-
-} // namespace DB
+} // namespace DB::DM

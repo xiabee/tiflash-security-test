@@ -43,19 +43,20 @@ public:
         , before_filter_actions(before_filter_actions_)
     {}
 
-    void finalize(const Names & parent_require) override;
+    void finalizeImpl(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
+private:
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & exec_context,
         PipelineExecGroupBuilder & group_builder,
         Context & /*context*/,
         size_t /*concurrency*/) override;
 
 private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
     String filter_column;
     ExpressionActionsPtr before_filter_actions;
 };

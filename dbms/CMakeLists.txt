@@ -58,6 +58,10 @@ add_headers_and_sources(tiflash_common_io src/Common)
 add_headers_and_sources(tiflash_common_io src/Common/HashTable)
 add_headers_and_sources(tiflash_common_io src/Common/SyncPoint)
 add_headers_and_sources(tiflash_common_io src/IO)
+add_headers_and_sources(tiflash_common_io src/IO/BaseFile)
+add_headers_and_sources(tiflash_common_io src/IO/Buffer)
+add_headers_and_sources(tiflash_common_io src/IO/Checksum)
+add_headers_and_sources(tiflash_common_io src/IO/Compression)
 
 add_headers_and_sources(dbms src/Analyzers)
 add_headers_and_sources(dbms src/Core)
@@ -67,15 +71,22 @@ add_headers_and_sources(dbms src/DataTypes)
 add_headers_and_sources(dbms src/Databases)
 add_headers_and_sources(dbms src/Debug)
 add_headers_and_sources(dbms src/Debug/MockExecutor)
+add_headers_and_sources(dbms src/Debug/MockKVStore)
+add_headers_and_sources(dbms src/Debug/dbgKVStore)
 add_headers_and_sources(dbms src/Dictionaries)
-add_headers_and_sources(dbms src/Encryption)
+# Encryption needs to link tiflash-proxy, but we do not want to link tiflash-proxy to tiflash_common_io.
+# So we put the encryption source files in dbms.
+add_headers_and_sources(dbms src/IO/Encryption)
+# FileProvider relies on Encryption, so we put it in dbms as well.
+add_headers_and_sources(dbms src/IO/FileProvider)
 add_headers_and_sources(dbms src/Interpreters)
 add_headers_and_sources(dbms src/Interpreters/SharedContexts)
 add_headers_and_sources(dbms src/Columns)
 add_headers_and_sources(dbms src/Storages)
 add_headers_and_sources(dbms src/Storages/S3)
-add_headers_and_sources(dbms src/Storages/Transaction)
 add_headers_and_sources(dbms src/WindowFunctions)
+add_headers_and_sources(dbms src/TiDB/Decode)
+add_headers_and_sources(dbms src/TiDB/Collation)
 add_headers_and_sources(dbms src/TiDB/Schema)
 add_headers_and_sources(dbms src/TiDB/Etcd)
 add_headers_and_sources(dbms src/TiDB)
@@ -133,8 +144,8 @@ if (MAKE_STATIC_LIBRARIES)
     add_library(dbms ${dbms_headers} ${dbms_sources})
 else ()
     add_library(dbms SHARED ${dbms_headers} ${dbms_sources})
-    set_target_properties (dbms PROPERTIES SOVERSION ${VERSION_MAJOR} VERSION ${VERSION_SO} OUTPUT_NAME clickhouse)
-    install (TARGETS dbms LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT clickhouse)
+    set_target_properties (dbms PROPERTIES SOVERSION ${VERSION_MAJOR} VERSION ${VERSION_SO} OUTPUT_NAME tiflash)
+    install (TARGETS dbms LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT tiflash)
 endif ()
 
 target_include_directories(dbms PUBLIC "${TIFLASH_PROXY_INCLUDE_DIR}")
@@ -182,6 +193,7 @@ target_link_libraries (tiflash_common_io
     prometheus-cpp::pull
     cpptoml
     magic_enum
+    simdjson
     libsymbolization
     ${RE2_LIBRARY}
     ${RE2_ST_LIBRARY}
@@ -206,6 +218,7 @@ target_link_libraries (dbms
     dtpb
     RemoteTaskProto
     PSCheckpointProto
+    kvstore
 )
 
 # always add GmSSL include dir to the include path for static analysis
@@ -235,11 +248,6 @@ endif()
 
 target_link_libraries (dbms ${Poco_Foundation_LIBRARY})
 
-if (USE_ICU)
-    target_link_libraries (dbms ${ICU_LIBS})
-    target_include_directories (dbms PRIVATE ${ICU_INCLUDE_DIR})
-endif ()
-
 target_link_libraries (dbms
     Threads::Threads
 )
@@ -252,6 +260,14 @@ if (NOT USE_INTERNAL_LZ4_LIBRARY)
 endif ()
 if (NOT USE_INTERNAL_ZSTD_LIBRARY)
     target_include_directories (dbms BEFORE PRIVATE ${ZSTD_INCLUDE_DIR})
+endif ()
+
+if (USE_QPL)
+    target_link_libraries (tiflash_common_io PUBLIC ${QPL_LIBRARY})
+    target_include_directories (dbms BEFORE PRIVATE ${QPL_INCLUDE_DIR})
+    set_source_files_properties (
+        src/IO/Compression/CompressionCodecDeflateQpl.cpp
+        PROPERTIES COMPILE_FLAGS "-mwaitpkg")
 endif ()
 
 target_include_directories (dbms PUBLIC ${DBMS_INCLUDE_DIR})
@@ -310,7 +326,7 @@ if (ENABLE_TESTS)
     target_compile_definitions(dbms PUBLIC DBMS_PUBLIC_GTEST)
     target_compile_definitions(dbms PUBLIC MULTIPLE_CONTEXT_GTEST)
 
-    target_link_libraries(gtests_dbms test_util_gtest_main tiflash_functions tiflash-dttool-lib delta_merge)
+    target_link_libraries(gtests_dbms test_util_gtest_main tiflash_functions tiflash-dttool-lib delta_merge kvstore)
 
     install (TARGETS gtests_dbms
             COMPONENT tiflash-gtest
@@ -354,7 +370,7 @@ if (ENABLE_TESTS)
         )
     target_include_directories(bench_dbms BEFORE PRIVATE ${SPARCEHASH_INCLUDE_DIR} ${benchmark_SOURCE_DIR}/include)
     target_compile_definitions(bench_dbms PUBLIC DBMS_PUBLIC_GTEST)
-    target_link_libraries(bench_dbms gtest dbms test_util_bench_main benchmark tiflash_functions server_for_test)
+    target_link_libraries(bench_dbms gtest dbms test_util_bench_main benchmark tiflash_functions server_for_test delta_merge kvstore)
 
     add_check(bench_dbms)
 endif ()

@@ -14,17 +14,15 @@
 
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
 #include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
-#include <IO/ReadBufferFromString.h>
+#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/Compression/CompressionInfo.h>
 
 namespace DB
 {
-CHBlockChunkDecodeAndSquash::CHBlockChunkDecodeAndSquash(
-    const Block & header,
-    size_t rows_limit_)
+CHBlockChunkDecodeAndSquash::CHBlockChunkDecodeAndSquash(const Block & header, size_t rows_limit_)
     : codec(header)
     , rows_limit(rows_limit_)
-{
-}
+{}
 
 std::optional<Block> CHBlockChunkDecodeAndSquash::decodeAndSquashV1(std::string_view sv)
 {

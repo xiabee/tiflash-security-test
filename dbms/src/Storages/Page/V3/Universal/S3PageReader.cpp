@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/ReadBufferFromRandomAccessFile.h>
+#include <IO/Buffer/ReadBufferFromRandomAccessFile.h>
 #include <Storages/Page/V3/Universal/S3PageReader.h>
 #include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
 #include <Storages/S3/S3Common.h>
@@ -49,9 +49,7 @@ Page S3PageReader::read(const UniversalPageIdAndEntry & page_id_and_entry)
     auto buf_size = location.size_in_file;
     RUNTIME_CHECK(buf_size != 0, page_id_and_entry);
     char * data_buf = static_cast<char *>(alloc(buf_size));
-    MemHolder mem_holder = createMemHolder(data_buf, [&, buf_size](char * p) {
-        free(p, buf_size);
-    });
+    MemHolder mem_holder = createMemHolder(data_buf, [&, buf_size](char * p) { free(p, buf_size); });
     // TODO: support checksum verification
     buf.readStrict(data_buf, buf_size);
     Page page{UniversalPageIdFormat::getU64ID(page_id_and_entry.first)};
@@ -76,12 +74,13 @@ UniversalPageMap S3PageReader::read(const UniversalPageIdAndEntries & page_id_an
     return page_map;
 }
 
-std::pair<UniversalPageMap, UniversalPageMap> S3PageReader::read(const FieldReadInfos & to_read)
+std::pair<UniversalPageMap, UniversalPageMap> S3PageReader::read(FieldReadInfos & to_read)
 {
     UniversalPageMap complete_page_map;
     size_t read_fields_size = 0;
-    for (const auto & read_info : to_read)
+    for (auto & read_info : to_read)
     {
+        std::sort(read_info.fields.begin(), read_info.fields.end());
         const auto & page_entry = read_info.entry;
         // read the whole page from S3 and save it as `complete_page`
         complete_page_map.emplace(read_info.page_id, read(std::make_pair(read_info.page_id, page_entry)));
@@ -91,9 +90,8 @@ std::pair<UniversalPageMap, UniversalPageMap> S3PageReader::read(const FieldRead
         }
     }
     char * read_fields_buf = static_cast<char *>(alloc(read_fields_size));
-    MemHolder read_fields_mem_holder = createMemHolder(read_fields_buf, [&, read_fields_size](char * p) {
-        free(p, read_fields_size);
-    });
+    MemHolder read_fields_mem_holder
+        = createMemHolder(read_fields_buf, [&, read_fields_size](char * p) { free(p, read_fields_size); });
     size_t data_pos = 0;
     UniversalPageMap read_fields_page_map;
     for (const auto & read_info : to_read)

@@ -14,6 +14,7 @@
 
 #include <Common/Exception.h>
 #include <Common/FailPoint.h>
+#include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
@@ -21,13 +22,13 @@
 #include <Poco/Path.h>
 #include <Storages/BackgroundProcessingPool.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
+#include <Storages/KVStore/KVStore.h>
+#include <Storages/KVStore/TMTContext.h>
+#include <Storages/KVStore/Types.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
-#include <Storages/Transaction/KVStore.h>
-#include <Storages/Transaction/TMTContext.h>
-#include <Storages/Transaction/Types.h>
 #include <aws/s3/S3Client.h>
 
 #include <ext/scope_guard.h>
@@ -43,8 +44,7 @@ UniversalPageStorageService::UniversalPageStorageService(Context & global_contex
     : global_context(global_context_)
     , uni_page_storage(nullptr)
     , log(Logger::get("UniPSService"))
-{
-}
+{}
 
 UniversalPageStorageServicePtr UniversalPageStorageService::create(
     Context & context,
@@ -60,12 +60,16 @@ UniversalPageStorageServicePtr UniversalPageStorageService::create(
     // for disagg tiflash write node
     if (S3::ClientFactory::instance().isEnabled() && !context.getSharedContextDisagg()->isDisaggregatedComputeMode())
     {
+        service->removeAllLocalCheckpointFiles();
         // TODO: make this interval reloadable
         auto interval_s = context.getSettingsRef().remote_checkpoint_interval_seconds;
         // Only upload checkpoint when S3 is enabled
         service->checkpoint_pool = std::make_unique<BackgroundProcessingPool>(1, "ps-checkpoint");
         service->remote_checkpoint_handle = service->checkpoint_pool->addTask(
-            [service] {
+            [srv_weak = std::weak_ptr<UniversalPageStorageService>(service)] {
+                auto service = srv_weak.lock();
+                if (!service)
+                    return false;
                 return service->uploadCheckpoint();
             },
             /*multi*/ false,
@@ -74,7 +78,10 @@ UniversalPageStorageServicePtr UniversalPageStorageService::create(
 
     auto & bkg_pool = context.getBackgroundPool();
     service->gc_handle = bkg_pool.addTask(
-        [service] {
+        [srv_weak = std::weak_ptr<UniversalPageStorageService>(service)] {
+            auto service = srv_weak.lock();
+            if (!service)
+                return false;
             return service->gc();
         },
         false,
@@ -82,8 +89,7 @@ UniversalPageStorageServicePtr UniversalPageStorageService::create(
     return service;
 }
 
-UniversalPageStorageServicePtr
-UniversalPageStorageService::createForTest(
+UniversalPageStorageServicePtr UniversalPageStorageService::createForTest(
     Context & context,
     const String & name,
     PSDiskDelegatorPtr delegator,
@@ -102,9 +108,9 @@ bool CheckpointUploadFunctor::operator()(const PS::V3::LocalCheckpointFiles & ch
     return remote_store->putCheckpointFiles(checkpoint, store_id, sequence);
 }
 
-void UniversalPageStorageService::setSyncAllData()
+void UniversalPageStorageService::setUploadAllData()
 {
-    sync_all_at_next_upload = true;
+    upload_all_at_next_upload = true;
     gc_handle->wake();
     LOG_INFO(log, "sync_all flag is set, next checkpoint will upload all existing data");
 }
@@ -135,7 +141,7 @@ bool UniversalPageStorageService::uploadCheckpoint()
 
     auto & tmt = global_context.getTMTContext();
 
-    auto store_info = tmt.getKVStore()->getStoreMeta();
+    auto store_info = tmt.getKVStore()->clonedStoreMeta();
     if (store_info.id() == InvalidStoreID)
     {
         LOG_INFO(log, "Skip checkpoint because store meta is not initialized");
@@ -148,10 +154,10 @@ bool UniversalPageStorageService::uploadCheckpoint()
         return false;
     }
     auto s3lock_client = tmt.getS3LockClient();
-    const bool force_sync = sync_all_at_next_upload.load();
-    bool upload_done = uploadCheckpointImpl(store_info, s3lock_client, remote_store, force_sync);
-    if (force_sync && upload_done)
-        sync_all_at_next_upload = false;
+    const bool force_upload = upload_all_at_next_upload.load();
+    bool upload_done = uploadCheckpointImpl(store_info, s3lock_client, remote_store, force_upload);
+    if (force_upload && upload_done)
+        upload_all_at_next_upload = false;
     // always return false to run at fixed rate
     return false;
 }
@@ -210,9 +216,14 @@ bool UniversalPageStorageService::uploadCheckpointImpl(
     // TODO: directly write into remote store. But take care of the order
     //       of CheckpointData files, lock files, and CheckpointManifest.
     const auto upload_info = uni_page_storage->allocateNewUploadLocksInfo();
-    auto local_dir = Poco::Path(global_context.getTemporaryPath() + fmt::format("/checkpoint_upload_{}", upload_info.upload_sequence)).absolute();
+    auto local_dir = getCheckpointLocalDir(upload_info.upload_sequence);
     Poco::File(local_dir).createDirectories();
     auto local_dir_str = local_dir.toString() + "/";
+    SCOPE_EXIT({
+        // No matter the local checkpoint files are uploaded successfully or fails, delete them directly.
+        // Since the directory has been created before, it should exists.
+        Poco::File(local_dir).remove(true);
+    });
 
     /*
      * If using `snapshot->sequence` as a part of manifest name, we can NOT
@@ -266,6 +277,7 @@ bool UniversalPageStorageService::uploadCheckpointImpl(
             .remote_store = remote_store,
             .log = log,
         },
+        .only_upload_manifest = settings.remote_checkpoint_only_upload_manifest,
     };
 
     const auto write_stats = uni_page_storage->dumpIncrementalCheckpoint(opts);
@@ -280,20 +292,11 @@ bool UniversalPageStorageService::uploadCheckpointImpl(
         write_stats.incremental_data_bytes,
         write_stats.compact_data_bytes);
 
-    // the checkpoint is uploaded to remote data store, remove local temp files
-    Poco::File(local_dir).remove(true);
-
     return true;
 }
 
-bool UniversalPageStorageService::gc()
+bool UniversalPageStorageService::gc() const
 {
-    Timepoint now = Clock::now();
-    const std::chrono::seconds try_gc_period(60);
-    if (now < (last_try_gc_time.load() + try_gc_period))
-        return false;
-
-    last_try_gc_time = now;
     // TODO: reload config
     return this->uni_page_storage->gc();
 }
@@ -318,4 +321,29 @@ void UniversalPageStorageService::shutdown()
         gc_handle = nullptr;
     }
 }
+
+void UniversalPageStorageService::removeAllLocalCheckpointFiles() const
+{
+    Poco::File temp_dir(global_context.getTemporaryPath());
+    if (temp_dir.exists() && temp_dir.isDirectory())
+    {
+        std::vector<String> short_names;
+        temp_dir.list(short_names);
+        for (const auto & name : short_names)
+        {
+            if (startsWith(name, checkpoint_dirname_prefix))
+            {
+                auto checkpoint_dirname = global_context.getTemporaryPath() + "/" + name;
+                Poco::File(checkpoint_dirname).remove(true);
+            }
+        }
+    }
+}
+
+Poco::Path UniversalPageStorageService::getCheckpointLocalDir(UInt64 seq) const
+{
+    return Poco::Path(global_context.getTemporaryPath() + fmt::format("/{}{}", checkpoint_dirname_prefix, seq))
+        .absolute();
+}
+
 } // namespace DB

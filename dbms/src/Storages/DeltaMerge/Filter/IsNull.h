@@ -16,10 +16,9 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB
+namespace DB::DM
 {
-namespace DM
-{
+
 class IsNull : public RSOperator
 {
     Attr attr;
@@ -27,26 +26,20 @@ class IsNull : public RSOperator
 public:
     explicit IsNull(const Attr & attr_)
         : attr(attr_)
-    {
-    }
+    {}
 
     String name() override { return "isnull"; }
 
-    Attrs getAttrs() override { return {attr}; }
+    ColIds getColumnIDs() override { return {attr.col_id}; }
 
-    String toDebugString() override
-    {
-        return fmt::format(R"({{"op":"{}","col":"{}"}})", name(), attr.col_name);
-    }
+    String toDebugString() override { return fmt::format(R"({{"op":"{}","col":"{}"}})", name(), attr.col_name); }
 
-    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override
+    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
     {
-        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_SOME(param, attr, rsindex);
-        return rsindex.minmax->checkIsNull(pack_id);
+        RSResults results(pack_count, RSResult::Some);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
+        return rsindex.minmax->checkIsNull(start_pack, pack_count);
     }
 };
 
-
-} // namespace DM
-
-} // namespace DB
+} // namespace DB::DM

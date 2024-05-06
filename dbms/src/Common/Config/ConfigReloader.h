@@ -31,7 +31,6 @@
 
 namespace DB
 {
-class Context;
 
 /** Every two seconds checks configuration files for update.
   * If configuration is changed, then config will be reloaded by ConfigProcessor
@@ -45,7 +44,11 @@ public:
 
     /** include_from_path is usually /etc/metrika.xml (i.e. value of <include_from> tag)
       */
-    ConfigReloader(const std::string & path, Updater && updater, bool already_loaded, const char * name = "CfgReloader");
+    ConfigReloader(
+        const std::string & path,
+        Updater && updater,
+        bool already_loaded,
+        const char * name = "CfgReloader");
 
     virtual ~ConfigReloader();
 
@@ -89,6 +92,8 @@ private:
 
     std::atomic_bool quit{false};
     std::thread thread;
+
+    std::condition_variable cv;
 };
 
 } // namespace DB

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Encryption/WriteReadableFile.h>
+#include <IO/BaseFile/WriteReadableFile.h>
 #include <Storages/Page/PageUtil.h>
 #include <Storages/Page/V3/Blob/BlobFile.h>
 #include <Storages/PathPool.h>
@@ -26,10 +26,11 @@ extern const char exception_before_page_file_write_sync[];
 
 namespace PS::V3
 {
-BlobFile::BlobFile(String parent_path_,
-                   BlobFileId blob_id_,
-                   FileProviderPtr file_provider_,
-                   PSDiskDelegatorPtr delegator_)
+BlobFile::BlobFile(
+    String parent_path_,
+    BlobFileId blob_id_,
+    FileProviderPtr file_provider_,
+    PSDiskDelegatorPtr delegator_)
     : blob_id(blob_id_)
     , file_provider{std::move(file_provider_)}
     , delegator(std::move(delegator_))
@@ -40,7 +41,10 @@ BlobFile::BlobFile(String parent_path_,
         getPath(),
         getEncryptionPath(),
         false,
-        /*create_new_encryption_info_*/ !file_in_disk.exists());
+        /*create_new_encryption_info_*/ !file_in_disk.exists(),
+        /*skip_encryption*/ file_provider->isKeyspaceEncryptionEnabled()
+        // When keyspace encryption is enabled, we encrypt the page data instead of the whole BlobFile
+    );
 
     file_size = file_in_disk.getSize();
     {
@@ -50,10 +54,11 @@ BlobFile::BlobFile(String parent_path_,
         PageFileIdAndLevel id_lvl{blob_id, 0};
         if (!delegator->fileExist(id_lvl))
         {
-            delegator->addPageFileUsedSize(id_lvl,
-                                           file_size,
-                                           parent_path,
-                                           /*need_insert_location*/ true);
+            delegator->addPageFileUsedSize(
+                id_lvl,
+                file_size,
+                parent_path,
+                /*need_insert_location*/ true);
         }
     }
 }
@@ -62,8 +67,9 @@ void BlobFile::read(char * buffer, size_t offset, size_t size, const ReadLimiter
 {
     if (unlikely(wrfile->isClosed()))
     {
-        throw Exception("Write failed, FD is closed which [path=" + parent_path + "], BlobFile should also be closed",
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Write failed, FD is closed which [path=" + parent_path + "], BlobFile should also be closed",
+            ErrorCodes::LOGICAL_ERROR);
     }
 
     PageUtil::readFile(wrfile, offset, buffer, size, read_limiter, background);
@@ -81,20 +87,39 @@ void BlobFile::write(char * buffer, size_t offset, size_t size, const WriteLimit
 
     if (unlikely(wrfile->isClosed()))
     {
-        throw Exception(fmt::format("Write failed, FD is closed which [path={}], BlobFile should also be closed", parent_path),
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            fmt::format("Write failed, FD is closed which [path={}], BlobFile should also be closed", parent_path),
+            ErrorCodes::LOGICAL_ERROR);
     }
 
-    fiu_do_on(FailPoints::exception_before_page_file_write_sync,
-              { // Mock that exception happend before write and sync
-                  throw Exception(fmt::format("Fail point {} is triggered.", FailPoints::exception_before_page_file_write_sync),
-                                  ErrorCodes::FAIL_POINT_ERROR);
-              });
+    fiu_do_on(
+        FailPoints::exception_before_page_file_write_sync,
+        { // Mock that exception happend before write and sync
+            throw Exception(
+                fmt::format("Fail point {} is triggered.", FailPoints::exception_before_page_file_write_sync),
+                ErrorCodes::FAIL_POINT_ERROR);
+        });
 
 #ifndef NDEBUG
-    PageUtil::writeFile(wrfile, offset, buffer, size, write_limiter, background, /*truncate_if_failed=*/false, /*enable_failpoint=*/true);
+    PageUtil::writeFile(
+        wrfile,
+        offset,
+        buffer,
+        size,
+        write_limiter,
+        background,
+        /*truncate_if_failed=*/false,
+        /*enable_failpoint=*/true);
 #else
-    PageUtil::writeFile(wrfile, offset, buffer, size, write_limiter, background, /*truncate_if_failed=*/false, /*enable_failpoint=*/false);
+    PageUtil::writeFile(
+        wrfile,
+        offset,
+        buffer,
+        size,
+        write_limiter,
+        background,
+        /*truncate_if_failed=*/false,
+        /*enable_failpoint=*/false);
 #endif
     PageUtil::syncFile(wrfile);
 
@@ -110,10 +135,7 @@ void BlobFile::write(char * buffer, size_t offset, size_t size, const WriteLimit
 
     if (expand_size != 0)
     {
-        delegator->addPageFileUsedSize(std::make_pair(blob_id, 0),
-                                       expand_size,
-                                       parent_path,
-                                       false);
+        delegator->addPageFileUsedSize(std::make_pair(blob_id, 0), expand_size, parent_path, false);
     }
 }
 

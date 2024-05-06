@@ -14,9 +14,10 @@
 
 #pragma once
 #include <Common/Exception.h>
-#include <IO/HashingWriteBuffer.h>
+#include <Common/ProfileEvents.h>
 #include <Poco/Base64Decoder.h>
 #include <Poco/Base64Encoder.h>
+#include <city.h>
 #include <common/crc64.h>
 #ifdef __x86_64__
 #include <xxh_x86dispatch.h>
@@ -54,7 +55,10 @@ public:
     using HashType = std::byte;
     static constexpr size_t hash_size = sizeof(HashType);
     static constexpr auto algorithm = ::DB::ChecksumAlgo::None;
-    static void update(const void *, size_t length) { ProfileEvents::increment(ProfileEvents::ChecksumDigestBytes, length); }
+    static void update(const void *, size_t length)
+    {
+        ProfileEvents::increment(ProfileEvents::ChecksumDigestBytes, length);
+    }
     [[nodiscard]] static HashType checksum() { return std::byte{0}; }
 };
 
@@ -136,12 +140,17 @@ struct ChecksumFrame
 {
     size_t bytes;
     typename Algorithm::HashType checksum;
-    uint8_t pad[alignof(size_t) > alignof(typename Algorithm::HashType) ? alignof(size_t) - sizeof(typename Algorithm::HashType) : 0];
+    uint8_t
+        pad[alignof(size_t) > alignof(typename Algorithm::HashType)
+                ? alignof(size_t) - sizeof(typename Algorithm::HashType)
+                : 0];
     uint8_t data[0];
 };
 
-#define BASIC_CHECK_FOR_FRAME(ALGO)                                                                                      \
-    static_assert(std::is_standard_layout_v<ChecksumFrame<Digest::ALGO>>, "DMChecksumFrame must be in standard-layout"); \
+#define BASIC_CHECK_FOR_FRAME(ALGO)                             \
+    static_assert(                                              \
+        std::is_standard_layout_v<ChecksumFrame<Digest::ALGO>>, \
+        "DMChecksumFrame must be in standard-layout");          \
     static_assert(std::is_trivial_v<ChecksumFrame<Digest::ALGO>>, "DMChecksumFrame must be trivial");
 
 BASIC_CHECK_FOR_FRAME(CRC32)

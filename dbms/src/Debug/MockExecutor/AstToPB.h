@@ -15,7 +15,8 @@
 #pragma once
 
 #include <Flash/Coprocessor/ChunkCodec.h>
-#include <Storages/Transaction/TiDB.h>
+#include <TiDB/Schema/TiDB.h>
+#include <kvproto/mpp.pb.h>
 
 namespace DB
 {
@@ -46,6 +47,7 @@ using MPPCtxPtr = std::shared_ptr<MPPCtx>;
 struct MPPInfo
 {
     Timestamp start_ts;
+    Int64 gather_id;
     UInt64 query_ts;
     UInt64 server_id;
     UInt64 local_query_id;
@@ -56,6 +58,7 @@ struct MPPInfo
 
     MPPInfo(
         Timestamp start_ts_,
+        Int64 gather_id_,
         UInt64 query_ts_,
         UInt64 server_id_,
         UInt64 local_query_id_,
@@ -64,6 +67,7 @@ struct MPPInfo
         const std::vector<Int64> & sender_target_task_ids_,
         const std::unordered_map<String, std::vector<Int64>> & receiver_source_task_ids_map_)
         : start_ts(start_ts_)
+        , gather_id(gather_id_)
         , query_ts(query_ts_)
         , server_id(server_id_)
         , local_query_id(local_query_id_)
@@ -86,11 +90,17 @@ void literalFieldToTiPBExpr(const ColumnInfo & ci, const Field & field, tipb::Ex
 void literalToPB(tipb::Expr * expr, const Field & value, int32_t collator_id);
 String getFunctionNameForConstantFolding(tipb::Expr * expr);
 void foldConstant(tipb::Expr * expr, int32_t collator_id, const Context & context);
-void functionToPB(const DAGSchema & input, ASTFunction * func, tipb::Expr * expr, int32_t collator_id, const Context & context);
+void functionToPB(
+    const DAGSchema & input,
+    ASTFunction * func,
+    tipb::Expr * expr,
+    int32_t collator_id,
+    const Context & context);
 void identifierToPB(const DAGSchema & input, ASTIdentifier * id, tipb::Expr * expr, int32_t collator_id);
 void astToPB(const DAGSchema & input, ASTPtr ast, tipb::Expr * expr, int32_t collator_id, const Context & context);
 void collectUsedColumnsFromExpr(const DAGSchema & input, ASTPtr ast, std::unordered_set<String> & used_columns);
 TiDB::ColumnInfo compileExpr(const DAGSchema & input, ASTPtr ast);
 void compileFilter(const DAGSchema & input, ASTPtr ast, std::vector<ASTPtr> & conditions);
+void fillTaskMetaWithMPPInfo(mpp::TaskMeta & task_meta, const MPPInfo & mpp_info);
 
 } // namespace DB

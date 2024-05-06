@@ -71,13 +71,25 @@ public:
 
     void enablePipeline(bool is_enable) const;
 
-    static void dagRequestEqual(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & actual);
+    static ::testing::AssertionResult dagRequestEqual(
+        const char * lhs_expr,
+        const char * rhs_expr,
+        const String & expected_string,
+        const std::shared_ptr<tipb::DAGRequest> & actual);
 
-    void executeInterpreter(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & request, size_t concurrency);
-    void executeInterpreterWithDeltaMerge(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & request, size_t concurrency);
+    void executeInterpreter(
+        const String & expected_string,
+        const std::shared_ptr<tipb::DAGRequest> & request,
+        size_t concurrency);
+    void executeInterpreterWithDeltaMerge(
+        const String & expected_string,
+        const std::shared_ptr<tipb::DAGRequest> & request,
+        size_t concurrency);
 
     ColumnsWithTypeAndName executeRawQuery(const String & query, size_t concurrency = 1);
-    void executeAndAssertColumnsEqual(const std::shared_ptr<tipb::DAGRequest> & request, const ColumnsWithTypeAndName & expect_columns);
+    void executeAndAssertColumnsEqual(
+        const std::shared_ptr<tipb::DAGRequest> & request,
+        const ColumnsWithTypeAndName & expect_columns);
 
     // To check the output column with index = column_index sorted.
     struct SortInfo
@@ -107,30 +119,26 @@ public:
         case ExchangeReceiver:
             return "exchange_receiver_0";
         default:
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                            "Unknown Executor Source type {}",
-                            type);
+            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unknown Executor Source type {}", fmt::underlying(type));
         }
     }
 
-    ColumnsWithTypeAndName executeStreams(DAGContext * dag_context, bool enable_memory_tracker = false);
+    ColumnsWithTypeAndName executeStreams(DAGContext * dag_context, bool is_internal = true);
 
-    ColumnsWithTypeAndName executeStreams(
-        const std::shared_ptr<tipb::DAGRequest> & request,
-        size_t concurrency = 1,
-        bool enable_memory_tracker = false);
+    ColumnsWithTypeAndName executeStreams(const std::shared_ptr<tipb::DAGRequest> & request, size_t concurrency = 1);
 
-    Blocks getExecuteStreamsReturnBlocks(
+    ColumnsWithTypeAndName executeStreamsWithMemoryTracker(
         const std::shared_ptr<tipb::DAGRequest> & request,
-        size_t concurrency = 1,
-        bool enable_memory_tracker = false);
+        size_t concurrency = 1);
+
+    Blocks getExecuteStreamsReturnBlocks(const std::shared_ptr<tipb::DAGRequest> & request, size_t concurrency = 1);
 
     /// test execution summary
     // <rows, concurrency>
-    using ProfileInfo = std::pair<int, size_t>;
+    using ProfileInfo = std::pair<int, int>;
     using Expect = std::unordered_map<String, ProfileInfo>;
     static constexpr int not_check_rows = -1;
-    static constexpr UInt64 not_check_concurrency = -1;
+    static constexpr int not_check_concurrency = -1;
 
 
     void testForExecutionSummary(
@@ -146,14 +154,15 @@ private:
     void checkBlockSorted(
         const std::shared_ptr<tipb::DAGRequest> & request,
         const SortInfos & sort_infos,
-        std::function<::testing::AssertionResult(const ColumnsWithTypeAndName &, const ColumnsWithTypeAndName &)> assert_func);
+        std::function<::testing::AssertionResult(const ColumnsWithTypeAndName &, const ColumnsWithTypeAndName &)>
+            assert_func);
 
 protected:
     MockDAGRequestContext context;
     std::unique_ptr<DAGContext> dag_context_ptr;
 };
 
-#define ASSERT_DAGREQUEST_EQAUL(str, request) dagRequestEqual((str), (request));
+#define ASSERT_DAGREQUEST_EQAUL(str, request) ASSERT_PRED_FORMAT2(ExecutorTest::dagRequestEqual, (str), (request));
 #define ASSERT_BLOCKINPUTSTREAM_EQAUL(str, request, concurrency) executeInterpreter((str), (request), (concurrency))
 
 // nullable type

@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Storages/Transaction/TiDB.h>
+#include <TiDB/Schema/TiDB.h>
 
 namespace DB
 {
@@ -31,7 +31,7 @@ struct SchemaNameMapper
 
     static KeyspaceID getMappedNameKeyspaceID(const String & name)
     {
-        auto keyspace_prefix_len = KEYSPACE_PREFIX.length();
+        static constexpr auto keyspace_prefix_len = KEYSPACE_PREFIX.length();
         auto pos = name.find(KEYSPACE_PREFIX);
         if (pos == String::npos)
             return NullspaceID;
@@ -62,7 +62,13 @@ struct SchemaNameMapper
 
     static String map2Keyspace(KeyspaceID keyspace_id, const String & name)
     {
-        return keyspace_id == NullspaceID ? name : KEYSPACE_PREFIX.data() + std::to_string(keyspace_id) + "_" + name;
+        return keyspace_id == NullspaceID ? name : fmt::format("{}{}_{}", KEYSPACE_PREFIX, keyspace_id, name);
+    }
+
+    virtual String mapDatabaseName(DatabaseID db_id, KeyspaceID keyspace_id) const
+    {
+        auto db_name = fmt::format("{}{}", DATABASE_PREFIX, db_id);
+        return map2Keyspace(keyspace_id, db_name);
     }
 
     virtual String mapDatabaseName(const TiDB::DBInfo & db_info) const
@@ -70,6 +76,7 @@ struct SchemaNameMapper
         auto db_name = fmt::format("{}{}", DATABASE_PREFIX, db_info.id);
         return map2Keyspace(db_info.keyspace_id, db_name);
     }
+
     virtual String displayDatabaseName(const TiDB::DBInfo & db_info) const
     {
         return map2Keyspace(db_info.keyspace_id, db_info.name);
@@ -88,17 +95,22 @@ struct SchemaNameMapper
     // Only use for logging / debugging
     virtual String debugDatabaseName(const TiDB::DBInfo & db_info) const
     {
-        auto db_name = db_info.name + "(" + std::to_string(db_info.id) + ")";
-        return map2Keyspace(db_info.keyspace_id, db_name);
+        return map2Keyspace(db_info.keyspace_id, db_info.name);
     }
     virtual String debugTableName(const TiDB::TableInfo & table_info) const
     {
-        auto table_name = table_info.name + "(" + std::to_string(table_info.id) + ")";
-        return map2Keyspace(table_info.keyspace_id, table_name);
+        return map2Keyspace(table_info.keyspace_id, table_info.name);
     }
     virtual String debugCanonicalName(const TiDB::DBInfo & db_info, const TiDB::TableInfo & table_info) const
     {
         return debugDatabaseName(db_info) + "." + debugTableName(table_info);
+    }
+
+    virtual String debugCanonicalName(const TiDB::TableInfo & table_info, DatabaseID db_id, KeyspaceID keyspace_id)
+        const
+    {
+        auto db_name = fmt::format("{}{}", DATABASE_PREFIX, db_id);
+        return map2Keyspace(keyspace_id, db_name) + "." + debugTableName(table_info);
     }
 };
 

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Encryption/FileProvider_fwd.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Storages/Page/V3/LogFile/LogFilename.h>
 #include <Storages/Page/V3/LogFile/LogReader.h>
 #include <Storages/Page/V3/WALStore.h>
@@ -39,37 +39,55 @@ public:
         throw Exception(msg, ErrorCodes::CORRUPTED_DATA);
     }
 
-    bool hasError() const
-    {
-        return error_happened;
-    }
+    bool hasError() const { return error_happened; }
 
 private:
     bool error_happened = false;
 };
 
+using LogReaderPtr = std::unique_ptr<LogReader>;
+
 class WALStoreReader
 {
 public:
     static LogFilenameSet listAllFiles(const PSDiskDelegatorPtr & delegator, LoggerPtr logger);
-    static std::tuple<std::optional<LogFilename>, LogFilenameSet>
-    findCheckpoint(LogFilenameSet && all_files);
+    static std::tuple<std::optional<LogFilename>, LogFilenameSet> findCheckpoint(LogFilenameSet && all_files);
 
-    static WALStoreReaderPtr create(String storage_name,
-                                    FileProviderPtr & provider,
-                                    LogFilenameSet files,
-                                    WALRecoveryMode recovery_mode_ = WALRecoveryMode::TolerateCorruptedTailRecords,
-                                    const ReadLimiterPtr & read_limiter = nullptr);
+    static WALStoreReaderPtr create(
+        String storage_name,
+        FileProviderPtr & provider,
+        LogFilenameSet files,
+        WALRecoveryMode recovery_mode_ = WALRecoveryMode::TolerateCorruptedTailRecords,
+        const ReadLimiterPtr & read_limiter = nullptr);
 
-    static WALStoreReaderPtr create(String storage_name,
-                                    FileProviderPtr & provider,
-                                    PSDiskDelegatorPtr & delegator,
-                                    WALRecoveryMode recovery_mode_ = WALRecoveryMode::TolerateCorruptedTailRecords,
-                                    const ReadLimiterPtr & read_limiter = nullptr);
+    static WALStoreReaderPtr create(
+        String storage_name,
+        FileProviderPtr & provider,
+        PSDiskDelegatorPtr & delegator,
+        WALRecoveryMode recovery_mode_ = WALRecoveryMode::TolerateCorruptedTailRecords,
+        const ReadLimiterPtr & read_limiter = nullptr);
+
+    static LogReaderPtr createLogReader(
+        const LogFilename & filename,
+        FileProviderPtr & provider,
+        ReportCollector * reporter,
+        WALRecoveryMode recovery_mode,
+        const ReadLimiterPtr & read_limiter,
+        LoggerPtr logger);
+
+    static String getLastRecordInLogFile(
+        const LogFilename & filename,
+        FileProviderPtr & provider,
+        WALRecoveryMode recovery_mode,
+        const ReadLimiterPtr & read_limiter,
+        LoggerPtr logger);
 
     bool remained() const;
 
-    std::optional<String> next();
+    UInt64 getSnapSeqForCheckpoint() const;
+
+    // std::pair<from_checkpoint, record>
+    std::pair<bool, std::optional<String>> next();
 
     void throwIfError() const
     {
@@ -105,7 +123,8 @@ private:
     ReportCollector reporter;
     const ReadLimiterPtr read_limiter;
 
-    bool checkpoint_read_done;
+    bool checkpoint_reader_created;
+    bool reading_checkpoint_file;
     const std::optional<LogFilename> checkpoint_file;
     const LogFilenameSet files_to_read;
     LogFilenameSet::const_iterator next_reading_file;

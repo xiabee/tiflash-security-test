@@ -32,14 +32,16 @@ struct MockSchemaGetter
         return MockTiDB::instance().getSchemaDiff(version);
     }
 
-    static bool checkSchemaDiffExists(Int64 version)
-    {
-        return MockTiDB::instance().checkSchemaDiffExists(version);
-    }
+    static bool checkSchemaDiffExists(Int64 version) { return MockTiDB::instance().checkSchemaDiffExists(version); }
 
-    static TiDB::TableInfoPtr getTableInfo(DatabaseID, TableID table_id)
+    static TiDB::TableInfoPtr getTableInfo(DatabaseID, TableID table_id, [[maybe_unused]] bool try_mvcc = true)
     {
         return MockTiDB::instance().getTableInfoByID(table_id);
+    }
+
+    static std::pair<TiDB::TableInfoPtr, bool> getTableInfoAndCheckMvcc(DatabaseID db_id, TableID table_id)
+    {
+        return {getTableInfo(db_id, table_id), false};
     }
 
     static std::vector<TiDB::DBInfoPtr> listDBs()

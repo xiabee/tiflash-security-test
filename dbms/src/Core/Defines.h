@@ -17,10 +17,6 @@
 #include <common/defines.h>
 #include <common/types.h>
 
-#define DBMS_NAME "TiFlash"
-#define DBMS_VERSION_MAJOR 1
-#define DBMS_VERSION_MINOR 1
-
 #define DBMS_DEFAULT_HOST "localhost"
 #define DBMS_DEFAULT_PORT 9000
 #define DBMS_DEFAULT_SECURE_PORT 9440
@@ -50,11 +46,13 @@
 
 // Timeout for building one disagg task in the TiFlash write node.
 // Including read index / wait index / generate segments snapshots.
-static constexpr UInt64 DEFAULT_DISAGG_TASK_BUILD_TIMEOUT_SEC = 10;
+static constexpr UInt64 DEFAULT_DISAGG_TASK_BUILD_TIMEOUT_SEC = 60;
 // Timeout for how long one disagg task is valid in the TiFlash write node.
 // It is now a short period to avoid long stale snapshots causing system
 // instable.
 static constexpr UInt64 DEFAULT_DISAGG_TASK_TIMEOUT_SEC = 5 * 60;
+// Timeout for FetchDisaggPages in the TiFlash compute node.
+static constexpr UInt64 DEFAULT_DISAGG_FETCH_PAGES_TIMEOUT_SEC = 30;
 
 #define DEFAULT_DAG_RECORDS_PER_CHUNK 1024L
 #define DEFAULT_BATCH_SEND_MIN_LIMIT (-1)
@@ -63,6 +61,8 @@ static constexpr UInt64 DEFAULT_DISAGG_TASK_TIMEOUT_SEC = 5 * 60;
   * Smaller values give better cache locality, less consumption of RAM, but more overhead to process the query.
   */
 #define DEFAULT_BLOCK_SIZE 65536
+
+constexpr size_t DEFAULT_BLOCK_BYTES = DEFAULT_BLOCK_SIZE * 256; // 256B per row, total 16MB.
 
 /** Which blocks should be formed for insertion into the table, if we control the formation of blocks.
   * (Sometimes the blocks are inserted exactly such blocks that have been read / transmitted from the outside, and this parameter does not affect their size.)
@@ -87,13 +87,6 @@ static constexpr UInt64 DEFAULT_DISAGG_TASK_TIMEOUT_SEC = 5 * 60;
 #define DBMS_CONNECTION_POOL_WITH_FAILOVER_DEFAULT_DECREASE_ERROR_PERIOD (2 * DBMS_DEFAULT_SEND_TIMEOUT_SEC)
 #define DEFAULT_QUERIES_QUEUE_WAIT_TIME_MS 5000 /// Maximum waiting time in the request queue.
 #define DBMS_DEFAULT_BACKGROUND_POOL_SIZE 16
-
-#define DBMS_MIN_REVISION_WITH_CLIENT_INFO 54032
-#define DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE 54058
-#define DBMS_MIN_REVISION_WITH_QUOTA_KEY_IN_CLIENT_INFO 54060
-#define DBMS_MIN_REVISION_WITH_TABLES_STATUS 54226
-#define DBMS_MIN_REVISION_WITH_TIME_ZONE_PARAMETER_IN_DATETIME_DATA_TYPE 54337
-#define DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME 54372
 
 /// Version of ClickHouse TCP protocol. Set to git tag with latest protocol change.
 #define DBMS_TCP_PROTOCOL_VERSION 54226

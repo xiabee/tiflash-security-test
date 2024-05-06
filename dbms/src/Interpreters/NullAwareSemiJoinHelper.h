@@ -17,8 +17,8 @@
 #include <Common/Logger.h>
 #include <Core/Block.h>
 #include <Flash/Coprocessor/JoinInterpreterHelper.h>
+#include <Interpreters/SemiJoinHelper.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
-
 
 namespace DB
 {
@@ -41,16 +41,13 @@ enum class NASemiJoinStep : UInt8
     DONE,
 };
 
-enum class NASemiJoinResultType : UInt8
-{
-    FALSE_VALUE,
-    TRUE_VALUE,
-    NULL_VALUE,
-};
-
 struct NARightSideInfo
 {
-    NARightSideInfo(bool has_all_key_null_row_, bool is_empty_, bool null_key_check_all_blocks_directly_, std::vector<RowsNotInsertToMap *> & null_rows_)
+    NARightSideInfo(
+        bool has_all_key_null_row_,
+        bool is_empty_,
+        bool null_key_check_all_blocks_directly_,
+        std::vector<RowsNotInsertToMap *> & null_rows_)
         : has_all_key_null_row(has_all_key_null_row_)
         , is_empty(is_empty_)
         , null_key_check_all_blocks_directly(null_key_check_all_blocks_directly_)
@@ -64,7 +61,10 @@ struct NARightSideInfo
 
 struct NALeftSideInfo
 {
-    NALeftSideInfo(const ConstNullMapPtr & null_map_, const ConstNullMapPtr & filter_map_, const ConstNullMapPtr & all_key_null_map_)
+    NALeftSideInfo(
+        const ConstNullMapPtr & null_map_,
+        const ConstNullMapPtr & filter_map_,
+        const ConstNullMapPtr & all_key_null_map_)
         : null_map(null_map_)
         , filter_map(filter_map_)
         , all_key_null_map(all_key_null_map_)
@@ -82,7 +82,7 @@ public:
 
     /// For convenience, callers can only consider the result of left outer semi join.
     /// This function will correct the result if it's not left outer semi join.
-    template <NASemiJoinResultType RES>
+    template <SemiJoinResultType RES>
     void setResult()
     {
         step = NASemiJoinStep::DONE;
@@ -91,40 +91,46 @@ public:
             result = RES;
             return;
         }
-        /// For (left) anti semi join
-        if constexpr (RES == NASemiJoinResultType::FALSE_VALUE)
-            result = NASemiJoinResultType::TRUE_VALUE;
-        else if constexpr (RES == NASemiJoinResultType::TRUE_VALUE)
-            result = NASemiJoinResultType::FALSE_VALUE;
+        /// For (left outer) anti semi join
+        if constexpr (RES == SemiJoinResultType::FALSE_VALUE)
+            result = SemiJoinResultType::TRUE_VALUE;
+        else if constexpr (RES == SemiJoinResultType::TRUE_VALUE)
+            result = SemiJoinResultType::FALSE_VALUE;
         else
-            result = NASemiJoinResultType::NULL_VALUE;
+            result = SemiJoinResultType::NULL_VALUE;
     }
 
-    NASemiJoinResultType getResult() const
+    SemiJoinResultType getResult() const
     {
         if (unlikely(step != NASemiJoinStep::DONE))
             throw Exception("null-aware semi join result is not ready");
         return result;
     }
 
-    inline NASemiJoinStep getStep() const
-    {
-        return step;
-    }
+    inline NASemiJoinStep getStep() const { return step; }
 
-    inline size_t getRowNum() const
-    {
-        return row_num;
-    }
+    inline size_t getRowNum() const { return row_num; }
 
     template <typename Mapped, NASemiJoinStep STEP>
-    void fillRightColumns(MutableColumns & added_columns, size_t left_columns, size_t right_columns, const std::vector<RowsNotInsertToMap *> & null_rows, size_t & current_offset, size_t min_pace);
+    void fillRightColumns(
+        MutableColumns & added_columns,
+        size_t left_columns,
+        size_t right_columns,
+        const std::vector<size_t> & right_column_indices_to_add,
+        const std::vector<RowsNotInsertToMap *> & null_rows,
+        size_t & current_offset,
+        size_t max_pace);
 
     template <NASemiJoinStep STEP>
     void checkExprResult(ConstNullMapPtr eq_null_map, size_t offset_begin, size_t offset_end);
 
     template <NASemiJoinStep STEP>
-    void checkExprResult(ConstNullMapPtr eq_null_map, const PaddedPODArray<UInt8> & other_column, ConstNullMapPtr other_null_map, size_t offset_begin, size_t offset_end);
+    void checkExprResult(
+        ConstNullMapPtr eq_null_map,
+        const ColumnUInt8::Container & other_column,
+        ConstNullMapPtr other_null_map,
+        size_t offset_begin,
+        size_t offset_end);
 
     template <NASemiJoinStep STEP>
     void checkStepEnd();
@@ -134,7 +140,7 @@ private:
 
     NASemiJoinStep step;
     bool step_end;
-    NASemiJoinResultType result;
+    SemiJoinResultType result;
 
     size_t pace;
     /// Position in null rows.
@@ -157,7 +163,7 @@ public:
     NASemiJoinHelper(
         Block & block,
         size_t left_columns,
-        size_t right_columns,
+        const std::vector<size_t> & right_column_indices_to_add,
         const BlocksList & right_blocks,
         const std::vector<RowsNotInsertToMap *> & null_rows,
         size_t max_block_size,
@@ -172,12 +178,17 @@ private:
     void runStepAllBlocks(std::list<Result *> & res_list);
 
     template <NASemiJoinStep STEP>
-    void runAndCheckExprResult(Block & exec_block, const std::vector<size_t> & offsets, std::list<Result *> & res_list, std::list<Result *> & next_res_list);
+    void runAndCheckExprResult(
+        Block & exec_block,
+        const std::vector<size_t> & offsets,
+        std::list<Result *> & res_list,
+        std::list<Result *> & next_res_list);
 
 private:
     Block & block;
     size_t left_columns;
     size_t right_columns;
+    const std::vector<size_t> & right_column_indices_to_add;
     const BlocksList & right_blocks;
     const std::vector<RowsNotInsertToMap *> & null_rows;
     size_t max_block_size;
@@ -185,7 +196,7 @@ private:
     const JoinNonEqualConditions & non_equal_conditions;
 };
 
-#define APPLY_FOR_NULL_AWARE_JOIN(M)                                                                   \
+#define APPLY_FOR_NULL_AWARE_SEMI_JOIN(M)                                                              \
     M(DB::ASTTableJoin::Kind::NullAware_LeftOuterSemi, DB::ASTTableJoin::Strictness::Any, DB::MapsAny) \
     M(DB::ASTTableJoin::Kind::NullAware_LeftOuterSemi, DB::ASTTableJoin::Strictness::All, DB::MapsAll) \
     M(DB::ASTTableJoin::Kind::NullAware_LeftOuterAnti, DB::ASTTableJoin::Strictness::Any, DB::MapsAny) \

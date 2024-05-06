@@ -20,7 +20,7 @@
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/WriteBuffer.h>
+#include <IO/Buffer/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Poco/String.h>
@@ -37,7 +37,10 @@ extern const int LOGICAL_ERROR;
 extern const String uniq_raw_res_name = "uniqRawRes";
 extern const String count_second_stage;
 
-void AggregateFunctionFactory::registerFunction(const String & name, Creator creator, CaseSensitiveness case_sensitiveness)
+void AggregateFunctionFactory::registerFunction(
+    const String & name,
+    Creator creator,
+    CaseSensitiveness case_sensitiveness)
 {
     if (creator == nullptr)
         throw Exception(
@@ -59,16 +62,11 @@ void AggregateFunctionFactory::registerFunction(const String & name, Creator cre
 /// A little hack - if we have NULL arguments, don't even create nested function.
 /// Combinator will check if nested_function was created.
 /// TODO Consider replace with function property. See also https://github.com/ClickHouse/ClickHouse/pull/11661
-extern const std::unordered_set<String> hacking_return_non_null_agg_func_names = {
-    "count",
-    "uniq",
-    "uniqHLL12",
-    "uniqExact",
-    "uniqCombined",
-    uniq_raw_res_name,
-    count_second_stage};
+extern const std::unordered_set<String> hacking_return_non_null_agg_func_names
+    = {"count", "uniq", "uniqHLL12", "uniqExact", "uniqCombined", uniq_raw_res_name, count_second_stage};
 
 AggregateFunctionPtr AggregateFunctionFactory::get(
+    const Context & context,
     const String & name,
     const DataTypes & argument_types,
     const Array & parameters,
@@ -79,9 +77,12 @@ AggregateFunctionPtr AggregateFunctionFactory::get(
 
     /// for most aggregation functions except `count`, if the input is empty, the function should return NULL
     /// so add this flag to make it possible to follow this rule, currently only used by Coprocessor query
-    if (empty_input_as_null || std::any_of(argument_types.begin(), argument_types.end(), [](const auto & type) { return type->isNullable(); }))
+    if (empty_input_as_null || std::any_of(argument_types.begin(), argument_types.end(), [](const auto & type) {
+            return type->isNullable();
+        }))
     {
-        AggregateFunctionCombinatorPtr combinator = AggregateFunctionCombinatorFactory::instance().tryFindSuffix("Null");
+        AggregateFunctionCombinatorPtr combinator
+            = AggregateFunctionCombinatorFactory::instance().tryFindSuffix("Null");
         if (!combinator)
             throw Exception(
                 "Logical error: cannot find aggregate function combinator to apply a function to Nullable arguments.",
@@ -91,20 +92,23 @@ AggregateFunctionPtr AggregateFunctionFactory::get(
 
         AggregateFunctionPtr nested_function;
 
-        if (hacking_return_non_null_agg_func_names.count(name) || std::none_of(argument_types.begin(), argument_types.end(), [](const auto & type) { return type->onlyNull(); }))
-            nested_function = getImpl(name, nested_types, parameters, recursion_level);
+        if (hacking_return_non_null_agg_func_names.count(name)
+            || std::none_of(argument_types.begin(), argument_types.end(), [](const auto & type) {
+                   return type->onlyNull();
+               }))
+            nested_function = getImpl(context, name, nested_types, parameters, recursion_level);
 
         return combinator->transformAggregateFunction(nested_function, argument_types, parameters);
     }
 
-    auto res = getImpl(name, argument_types, parameters, recursion_level);
+    auto res = getImpl(context, name, argument_types, parameters, recursion_level);
     if (!res)
         throw Exception("Logical error: AggregateFunctionFactory returned nullptr", ErrorCodes::LOGICAL_ERROR);
     return res;
 }
 
-
 AggregateFunctionPtr AggregateFunctionFactory::getImpl(
+    const Context & context,
     const String & name,
     const DataTypes & argument_types,
     const Array & parameters,
@@ -113,7 +117,7 @@ AggregateFunctionPtr AggregateFunctionFactory::getImpl(
     /// Find by exact match.
     auto it = aggregate_functions.find(name);
     if (it != aggregate_functions.end())
-        return it->second(name, argument_types, parameters);
+        return it->second(context, name, argument_types, parameters);
 
     /// Find by case-insensitive name.
     /// Combinators cannot apply for case insensitive (SQL-style) aggregate function names. Only for native names.
@@ -121,7 +125,7 @@ AggregateFunctionPtr AggregateFunctionFactory::getImpl(
     {
         auto it = case_insensitive_aggregate_functions.find(Poco::toLower(name));
         if (it != case_insensitive_aggregate_functions.end())
-            return it->second(name, argument_types, parameters);
+            return it->second(context, name, argument_types, parameters);
     }
 
     /// Combinators of aggregate functions.
@@ -131,23 +135,27 @@ AggregateFunctionPtr AggregateFunctionFactory::getImpl(
     if (AggregateFunctionCombinatorPtr combinator = AggregateFunctionCombinatorFactory::instance().tryFindSuffix(name))
     {
         if (combinator->getName() == "Null")
-            throw Exception("Aggregate function combinator 'Null' is only for internal usage", ErrorCodes::UNKNOWN_AGGREGATE_FUNCTION);
+            throw Exception(
+                "Aggregate function combinator 'Null' is only for internal usage",
+                ErrorCodes::UNKNOWN_AGGREGATE_FUNCTION);
 
         String nested_name = name.substr(0, name.size() - combinator->getName().size());
         DataTypes nested_types = combinator->transformArguments(argument_types);
-        AggregateFunctionPtr nested_function = getImpl(nested_name, nested_types, parameters, recursion_level + 1);
+        AggregateFunctionPtr nested_function
+            = getImpl(context, nested_name, nested_types, parameters, recursion_level + 1);
         return combinator->transformAggregateFunction(nested_function, argument_types, parameters);
     }
 
     throw Exception("Unknown aggregate function " + name, ErrorCodes::UNKNOWN_AGGREGATE_FUNCTION);
 }
 
-
-AggregateFunctionPtr AggregateFunctionFactory::tryGet(const String & name, const DataTypes & argument_types, const Array & parameters) const
+AggregateFunctionPtr AggregateFunctionFactory::tryGet(
+    const Context & context,
+    const String & name,
+    const DataTypes & argument_types,
+    const Array & parameters) const
 {
-    return isAggregateFunctionName(name)
-        ? get(name, argument_types, parameters)
-        : nullptr;
+    return isAggregateFunctionName(name) ? get(context, name, argument_types, parameters) : nullptr;
 }
 
 

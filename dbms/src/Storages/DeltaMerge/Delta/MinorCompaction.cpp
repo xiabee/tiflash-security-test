@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/MemoryReadWriteBuffer.h>
+#include <IO/Buffer/MemoryReadWriteBuffer.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
@@ -74,7 +74,12 @@ bool MinorCompaction::commit(ColumnFilePersistedSetPtr & persisted_file_set, Wri
 
 String MinorCompaction::info() const
 {
-    return fmt::format("Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}", total_compact_files, result_compact_files, total_compact_rows, total_compact_bytes);
+    return fmt::format(
+        "Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}",
+        total_compact_files,
+        result_compact_files,
+        total_compact_rows,
+        total_compact_bytes);
 }
 } // namespace DM
 } // namespace DB
