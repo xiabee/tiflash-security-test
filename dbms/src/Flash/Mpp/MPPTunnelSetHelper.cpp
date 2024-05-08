@@ -15,7 +15,6 @@
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
 #include <Flash/Mpp/MPPTunnelSetHelper.h>
-#include <IO/Compression/CompressionInfo.h>
 
 namespace DB::MPPTunnelSetHelper
 {
@@ -55,7 +54,10 @@ TrackedMppDataPacketPtr ToPacket(
         return nullptr;
     const Block & header = blocks.front().cloneEmpty();
     auto && codec = CHBlockChunkCodecV1{header};
-    auto && res = codec.encode(std::move(blocks), method, false);
+    auto && res = codec.encode(
+        std::move(blocks),
+        method,
+        false);
     if unlikely (res.empty())
         return nullptr;
 

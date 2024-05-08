@@ -23,12 +23,18 @@ template <typename LimitActionPtr>
 class LimitTransformOp : public TransformOp
 {
 public:
-    LimitTransformOp(PipelineExecutorContext & exec_context_, const String & req_id, const LimitActionPtr & action_)
-        : TransformOp(exec_context_, req_id)
+    LimitTransformOp(
+        PipelineExecutorStatus & exec_status_,
+        const String & req_id,
+        const LimitActionPtr & action_)
+        : TransformOp(exec_status_, req_id)
         , action(action_)
     {}
 
-    String getName() const override { return "LimitTransformOp"; }
+    String getName() const override
+    {
+        return "LimitTransformOp";
+    }
 
 protected:
     OperatorStatus transformImpl(Block & block) override;

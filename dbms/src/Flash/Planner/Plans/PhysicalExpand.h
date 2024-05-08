@@ -44,22 +44,20 @@ public:
         , expand_actions(expand_actions)
     {}
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     void expandTransform(DAGPipeline & child_pipeline);
 
     const Block & getSampleBlock() const override;
 
-private:
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
-
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & exec_context,
+    void buildPipelineExecGroup(
+        PipelineExecutorStatus & exec_status,
         PipelineExecGroupBuilder & group_builder,
         Context & /*context*/,
         size_t /*concurrency*/) override;
 
 private:
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
     std::shared_ptr<const Expand> shared_expand;
     ExpressionActionsPtr expand_actions;
 };

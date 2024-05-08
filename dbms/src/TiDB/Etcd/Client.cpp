@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Exception.h>
 #include <Poco/URI.h>
 #include <TiDB/Etcd/Client.h>
 #include <TiDB/Etcd/EtcdConnClient.h>
@@ -22,8 +21,6 @@
 #include <etcd/v3election.grpc.pb.h>
 #include <etcd/v3election.pb.h>
 #include <fmt/chrono.h>
-
-#include <magic_enum.hpp>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -39,14 +36,10 @@
 
 #include <chrono>
 #include <mutex>
-#include <random>
 
 namespace DB::Etcd
 {
-ClientPtr Client::create(
-    const pingcap::pd::ClientPtr & pd_client,
-    const pingcap::ClusterConfig & config,
-    Int64 timeout_s)
+ClientPtr Client::create(const pingcap::pd::ClientPtr & pd_client, const pingcap::ClusterConfig & config, Int64 timeout_s)
 {
     auto etcd_client = std::make_shared<Client>();
     etcd_client->pd_client = pd_client;
@@ -162,11 +155,7 @@ SessionPtr Client::createSession(grpc::ClientContext * grpc_context, Int64 ttl)
     const auto & [lease_id, status] = leaseGrant(ttl);
     if (!status.ok())
     {
-        LOG_ERROR(
-            log,
-            "etcd lease grant failed, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_ERROR(log, "etcd lease grant failed, code={} msg={}", status.error_code(), status.error_message());
         return {};
     }
 
@@ -191,27 +180,25 @@ grpc::Status Client::leaseRevoke(LeaseID lease_id)
     return leaderClient()->lease_stub->LeaseRevoke(&context, req, &resp);
 }
 
-std::tuple<v3electionpb::LeaderKey, grpc::Status> Client::campaign(
-    grpc::ClientContext * grpc_context,
-    const String & name,
-    const String & value,
-    LeaseID lease_id)
+std::tuple<v3electionpb::LeaderKey, grpc::Status>
+Client::campaign(const String & name, const String & value, LeaseID lease_id)
 {
     v3electionpb::CampaignRequest req;
     req.set_name(name);
     req.set_value(value);
     req.set_lease(lease_id);
 
+    grpc::ClientContext context;
     // usually use `campaign` blocks until become leader or error happens,
     // don't set timeout.
 
     v3electionpb::CampaignResponse resp;
-    auto status = leaderClient()->election_stub->Campaign(grpc_context, req, &resp);
+    auto status = leaderClient()->election_stub->Campaign(&context, req, &resp);
     return {resp.leader(), status};
 }
 
-std::unique_ptr<grpc::ClientReaderWriter<etcdserverpb::WatchRequest, etcdserverpb::WatchResponse>> Client::watch(
-    grpc::ClientContext * grpc_context)
+std::unique_ptr<grpc::ClientReaderWriter<etcdserverpb::WatchRequest, etcdserverpb::WatchResponse>>
+Client::watch(grpc::ClientContext * grpc_context)
 {
     return leaderClient()->watch_stub->Watch(grpc_context);
 }
@@ -243,119 +230,6 @@ grpc::Status Client::resign(const v3electionpb::LeaderKey & leader_key)
     return status;
 }
 
-// Using ectd Txn to check if /tidb/server_id/server_id exists.
-// If doesn't exists, put it to etcd and return. Otherwise retry(max retry 3 times).
-UInt64 Client::acquireServerIDFromGAC()
-{
-    const Int32 retry_times = 3;
-    UInt64 random_server_id = 0;
-    bool acquire_succ = false;
-
-    std::random_device dev;
-    std::mt19937_64 gen(dev());
-    std::uniform_int_distribution dist;
-
-    for (Int32 i = 0; i < retry_times; ++i)
-    {
-        auto exists_server_ids = getExistsServerID();
-
-        const Int32 max_count = std::numeric_limits<Int32>::max();
-        bool gen_random_server_id_succ = false;
-        for (Int32 count = 0; count < max_count; ++count)
-        {
-            random_server_id = dist(gen);
-            if (exists_server_ids.find(random_server_id) == exists_server_ids.end())
-            {
-                gen_random_server_id_succ = true;
-                break;
-            }
-        }
-
-        if (!gen_random_server_id_succ)
-            continue;
-
-        etcdserverpb::TxnRequest txn_req;
-        etcdserverpb::Compare * cmp = txn_req.add_compare();
-
-        cmp->set_result(etcdserverpb::Compare_CompareResult::Compare_CompareResult_EQUAL);
-        cmp->set_target(etcdserverpb::Compare_CompareTarget::Compare_CompareTarget_CREATE);
-        String key = fmt::format("{}/{}", TIDB_SERVER_ID_ETCD_PATH, random_server_id);
-        cmp->set_key(key);
-        cmp->set_create_revision(0);
-
-        etcdserverpb::RequestOp * succ_req_op = txn_req.add_success();
-        etcdserverpb::PutRequest * put_req = succ_req_op->mutable_request_put();
-        put_req->set_key(key);
-        put_req->set_value("0");
-
-        etcdserverpb::TxnResponse txn_resp;
-        grpc::ClientContext context;
-        context.set_deadline(std::chrono::system_clock::now() + timeout);
-        auto status = leaderClient()->kv_stub->Txn(&context, txn_req, &txn_resp);
-        if (!status.ok())
-            throw Exception("acquireServerIDFromPD failed, grpc error: {}", status.error_message());
-
-        if (txn_resp.succeeded())
-        {
-            acquire_succ = true;
-            break;
-        }
-    }
-
-    if (!acquire_succ)
-        throw Exception("too many times({}) retry when acquireServerIDFromPD", retry_times);
-
-    return random_server_id;
-}
-
-std::unordered_set<UInt64> Client::getExistsServerID()
-{
-    etcdserverpb::RangeRequest range_req;
-    range_req.set_key(TIDB_SERVER_ID_ETCD_PATH);
-    char next_ch = '/' + 1;
-    range_req.set_range_end(TIDB_SERVER_ID_ETCD_PATH + std::string{next_ch});
-    range_req.set_keys_only(true);
-
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + timeout);
-    etcdserverpb::RangeResponse range_resp;
-    auto status = leaderClient()->kv_stub->Range(&context, range_req, &range_resp);
-    if (!status.ok())
-        throw Exception("getExistsServerID failed, grpc error: {}", status.error_message());
-
-    std::unordered_set<UInt64> exists_server_ids;
-    for (const auto & kv : range_resp.kvs())
-    {
-        String key = kv.key();
-        String prefix(key.begin(), key.begin() + TIDB_SERVER_ID_ETCD_PATH.size());
-        RUNTIME_CHECK(prefix == TIDB_SERVER_ID_ETCD_PATH);
-        String server_id_str(key.begin() + TIDB_SERVER_ID_ETCD_PATH.size() + 1, key.end());
-        exists_server_ids.insert(std::stoi(server_id_str));
-    }
-    LOG_INFO(log, "existing server ids: {}", exists_server_ids.size());
-    return exists_server_ids;
-}
-
-void Client::deleteServerIDFromGAC(UInt64 serverID)
-{
-    etcdserverpb::DeleteRangeRequest del_range_req;
-    const String key = fmt::format("{}/{}", TIDB_SERVER_ID_ETCD_PATH, serverID);
-    del_range_req.set_key(key);
-
-    etcdserverpb::DeleteRangeResponse del_range_resp;
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + timeout);
-
-    auto status = leaderClient()->kv_stub->DeleteRange(&context, del_range_req, &del_range_resp);
-    if (!status.ok())
-        throw Exception("deleteServerIDFromGAC failed, grpc error: {}", status.error_message());
-
-    if (del_range_resp.deleted() != 1)
-        throw Exception(
-            "deleteServerIDFromGAC failed, unexpected deleted num, expect 1, got {}",
-            del_range_resp.deleted());
-}
-
 bool Session::isValid() const
 {
     TimePoint now = std::chrono::system_clock::now();
@@ -376,11 +250,7 @@ bool Session::keepAliveOne()
     if (!ok)
     {
         auto status = writer->Finish();
-        LOG_INFO(
-            log,
-            "keep alive write fail, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_INFO(log, "keep alive write fail, code={} msg={}", status.error_code(), status.error_message());
         finished = true;
         return false;
     }
@@ -390,11 +260,7 @@ bool Session::keepAliveOne()
     if (!ok)
     {
         auto status = writer->Finish();
-        LOG_INFO(
-            log,
-            "keep alive read fail, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_INFO(log, "keep alive read fail, code={} msg={}", status.error_code(), status.error_message());
         finished = true;
         return false;
     }
@@ -402,24 +268,12 @@ bool Session::keepAliveOne()
     // the lease is not valid anymore
     if (resp.ttl() <= 0)
     {
-        auto status = writer->Finish();
-        LOG_INFO(
-            log,
-            "keep alive fail, ttl={}, code={} msg={}",
-            resp.ttl(),
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
-        finished = true;
+        LOG_DEBUG(log, "keep alive fail, ttl={}", resp.ttl());
         return false;
     }
     lease_deadline = next_timepoint + std::chrono::seconds(resp.ttl());
-    LOG_DEBUG(
-        log,
-        "keep alive update deadline, ttl={} lease_deadline={:%Y-%m-%d %H:%M:%S}",
-        resp.ttl(),
-        lease_deadline);
+    LOG_DEBUG(log, "keep alive update deadline, ttl={} lease_deadline={:%Y-%m-%d %H:%M:%S}", resp.ttl(), lease_deadline);
     return true;
 }
 
-const String Client::TIDB_SERVER_ID_ETCD_PATH = "/tidb/server_id";
 } // namespace DB::Etcd

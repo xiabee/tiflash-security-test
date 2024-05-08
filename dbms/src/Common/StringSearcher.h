@@ -196,9 +196,7 @@ public:
                     pos += cache_valid_len;
                     const auto * needle_pos = needle + cache_valid_len;
 
-                    while (needle_pos < needle_end
-                           && Poco::Unicode::toLower(utf8.convert(pos))
-                               == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                    while (needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                     {
                         /// @note assuming sequences for lowercase and uppercase have exact same length
                         const auto len = DB::UTF8::seqLength(*pos);
@@ -221,8 +219,7 @@ public:
             pos += first_needle_symbol_is_ascii;
             const auto * needle_pos = needle + first_needle_symbol_is_ascii;
 
-            while (needle_pos < needle_end
-                   && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+            while (needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
             {
                 const auto len = DB::UTF8::seqLength(*pos);
                 pos += len, needle_pos += len;
@@ -279,9 +276,7 @@ public:
                             const auto * haystack_pos = haystack + cache_valid_len;
                             const auto * needle_pos = needle + cache_valid_len;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && Poco::Unicode::toLower(utf8.convert(haystack_pos))
-                                       == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(haystack_pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                             {
                                 /// @note assuming sequences for lowercase and uppercase have exact same length
                                 const auto len = DB::UTF8::seqLength(*haystack_pos);
@@ -310,9 +305,7 @@ public:
                 const auto * haystack_pos = haystack + first_needle_symbol_is_ascii;
                 const auto * needle_pos = needle + first_needle_symbol_is_ascii;
 
-                while (haystack_pos < haystack_end && needle_pos < needle_end
-                       && Poco::Unicode::toLower(utf8.convert(haystack_pos))
-                           == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                while (haystack_pos < haystack_end && needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(haystack_pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                 {
                     const auto len = DB::UTF8::seqLength(*haystack_pos);
                     haystack_pos += len, needle_pos += len;
@@ -478,8 +471,7 @@ public:
                             const auto * haystack_pos = haystack + n;
                             const auto * needle_pos = needle + n;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
                                 ++haystack_pos, ++needle_pos;
 
                             if (needle_pos == needle_end)
@@ -503,8 +495,7 @@ public:
                 const auto * haystack_pos = haystack + 1;
                 const auto * needle_pos = needle + 1;
 
-                while (haystack_pos < haystack_end && needle_pos < needle_end
-                       && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
+                while (haystack_pos < haystack_end && needle_pos < needle_end && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
                     ++haystack_pos, ++needle_pos;
 
                 if (needle_pos == needle_end)
@@ -658,8 +649,7 @@ public:
                             const auto * haystack_pos = haystack + n;
                             const auto * needle_pos = needle + n;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && *haystack_pos == *needle_pos)
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && *haystack_pos == *needle_pos)
                                 ++haystack_pos, ++needle_pos;
 
                             if (needle_pos == needle_end)

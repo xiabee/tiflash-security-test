@@ -22,9 +22,7 @@ namespace DB
 {
 struct TableScanDetail : public ConnectionProfileInfo
 {
-    const bool is_local;
-    double min_stream_cost_ns = -1.0;
-    double max_stream_cost_ns = -1.0;
+    bool is_local;
 
     explicit TableScanDetail(bool is_local_)
         : is_local(is_local_)
@@ -58,8 +56,5 @@ private:
 protected:
     void appendExtraJson(FmtBuffer &) const override;
     void collectExtraRuntimeDetail() override;
-
-private:
-    void updateTableScanDetail(const std::vector<ConnectionProfileInfo> & connection_profile_infos);
 };
 } // namespace DB

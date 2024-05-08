@@ -27,8 +27,6 @@ RemoteRequest RemoteRequest::build(
     const TiDBTableScan & table_scan,
     const TiDB::TableInfo & table_info,
     const FilterConditions & filter_conditions,
-    UInt64 connection_id,
-    const String & connection_alias,
     const LoggerPtr & log)
 {
     LOG_INFO(log, "{}", printRetryRegions(retry_regions, table_info.id));
@@ -69,11 +67,8 @@ RemoteRequest RemoteRequest::build(
             }
             else
             {
-                // https://github.com/pingcap/tiflash/issues/8601
-                // If the precision of the `TIME`(which is MyDuration in TiFlash) type is modified,
-                // TiFlash storage layer may not trigger `sync_schema` and update table info.
-                // Therefore, the column info in the TiDB request will be used in this case.
-                schema.emplace_back(std::make_pair(table_info.getColumnInfo(col_id).name, col));
+                const auto & col_info = table_info.getColumnInfo(col_id);
+                schema.emplace_back(std::make_pair(col_info.name, col_info));
             }
             dag_req.add_output_offsets(i);
         }
@@ -84,9 +79,6 @@ RemoteRequest RemoteRequest::build(
     /// will be collected by CoprocessorBlockInputStream.
     /// Otherwise rows in execution summary of table scan will be double.
     dag_req.set_collect_execution_summaries(false);
-    dag_req.set_flags(dag_context.getFlags());
-    dag_req.set_sql_mode(dag_context.getSQLMode());
-    dag_req.set_div_precision_increment(dag_context.getDivPrecisionIncrement());
     const auto & original_dag_req = *dag_context.dag_request;
     if (original_dag_req.has_time_zone_name() && !original_dag_req.time_zone_name().empty())
         dag_req.set_time_zone_name(original_dag_req.time_zone_name());
@@ -94,7 +86,7 @@ RemoteRequest RemoteRequest::build(
         dag_req.set_time_zone_offset(original_dag_req.time_zone_offset());
 
     std::vector<pingcap::coprocessor::KeyRange> key_ranges = buildKeyRanges(retry_regions);
-    return {std::move(dag_req), std::move(schema), std::move(key_ranges), connection_id, connection_alias};
+    return {std::move(dag_req), std::move(schema), std::move(key_ranges)};
 }
 
 std::vector<pingcap::coprocessor::KeyRange> RemoteRequest::buildKeyRanges(const RegionRetryList & retry_regions)

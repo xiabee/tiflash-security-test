@@ -17,8 +17,8 @@
 #include <Common/Logger.h>
 #include <DataStreams/BlockIO.h>
 #include <Flash/Coprocessor/RegionInfo.h>
-#include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/TiKVKeyValue.h>
+#include <Storages/Transaction/Types.h>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -39,7 +39,8 @@ class Context;
 
 /// An abstraction of driver running DAG request.
 /// Now is a naive native executor. Might get evolved to drive MPP-like computation.
-template <DAGRequestKind Kind>
+
+template <bool batch = false>
 class DAGDriver
 {
 public:
@@ -47,21 +48,14 @@ public:
         Context & context_,
         UInt64 start_ts,
         UInt64 schema_ver,
-        tipb::SelectResponse * cop_response_,
+        tipb::SelectResponse * dag_response_,
         bool internal_ = false);
 
     DAGDriver(
         Context & context_,
         UInt64 start_ts,
         UInt64 schema_ver,
-        grpc::ServerWriter<::coprocessor::Response> * cop_writer_,
-        bool internal_ = false);
-
-    DAGDriver(
-        Context & context_,
-        UInt64 start_ts,
-        UInt64 schema_ver,
-        grpc::ServerWriter<coprocessor::BatchResponse> * batch_cop_writer_,
+        ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer,
         bool internal_ = false);
 
     void execute();
@@ -73,9 +67,9 @@ private:
 
     Context & context;
 
-    tipb::SelectResponse * cop_response = nullptr;
-    grpc::ServerWriter<coprocessor::Response> * cop_writer = nullptr;
-    grpc::ServerWriter<coprocessor::BatchResponse> * batch_cop_writer = nullptr;
+    tipb::SelectResponse * dag_response;
+
+    ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer;
 
     bool internal;
 

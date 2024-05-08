@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <common/StringRef.h>
-
 #include <ostream>
+
+#include <common/StringRef.h>
 
 
 std::ostream & operator<<(std::ostream & os, const StringRef & str)
@@ -24,3 +24,4 @@ std::ostream & operator<<(std::ostream & os, const StringRef & str)
 
     return os;
 }
+

@@ -13,13 +13,12 @@
 // limitations under the License.
 
 #include <Common/FailPoint.h>
+#include <Encryption/PosixRandomAccessFile.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
 #include <Flash/Disaggregated/S3LockClient.h>
-#include <IO/BaseFile/PosixRandomAccessFile.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/Buffer/ReadBufferFromRandomAccessFile.h>
-#include <IO/Buffer/WriteBufferFromWritableFile.h>
-#include <IO/Encryption/MockKeyManager.h>
+#include <IO/ReadBufferFromFile.h>
+#include <IO/ReadBufferFromRandomAccessFile.h>
+#include <IO/WriteBufferFromWritableFile.h>
 #include <IO/copyData.h>
 #include <Storages/Page/V3/BlobStore.h>
 #include <Storages/Page/V3/CheckpointFile/CPFilesWriter.h>
@@ -38,12 +37,11 @@
 
 #include <memory>
 
-
-namespace DB::PS::universal::tests
+namespace DB
 {
-class UniPageStorageRemoteReadTest
-    : public DB::base::TiFlashStorageTestBasic
-    , public testing::WithParamInterface<std::pair<bool, bool>>
+namespace PS::universal::tests
+{
+class UniPageStorageRemoteReadTest : public DB::base::TiFlashStorageTestBasic
 {
 public:
     UniPageStorageRemoteReadTest()
@@ -54,15 +52,13 @@ public:
     {
         TiFlashStorageTestBasic::SetUp();
         auto path = getTemporaryPath();
-        dir = path;
-        data_file_path_pattern = dir + "/data_{index}";
+        dir_ = path;
+        data_file_path_pattern = dir_ + "/data_{index}";
         data_file_id_pattern = "data_{index}";
-        manifest_file_path = dir + "/manifest_foo";
+        manifest_file_path = dir_ + "/manifest_foo";
         manifest_file_id = "manifest_foo";
         createIfNotExist(path);
-        auto [is_encrypted, is_keyspace_encrypted] = GetParam();
-        KeyManagerPtr key_manager = std::make_shared<MockKeyManager>(is_encrypted);
-        file_provider = std::make_shared<FileProvider>(key_manager, is_encrypted, is_keyspace_encrypted);
+        file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
         delegator = std::make_shared<DB::tests::MockDiskDelegatorSingle>(path);
         s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
 
@@ -70,10 +66,12 @@ public:
 
         page_storage = UniversalPageStorage::create("write", delegator, config, file_provider);
         page_storage->restore();
-        DB::tests::TiFlashTestEnv::enableS3Config();
     }
 
-    void reload() { page_storage = reopenWithConfig(config); }
+    void reload()
+    {
+        page_storage = reopenWithConfig(config);
+    }
 
     std::shared_ptr<UniversalPageStorage> reopenWithConfig(const PageStorageConfig & config_)
     {
@@ -99,14 +97,15 @@ public:
         ASSERT_EQ(r, 0);
     }
 
-    void TearDown() override { DB::tests::TiFlashTestEnv::disableS3Config(); }
-
 protected:
-    void deleteBucket() { ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client); }
+    void deleteBucket()
+    {
+        ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client);
+    }
 
 protected:
     StoreID test_store_id = 1234;
-    String dir;
+    String dir_;
     FileProviderPtr file_provider;
     PSDiskDelegatorPtr delegator;
     std::shared_ptr<S3::TiFlashS3Client> s3_client;
@@ -121,7 +120,7 @@ protected:
     String manifest_file_path;
 };
 
-TEST_P(UniPageStorageRemoteReadTest, WriteRead)
+TEST_F(UniPageStorageRemoteReadTest, WriteRead)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -139,8 +138,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         edits.appendRecord({.type = PS::V3::EditRecordType::VAR_REF, .page_id = "aaabbb2", .ori_page_id = "aaabbb"});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
@@ -166,12 +164,7 @@ try
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage(r[0].page_id, 0, "local data");
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         wb.putRefPage(r[1].page_id, r[0].page_id);
         page_storage->write(std::move(wb));
     }
@@ -205,7 +198,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithRestart)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithRestart)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -223,8 +216,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -248,12 +240,7 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -279,7 +266,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithRef)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithRef)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -297,8 +284,7 @@ try
     });
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "aaabbb", .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -323,12 +309,7 @@ try
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage(r[0].page_id, 0, "local data");
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -367,7 +348,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadMultiple)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadMultiple)
 try
 {
     auto writer = PS::V3::CPFilesWriter::create({
@@ -375,8 +356,8 @@ try
         .data_file_id_pattern = data_file_id_pattern,
         .manifest_file_path = manifest_file_path,
         .manifest_file_id = manifest_file_id,
-        .data_source = PS::V3::CPWriteDataSourceFixture::create(
-            {{5, "Said she just dreamed a dream"}, {10, "nahida opened her eyes"}}),
+        .data_source = PS::V3::CPWriteDataSourceFixture::create({{5, "Said she just dreamed a dream"},
+                                                                 {10, "nahida opened her eyes"}}),
     });
 
     writer->writePrefix({
@@ -388,10 +369,8 @@ try
     UniversalPageId page_id2 = "aaabbb2";
     {
         auto edits = PS::V3::universal::PageEntriesEdit{};
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id1, .entry = {.size = 29, .offset = 5}});
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id2, .entry = {.size = 22, .offset = 10}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id1, .entry = {.size = 29, .offset = 5}});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = page_id2, .entry = {.size = 22, .offset = 10}});
         writer->writeEditsAndApplyCheckpointInfo(edits);
     }
     auto data_paths = writer->writeSuffix();
@@ -415,18 +394,8 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
-        wb.putRemotePage(
-            r[1].page_id,
-            0,
-            r[0].entry.size,
-            r[1].entry.checkpoint_info.data_location,
-            std::move(r[1].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[1].page_id, 0, r[0].entry.size, r[1].entry.checkpoint_info.data_location, std::move(r[1].entry.field_offsets));
         page_storage->write(std::move(wb));
     }
 
@@ -454,33 +423,20 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadWithFields)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadWithFields)
 try
 {
-    PageTypeAndConfig page_type_and_config{
-        {PageType::Normal, PageTypeConfig{.heavy_gc_valid_rate = 0.5}},
-        {PageType::RaftData, PageTypeConfig{.heavy_gc_valid_rate = 0.1}},
-    };
-    auto blob_store = PS::V3::BlobStore<PS::V3::universal::BlobStoreTrait>(
-        getCurrentTestName(),
-        file_provider,
-        delegator,
-        PS::V3::BlobConfig{},
-        page_type_and_config);
+    auto blob_store = PS::V3::BlobStore<PS::V3::universal::BlobStoreTrait>(getCurrentTestName(), file_provider, delegator, PS::V3::BlobConfig{});
 
     auto edits = PS::V3::universal::PageEntriesEdit{};
     {
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
         wb.putPage("page_foo", 0, "The flower carriage rocked", {4, 10, 12});
-        auto blob_store_edits = blob_store.write(std::move(wb));
+        auto blob_store_edits = blob_store.write(std::move(wb), nullptr);
 
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_ENTRY,
-             .page_id = "page_foo",
-             .entry = blob_store_edits.getRecords()[0].entry});
-        edits.appendRecord(
-            {.type = PS::V3::EditRecordType::VAR_REF, .page_id = "page_foo2", .ori_page_id = "page_foo"});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_ENTRY, .page_id = "page_foo", .entry = blob_store_edits.getRecords()[0].entry});
+        edits.appendRecord({.type = PS::V3::EditRecordType::VAR_REF, .page_id = "page_foo2", .ori_page_id = "page_foo"});
     }
 
     auto writer = PS::V3::CPFilesWriter::create({
@@ -488,7 +444,7 @@ try
         .data_file_id_pattern = data_file_id_pattern,
         .manifest_file_path = manifest_file_path,
         .manifest_file_id = manifest_file_id,
-        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(blob_store, file_provider),
+        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(blob_store),
     });
     writer->writePrefix({
         .writer = {},
@@ -517,12 +473,7 @@ try
 
         UniversalWriteBatch wb;
         wb.disableRemoteLock();
-        wb.putRemotePage(
-            r[0].page_id,
-            0,
-            r[0].entry.size,
-            r[0].entry.checkpoint_info.data_location,
-            std::move(r[0].entry.field_offsets));
+        wb.putRemotePage(r[0].page_id, 0, r[0].entry.size, r[0].entry.checkpoint_info.data_location, std::move(r[0].entry.field_offsets));
         wb.putRefPage(r[1].page_id, r[0].page_id);
         page_storage->write(std::move(wb));
     }
@@ -563,7 +514,7 @@ try
 }
 CATCH
 
-TEST_P(UniPageStorageRemoteReadTest, WriteReadExternal)
+TEST_F(UniPageStorageRemoteReadTest, WriteReadExternal)
 try
 {
     UniversalPageId page_id1{"aaabbb"};
@@ -610,9 +561,5 @@ try
 }
 CATCH
 
-INSTANTIATE_TEST_CASE_P(
-    UniPageStorageRemote,
-    UniPageStorageRemoteReadTest,
-    testing::Values(std::make_pair(false, false), std::make_pair(true, false), std::make_pair(true, true)));
-
-} // namespace DB::PS::universal::tests
+} // namespace PS::universal::tests
+} // namespace DB

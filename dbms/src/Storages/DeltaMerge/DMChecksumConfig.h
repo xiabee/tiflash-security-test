@@ -15,7 +15,7 @@
 #pragma once
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/TiFlashException.h>
-#include <IO/Checksum/ChecksumBuffer.h>
+#include <IO/ChecksumBuffer.h>
 #include <Interpreters/Context_fwd.h>
 
 #include <map>
@@ -28,21 +28,20 @@ class DMChecksumConfig
 public:
     explicit DMChecksumConfig(std::istream & input);
 
-    explicit DMChecksumConfig(
-        std::map<std::string, std::string> embedded_checksum_ = {},
-        size_t checksum_frame_length_ = TIFLASH_DEFAULT_CHECKSUM_FRAME_SIZE,
-        DB::ChecksumAlgo checksum_algorithm_ = DB::ChecksumAlgo::XXH3,
-        std::map<std::string, std::string> debug_info_
-        = {{"creation_commit_hash", TiFlashBuildInfo::getGitHash()},
-           {"creation_edition", TiFlashBuildInfo::getEdition()},
-           {"creation_version", TiFlashBuildInfo::getVersion()},
-           {"creation_release_version", TiFlashBuildInfo::getReleaseVersion()},
-           {"creation_build_time", TiFlashBuildInfo::getUTCBuildTime()}})
+    explicit DMChecksumConfig(std::map<std::string, std::string> embedded_checksum_ = {},
+                              size_t checksum_frame_length_ = TIFLASH_DEFAULT_CHECKSUM_FRAME_SIZE,
+                              DB::ChecksumAlgo checksum_algorithm_ = DB::ChecksumAlgo::XXH3,
+                              std::map<std::string, std::string> debug_info_ = {{"creation_commit_hash", TiFlashBuildInfo::getGitHash()},
+                                                                                {"creation_edition", TiFlashBuildInfo::getEdition()},
+                                                                                {"creation_version", TiFlashBuildInfo::getVersion()},
+                                                                                {"creation_release_version", TiFlashBuildInfo::getReleaseVersion()},
+                                                                                {"creation_build_time", TiFlashBuildInfo::getUTCBuildTime()}})
         : checksum_frame_length(checksum_frame_length_)
         , checksum_algorithm(checksum_algorithm_)
         , embedded_checksum(std::move(embedded_checksum_))
         , debug_info(std::move(debug_info_))
-    {}
+    {
+    }
 
     friend std::ostream & operator<<(std::ostream &, const DMChecksumConfig &);
 

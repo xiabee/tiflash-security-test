@@ -1,18 +1,22 @@
 # See the OWNERS docs at https://go.k8s.io/owners
 approvers:
+  # - tiflash-maintainers
+  - flowbehappy
+  - ilovesoup
+  - zanmato1984
+  # - tiflash-committers
   - bestwoody
   - birdstorm
   - breezewish
   - CalvinNeo
-  - flowbehappy
   - fuzhe1989
   - fzhedu
   - gengliqi
   - guo-shaoge
   - hehechen
+  - hongyunya
   - hongyunyan
   - ichn-hu
-  - ilovesoup
   - JaySon-Huang
   - jiaqizho
   - JinheLin
@@ -28,7 +32,8 @@ approvers:
   - XuHuaiyu
   - yibin87
   - ywqzzy
-  - zanmato1984
 reviewers:
+  # - tiflash-reviewers
   - LiSong0214
   - xzhangxian1008
+  - ywqzzy

@@ -25,7 +25,14 @@
     M(ReadBufferFromFileDescriptorReadBytes)   \
     M(WriteBufferFromFileDescriptorWrite)      \
     M(WriteBufferFromFileDescriptorWriteBytes) \
+    M(ReadBufferAIORead)                       \
+    M(ReadBufferAIOReadBytes)                  \
+    M(WriteBufferAIOWrite)                     \
+    M(WriteBufferAIOWriteBytes)                \
                                                \
+    M(UncompressedCacheHits)                   \
+    M(UncompressedCacheMisses)                 \
+    M(UncompressedCacheWeightLost)             \
     M(MarkCacheHits)                           \
     M(MarkCacheMisses)                         \
                                                \
@@ -134,11 +141,7 @@
     M(S3PutObjectRetry)                        \
     M(FileCacheHit)                            \
     M(FileCacheMiss)                           \
-    M(FileCacheEvict)                          \
-    M(S3PutDMFile)                             \
-    M(S3PutDMFileRetry)                        \
-    M(S3WriteDMFileBytes)                      \
-    M(DTDeltaIndexError)
+    M(FileCacheEvict)
 
 namespace ProfileEvents
 {

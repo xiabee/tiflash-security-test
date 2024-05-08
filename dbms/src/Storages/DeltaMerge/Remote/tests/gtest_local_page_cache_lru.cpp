@@ -138,7 +138,10 @@ TEST_F(LocalPageCacheLRUTest, PutDifferentSize)
     RNLocalPageCacheLRU lru(5);
     lru.put("key_1", 3);
 
-    ASSERT_THROW({ lru.put("key_1", 1); }, DB::Exception);
+    ASSERT_THROW({
+        lru.put("key_1", 1);
+    },
+                 DB::Exception);
 }
 
 } // namespace DB::DM::Remote::tests

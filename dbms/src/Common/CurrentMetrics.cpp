@@ -22,7 +22,6 @@
     M(OpenFileForReadWrite)                     \
     M(MemoryTracking)                           \
     M(MemoryTrackingInBackgroundProcessingPool) \
-    M(MemoryTrackingKVStore)                    \
     M(LogicalCPUCores)                          \
     M(MemoryCapacity)                           \
     M(PSMVCCNumSnapshots)                       \
@@ -48,8 +47,6 @@
     M(DT_DeltaMergeTotalRows)                   \
     M(DT_DeltaIndexCacheSize)                   \
     M(RaftNumSnapshotsPendingApply)             \
-    M(RaftNumPrehandlingSubTasks)               \
-    M(RaftNumParallelPrehandlingTasks)          \
     M(RateLimiterPendingWriteRequest)           \
     M(DT_SegmentReadTasks)                      \
     M(DT_SnapshotOfRead)                        \
@@ -70,7 +67,6 @@
     M(StoragePoolV2Only)                        \
     M(StoragePoolV3Only)                        \
     M(StoragePoolMixMode)                       \
-    M(StoragePoolUniPS)                         \
     M(RegionPersisterRunMode)                   \
     M(S3Requests)                               \
     M(GlobalStorageRunMode)                     \
@@ -82,10 +78,7 @@
     M(DTFileCacheUsed)                          \
     M(PageCacheCapacity)                        \
     M(PageCacheUsed)                            \
-    M(ConnectionPoolSize)                       \
-    M(MemoryTrackingQueryStorageTask)           \
-    M(MemoryTrackingFetchPages)                 \
-    M(MemoryTrackingSharedColumnData)
+    M(ConnectionPoolSize)
 
 namespace CurrentMetrics
 {

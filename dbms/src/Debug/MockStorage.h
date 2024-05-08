@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #pragma once
-
 #include <Core/ColumnsWithTypeAndName.h>
 #include <DataStreams/IBlockInputStream.h>
 #include <Flash/Coprocessor/FilterConditions.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Operators/Operator.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/TiDB.h>
 #include <common/types.h>
 
 #include <atomic>
@@ -46,7 +44,10 @@ using CutColumnInfo = std::pair<int, int>; // <start_idx, row_num>
 class MockTableIdGenerator : public ext::Singleton<MockTableIdGenerator>
 {
 public:
-    Int64 nextTableId() { return ++current_id; }
+    Int64 nextTableId()
+    {
+        return ++current_id;
+    }
 
 private:
     std::atomic<Int64> current_id = 0;
@@ -89,35 +90,11 @@ public:
 
     NamesAndTypes getNameAndTypesForDeltaMerge(Int64 table_id);
 
-    std::tuple<StorageDeltaMergePtr, Names, SelectQueryInfo> prepareForRead(
-        Context & context,
-        Int64 table_id,
-        bool keep_order = false);
-
-    BlockInputStreamPtr getStreamFromDeltaMerge(
-        Context & context,
-        Int64 table_id,
-        const FilterConditions * filter_conditions = nullptr,
-        bool keep_order = false,
-        std::vector<int> runtime_filter_ids = std::vector<int>(),
-        int rf_max_wait_time_ms = 0);
-
-    void buildExecFromDeltaMerge(
-        PipelineExecutorContext & exec_context_,
-        PipelineExecGroupBuilder & group_builder,
-        Context & context,
-        Int64 table_id,
-        size_t concurrency = 1,
-        bool keep_order = false,
-        const FilterConditions * filter_conditions = nullptr,
-        std::vector<int> runtime_filter_ids = std::vector<int>(),
-        int rf_max_wait_time_ms = 0);
+    std::tuple<StorageDeltaMergePtr, Names, SelectQueryInfo> prepareForRead(Context & context, Int64 table_id);
+    BlockInputStreamPtr getStreamFromDeltaMerge(Context & context, Int64 table_id, const FilterConditions * filter_conditions = nullptr);
+    SourceOps getSourceOpsFromDeltaMerge(PipelineExecutorStatus & exec_status_, Context & context, Int64 table_id, size_t concurrency = 1);
 
     bool tableExistsForDeltaMerge(Int64 table_id);
-
-    void addDeltaMergeTableConcurrencyHint(const String & name, size_t concurrency_hint);
-
-    size_t getDelatMergeTableConcurrencyHint(Int64 table_id);
 
     /// for exchange receiver
     void addExchangeSchema(const String & exchange_name, const MockColumnInfoVec & columnInfos);
@@ -131,17 +108,12 @@ public:
     void addExchangeRelation(const String & executor_id, const String & exchange_name);
 
     ColumnsWithTypeAndName getExchangeColumns(const String & executor_id);
-    std::vector<ColumnsWithTypeAndName> getFineGrainedExchangeColumnsVector(
-        const String & executor_id,
-        size_t fine_grained_stream_count);
+    std::vector<ColumnsWithTypeAndName> getFineGrainedExchangeColumnsVector(const String & executor_id, size_t fine_grained_stream_count);
 
     bool exchangeExists(const String & executor_id);
 
     /// for MPP Tasks, it will split data by partition num, then each MPP service will have a subset of mock data.
-    ColumnsWithTypeAndName getColumnsForMPPTableScan(
-        const TiDBTableScan & table_scan,
-        Int64 partition_id,
-        Int64 partition_num);
+    ColumnsWithTypeAndName getColumnsForMPPTableScan(const TiDBTableScan & table_scan, Int64 partition_id, Int64 partition_num);
 
     TableInfo getTableInfo(const String & name);
     TableInfo getTableInfoForDeltaMerge(const String & name);
@@ -167,17 +139,14 @@ private:
     std::unordered_map<String, String> executor_id_to_name_map; /// <executor_id, exchange name>
     std::unordered_map<String, MockColumnInfoVec> exchange_schemas; /// <exchange_name, columnInfo>
     std::unordered_map<String, ColumnsWithTypeAndName> exchange_columns; /// <exchange_name, columns>
-    std::unordered_map<String, std::vector<ColumnsWithTypeAndName>>
-        fine_grained_exchange_columns; /// <exchange_name, vector<columns>>
+    std::unordered_map<String, std::vector<ColumnsWithTypeAndName>> fine_grained_exchange_columns; /// <exchange_name, vector<columns>>
 
     /// for mock storage delta merge
     std::unordered_map<String, Int64> name_to_id_map_for_delta_merge; /// <table_name, table_id>
     std::unordered_map<Int64, MockColumnInfoVec> table_schema_for_delta_merge; /// <table_id, columnInfo>
-    std::unordered_map<Int64, std::shared_ptr<StorageDeltaMerge>>
-        storage_delta_merge_map; // <table_id, StorageDeltaMerge>
+    std::unordered_map<Int64, std::shared_ptr<StorageDeltaMerge>> storage_delta_merge_map; // <table_id, StorageDeltaMerge>
     std::unordered_map<String, TableInfo> table_infos_for_delta_merge; /// <table_name, table_info>
     std::unordered_map<Int64, NamesAndTypes> names_and_types_map_for_delta_merge; /// <table_id, NamesAndTypes>
-    std::unordered_map<Int64, size_t> delta_merge_table_id_to_concurrency_hint; /// <table_id, concurrency_hint>
 
     // storage delta merge can be used in executor ut test only.
     bool use_storage_delta_merge = false;

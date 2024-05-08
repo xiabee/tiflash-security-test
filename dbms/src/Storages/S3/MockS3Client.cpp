@@ -94,8 +94,7 @@ Model::GetObjectOutcome MockS3Client::GetObject(const Model::GetObjectRequest & 
     }
     auto size = right - left + 1;
     Model::GetObjectResult result;
-    auto * ss = Aws::New<Aws::StringStream>("MockS3Client");
-    *ss << itr_obj->second.substr(left, size);
+    auto * ss = new std::stringstream(itr_obj->second.substr(left, size));
     result.ReplaceBody(ss);
     result.SetContentLength(size);
     return result;
@@ -103,8 +102,6 @@ Model::GetObjectOutcome MockS3Client::GetObject(const Model::GetObjectRequest & 
 
 Model::PutObjectOutcome MockS3Client::PutObject(const Model::PutObjectRequest & request) const
 {
-    if (put_object_status == S3Status::FAILED)
-        return Aws::S3::S3ErrorMapper::GetErrorForName("");
     std::lock_guard lock(mtx);
     auto itr = storage.find(request.GetBucket());
     if (itr == storage.end())
@@ -158,11 +155,7 @@ Model::GetObjectTaggingOutcome MockS3Client::GetObjectTagging(const Model::GetOb
     }
 
     auto object_tagging_iter = storage_tagging[request.GetBucket()].find(normalizedKey(request.GetKey()));
-    RUNTIME_CHECK_MSG(
-        object_exist,
-        "try to get tagging of non-exist object, bucket={} key={}",
-        request.GetBucket(),
-        request.GetKey());
+    RUNTIME_CHECK_MSG(object_exist, "try to get tagging of non-exist object, bucket={} key={}", request.GetBucket(), request.GetKey());
 
     // object exist but tag not exist, consider it as empty
     if (object_tagging_iter == storage_tagging[request.GetBucket()].end())
@@ -174,7 +167,8 @@ Model::GetObjectTaggingOutcome MockS3Client::GetObjectTagging(const Model::GetOb
     auto pos = taggings.find('=');
     RUNTIME_CHECK(pos != String::npos, taggings, pos, taggings.size());
     Aws::S3::Model::Tag tag;
-    tag.WithKey(taggings.substr(0, pos)).WithValue(taggings.substr(pos + 1, taggings.size()));
+    tag.WithKey(taggings.substr(0, pos))
+        .WithValue(taggings.substr(pos + 1, taggings.size()));
     auto r = Model::GetObjectTaggingResult{};
     r.AddTagSet(tag);
     return r;
@@ -264,8 +258,7 @@ Model::HeadObjectOutcome MockS3Client::HeadObject(const Model::HeadObjectRequest
     return Aws::S3::S3ErrorMapper::GetErrorForName("NoSuchKey");
 }
 
-Model::CreateMultipartUploadOutcome MockS3Client::CreateMultipartUpload(
-    const Model::CreateMultipartUploadRequest & /*request*/) const
+Model::CreateMultipartUploadOutcome MockS3Client::CreateMultipartUpload(const Model::CreateMultipartUploadRequest & /*request*/) const
 {
     static std::atomic<UInt64> upload_id{0};
     Model::CreateMultipartUploadResult result;
@@ -276,15 +269,13 @@ Model::CreateMultipartUploadOutcome MockS3Client::CreateMultipartUpload(
 Model::UploadPartOutcome MockS3Client::UploadPart(const Model::UploadPartRequest & request) const
 {
     std::lock_guard lock(mtx);
-    upload_parts[request.GetUploadId()][request.GetPartNumber()]
-        = String{std::istreambuf_iterator<char>(*request.GetBody()), {}};
+    upload_parts[request.GetUploadId()][request.GetPartNumber()] = String{std::istreambuf_iterator<char>(*request.GetBody()), {}};
     Model::UploadPartResult result;
     result.SetETag(std::to_string(request.GetPartNumber()));
     return result;
 }
 
-Model::CompleteMultipartUploadOutcome MockS3Client::CompleteMultipartUpload(
-    const Model::CompleteMultipartUploadRequest & request) const
+Model::CompleteMultipartUploadOutcome MockS3Client::CompleteMultipartUpload(const Model::CompleteMultipartUploadRequest & request) const
 {
     std::lock_guard lock(mtx);
     const auto & parts = upload_parts[request.GetUploadId()];
@@ -319,16 +310,14 @@ Model::DeleteBucketOutcome MockS3Client::DeleteBucket(const Model::DeleteBucketR
     return Model::DeleteBucketOutcome{};
 }
 
-Model::GetBucketLifecycleConfigurationOutcome MockS3Client::GetBucketLifecycleConfiguration(
-    const Model::GetBucketLifecycleConfigurationRequest & request) const
+Model::GetBucketLifecycleConfigurationOutcome MockS3Client::GetBucketLifecycleConfiguration(const Model::GetBucketLifecycleConfigurationRequest & request) const
 {
     // just mock a stub
     UNUSED(request);
     return Model::GetBucketLifecycleConfigurationResult();
 }
 
-Model::PutBucketLifecycleConfigurationOutcome MockS3Client::PutBucketLifecycleConfiguration(
-    const Model::PutBucketLifecycleConfigurationRequest & request) const
+Model::PutBucketLifecycleConfigurationOutcome MockS3Client::PutBucketLifecycleConfiguration(const Model::PutBucketLifecycleConfigurationRequest & request) const
 {
     // just mock a stub
     UNUSED(request);

@@ -24,16 +24,19 @@ class GetResultSinkOp : public SinkOp
 {
 public:
     GetResultSinkOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id,
         const ResultQueuePtr & result_queue_)
-        : SinkOp(exec_context_, req_id)
+        : SinkOp(exec_status_, req_id)
         , result_queue(result_queue_)
     {
         assert(result_queue);
     }
 
-    String getName() const override { return "GetResultSinkOp"; }
+    String getName() const override
+    {
+        return "GetResultSinkOp";
+    }
 
 protected:
     OperatorStatus writeImpl(Block && block) override;

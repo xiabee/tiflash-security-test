@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-path = "/tmp/tiflash/data"
+tmp_path = "/tmp/tiflash/data/tmp"
+path = "/tmp/tiflash/data/db"
 capacity = "107374182400" # 100GB
+mark_cache_size = 1073741824
+minmax_index_cache_size = 1073741824
 tcp_port = 9000
+http_port = 8123
 
 [logger]
 count = 10
@@ -22,7 +26,3 @@ errorlog = "/tmp/tiflash/log/error.log"
 size = "1000M"
 log = "/tmp/tiflash/log/server.log"
 level = "trace"
-
-[profiles]
-[profiles.default]
-enable_resource_control = 0

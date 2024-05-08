@@ -32,11 +32,7 @@ public:
     /** with_names - the first line is the header with the names of the columns
       * with_types - on the next line header with type names
       */
-    TabSeparatedRowInputStream(
-        ReadBuffer & istr_,
-        const Block & header_,
-        bool with_names_ = false,
-        bool with_types_ = false);
+    TabSeparatedRowInputStream(ReadBuffer & istr_, const Block & header_, bool with_names_ = false, bool with_types_ = false);
 
     bool read(MutableColumns & columns) override;
     void readPrefix() override;
@@ -65,11 +61,8 @@ private:
 
     void updateDiagnosticInfo();
 
-    bool parseRowAndPrintDiagnosticInfo(
-        MutableColumns & columns,
-        WriteBuffer & out,
-        size_t max_length_of_column_name,
-        size_t max_length_of_data_type_name);
+    bool parseRowAndPrintDiagnosticInfo(MutableColumns & columns,
+        WriteBuffer & out, size_t max_length_of_column_name, size_t max_length_of_data_type_name);
 };
 
-} // namespace DB
+}

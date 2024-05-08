@@ -38,19 +38,13 @@ namespace
 class AggregateFunctionTopKDate : public AggregateFunctionTopK<DataTypeDate::FieldType>
 {
     using AggregateFunctionTopK<DataTypeDate::FieldType>::AggregateFunctionTopK;
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDate>());
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDate>()); }
 };
 
 class AggregateFunctionTopKDateTime : public AggregateFunctionTopK<DataTypeDateTime::FieldType>
 {
     using AggregateFunctionTopK<DataTypeDateTime::FieldType>::AggregateFunctionTopK;
-    DataTypePtr getReturnType() const override
-    {
-        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDateTime>());
-    }
+    DataTypePtr getReturnType() const override { return std::make_shared<DataTypeArray>(std::make_shared<DataTypeDateTime>()); }
 };
 
 
@@ -68,11 +62,7 @@ IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_type, UIn
         return new AggregateFunctionTopKGeneric<false>(threshold, argument_type);
 }
 
-AggregateFunctionPtr createAggregateFunctionTopK(
-    const Context & /* context not used */,
-    const std::string & name,
-    const DataTypes & argument_types,
-    const Array & params)
+AggregateFunctionPtr createAggregateFunctionTopK(const std::string & name, const DataTypes & argument_types, const Array & params)
 {
     assertUnary(name, argument_types);
 

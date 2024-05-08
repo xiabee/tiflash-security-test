@@ -30,7 +30,7 @@ inline UInt64 clock_gettime_ns(clockid_t clock_type = CLOCK_MONOTONIC)
     {
     };
     clock_gettime(clock_type, &ts);
-    return static_cast<UInt64>(ts.tv_sec * 1000000000ULL + ts.tv_nsec);
+    return UInt64(ts.tv_sec * 1000000000ULL + ts.tv_nsec);
 }
 
 /// Sometimes monotonic clock may not be monotonic (due to bug in kernel?).
@@ -64,14 +64,14 @@ public:
 
     void start()
     {
-        start_ns = nanosecondsWithBound(start_ns);
+        start_ns = nanoseconds();
         last_ns = start_ns;
         is_running = true;
     }
 
     void stop()
     {
-        stop_ns = nanosecondsWithBound(start_ns);
+        stop_ns = nanoseconds();
         is_running = false;
     }
 
@@ -82,16 +82,14 @@ public:
         last_ns = 0;
         is_running = false;
     }
-
     void restart() { start(); }
-
-    UInt64 elapsed() const { return is_running ? nanosecondsWithBound(start_ns) - start_ns : stop_ns - start_ns; }
+    UInt64 elapsed() const { return is_running ? nanoseconds() - start_ns : stop_ns - start_ns; }
     UInt64 elapsedMilliseconds() const { return elapsed() / 1000000UL; }
     double elapsedSeconds() const { return static_cast<double>(elapsed()) / 1000000000ULL; }
 
     UInt64 elapsedFromLastTime()
     {
-        const auto now_ns = nanosecondsWithBound(last_ns);
+        const auto now_ns = nanoseconds();
         if (is_running)
         {
             auto rc = now_ns - last_ns;
@@ -102,10 +100,10 @@ public:
         {
             return stop_ns - last_ns;
         }
-    }
+    };
 
     UInt64 elapsedMillisecondsFromLastTime() { return elapsedFromLastTime() / 1000000UL; }
-    double elapsedSecondsFromLastTime() { return static_cast<double>(elapsedFromLastTime()) / 1000000000ULL; }
+    UInt64 elapsedSecondsFromLastTime() { return elapsedFromLastTime() / 1000000UL; }
 
 private:
     UInt64 start_ns = 0;
@@ -114,9 +112,7 @@ private:
     clockid_t clock_type;
     bool is_running = false;
 
-    // Get current nano seconds, ensuring the return value is not
-    // less than `lower_bound`.
-    UInt64 nanosecondsWithBound(UInt64 lower_bound) const { return clock_gettime_ns_adjusted(lower_bound, clock_type); }
+    UInt64 nanoseconds() const { return clock_gettime_ns_adjusted(start_ns, clock_type); }
 };
 
 
@@ -214,8 +210,5 @@ private:
     clockid_t clock_type;
 
     /// Most significant bit is a lock. When it is set, compareAndRestartDeferred method will return false.
-    UInt64 nanoseconds(UInt64 prev_time) const
-    {
-        return clock_gettime_ns_adjusted(prev_time, clock_type) & 0x7FFFFFFFFFFFFFFFULL;
-    }
+    UInt64 nanoseconds(UInt64 prev_time) const { return clock_gettime_ns_adjusted(prev_time, clock_type) & 0x7FFFFFFFFFFFFFFFULL; }
 };

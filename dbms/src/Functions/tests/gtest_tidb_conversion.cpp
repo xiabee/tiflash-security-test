@@ -88,30 +88,22 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<IsDecimal<Output>, void>::type testNotOnlyNull(
-        const Input & input,
-        const DecimalField<Output> & output,
-        const std::tuple<UInt32, UInt32> & meta)
+    typename std::enable_if<IsDecimal<Output>, void>::type testNotOnlyNull(const Input & input, const DecimalField<Output> & output, const std::tuple<UInt32, UInt32> & meta)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_COLUMN_EQ(
-                is_const ? createConstColumn<Nullable<Output>>(meta, 1, output)
-                         : createColumn<Nullable<Output>>(meta, {output}),
+                is_const ? createConstColumn<Nullable<Output>>(meta, 1, output) : createColumn<Nullable<Output>>(meta, {output}),
                 executeFunction(
                     func_name,
                     {is_const ? createConstColumn<Nullable<Input>>(1, input) : createColumn<Nullable<Input>>({input}),
-                     createCastTypeConstColumn(
-                         fmt::format("Nullable(Decimal({},{}))", std::get<0>(meta), std::get<1>(meta)))}));
+                     createCastTypeConstColumn(fmt::format("Nullable(Decimal({},{}))", std::get<0>(meta), std::get<1>(meta)))}));
         };
         inner_test(true);
         inner_test(false);
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(
-        const DecimalField<Decimal64> & input,
-        const MyDateTime & output,
-        int fraction)
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(const DecimalField<Decimal64> & input, const MyDateTime & output, int fraction)
     {
         auto meta = std::make_tuple(19, input.getScale());
         auto inner_test = [&](bool is_const) {
@@ -119,8 +111,7 @@ public:
                 is_const ? createDateTimeColumnConst(1, output, fraction) : createDateTimeColumn({output}, fraction),
                 executeFunction(
                     func_name,
-                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input)
-                              : createColumn<Nullable<Input>>(meta, {input}),
+                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input) : createColumn<Nullable<Input>>(meta, {input}),
                      createCastTypeConstColumn(fmt::format("Nullable(MyDateTime({}))", fraction))}));
         };
         inner_test(true);
@@ -128,10 +119,7 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(
-        const Input & input,
-        const MyDateTime & output,
-        int fraction)
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testNotOnlyNull(const Input & input, const MyDateTime & output, int fraction)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_COLUMN_EQ(
@@ -162,17 +150,14 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<IsDecimal<Output>, void>::type testThrowException(
-        const Input & input,
-        const std::tuple<UInt32, UInt32> & meta)
+    typename std::enable_if<IsDecimal<Output>, void>::type testThrowException(const Input & input, const std::tuple<UInt32, UInt32> & meta)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_THROW(
                 executeFunction(
                     func_name,
                     {is_const ? createConstColumn<Nullable<Input>>(1, input) : createColumn<Nullable<Input>>({input}),
-                     createCastTypeConstColumn(
-                         fmt::format("Nullable(Decimal({},{}))", std::get<0>(meta), std::get<1>(meta)))}),
+                     createCastTypeConstColumn(fmt::format("Nullable(Decimal({},{}))", std::get<0>(meta), std::get<1>(meta)))}),
                 TiFlashException);
         };
         inner_test(true);
@@ -180,9 +165,7 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testThrowException(
-        const Input & input,
-        int fraction)
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testThrowException(const Input & input, int fraction)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_THROW(
@@ -197,9 +180,7 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testReturnNull(
-        const Input & input,
-        int fraction)
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testReturnNull(const Input & input, int fraction)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_COLUMN_EQ(
@@ -214,18 +195,14 @@ public:
     }
 
     template <typename Input, typename Output>
-    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testReturnNull(
-        const DecimalField<Input> & input,
-        const std::tuple<UInt32, UInt32> & meta,
-        int fraction)
+    typename std::enable_if<std::is_same_v<Output, MyDateTime>, void>::type testReturnNull(const DecimalField<Input> & input, const std::tuple<UInt32, UInt32> & meta, int fraction)
     {
         auto inner_test = [&](bool is_const) {
             ASSERT_COLUMN_EQ(
                 is_const ? createDateTimeColumnConst(1, {}, fraction) : createDateTimeColumn({{}}, fraction),
                 executeFunction(
                     func_name,
-                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input)
-                              : createColumn<Nullable<Input>>(meta, {input}),
+                    {is_const ? createConstColumn<Nullable<Input>>(meta, 1, input) : createColumn<Nullable<Input>>(meta, {input}),
                      createCastTypeConstColumn(fmt::format("Nullable(MyDateTime({}))", fraction))}));
         };
         inner_test(true);
@@ -235,11 +212,11 @@ public:
     template <typename Input, typename Output>
     void testOnlyNull()
     {
-        std::vector<ColumnWithTypeAndName> nulls
-            = {createOnlyNullColumnConst(1),
-               createOnlyNullColumn(1),
-               createColumn<Nullable<Input>>({{}}),
-               createConstColumn<Nullable<Input>>(1, {})};
+        std::vector<ColumnWithTypeAndName> nulls = {
+            createOnlyNullColumnConst(1),
+            createOnlyNullColumn(1),
+            createColumn<Nullable<Input>>({{}}),
+            createConstColumn<Nullable<Input>>(1, {})};
 
         auto inner_test = [&](const ColumnWithTypeAndName & null_one) {
             if constexpr (IsDecimal<Output>)
@@ -270,64 +247,34 @@ public:
                     res,
                     executeFunction(
                         func_name,
-                        {null_one, createCastTypeConstColumn(fmt::format("Nullable(Decimal({},0))", precision))}));
+                        {null_one,
+                         createCastTypeConstColumn(fmt::format("Nullable(Decimal({},0))", precision))}));
             }
             else if constexpr (std::is_same_v<Output, MyDateTime>)
             {
-                auto res = null_one.column->isColumnConst() ? createDateTimeColumnConst(1, {}, 6)
-                                                            : createDateTimeColumn({{}}, 6);
-                ASSERT_COLUMN_EQ(
-                    res,
-                    executeFunction(func_name, {null_one, createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
-            }
-            else
-            {
-                auto res = null_one.column->isColumnConst() ? createConstColumn<Nullable<Output>>(1, {})
-                                                            : createColumn<Nullable<Output>>({{}});
+                auto res = null_one.column->isColumnConst() ? createDateTimeColumnConst(1, {}, 6) : createDateTimeColumn({{}}, 6);
                 ASSERT_COLUMN_EQ(
                     res,
                     executeFunction(
                         func_name,
-                        {null_one, createCastTypeConstColumn(fmt::format("Nullable({})", TypeName<Output>::get()))}));
+                        {null_one,
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+            }
+            else
+            {
+                auto res = null_one.column->isColumnConst() ? createConstColumn<Nullable<Output>>(1, {}) : createColumn<Nullable<Output>>({{}});
+                ASSERT_COLUMN_EQ(
+                    res,
+                    executeFunction(
+                        func_name,
+                        {null_one,
+                         createCastTypeConstColumn(fmt::format("Nullable({})", TypeName<Output>::get()))}));
             }
         };
         for (const auto & null_one : nulls)
         {
             inner_test(null_one);
         }
-    }
-
-    void parseAndTestDecimalToFloat64(String input_decimal, double ref)
-    {
-        ASSERT_TRUE(!input_decimal.empty());
-        size_t prec = input_decimal.length();
-        size_t scale = 0;
-        auto pos = input_decimal.find(".");
-        if (pos != std::string::npos)
-        {
-            ASSERT_TRUE(input_decimal.length() >= pos + 1);
-            scale = input_decimal.length() - pos - 1;
-            --prec;
-        }
-        bool negative = input_decimal.starts_with("-");
-        if (negative)
-        {
-            ASSERT_TRUE(prec >= 1);
-            --prec;
-        }
-        ASSERT_TRUE(prec >= scale);
-        ASSERT_COLUMN_EQ_V2(
-            createColumn<Float64>({ref}),
-            executeFunction(
-                func_name,
-                {createColumn<Decimal128>(std::make_tuple(prec, scale), {input_decimal}),
-                 createCastTypeConstColumn("Float64")}));
-        ASSERT_COLUMN_EQ_V2(
-            createColumn<Float64>({ref}),
-            executeFunction(
-                func_name,
-                {createColumn<Decimal256>(std::make_tuple(prec, scale), {input_decimal}),
-                 createCastTypeConstColumn("Float64")}));
     }
 };
 
@@ -342,164 +289,188 @@ try
     /// null only cases
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({{}}),
-        executeFunction(func_name, {createOnlyNullColumn(1), createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createOnlyNullColumn(1),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({{}}),
-        executeFunction(func_name, {createOnlyNullColumn(1), createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createOnlyNullColumn(1),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
 
     /// const cases
     // uint8/16/32/64 -> uint64, no overflow
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_UINT8),
-        executeFunction(func_name, {createConstColumn<UInt8>(1, MAX_UINT8), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt8>(1, MAX_UINT8),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_UINT16),
-        executeFunction(func_name, {createConstColumn<UInt16>(1, MAX_UINT16), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt16>(1, MAX_UINT16),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_UINT32),
-        executeFunction(func_name, {createConstColumn<UInt32>(1, MAX_UINT32), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt32>(1, MAX_UINT32),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_UINT64),
-        executeFunction(func_name, {createConstColumn<UInt64>(1, MAX_UINT64), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt64>(1, MAX_UINT64),
+                         createCastTypeConstColumn("UInt64")}));
     // int8/16/32/64 -> uint64, no overflow
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_INT8),
-        executeFunction(func_name, {createConstColumn<Int8>(1, MAX_INT8), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int8>(1, MAX_INT8),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_INT16),
-        executeFunction(func_name, {createConstColumn<Int16>(1, MAX_INT16), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int16>(1, MAX_INT16),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_INT32),
-        executeFunction(func_name, {createConstColumn<Int32>(1, MAX_INT32), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int32>(1, MAX_INT32),
+                         createCastTypeConstColumn("UInt64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<UInt64>(1, MAX_INT64),
-        executeFunction(func_name, {createConstColumn<Int64>(1, MAX_INT64), createCastTypeConstColumn("UInt64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int64>(1, MAX_INT64),
+                         createCastTypeConstColumn("UInt64")}));
     // uint8/16/32 -> int64, no overflow
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_UINT8),
-        executeFunction(func_name, {createConstColumn<UInt8>(1, MAX_UINT8), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt8>(1, MAX_UINT8),
+                         createCastTypeConstColumn("Int64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_UINT16),
-        executeFunction(func_name, {createConstColumn<UInt16>(1, MAX_UINT16), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt16>(1, MAX_UINT16),
+                         createCastTypeConstColumn("Int64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_UINT32),
-        executeFunction(func_name, {createConstColumn<UInt32>(1, MAX_UINT32), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt32>(1, MAX_UINT32),
+                         createCastTypeConstColumn("Int64")}));
     //  uint64 -> int64, will overflow
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, -1),
-        executeFunction(func_name, {createConstColumn<UInt64>(1, MAX_UINT64), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt64>(1, MAX_UINT64),
+                         createCastTypeConstColumn("Int64")}));
     // int8/16/32/64 -> int64, no overflow
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_INT8),
-        executeFunction(func_name, {createConstColumn<Int8>(1, MAX_INT8), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int8>(1, MAX_INT8),
+                         createCastTypeConstColumn("Int64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_INT16),
-        executeFunction(func_name, {createConstColumn<Int16>(1, MAX_INT16), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int16>(1, MAX_INT16),
+                         createCastTypeConstColumn("Int64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_INT32),
-        executeFunction(func_name, {createConstColumn<Int32>(1, MAX_INT32), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int32>(1, MAX_INT32),
+                         createCastTypeConstColumn("Int64")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<Int64>(1, MAX_INT64),
-        executeFunction(func_name, {createConstColumn<Int64>(1, MAX_INT64), createCastTypeConstColumn("Int64")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int64>(1, MAX_INT64),
+                         createCastTypeConstColumn("Int64")}));
 
     /// normal cases
     // uint8/16/32/64 -> uint64, no overflow
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, 1, MAX_UINT8, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({0, 1, MAX_UINT8, {}}), createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({0, 1, MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, 1, MAX_UINT16, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({0, 1, MAX_UINT16, {}}), createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({0, 1, MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, 1, MAX_UINT32, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({0, 1, MAX_UINT32, {}}), createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({0, 1, MAX_UINT32, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, 1, MAX_UINT64, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({0, 1, MAX_UINT64, {}}), createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({0, 1, MAX_UINT64, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     // int8/16/32/64 -> uint64, no overflow
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, MAX_INT8, MAX_UINT64, MAX_UINT64 - MAX_INT8, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({0, MAX_INT8, -1, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({0, MAX_INT8, -1, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, MAX_INT16, MAX_UINT64, MAX_UINT64 - MAX_INT16, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({0, MAX_INT16, -1, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({0, MAX_INT16, -1, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, MAX_INT32, MAX_UINT64, MAX_UINT64 - MAX_INT32, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({0, MAX_INT32, -1, MIN_INT32, {}}),
-             createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({0, MAX_INT32, -1, MIN_INT32, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({0, MAX_INT64, MAX_UINT64, MAX_UINT64 - MAX_INT64, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({0, MAX_INT64, -1, MIN_INT64, {}}),
-             createCastTypeConstColumn("Nullable(UInt64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({0, MAX_INT64, -1, MIN_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(UInt64)")}));
     // uint8/16/32 -> int64, no overflow
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT8, MAX_UINT8, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({0, MAX_INT8, MAX_UINT8, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({0, MAX_INT8, MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT16, MAX_UINT16, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({0, MAX_INT16, MAX_UINT16, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({0, MAX_INT16, MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT32, MAX_UINT32, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({0, MAX_INT32, MAX_UINT32, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({0, MAX_INT32, MAX_UINT32, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     //  uint64 -> int64, overflow may happen
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT64, -1, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({0, MAX_INT64, MAX_UINT64, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({0, MAX_INT64, MAX_UINT64, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     // int8/16/32/64 -> int64, no overflow
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT8, -1, MIN_INT8, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({0, MAX_INT8, -1, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({0, MAX_INT8, -1, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT16, -1, MIN_INT16, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({0, MAX_INT16, -1, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({0, MAX_INT16, -1, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT32, -1, MIN_INT32, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({0, MAX_INT32, -1, MIN_INT32, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({0, MAX_INT32, -1, MIN_INT32, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({0, MAX_INT64, -1, MIN_INT64, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({0, MAX_INT64, -1, MIN_INT64, {}}),
-             createCastTypeConstColumn("Nullable(Int64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({0, MAX_INT64, -1, MIN_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(Int64)")}));
 }
 CATCH
 
@@ -508,59 +479,62 @@ try
 {
     // uint64/int64 -> float64, may be not precise
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Float64>>({1234567890.0, 123456789012345680.0, 0.0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>(
-                 {1234567890, // this is fine
-                  123456789012345678, // but this cannot be represented precisely in the IEEE 754 64-bit float format
-                  0,
-                  {}}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
+        createColumn<Nullable<Float64>>(
+            {1234567890.0,
+             123456789012345680.0,
+             0.0,
+             {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>(
+                             {1234567890, // this is fine
+                              123456789012345678, // but this cannot be represented precisely in the IEEE 754 64-bit float format
+                              0,
+                              {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Float64>>({1234567890.0, 123456789012345680.0, 0.0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>(
-                 {1234567890, // this is fine
-                  123456789012345678, // but this cannot be represented precisely in the IEEE 754 64-bit float format
-                  0,
-                  {}}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
+        createColumn<Nullable<Float64>>(
+            {1234567890.0,
+             123456789012345680.0,
+             0.0,
+             {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>(
+                             {1234567890, // this is fine
+                              123456789012345678, // but this cannot be represented precisely in the IEEE 754 64-bit float format
+                              0,
+                              {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     // uint32/16/8 and int32/16/8 -> float64, precise
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_UINT32, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32, 0, {}}), createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_UINT16, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, 0, {}}), createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_UINT8, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, 0, {}}), createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_INT32, MIN_INT32, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, 0, {}}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_INT16, MIN_INT16, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, 0, {}}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({MAX_INT8, MIN_INT8, 0, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, 0, {}}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, 0, {}}),
+                         createCastTypeConstColumn("Nullable(Float64)")}));
 }
 CATCH
 
@@ -570,83 +544,97 @@ try
     /// null only cases
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({{}}),
-        executeFunction(func_name, {createOnlyNullColumn(1), createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createOnlyNullColumn(1),
+                         createCastTypeConstColumn("Nullable(String)")}));
 
     /// const cases
     // uint64/32/16/8 -> string
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "18446744073709551615"),
-        executeFunction(func_name, {createConstColumn<UInt64>(1, MAX_UINT64), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt64>(1, MAX_UINT64),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "4294967295"),
-        executeFunction(func_name, {createConstColumn<UInt32>(1, MAX_UINT32), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt32>(1, MAX_UINT32),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "65535"),
-        executeFunction(func_name, {createConstColumn<UInt16>(1, MAX_UINT16), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt16>(1, MAX_UINT16),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "255"),
-        executeFunction(func_name, {createConstColumn<UInt8>(1, MAX_UINT8), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<UInt8>(1, MAX_UINT8),
+                         createCastTypeConstColumn("String")}));
     // int64/32/16/8 -> string
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "9223372036854775807"),
-        executeFunction(func_name, {createConstColumn<Int64>(1, MAX_INT64), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int64>(1, MAX_INT64),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "2147483647"),
-        executeFunction(func_name, {createConstColumn<Int32>(1, MAX_INT32), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int32>(1, MAX_INT32),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "32767"),
-        executeFunction(func_name, {createConstColumn<Int16>(1, MAX_INT16), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int16>(1, MAX_INT16),
+                         createCastTypeConstColumn("String")}));
     ASSERT_COLUMN_EQ(
         createConstColumn<String>(1, "127"),
-        executeFunction(func_name, {createConstColumn<Int8>(1, MAX_INT8), createCastTypeConstColumn("String")}));
+        executeFunction(func_name,
+                        {createConstColumn<Int8>(1, MAX_INT8),
+                         createCastTypeConstColumn("String")}));
 
     /// normal cases
     // uint64/32/16/8 -> string
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"18446744073709551615", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({MAX_UINT64, 0, {}}), createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({MAX_UINT64, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"4294967295", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32, 0, {}}), createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"65535", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, 0, {}}), createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"255", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, 0, {}}), createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     // int64/32/16/8 -> string
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"9223372036854775807", "-9223372036854775808", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, 0, {}}),
-             createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"2147483647", "-2147483648", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, 0, {}}),
-             createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"32767", "-32768", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, 0, {}}),
-             createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"127", "-128", "0", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, 0, {}}),
-             createCastTypeConstColumn("Nullable(String)")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, 0, {}}),
+                         createCastTypeConstColumn("Nullable(String)")}));
 }
 CATCH
 
@@ -658,290 +646,279 @@ try
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(9, 0),
             {DecimalField32(MAX_INT8, 0), DecimalField32(MIN_INT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal64>>(
             std::make_tuple(18, 0),
             {DecimalField64(MAX_INT8, 0), DecimalField64(MIN_INT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal128>>(
             std::make_tuple(38, 0),
             {DecimalField128(MAX_INT8, 0), DecimalField128(MIN_INT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
             {DecimalField256(static_cast<Int256>(MAX_INT8), 0), DecimalField256(static_cast<Int256>(MIN_INT8), 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // int16 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(9, 0),
             {DecimalField32(MAX_INT16, 0), DecimalField32(MIN_INT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal64>>(
             std::make_tuple(18, 0),
             {DecimalField64(MAX_INT16, 0), DecimalField64(MIN_INT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal128>>(
             std::make_tuple(38, 0),
             {DecimalField128(MAX_INT16, 0), DecimalField128(MIN_INT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
-            {DecimalField256(static_cast<Int256>(MAX_INT16), 0),
-             DecimalField256(static_cast<Int256>(MIN_INT16), 0),
-             {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+            {DecimalField256(static_cast<Int256>(MAX_INT16), 0), DecimalField256(static_cast<Int256>(MIN_INT16), 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int16>>({MAX_INT16, MIN_INT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // int32 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(9, 0),
             {DecimalField32(999999999, 0), DecimalField32(-999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({999999999, -999999999, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({1000000000, -1000000000, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
-        TiFlashException);
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({999999999, -999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<Int32>>({1000000000, -1000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal64>>(
             std::make_tuple(18, 0),
             {DecimalField64(MAX_INT32, 0), DecimalField64(MIN_INT32, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal128>>(
             std::make_tuple(38, 0),
             {DecimalField128(MAX_INT32, 0), DecimalField128(MIN_INT32, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
-            {DecimalField256(static_cast<Int256>(MAX_INT32), 0),
-             DecimalField256(static_cast<Int256>(MIN_INT32), 0),
-             {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+            {DecimalField256(static_cast<Int256>(MAX_INT32), 0), DecimalField256(static_cast<Int256>(MIN_INT32), 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({MAX_INT32, MIN_INT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // int64 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(9, 0),
             {DecimalField32(999999999, 0), DecimalField32(-999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({999999999, -999999999, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({1000000000, -1000000000, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
-        TiFlashException);
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({999999999, -999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<Int64>>({1000000000, -1000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal64>>(
             std::make_tuple(18, 0),
             {DecimalField64(999999999999999999, 0), DecimalField64(-999999999999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({999999999999999999, -999999999999999999, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({1000000000000000000, -1000000000000000000, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}),
-        TiFlashException);
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({999999999999999999, -999999999999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<Int64>>({1000000000000000000, -1000000000000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(18,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal128>>(
             std::make_tuple(38, 0),
             {DecimalField128(MAX_INT64, 0), DecimalField128(MIN_INT64, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
-            {DecimalField256(static_cast<Int256>(MAX_INT64), 0),
-             DecimalField256(static_cast<Int256>(MIN_INT64), 0),
-             {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+            {DecimalField256(static_cast<Int256>(MAX_INT64), 0), DecimalField256(static_cast<Int256>(MIN_INT64), 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({MAX_INT64, MIN_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // uint8 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(9, 0), {DecimalField32(MAX_UINT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(9, 0),
+            {DecimalField32(MAX_UINT8, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal64>>(std::make_tuple(18, 0), {DecimalField64(MAX_UINT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}), createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        createColumn<Nullable<Decimal64>>(
+            std::make_tuple(18, 0),
+            {DecimalField64(MAX_UINT8, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal128>>(std::make_tuple(38, 0), {DecimalField128(MAX_UINT8, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}), createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        createColumn<Nullable<Decimal128>>(
+            std::make_tuple(38, 0),
+            {DecimalField128(MAX_UINT8, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
             {DecimalField256(static_cast<Int256>(MAX_UINT8), 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}), createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // uint16 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(9, 0), {DecimalField32(MAX_UINT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(9, 0),
+            {DecimalField32(MAX_UINT16, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal64>>(std::make_tuple(18, 0), {DecimalField64(MAX_UINT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}), createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        createColumn<Nullable<Decimal64>>(
+            std::make_tuple(18, 0),
+            {DecimalField64(MAX_UINT16, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal128>>(std::make_tuple(38, 0), {DecimalField128(MAX_UINT16, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}), createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        createColumn<Nullable<Decimal128>>(
+            std::make_tuple(38, 0),
+            {DecimalField128(MAX_UINT16, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
             {DecimalField256(static_cast<Int256>(MAX_UINT16), 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}), createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // uint32 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(9, 0), {DecimalField32(999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({999999999, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({1000000000, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
-        TiFlashException);
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(9, 0),
+            {DecimalField32(999999999, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<UInt32>>({1000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal64>>(std::make_tuple(18, 0), {DecimalField64(MAX_UINT32, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}), createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+        createColumn<Nullable<Decimal64>>(
+            std::make_tuple(18, 0),
+            {DecimalField64(MAX_UINT32, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal128>>(std::make_tuple(38, 0), {DecimalField128(MAX_UINT32, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}), createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        createColumn<Nullable<Decimal128>>(
+            std::make_tuple(38, 0),
+            {DecimalField128(MAX_UINT32, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
             {DecimalField256(static_cast<Int256>(MAX_UINT32), 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}), createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
     // uint64 -> decimal32/64/128/256
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(9, 0), {DecimalField32(999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({999999999, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({1000000000, {}}), createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
-        TiFlashException);
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(9, 0),
+            {DecimalField32(999999999, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<UInt64>>({1000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(9,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal64>>(std::make_tuple(18, 0), {DecimalField64(999999999999999999, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({999999999999999999, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({1000000000000000000, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(18,0))")}),
-        TiFlashException);
+        createColumn<Nullable<Decimal64>>(
+            std::make_tuple(18, 0),
+            {DecimalField64(999999999999999999, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({999999999999999999, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(18,0))")}));
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<UInt64>>({1000000000000000000, {}}),
+                                  createCastTypeConstColumn("Nullable(Decimal(18,0))")}),
+                 TiFlashException);
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal128>>(std::make_tuple(38, 0), {DecimalField128(MAX_INT64, 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({MAX_INT64, {}}), createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
+        createColumn<Nullable<Decimal128>>(
+            std::make_tuple(38, 0),
+            {DecimalField128(MAX_INT64, 0), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({MAX_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,0))")}));
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(65, 0),
             {DecimalField256(static_cast<Int256>(MAX_INT64), 0), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({MAX_INT64, {}}), createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({MAX_INT64, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(65,0))")}));
 
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}),
-        TiFlashException);
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}),
+                 TiFlashException);
 
-    ASSERT_THROW(
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}),
-        TiFlashException);
+    ASSERT_THROW(executeFunction(func_name,
+                                 {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}),
+                 TiFlashException);
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(4, 1), {DecimalField32(static_cast<Int32>(9990), 1)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(4, 1),
+            {DecimalField32(static_cast<Int32>(9990), 1)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(4, 1), {DecimalField32(static_cast<Int32>(-9990), 1)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({-999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(4, 1),
+            {DecimalField32(static_cast<Int32>(-9990), 1)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({-999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
 
     auto & dag_context = getDAGContext();
     UInt64 ori_flags = dag_context.getFlags();
@@ -949,28 +926,32 @@ try
     dag_context.clearWarnings();
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(4, 1), {DecimalField32(static_cast<Int32>(9999), 1)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(4, 1),
+            {DecimalField32(static_cast<Int32>(9999), 1)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(4, 1), {DecimalField32(static_cast<Int32>(-9999), 1)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(4, 1),
+            {DecimalField32(static_cast<Int32>(-9999), 1)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(4, 1))")}));
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(2, 2), {DecimalField32(static_cast<Int32>(99), 2)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(2, 2))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(2, 2),
+            {DecimalField32(static_cast<Int32>(99), 2)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({9999}), createCastTypeConstColumn("Nullable(Decimal(2, 2))")}));
 
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Decimal32>>(std::make_tuple(2, 2), {DecimalField32(static_cast<Int32>(-99), 2)}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(2, 2))")}));
+        createColumn<Nullable<Decimal32>>(
+            std::make_tuple(2, 2),
+            {DecimalField32(static_cast<Int32>(-99), 2)}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int32>>({-9999}), createCastTypeConstColumn("Nullable(Decimal(2, 2))")}));
 
     dag_context.setFlags(ori_flags);
 }
@@ -981,43 +962,40 @@ try
 {
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}, {{2021, 10, 26, 16, 8, 59, 0}}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({{}, 20211026160859}),
-             createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({{}, 20211026160859}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}, {{2021, 10, 26, 16, 8, 59, 0}}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({{}, 20211026160859}),
-             createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({{}, 20211026160859}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
 
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt8>>({MAX_UINT8}), createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt8>>({MAX_UINT8}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt16>>({MAX_UINT16}), createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt16>>({MAX_UINT16}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt32>>({MAX_UINT32}), createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt32>>({MAX_UINT32}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<UInt64>>({0}), createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<UInt64>>({0}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{}, {}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({{}, -20211026160859}),
-             createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({{}, -20211026160859}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
 }
 CATCH
 
@@ -1152,21 +1130,12 @@ try
     testNotOnlyNull<Float32, Decimal128>(MIN_FLOAT64, DecimalField128(0, 30), std::make_tuple(38, 30));
 
     testNotOnlyNull<Float32, Decimal256>(0, DecimalField256(static_cast<Int256>(0), 0), std::make_tuple(65, 0));
-    testNotOnlyNull<Float32, Decimal256>(
-        12.213f,
-        DecimalField256(static_cast<Int256>(12213), 3),
-        std::make_tuple(65, 3));
-    testNotOnlyNull<Float32, Decimal256>(
-        -12.213f,
-        DecimalField256(static_cast<Int256>(-12213), 3),
-        std::make_tuple(65, 3));
+    testNotOnlyNull<Float32, Decimal256>(12.213f, DecimalField256(static_cast<Int256>(12213), 3), std::make_tuple(65, 3));
+    testNotOnlyNull<Float32, Decimal256>(-12.213f, DecimalField256(static_cast<Int256>(-12213), 3), std::make_tuple(65, 3));
     // TODO add test after bug fixed
     // ERROR 1105 (HY000): other error for mpp stream: Cannot convert a non-finite number to an integer.
     // testNotOnlyNull<Float32, Decimal256>(MAX_FLOAT32, DecimalField256(Int256("340282346638528860000000000000000000000"), 0), std::make_tuple(65, 0));
-    testNotOnlyNull<Float32, Decimal256>(
-        MIN_FLOAT64,
-        DecimalField256(static_cast<Int256>(0), 30),
-        std::make_tuple(65, 30));
+    testNotOnlyNull<Float32, Decimal256>(MIN_FLOAT64, DecimalField256(static_cast<Int256>(0), 30), std::make_tuple(65, 30));
 
     testNotOnlyNull<Float64, Decimal32>(0, DecimalField32(0, 0), std::make_tuple(9, 0));
     testNotOnlyNull<Float64, Decimal32>(12.213, DecimalField32(12213, 3), std::make_tuple(9, 3));
@@ -1187,19 +1156,10 @@ try
     testNotOnlyNull<Float64, Decimal128>(MIN_FLOAT64, DecimalField128(0, 30), std::make_tuple(38, 30));
 
     testNotOnlyNull<Float64, Decimal256>(0, DecimalField256(static_cast<Int256>(0), 0), std::make_tuple(65, 0));
-    testNotOnlyNull<Float64, Decimal256>(
-        12.213,
-        DecimalField256(static_cast<Int256>(12213), 3),
-        std::make_tuple(65, 3));
-    testNotOnlyNull<Float64, Decimal256>(
-        -12.213,
-        DecimalField256(static_cast<Int256>(-12213), 3),
-        std::make_tuple(65, 3));
+    testNotOnlyNull<Float64, Decimal256>(12.213, DecimalField256(static_cast<Int256>(12213), 3), std::make_tuple(65, 3));
+    testNotOnlyNull<Float64, Decimal256>(-12.213, DecimalField256(static_cast<Int256>(-12213), 3), std::make_tuple(65, 3));
     testThrowException<Float64, Decimal256>(MAX_FLOAT64, std::make_tuple(65, 0));
-    testNotOnlyNull<Float64, Decimal256>(
-        MIN_FLOAT64,
-        DecimalField256(static_cast<Int256>(0), 30),
-        std::make_tuple(65, 30));
+    testNotOnlyNull<Float64, Decimal256>(MIN_FLOAT64, DecimalField256(static_cast<Int256>(0), 30), std::make_tuple(65, 30));
 
 
     // test round
@@ -1227,22 +1187,10 @@ try
     testNotOnlyNull<Float32, Decimal128>(12.215f, DecimalField128(1222, 2), std::make_tuple(38, 2));
     testNotOnlyNull<Float32, Decimal128>(-12.215f, DecimalField128(-1222, 2), std::make_tuple(38, 2));
 
-    testNotOnlyNull<Float32, Decimal256>(
-        12.213f,
-        DecimalField256(static_cast<Int256>(1221), 2),
-        std::make_tuple(65, 2));
-    testNotOnlyNull<Float32, Decimal256>(
-        -12.213f,
-        DecimalField256(static_cast<Int256>(-1221), 2),
-        std::make_tuple(65, 2));
-    testNotOnlyNull<Float32, Decimal256>(
-        12.215f,
-        DecimalField256(static_cast<Int256>(1222), 2),
-        std::make_tuple(65, 2));
-    testNotOnlyNull<Float32, Decimal256>(
-        -12.215f,
-        DecimalField256(static_cast<Int256>(-1222), 2),
-        std::make_tuple(65, 2));
+    testNotOnlyNull<Float32, Decimal256>(12.213f, DecimalField256(static_cast<Int256>(1221), 2), std::make_tuple(65, 2));
+    testNotOnlyNull<Float32, Decimal256>(-12.213f, DecimalField256(static_cast<Int256>(-1221), 2), std::make_tuple(65, 2));
+    testNotOnlyNull<Float32, Decimal256>(12.215f, DecimalField256(static_cast<Int256>(1222), 2), std::make_tuple(65, 2));
+    testNotOnlyNull<Float32, Decimal256>(-12.215f, DecimalField256(static_cast<Int256>(-1222), 2), std::make_tuple(65, 2));
 
     testNotOnlyNull<Float64, Decimal32>(12.213, DecimalField32(1221, 2), std::make_tuple(9, 2));
     testNotOnlyNull<Float64, Decimal32>(-12.213, DecimalField32(-1221, 2), std::make_tuple(9, 2));
@@ -1260,42 +1208,24 @@ try
     testNotOnlyNull<Float64, Decimal128>(-12.215, DecimalField128(-1222, 2), std::make_tuple(38, 2));
 
     testNotOnlyNull<Float64, Decimal256>(12.213, DecimalField256(static_cast<Int256>(1221), 2), std::make_tuple(65, 2));
-    testNotOnlyNull<Float64, Decimal256>(
-        -12.213,
-        DecimalField256(static_cast<Int256>(-1221), 2),
-        std::make_tuple(65, 2));
+    testNotOnlyNull<Float64, Decimal256>(-12.213, DecimalField256(static_cast<Int256>(-1221), 2), std::make_tuple(65, 2));
     testNotOnlyNull<Float64, Decimal256>(12.215, DecimalField256(static_cast<Int256>(1222), 2), std::make_tuple(65, 2));
-    testNotOnlyNull<Float64, Decimal256>(
-        -12.215,
-        DecimalField256(static_cast<Int256>(-1222), 2),
-        std::make_tuple(65, 2));
+    testNotOnlyNull<Float64, Decimal256>(-12.215, DecimalField256(static_cast<Int256>(-1222), 2), std::make_tuple(65, 2));
 
     // Not compatible with MySQL/TiDB.
     // MySQL/TiDB: 34028199169636080000000000000000000000.00
     // TiFlash:    34028199169636079590747176440761942016.00
-    testNotOnlyNull<Float32, Decimal256>(
-        3.40282e+37f,
-        DecimalField256(Decimal256(Int256("3402819916963607959074717644076194201600")), 2),
-        std::make_tuple(50, 2));
+    testNotOnlyNull<Float32, Decimal256>(3.40282e+37f, DecimalField256(Decimal256(Int256("3402819916963607959074717644076194201600")), 2), std::make_tuple(50, 2));
     // MySQL/TiDB: 34028200000000000000000000000000000000.00
     // TiFlash:    34028200000000004441521809130870213181.44
-    testNotOnlyNull<Float64, Decimal256>(
-        3.40282e+37,
-        DecimalField256(Decimal256(Int256("3402820000000000444152180913087021318144")), 2),
-        std::make_tuple(50, 2));
+    testNotOnlyNull<Float64, Decimal256>(3.40282e+37, DecimalField256(Decimal256(Int256("3402820000000000444152180913087021318144")), 2), std::make_tuple(50, 2));
 
     // MySQL/TiDB: 123.12345886230469000000
     // TiFlash:    123.12345886230470197248
-    testNotOnlyNull<Float32, Decimal256>(
-        123.123456789123456789f,
-        DecimalField256(Decimal256(Int256("12312345886230470197248")), 20),
-        std::make_tuple(50, 20));
+    testNotOnlyNull<Float32, Decimal256>(123.123456789123456789f, DecimalField256(Decimal256(Int256("12312345886230470197248")), 20), std::make_tuple(50, 20));
     // MySQL/TiDB: 123.12345886230469000000
     // TiFlash:    123.12345678912344293376
-    testNotOnlyNull<Float64, Decimal256>(
-        123.123456789123456789,
-        DecimalField256(Decimal256(Int256("12312345678912344293376")), 20),
-        std::make_tuple(50, 20));
+    testNotOnlyNull<Float64, Decimal256>(123.123456789123456789, DecimalField256(Decimal256(Int256("12312345678912344293376")), 20), std::make_tuple(50, 20));
 
     dag_context.setFlags(ori_flags);
     dag_context.clearWarnings();
@@ -1386,16 +1316,8 @@ try
     dag_context->addFlag(TiDBSQLFlags::IN_INSERT_STMT | TiDBSQLFlags::IN_UPDATE_OR_DELETE_STMT);
     dag_context->clearWarnings();
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal32>(
-            std::make_tuple(5, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(
-                 std::make_tuple(5, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
     ASSERT_EQ(dag_context->getWarningCount(), 4);
     dag_context->setFlags(ori_flags);
     dag_context->clearWarnings();
@@ -1411,307 +1333,47 @@ try
     dag_context->clearWarnings();
 
     /// decimal32 to decimal32/64/128/256
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal32>(
-            std::make_tuple(5, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(
-                 std::make_tuple(5, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(5,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal64>(
-            std::make_tuple(15, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(
-                 std::make_tuple(5, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(15,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal128>(
-            std::make_tuple(25, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(
-                 std::make_tuple(5, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(25,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal256>(
-            std::make_tuple(45, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(
-                 std::make_tuple(5, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(45,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal64>(std::make_tuple(15, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(15,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal128>(std::make_tuple(25, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(25,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal256>(std::make_tuple(45, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal32>(std::make_tuple(5, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(45,2)")}));
 
     /// decimal64 to decimal32/64/128/256
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal32>(
-            std::make_tuple(5, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(
-                 std::make_tuple(15, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(5,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal64>(
-            std::make_tuple(15, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(
-                 std::make_tuple(15, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(15,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal128>(
-            std::make_tuple(25, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(
-                 std::make_tuple(15, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(25,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal256>(
-            std::make_tuple(45, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(
-                 std::make_tuple(15, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(45,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal64>(std::make_tuple(15, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal64>(std::make_tuple(15, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal64>(std::make_tuple(15, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(15,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal128>(std::make_tuple(25, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal64>(std::make_tuple(15, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(25,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal256>(std::make_tuple(45, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal64>(std::make_tuple(15, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(45,2)")}));
 
     /// decimal128 to decimal32/64/128/256
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal32>(
-            std::make_tuple(5, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal128>(
-                 std::make_tuple(25, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(5,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal64>(
-            std::make_tuple(15, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal128>(
-                 std::make_tuple(25, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(15,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal128>(
-            std::make_tuple(25, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal128>(
-                 std::make_tuple(25, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(25,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal256>(
-            std::make_tuple(45, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal128>(
-                 std::make_tuple(25, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(45,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal128>(std::make_tuple(25, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal64>(std::make_tuple(15, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal128>(std::make_tuple(25, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(15,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal128>(std::make_tuple(25, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal128>(std::make_tuple(25, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(25,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal256>(std::make_tuple(45, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal128>(std::make_tuple(25, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(45,2)")}));
 
     /// decimal256 to decimal32/64/128/256
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal32>(
-            std::make_tuple(5, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal256>(
-                 std::make_tuple(45, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(5,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal64>(
-            std::make_tuple(15, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal256>(
-                 std::make_tuple(45, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(15,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal128>(
-            std::make_tuple(25, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal256>(
-                 std::make_tuple(45, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(25,2)")}));
-    ASSERT_COLUMN_EQ(
-        createColumn<Decimal256>(
-            std::make_tuple(45, 2),
-            {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal256>(
-                 std::make_tuple(45, 4),
-                 {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}),
-             createCastTypeConstColumn("Decimal(45,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal32>(std::make_tuple(5, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal256>(std::make_tuple(45, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(5,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal64>(std::make_tuple(15, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal256>(std::make_tuple(45, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(15,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal128>(std::make_tuple(25, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal256>(std::make_tuple(45, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(25,2)")}));
+    ASSERT_COLUMN_EQ(createColumn<Decimal256>(std::make_tuple(45, 2), {"1.23", "1.56", "1.01", "1.00", "-1.23", "-1.56", "-1.01", "-1.00"}),
+                     executeFunction(func_name, {createColumn<Decimal256>(std::make_tuple(45, 4), {"1.2300", "1.5600", "1.0056", "1.0023", "-1.2300", "-1.5600", "-1.0056", "-1.0023"}), createCastTypeConstColumn("Decimal(45,2)")}));
 
     dag_context->setFlags(ori_flags);
     dag_context->clearWarnings();
-}
-CATCH
-
-TEST_F(TestTidbConversion, castDecimalAsRealBasic)
-try
-{
-    /// null only cases
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Nullable<Float64>>({{}}),
-        executeFunction(func_name, {createOnlyNullColumn(1), createCastTypeConstColumn("Nullable(Float64)")}));
-
-    /// ColumnVector(const nullable)
-    ASSERT_COLUMN_EQ_V2(
-        createConstColumn<Nullable<Float64>>(1, {3.0}),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<Decimal64>>(std::make_tuple(22, 1), 1, {"3.0"}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
-
-    ASSERT_COLUMN_EQ_V2(
-        createConstColumn<Nullable<Float64>>(1, {}),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<Decimal64>>(std::make_tuple(22, 1), 1, std::nullopt),
-             createCastTypeConstColumn("Nullable(Float64)")}));
-
-    /// ColumnVector(const non-nullable)
-    ASSERT_COLUMN_EQ_V2(
-        createConstColumn<Float64>(1, {1230.345}),
-        executeFunction(
-            func_name,
-            {createConstColumn<Decimal64>(std::make_tuple(22, 3), 1, {"1230.345"}),
-             createCastTypeConstColumn("Float64")}));
-
-    /// ColumnVector(nullable)
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Nullable<Float64>>({345.002, std::nullopt, 1.02}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Decimal64>>(std::make_tuple(22, 3), {"345.002", std::nullopt, "1.02"}),
-             createCastTypeConstColumn("Nullable(Float64)")}));
-
-    /// ColumnVector(non-nullable)
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({3.14159, 1.0234567}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(std::make_tuple(22, 7), {"3.14159", "1.0234567"}),
-             createCastTypeConstColumn("Float64")}));
-
-    /// Negative
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({-0.14159, -1.0234567}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(std::make_tuple(22, 7), {"-0.14159", "-1.0234567"}),
-             createCastTypeConstColumn("Float64")}));
-
-    /// Decimal32
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({0.141, 1.02}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal32>(std::make_tuple(8, 3), {"0.141", "1.02"}), createCastTypeConstColumn("Float64")}));
-
-    /// Decimal64
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({0.14159, 1.0234567}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal64>(std::make_tuple(22, 7), {"0.14159", "1.0234567"}),
-             createCastTypeConstColumn("Float64")}));
-
-    /// Decimal128
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({0.141593452, 19387.023456789}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal128>(std::make_tuple(25, 9), {"0.141593452", "19387.023456789"}),
-             createCastTypeConstColumn("Float64")}));
-
-    /// Decimal256
-    ASSERT_COLUMN_EQ_V2(
-        createColumn<Float64>({0.141593452, 193857.02356789}),
-        executeFunction(
-            func_name,
-            {createColumn<Decimal256>(std::make_tuple(32, 9), {"0.141593452", "193857.02356789"}),
-             createCastTypeConstColumn("Float64")}));
-}
-CATCH
-
-TEST_F(TestTidbConversion, castDecimalAsRealNumeric)
-try
-{
-    std::vector<std::pair<String, double>> test_data = {
-        {"9007199254740993.0", 9007199254740992.0},
-        {"9007199254740994.0", 9007199254740994.0},
-        {"9007199254740995.0", 9007199254740996.0},
-        {"9007199254740996.0", 9007199254740996.0},
-        {"12345", 12345},
-        {"123.45", 123.45},
-        {"-123.45", -123.45},
-        {"0.00012345000098765", 0.00012345000098765},
-        {"1234500009876.5", 1234500009876.5},
-        {"-9223372036854775807", -9223372036854775807.0},
-        {"-9223372036854775808", -9223372036854775808.0},
-        {"18446744073709551615", 18446744073709551615.0},
-        {"123456789.987654321", 123456789.987654321},
-        {"1", 1},
-        {"+1", 1},
-        {"100000000000000000000000", 1e+23},
-        {"123456700", 1.234567e+08},
-        {"99999999999999974834176", 9.999999999999997e+22},
-        {"100000000000000000000001", 1.0000000000000001e+23},
-        {"100000000000000008388608", 1.0000000000000001e+23},
-        {"100000000000000016777215", 1.0000000000000001e+23},
-        {"100000000000000016777216", 1.0000000000000003e+23},
-        {"-1", -1},
-        {"-0.1", -0.1},
-        {"0", 0},
-        {"22.222222222222222", 22.22222222222222},
-        {"3.12415900000000035241", 3.124159000000000130370},
-        {"3.12415900000000035242", 3.124159000000000574460},
-        {"3.124158999999999908325", 3.124158999999999686281},
-        {"3.124158999999999908326", 3.124159000000000130370},
-        {"1090544144181609348671888949248", 1.0905441441816093e+30},
-        {"1090544144181609348835077142190", 1.0905441441816094e+30},
-    };
-    for (const auto & data : test_data)
-    {
-        parseAndTestDecimalToFloat64(data.first, data.second);
-    }
 }
 CATCH
 
@@ -1727,43 +1389,51 @@ try
     auto ctn_datetime1 = ColumnWithTypeAndName(std::move(col_datetime1), data_type_ptr, "datetime");
     ASSERT_COLUMN_EQ(
         createColumn<Float64>({datetime_float, datetime_frac_float}),
-        executeFunction(func_name, {ctn_datetime1, createCastTypeConstColumn("Float64")}));
+        executeFunction(func_name,
+                        {ctn_datetime1,
+                         createCastTypeConstColumn("Float64")}));
 
     // cast datetime to nullable float
     auto col_datetime2 = getDatetimeColumn();
     auto ctn_datetime2 = ColumnWithTypeAndName(std::move(col_datetime2), data_type_ptr, "datetime");
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({datetime_float, datetime_frac_float}),
-        executeFunction(func_name, {ctn_datetime2, createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {ctn_datetime2,
+                         createCastTypeConstColumn("Nullable(Float64)")}));
 
     // cast nullable datetime to nullable float
     auto col_datetime3 = getDatetimeColumn();
     auto datetime3_null_map = ColumnUInt8::create(2, 0);
     datetime3_null_map->getData()[1] = 1;
     auto col_datetime3_nullable = ColumnNullable::create(std::move(col_datetime3), std::move(datetime3_null_map));
-    auto ctn_datetime3_nullable
-        = ColumnWithTypeAndName(std::move(col_datetime3_nullable), makeNullable(data_type_ptr), "datetime");
+    auto ctn_datetime3_nullable = ColumnWithTypeAndName(std::move(col_datetime3_nullable), makeNullable(data_type_ptr), "datetime");
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Float64>>({datetime_float, {}}),
-        executeFunction(func_name, {ctn_datetime3_nullable, createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {ctn_datetime3_nullable,
+                         createCastTypeConstColumn("Nullable(Float64)")}));
 
     // cast const datetime to float
     auto col_datetime4_const = ColumnConst::create(getDatetimeColumn(true), 1);
     auto ctn_datetime4_const = ColumnWithTypeAndName(std::move(col_datetime4_const), data_type_ptr, "datetime");
     ASSERT_COLUMN_EQ(
         createConstColumn<Float64>(1, datetime_float),
-        executeFunction(func_name, {ctn_datetime4_const, createCastTypeConstColumn("Float64")}));
+        executeFunction(func_name,
+                        {ctn_datetime4_const,
+                         createCastTypeConstColumn("Float64")}));
 
     // cast nullable const datetime to float
     auto col_datetime5 = getDatetimeColumn(true);
     auto datetime5_null_map = ColumnUInt8::create(1, 0);
     auto col_datetime5_nullable = ColumnNullable::create(std::move(col_datetime5), std::move(datetime5_null_map));
     auto col_datetime5_nullable_const = ColumnConst::create(std::move(col_datetime5_nullable), 1);
-    auto ctn_datetime5_nullable_const
-        = ColumnWithTypeAndName(std::move(col_datetime5_nullable_const), makeNullable(data_type_ptr), "datetime");
+    auto ctn_datetime5_nullable_const = ColumnWithTypeAndName(std::move(col_datetime5_nullable_const), makeNullable(data_type_ptr), "datetime");
     ASSERT_COLUMN_EQ(
         createConstColumn<Nullable<Float64>>(1, datetime_float),
-        executeFunction(func_name, {ctn_datetime5_nullable_const, createCastTypeConstColumn("Nullable(Float64)")}));
+        executeFunction(func_name,
+                        {ctn_datetime5_nullable_const,
+                         createCastTypeConstColumn("Nullable(Float64)")}));
 }
 CATCH
 
@@ -1831,39 +1501,19 @@ try
         makeNullable(to_type_3),
         "output3_output");
 
-    ASSERT_COLUMN_EQ(
-        output1_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_1)->getName())}));
-    ASSERT_COLUMN_EQ(
-        output2_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_2)->getName())}));
-    ASSERT_COLUMN_EQ(
-        output3_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_3)->getName())}));
+    ASSERT_COLUMN_EQ(output1_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_1)->getName())}));
+    ASSERT_COLUMN_EQ(output2_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_2)->getName())}));
+    ASSERT_COLUMN_EQ(output3_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_3)->getName())}));
 
     // Test Const
-    ColumnWithTypeAndName input_const(
-        createConstColumn<DataTypeMyDuration::FieldType>(1, (20 * 3600 + 20 * 60 + 20) * 1000000000L + 999000000L)
-            .column,
-        from_type,
-        "input_const");
+    ColumnWithTypeAndName input_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (20 * 3600 + 20 * 60 + 20) * 1000000000L + 999000000L).column, from_type, "input_const");
     ColumnWithTypeAndName output1_const(input_const.column, to_type_1, "output1_const");
     ColumnWithTypeAndName output2_const(input_const.column, to_type_2, "output2_const");
-    ColumnWithTypeAndName output3_const(
-        createConstColumn<DataTypeMyDuration::FieldType>(1, (20 * 3600 + 20 * 60 + 21) * 1000000000L + 000000000L)
-            .column,
-        to_type_3,
-        "output3_const");
+    ColumnWithTypeAndName output3_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (20 * 3600 + 20 * 60 + 21) * 1000000000L + 000000000L).column, to_type_3, "output3_const");
 
-    ASSERT_COLUMN_EQ(
-        output1_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_1->getName())}));
-    ASSERT_COLUMN_EQ(
-        output2_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_2->getName())}));
-    ASSERT_COLUMN_EQ(
-        output3_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_3->getName())}));
+    ASSERT_COLUMN_EQ(output1_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_1->getName())}));
+    ASSERT_COLUMN_EQ(output2_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_2->getName())}));
+    ASSERT_COLUMN_EQ(output3_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_3->getName())}));
 }
 CATCH
 
@@ -1874,9 +1524,7 @@ try
     auto arg1_column = createColumn<Nullable<String>>({{}, "1/12/2020", "00:59:60 ", "1/12/2020"});
     auto arg2_column = createColumn<Nullable<String>>({"%d/%c/%Y", {}, "%H:%i:%S ", "%d/%c/%Y"});
     ColumnWithTypeAndName result_column(
-        createColumn<Nullable<DataTypeMyDateTime::FieldType>>(
-            {{}, {}, {}, MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()})
-            .column,
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({{}, {}, {}, MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()}).column,
         makeNullable(std::make_shared<DataTypeMyDateTime>(0)),
         "result");
     ASSERT_COLUMN_EQ(result_column, executeFunction("strToDateDatetime", arg1_column, arg2_column));
@@ -1885,9 +1533,7 @@ try
     arg1_column = createConstColumn<Nullable<String>>(2, {"1/12/2020"});
     arg2_column = createColumn<Nullable<String>>({"%d/%c/%Y", "%d/%c/%Y"});
     result_column = ColumnWithTypeAndName(
-        createColumn<Nullable<DataTypeMyDateTime::FieldType>>(
-            {MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt(), MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()})
-            .column,
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt(), MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()}).column,
         makeNullable(std::make_shared<DataTypeMyDateTime>(0)),
         "result");
     ASSERT_COLUMN_EQ(result_column, executeFunction("strToDateDatetime", arg1_column, arg2_column));
@@ -1905,9 +1551,7 @@ try
     arg1_column = createColumn<Nullable<String>>({"1/12/2020", "1/12/2020"});
     arg2_column = createConstColumn<Nullable<String>>(2, "%d/%c/%Y");
     result_column = ColumnWithTypeAndName(
-        createColumn<Nullable<DataTypeMyDateTime::FieldType>>(
-            {MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt(), MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()})
-            .column,
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt(), MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()}).column,
         makeNullable(std::make_shared<DataTypeMyDateTime>(0)),
         "result");
     ASSERT_COLUMN_EQ(result_column, executeFunction("strToDateDatetime", arg1_column, arg2_column));
@@ -1916,10 +1560,7 @@ try
     arg1_column = createConstColumn<Nullable<String>>(2, "1/12/2020");
     arg2_column = createConstColumn<Nullable<String>>(2, "%d/%c/%Y");
     result_column = ColumnWithTypeAndName(
-        createConstColumn<Nullable<DataTypeMyDateTime::FieldType>>(
-            2,
-            {MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()})
-            .column,
+        createConstColumn<Nullable<DataTypeMyDateTime::FieldType>>(2, {MyDateTime{2020, 12, 1, 0, 0, 0, 0}.toPackedUInt()}).column,
         makeNullable(std::make_shared<DataTypeMyDateTime>(0)),
         "result");
     ASSERT_COLUMN_EQ(result_column, executeFunction("strToDateDatetime", arg1_column, arg2_column));
@@ -2167,10 +1808,9 @@ try
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(to_prec, to_scale),
             {DecimalField32(MAX_INT8 * 1000, to_scale), DecimalField32(MIN_INT8 * 1000, to_scale), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(7,3))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(7,3))")}));
 
     // case2: cast(tinyint as decimal(9, 7))
     to_prec = 9;
@@ -2187,10 +1827,9 @@ try
         createColumn<Nullable<Decimal32>>(
             std::make_tuple(to_prec, to_scale),
             {DecimalField32(999999999, to_scale), DecimalField32(-999999999, to_scale), {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
-             createCastTypeConstColumn("Nullable(Decimal(9,7))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int8>>({MAX_INT8, MIN_INT8, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(9,7))")}));
     dag_context.setFlags(ori_flags);
 
     // case3: cast(bigint as decimal(40, 20))
@@ -2204,12 +1843,10 @@ try
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal256>>(
             std::make_tuple(to_prec, to_scale),
-            {DecimalField256(1024 * static_cast<Int256>(pow(10, to_scale)), to_scale),
-             DecimalField256(-1024 * static_cast<Int256>(pow(10, to_scale)), to_scale),
-             {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({1024, -1024, {}}), createCastTypeConstColumn("Nullable(Decimal(40,20))")}));
+            {DecimalField256(1024 * static_cast<Int256>(pow(10, to_scale)), to_scale), DecimalField256(-1024 * static_cast<Int256>(pow(10, to_scale)), to_scale), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({1024, -1024, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(40,20))")}));
 
     // case4: cast(bigint as decimal(38, 20))
     // from_prec(19) + to_scale(20) > Decimal256::prec(38), so we **CANNOT** skip check overflow.
@@ -2221,12 +1858,10 @@ try
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Decimal128>>(
             std::make_tuple(to_prec, to_scale),
-            {DecimalField128(1024 * static_cast<Int128>(pow(10, to_scale)), to_scale),
-             DecimalField128(-1024 * static_cast<Int128>(pow(10, to_scale)), to_scale),
-             {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<Int64>>({1024, -1024, {}}), createCastTypeConstColumn("Nullable(Decimal(38,20))")}));
+            {DecimalField128(1024 * static_cast<Int128>(pow(10, to_scale)), to_scale), DecimalField128(-1024 * static_cast<Int128>(pow(10, to_scale)), to_scale), {}}),
+        executeFunction(func_name,
+                        {createColumn<Nullable<Int64>>({1024, -1024, {}}),
+                         createCastTypeConstColumn("Nullable(Decimal(38,20))")}));
 }
 CATCH
 
@@ -2234,13 +1869,7 @@ CATCH
 TEST_F(TestTidbConversion, castStringAsDateTime)
 try
 {
-    auto input = std::vector<String>{
-        "2012-12-12 12:12:12",
-        "2012-12-12\t12:12:12",
-        "2012-12-12\n12:12:12",
-        "2012-12-12\v12:12:12",
-        "2012-12-12\f12:12:12",
-        "2012-12-12\r12:12:12"};
+    auto input = std::vector<String>{"2012-12-12 12:12:12", "2012-12-12\t12:12:12", "2012-12-12\n12:12:12", "2012-12-12\v12:12:12", "2012-12-12\f12:12:12", "2012-12-12\r12:12:12"};
     auto to_column = createConstColumn<String>(1, "MyDateTime(6)");
 
     // vector
@@ -2258,13 +1887,7 @@ try
     ASSERT_EQ(except_packed, const_result.column.get()->get64(0));
 
     // nullable
-    auto nullable_from_column = createColumn<Nullable<String>>(
-        {"2012-12-12 12:12:12",
-         "2012-12-12\t12:12:12",
-         "2012-12-12\n12:12:12",
-         "2012-12-12\v12:12:12",
-         "2012-12-12\f12:12:12",
-         "2012-12-12\r12:12:12"});
+    auto nullable_from_column = createColumn<Nullable<String>>({"2012-12-12 12:12:12", "2012-12-12\t12:12:12", "2012-12-12\n12:12:12", "2012-12-12\v12:12:12", "2012-12-12\f12:12:12", "2012-12-12\r12:12:12"});
     auto nullable_result = executeFunction("tidb_cast", {from_column, to_column});
     for (size_t i = 0; i < input.size(); i++)
     {
@@ -2325,52 +1948,28 @@ try
         "datetime_output3");
 
 
-    ASSERT_COLUMN_EQ(
-        datetime_output1,
-        executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_1->getName())}));
-    ASSERT_COLUMN_EQ(
-        datetime_output2,
-        executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_2->getName())}));
-    ASSERT_COLUMN_EQ(
-        datetime_output3,
-        executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_3->getName())}));
+    ASSERT_COLUMN_EQ(datetime_output1, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_1->getName())}));
+    ASSERT_COLUMN_EQ(datetime_output2, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_2->getName())}));
+    ASSERT_COLUMN_EQ(datetime_output3, executeFunction(func_name, {ctn_datetime, createCastTypeConstColumn(to_type_3->getName())}));
 
 
     // Test Const
-    ColumnWithTypeAndName input_const(
-        createConstColumn<DataTypeMyDateTime::FieldType>(1, datetime_frac2.toPackedUInt()).column,
-        datetime_type_ptr,
-        "input_const");
-    ColumnWithTypeAndName output1_const(
-        createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L)
-            .column,
-        to_type_1,
-        "output1_const");
-    ColumnWithTypeAndName output2_const(
-        createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L)
-            .column,
-        to_type_2,
-        "output2_const");
-    ColumnWithTypeAndName output3_const(
-        createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 120000000L)
-            .column,
-        to_type_3,
-        "output3_const");
+    ColumnWithTypeAndName input_const(createConstColumn<DataTypeMyDateTime::FieldType>(1, datetime_frac2.toPackedUInt()).column, datetime_type_ptr, "input_const");
+    ColumnWithTypeAndName output1_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L).column, to_type_1, "output1_const");
+    ColumnWithTypeAndName output2_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 123500000L).column, to_type_2, "output2_const");
+    ColumnWithTypeAndName output3_const(createConstColumn<DataTypeMyDuration::FieldType>(1, (11 * 3600 + 11 * 60 + 11) * 1000000000L + 120000000L).column, to_type_3, "output3_const");
 
-    ASSERT_COLUMN_EQ(
-        output1_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_1->getName())}));
-    ASSERT_COLUMN_EQ(
-        output2_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_2->getName())}));
-    ASSERT_COLUMN_EQ(
-        output3_const,
-        executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_3->getName())}));
+    ASSERT_COLUMN_EQ(output1_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_1->getName())}));
+    ASSERT_COLUMN_EQ(output2_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_2->getName())}));
+    ASSERT_COLUMN_EQ(output3_const, executeFunction(func_name, {input_const, createCastTypeConstColumn(to_type_3->getName())}));
 
     // Test Nullable
     ColumnWithTypeAndName input_nullable(
-        createColumn<Nullable<DataTypeMyDateTime::FieldType>>(
-            {datetime_frac1.toPackedUInt(), {}, datetime_frac2.toPackedUInt(), {}, datetime_frac3.toPackedUInt()})
+        createColumn<Nullable<DataTypeMyDateTime::FieldType>>({datetime_frac1.toPackedUInt(),
+                                                               {},
+                                                               datetime_frac2.toPackedUInt(),
+                                                               {},
+                                                               datetime_frac3.toPackedUInt()})
             .column,
         makeNullable(datetime_type_ptr),
         "input_nullable");
@@ -2402,15 +2001,9 @@ try
         makeNullable(to_type_3),
         "output3_output");
 
-    ASSERT_COLUMN_EQ(
-        output1_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_1)->getName())}));
-    ASSERT_COLUMN_EQ(
-        output2_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_2)->getName())}));
-    ASSERT_COLUMN_EQ(
-        output3_nullable,
-        executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_3)->getName())}));
+    ASSERT_COLUMN_EQ(output1_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_1)->getName())}));
+    ASSERT_COLUMN_EQ(output2_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_2)->getName())}));
+    ASSERT_COLUMN_EQ(output3_nullable, executeFunction(func_name, {input_nullable, createCastTypeConstColumn(makeNullable(to_type_3)->getName())}));
 }
 CATCH
 
@@ -2469,9 +2062,9 @@ try
 
     ASSERT_COLUMN_EQ(
         createDateTimeColumn({{{2012, 0, 0, 0, 0, 0, 0}}}, 6),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"20120000"}), createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
+        executeFunction(func_name,
+                        {createColumn<Nullable<String>>({"20120000"}),
+                         createCastTypeConstColumn("Nullable(MyDateTime(6))")}));
 }
 CATCH
 

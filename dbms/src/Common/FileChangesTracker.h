@@ -43,7 +43,10 @@ struct FilesChangesTracker
 {
     std::set<FileWithTimestamp> files;
 
-    bool valid() const { return !files.empty(); }
+    bool valid() const
+    {
+        return !files.empty();
+    }
 
     void addIfExists(const std::string & path)
     {
@@ -54,8 +57,7 @@ struct FilesChangesTracker
     }
     bool isDifferOrNewerThan(const FilesChangesTracker & rhs) const
     {
-        return (files.size() != rhs.files.size())
-            || !std::equal(files.begin(), files.end(), rhs.files.begin(), FileWithTimestamp::isTheSame);
+        return (files.size() != rhs.files.size()) || !std::equal(files.begin(), files.end(), rhs.files.begin(), FileWithTimestamp::isTheSame);
     }
 };
 } // namespace DB

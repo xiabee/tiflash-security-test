@@ -14,55 +14,55 @@
 
 #pragma once
 
-#include <Common/Stopwatch.h>
-#include <Flash/Mpp/ReceivedMessageQueue.h>
+#include <Flash/Mpp/ReceiverChannelWriter.h>
 
 namespace DB
 {
 struct LocalRequestHandler
 {
     LocalRequestHandler(
+        MemoryTracker * recv_mem_tracker_,
         std::function<void(bool, const String &)> && notify_write_done_,
         std::function<void()> && notify_close_,
         std::function<void()> && add_local_conn_num_,
-        const std::string & req_info_,
-        ReceivedMessageQueue * msg_queue_)
-        : notify_write_done(std::move(notify_write_done_))
+        ReceiverChannelWriter && channel_writer_)
+        : recv_mem_tracker(recv_mem_tracker_)
+        , notify_write_done(std::move(notify_write_done_))
         , notify_close(std::move(notify_close_))
         , add_local_conn_num(std::move(add_local_conn_num_))
-        , req_info(req_info_)
-        , msg_queue(msg_queue_)
+        , channel_writer(std::move(channel_writer_))
     {}
 
-    template <bool is_force>
+    template <bool enable_fine_grained_shuffle, bool non_blocking>
     bool write(size_t source_index, const TrackedMppDataPacketPtr & tracked_packet)
     {
-        return msg_queue->pushPacket<is_force>(source_index, req_info, tracked_packet, ReceiverMode::Local);
+        return channel_writer.write<enable_fine_grained_shuffle, non_blocking>(source_index, tracked_packet);
     }
 
-    bool isWritable() const { return msg_queue->isWritable(); }
+    bool isReadyForWrite() const
+    {
+        return channel_writer.isReadyForWrite();
+    }
 
     void writeDone(bool meet_error, const String & local_err_msg) const
     {
         notify_write_done(meet_error, local_err_msg);
     }
 
-    void closeConnection() const { notify_close(); }
+    void closeConnection() const
+    {
+        notify_close();
+    }
 
-    void setAlive() const { add_local_conn_num(); }
+    void setAlive() const
+    {
+        add_local_conn_num();
+    }
 
-    void recordWaitingTaskTime() { waiting_task_time = watch.elapsedMilliseconds(); }
-
-    UInt64 getTotalElapsedTime() const { return watch.elapsedMilliseconds(); }
-
-    UInt64 getWaitingTaskTime() const { return waiting_task_time; }
-
+    MemoryTracker * recv_mem_tracker;
     std::function<void(bool, const String &)> notify_write_done;
     std::function<void()> notify_close;
     std::function<void()> add_local_conn_num;
-    const std::string req_info;
-    ReceivedMessageQueue * msg_queue;
-    UInt64 waiting_task_time = 0;
-    Stopwatch watch;
+    ReceiverChannelWriter channel_writer;
 };
 } // namespace DB

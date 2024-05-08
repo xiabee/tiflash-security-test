@@ -18,7 +18,6 @@
 #include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Flash/Pipeline/Pipeline.h>
 #include <Flash/Pipeline/PipelineBuilder.h>
-#include <Flash/Pipeline/Schedule/Events/Event.h>
 #include <Flash/Planner/PhysicalPlanHelper.h>
 #include <Flash/Planner/PhysicalPlanNode.h>
 #include <Interpreters/Context.h>
@@ -30,13 +29,12 @@ PhysicalPlanNode::PhysicalPlanNode(
     const PlanType & type_,
     const NamesAndTypes & schema_,
     const FineGrainedShuffle & fine_grained_shuffle_,
-    const String & req_id_)
+    const String & req_id)
     : executor_id(executor_id_)
-    , req_id(req_id_)
     , type(type_)
     , schema(schema_)
     , fine_grained_shuffle(fine_grained_shuffle_)
-    , log(Logger::get(fmt::format("{}_{}_{}", req_id, type_.toString(), executor_id_)))
+    , log(Logger::get(req_id, type_.toString(), executor_id_))
 {}
 
 String PhysicalPlanNode::toString()
@@ -63,34 +61,9 @@ String PhysicalPlanNode::toSimpleString()
     return fmt::format("{}|{}", type.toString(), isTiDBOperator() ? executor_id : "NonTiDBOperator");
 }
 
-void PhysicalPlanNode::finalize(const Names & parent_require)
+void PhysicalPlanNode::finalize()
 {
-    if unlikely (finalized)
-    {
-        LOG_WARNING(log, "Should not reach here, {}-{} already finalized", type.toString(), executor_id);
-        return;
-    }
-    auto block_to_schema_string = [&](const Block & block) {
-        FmtBuffer buffer;
-        buffer.joinStr(
-            block.cbegin(),
-            block.cend(),
-            [](const auto & item, FmtBuffer & buf) { buf.fmtAppend("<{}, {}>", item.name, item.type->getName()); },
-            ", ");
-        return buffer.toString();
-    };
-    auto block_before_finalize = getSampleBlock();
-    finalizeImpl(parent_require);
-    finalized = true;
-    auto block_after_finalize = getSampleBlock();
-    if (block_before_finalize.columns() != block_after_finalize.columns())
-    {
-        LOG_DEBUG(
-            log,
-            "Finalize pruned some columns: before finalize: {}, after finalize: {}",
-            block_to_schema_string(block_before_finalize),
-            block_to_schema_string(block_after_finalize));
-    }
+    finalize(DB::toNames(schema));
 }
 
 void PhysicalPlanNode::recordProfileStreams(DAGPipeline & pipeline, const Context & context)
@@ -113,45 +86,24 @@ void PhysicalPlanNode::buildBlockInputStream(DAGPipeline & pipeline, Context & c
     if (is_restore_concurrency)
     {
         context.getDAGContext()->updateFinalConcurrency(pipeline.streams.size(), max_streams);
-        restoreConcurrency(
-            pipeline,
-            context.getDAGContext()->final_concurrency,
-            context.getSettingsRef().max_buffered_bytes_in_executor,
-            log);
+        restoreConcurrency(pipeline, context.getDAGContext()->final_concurrency, log);
     }
 }
 
 void PhysicalPlanNode::buildPipelineExecGroup(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    Context & context,
-    size_t concurrency)
+    PipelineExecutorStatus & /*exec_status*/,
+    PipelineExecGroupBuilder & /*group_builder*/,
+    Context & /*context*/,
+    size_t /*concurrency*/)
 {
-    buildPipelineExecGroupImpl(exec_context, group_builder, context, concurrency);
-    if (is_tidb_operator)
-        context.getDAGContext()->addOperatorProfileInfos(executor_id, group_builder.getCurProfileInfos());
+    throw Exception("Unsupport");
 }
 
-void PhysicalPlanNode::buildPipeline(
-    PipelineBuilder & builder,
-    Context & context,
-    PipelineExecutorContext & exec_context)
+void PhysicalPlanNode::buildPipeline(PipelineBuilder & builder)
 {
-    RUNTIME_CHECK(childrenSize() <= 1);
+    assert(childrenSize() <= 1);
     if (childrenSize() == 1)
-        children(0)->buildPipeline(builder, context, exec_context);
+        children(0)->buildPipeline(builder);
     builder.addPlanNode(shared_from_this());
-}
-
-EventPtr PhysicalPlanNode::sinkComplete(PipelineExecutorContext & exec_context)
-{
-    if (getFineGrainedShuffle().enable())
-        return nullptr;
-    return doSinkComplete(exec_context);
-}
-
-EventPtr PhysicalPlanNode::doSinkComplete(PipelineExecutorContext & /*exec_status*/)
-{
-    return nullptr;
 }
 } // namespace DB

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/CPUAffinityManager.h>
 #include <Debug/MockExecutor/AstToPBUtils.h>
 #include <Flash/EstablishCall.h>
 #include <Interpreters/Context.h>
@@ -34,10 +33,10 @@ namespace
 {
 void handleRpcs(grpc::ServerCompletionQueue * curcq, const LoggerPtr & log)
 {
-    CPUAffinityManager::getInstance().bindSelfQueryThread();
-
     GET_METRIC(tiflash_thread_count, type_total_rpc_async_worker).Increment();
-    SCOPE_EXIT({ GET_METRIC(tiflash_thread_count, type_total_rpc_async_worker).Decrement(); });
+    SCOPE_EXIT({
+        GET_METRIC(tiflash_thread_count, type_total_rpc_async_worker).Decrement();
+    });
     void * tag = nullptr; // uniquely identifies a request.
     bool ok = false;
     while (true)
@@ -56,10 +55,12 @@ void handleRpcs(grpc::ServerCompletionQueue * curcq, const LoggerPtr & log)
                 break;
             }
             GET_METRIC(tiflash_thread_count, type_active_rpc_async_worker).Increment();
-            SCOPE_EXIT({ GET_METRIC(tiflash_thread_count, type_active_rpc_async_worker).Decrement(); });
+            SCOPE_EXIT({
+                GET_METRIC(tiflash_thread_count, type_active_rpc_async_worker).Decrement();
+            });
             // If ok is false, it means server is shutdown.
             // We need not log all not ok events, since the volumn is large which will pollute the content of log.
-            reinterpret_cast<GRPCKickTag *>(tag)->execute(ok);
+            static_cast<EstablishCallData *>(tag)->proceed(ok);
         }
         catch (Exception & e)
         {
@@ -86,7 +87,8 @@ void handleRpcs(grpc::ServerCompletionQueue * curcq, const LoggerPtr & log)
 }
 } // namespace
 
-static grpc_ssl_certificate_config_reload_status sslServerCertificateConfigCallback(
+static grpc_ssl_certificate_config_reload_status
+sslServerCertificateConfigCallback(
     void * arg,
     grpc_ssl_server_certificate_config ** config)
 {
@@ -97,7 +99,9 @@ static grpc_ssl_certificate_config_reload_status sslServerCertificateConfigCallb
     auto * context = static_cast<Context *>(arg);
     auto options = context->getSecurityConfig()->readAndCacheSslCredentialOptions();
     grpc_ssl_pem_key_cert_pair pem_key_cert_pair = {options.pem_private_key.c_str(), options.pem_cert_chain.c_str()};
-    *config = grpc_ssl_server_certificate_config_create(options.pem_root_certs.c_str(), &pem_key_cert_pair, 1);
+    *config = grpc_ssl_server_certificate_config_create(options.pem_root_certs.c_str(),
+                                                        &pem_key_cert_pair,
+                                                        1);
     return GRPC_SSL_CERTIFICATE_CONFIG_RELOAD_NEW;
 }
 
@@ -117,17 +121,15 @@ std::shared_ptr<grpc::ServerCredentials> sslServerCredentialsWithFetcher(Context
     grpc_server_credentials * c_creds = grpcSslServerCredentialsCreateWithFetcher(
         GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY,
         &context);
-    return std::shared_ptr<grpc::ServerCredentials>(new grpc::SecureServerCredentials(c_creds));
+    return std::shared_ptr<grpc::ServerCredentials>(
+        new grpc::SecureServerCredentials(c_creds));
 }
 
-FlashGrpcServerHolder::FlashGrpcServerHolder(
-    Context & context,
-    Poco::Util::LayeredConfiguration & config_,
-    const TiFlashRaftConfig & raft_config,
-    const LoggerPtr & log_)
+FlashGrpcServerHolder::FlashGrpcServerHolder(Context & context, Poco::Util::LayeredConfiguration & config_, const TiFlashRaftConfig & raft_config, const LoggerPtr & log_)
     : log(log_)
     , is_shutdown(std::make_shared<std::atomic<bool>>(false))
 {
+    background_task.begin();
     grpc::ServerBuilder builder;
 
     if (!context.isTest() && context.getSecurityConfig()->hasTlsConfig())
@@ -149,8 +151,7 @@ FlashGrpcServerHolder::FlashGrpcServerHolder(
 
     diagnostics_service = std::make_unique<DiagnosticsService>(context, config_);
     builder.SetOption(grpc::MakeChannelArgumentOption(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, 5 * 1000));
-    builder.SetOption(
-        grpc::MakeChannelArgumentOption(GRPC_ARG_HTTP2_MIN_SENT_PING_INTERVAL_WITHOUT_DATA_MS, 10 * 1000));
+    builder.SetOption(grpc::MakeChannelArgumentOption(GRPC_ARG_HTTP2_MIN_SENT_PING_INTERVAL_WITHOUT_DATA_MS, 10 * 1000));
     // number of grpc thread pool's non-temporary threads, better tune it up to avoid frequent creation/destruction of threads
     auto max_grpc_pollers = context.getSettingsRef().max_grpc_pollers;
     if (max_grpc_pollers > 0 && max_grpc_pollers <= std::numeric_limits<int>::max())
@@ -176,10 +177,7 @@ FlashGrpcServerHolder::FlashGrpcServerHolder(
     flash_grpc_server = builder.BuildAndStart();
     if (!flash_grpc_server)
     {
-        throw Exception(
-            "Exception happens when start grpc server, the flash.service_addr may be invalid, flash.service_addr is "
-                + raft_config.flash_server_addr,
-            ErrorCodes::IP_ADDRESS_NOT_ALLOWED);
+        throw Exception("Exception happens when start grpc server, the flash.service_addr may be invalid, flash.service_addr is " + raft_config.flash_server_addr, ErrorCodes::IP_ADDRESS_NOT_ALLOWED);
     }
     LOG_INFO(log, "Flash grpc server listening on [{}]", raft_config.flash_server_addr);
     Debug::setServiceAddr(raft_config.flash_server_addr);
@@ -194,16 +192,10 @@ FlashGrpcServerHolder::FlashGrpcServerHolder(
             for (int j = 0; j < preallocated_request_count_per_poller; ++j)
             {
                 // EstablishCallData will handle its lifecycle by itself.
-                EstablishCallData::spawn(
-                    assert_cast<AsyncFlashService *>(flash_service.get()),
-                    cq,
-                    notify_cq,
-                    is_shutdown);
+                EstablishCallData::spawn(assert_cast<AsyncFlashService *>(flash_service.get()), cq, notify_cq, is_shutdown);
             }
-            cq_workers.emplace_back(
-                ThreadFactory::newThread(false, "async_poller", [cq, this] { handleRpcs(cq, log); }));
-            notify_cq_workers.emplace_back(
-                ThreadFactory::newThread(false, "async_poller", [notify_cq, this] { handleRpcs(notify_cq, log); }));
+            cq_workers.emplace_back(ThreadFactory::newThread(false, "async_poller", [cq, this] { handleRpcs(cq, log); }));
+            notify_cq_workers.emplace_back(ThreadFactory::newThread(false, "async_poller", [notify_cq, this] { handleRpcs(notify_cq, log); }));
         }
     }
 }
@@ -222,13 +214,6 @@ FlashGrpcServerHolder::~FlashGrpcServerHolder()
         int wait_cnt = 0;
         while (GET_METRIC(tiflash_object_count, type_count_of_mpptunnel).Value() >= 1 && (wait_cnt++ < max_wait_cnt))
             std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (GET_METRIC(tiflash_object_count, type_count_of_mpptunnel).Value() >= 1)
-            LOG_WARNING(
-                log,
-                "Wait {} seconds for mpp tunnels shutdown, still some mpp tunnels are alive, potential resource leak",
-                wait_cnt);
-        else
-            LOG_INFO(log, "Wait {} seconds for mpp tunnels shutdown, all finished", wait_cnt);
 
         for (auto & cq : cqs)
             cq->Shutdown();
@@ -252,6 +237,7 @@ FlashGrpcServerHolder::~FlashGrpcServerHolder()
         LOG_INFO(log, "Begin to shut down flash service");
         flash_service.reset();
         LOG_INFO(log, "Shut down flash service");
+        background_task.end();
     }
     catch (...)
     {

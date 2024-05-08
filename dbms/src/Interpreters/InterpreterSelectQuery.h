@@ -20,7 +20,7 @@
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/ExpressionAnalyzer.h>
 #include <Interpreters/IInterpreter.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 
 #include <memory>
 
@@ -75,7 +75,9 @@ public:
 
     Block getSampleBlock();
 
-    static Block getSampleBlock(const ASTPtr & query_ptr_, const Context & context_);
+    static Block getSampleBlock(
+        const ASTPtr & query_ptr_,
+        const Context & context_);
 
 private:
     struct Pipeline
@@ -96,17 +98,23 @@ private:
                 transform(stream);
         }
 
-        bool hasMoreThanOneStream() const { return streams.size(); }
+        bool hasMoreThanOneStream() const
+        {
+            return streams.size();
+        }
     };
 
     struct OnlyAnalyzeTag
     {
     };
-    InterpreterSelectQuery(OnlyAnalyzeTag, const ASTPtr & query_ptr_, const Context & context_);
+    InterpreterSelectQuery(
+        OnlyAnalyzeTag,
+        const ASTPtr & query_ptr_,
+        const Context & context_);
 
     void init(const Names & required_result_column_names);
 
-    void getAndLockStorageWithSchemaVersion(const String & database_name, const String & table_name);
+    void getAndLockStorageWithSchemaVersion(const String & database_name, const String & table_name, Int64 schema_version);
 
     void executeImpl(Pipeline & pipeline, const BlockInputStreamPtr & input, bool dry_run);
 
@@ -154,10 +162,10 @@ private:
     /// Fetch data from the table. Returns the stage to which the query was processed in Storage.
     QueryProcessingStage::Enum executeFetchColumns(Pipeline & pipeline, bool dry_run);
 
-    void executeWhere(Pipeline & pipeline, const ExpressionActionsPtr & expression) const;
+    void executeWhere(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeAggregation(Pipeline & pipeline, const ExpressionActionsPtr & expression, bool final);
     void executeMergeAggregated(Pipeline & pipeline, bool final);
-    void executeHaving(Pipeline & pipeline, const ExpressionActionsPtr & expression) const;
+    void executeHaving(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeExpression(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeOrder(Pipeline & pipeline);
     void executeMergeSorted(Pipeline & pipeline);
@@ -168,9 +176,7 @@ private:
     void executeProjection(Pipeline & pipeline, const ExpressionActionsPtr & expression);
     void executeDistinct(Pipeline & pipeline, bool before_order, Names columns);
     void executeExtremes(Pipeline & pipeline);
-    void executeSubqueriesInSetsAndJoins(
-        Pipeline & pipeline,
-        std::unordered_map<String, SubqueryForSet> & subqueries_for_sets);
+    void executeSubqueriesInSetsAndJoins(Pipeline & pipeline, std::unordered_map<String, SubqueryForSet> & subqueries_for_sets);
 
     /** If there is a SETTINGS section in the SELECT query, then apply settings from it.
       *

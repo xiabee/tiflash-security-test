@@ -92,12 +92,18 @@ try
     // bigint unsigned + bigint unsigned = bigint unsigned
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({1, 1, {}}),
-        executeFunction(func_name, createColumn<Nullable<UInt64>>({1, 1, {}}), createColumn<UInt64>({100, 100, 1000})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<UInt64>>({1, 1, {}}),
+            createColumn<UInt64>({100, 100, 1000})));
 
     // bigint + bigint = bigint
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({-100, 1, {}}),
-        executeFunction(func_name, createColumn<Nullable<Int64>>({1, 1, {}}), createColumn<Int64>({-100, 100, 1000})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<Int64>>({1, 1, {}}),
+            createColumn<Int64>({-100, 100, 1000})));
 
     // consider null
     ASSERT_COLUMN_EQ(
@@ -111,14 +117,13 @@ try
 
     // real least
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Float64>>({1.1, -1.4, -1.1, -1.3, 1.1, -3.3, -1.1, -3.48, -12.34, 0.0, 0.0, {}, {}, {}}),
+        createColumn<Nullable<Float64>>(
+            {1.1, -1.4, -1.1, -1.3, 1.1, -3.3, -1.1, -3.48, -12.34, 0.0, 0.0, {}, {}, {}}),
         executeFunction(
             func_name,
             createColumn<Nullable<Float64>>({1.4, -1.4, 1.3, -1.3, 3.3, -3.3, 3.3, -3.3, 12.34, 0.0, 0.0, 0.0, {}, {}}),
-            createColumn<Nullable<Float64>>(
-                {1.3, -1.3, 1.3, -1.3, 3.3, -3.3, 3.3, -3.48, -12.34, 0.0, 0.0, 0.0, {}, {}}),
-            createColumn<Nullable<Float64>>(
-                {1.1, 1.1, -1.1, -1.1, 1.1, 1.1, -1.1, -1.1, 0.0, 12.34, 0.0, {}, 0.0, {}})));
+            createColumn<Nullable<Float64>>({1.3, -1.3, 1.3, -1.3, 3.3, -3.3, 3.3, -3.48, -12.34, 0.0, 0.0, 0.0, {}, {}}),
+            createColumn<Nullable<Float64>>({1.1, 1.1, -1.1, -1.1, 1.1, 1.1, -1.1, -1.1, 0.0, 12.34, 0.0, {}, 0.0, {}})));
 
 
     ASSERT_COLUMN_EQ(
@@ -158,7 +163,10 @@ try
     // only null least
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({{}, {}}),
-        executeFunction(func_name, createColumn<Nullable<Int64>>({{}, {}}), createColumn<Nullable<Int64>>({{}, {}})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<Int64>>({{}, {}}),
+            createColumn<Nullable<Int64>>({{}, {}})));
 
     // const and only null least
     ASSERT_COLUMN_EQ(
@@ -189,36 +197,32 @@ TEST_F(LeastGreatestTest, leastString)
 try
 {
     const String & func_name = "tidbLeastString";
-    const auto * utf8mb4_general_ci_collator
-        = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_GENERAL_CI);
+    const auto * utf8mb4_general_ci_collator = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_GENERAL_CI);
 
     /// without collator
     // vector vector
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"11"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"}),
-             createColumn<Nullable<String>>({"111111"})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"11"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"}),
+                          createColumn<Nullable<String>>({"111111"})}));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({""}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"}),
-             createColumn<Nullable<String>>({""})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({""}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"}),
+                          createColumn<Nullable<String>>({""})}));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"11", "2"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "2"}),
-             createColumn<Nullable<String>>({"111", "22"})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"11", "2"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "2"}),
+                          createColumn<Nullable<String>>({"111", "22"})}));
     // vector constant
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"11", "22222", "22", "11111111"}),
@@ -252,120 +256,109 @@ try
              createColumn<Nullable<String>>({"11", "33", "22", "11111111"})}));
 
     // constant constant
-    ASSERT_COLUMN_EQ(
-        createConstColumn<String>(4, "11"),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<String>>(4, "1111"), createConstColumn<Nullable<String>>(4, "11")}));
+    ASSERT_COLUMN_EQ(createConstColumn<String>(4, "11"),
+                     executeFunction(
+                         func_name,
+                         {createConstColumn<Nullable<String>>(4, "1111"),
+                          createConstColumn<Nullable<String>>(4, "11")}));
 
-    ASSERT_COLUMN_EQ(
-        createConstColumn<String>(4, "11"),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<String>>(4, "11"), createConstColumn<Nullable<String>>(4, "1111")}));
+    ASSERT_COLUMN_EQ(createConstColumn<String>(4, "11"),
+                     executeFunction(
+                         func_name,
+                         {createConstColumn<Nullable<String>>(4, "11"),
+                          createConstColumn<Nullable<String>>(4, "1111")}));
 
 
-    ASSERT_COLUMN_EQ(
-        createConstColumn<String>(4, "11"),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<String>>(4, "11"),
-             createConstColumn<Nullable<String>>(4, "111"),
-             createConstColumn<Nullable<String>>(4, "1111")}));
+    ASSERT_COLUMN_EQ(createConstColumn<String>(4, "11"),
+                     executeFunction(
+                         func_name,
+                         {createConstColumn<Nullable<String>>(4, "11"),
+                          createConstColumn<Nullable<String>>(4, "111"),
+                          createConstColumn<Nullable<String>>(4, "1111")}));
 
     /// with collator
     // vector vector
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"11"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"11"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"111"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"2222"}),
-             createColumn<Nullable<String>>({"111"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"111"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"2222"}),
+                          createColumn<Nullable<String>>({"111"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"a", "b"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"a", "b"}),
-             createColumn<Nullable<String>>({"b", "c"}),
-             createColumn<Nullable<String>>({"c", "d"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"a", "b"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"a", "b"}),
+                          createColumn<Nullable<String>>({"b", "c"}),
+                          createColumn<Nullable<String>>({"c", "d"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
-             createColumn<Nullable<String>>({"b", "c", "sadhhdask"}),
-             createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
+                          createColumn<Nullable<String>>({"b", "c", "sadhhdask"}),
+                          createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"11", "22"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"11", "22"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1", "2"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"}),
-             createColumn<Nullable<String>>({"1", "2"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1", "2"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"}),
+                          createColumn<Nullable<String>>({"1", "2"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"11", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", {}}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"11", {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", {}}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<String>({"11", "2"}),
-        executeFunction(
-            func_name,
-            {createColumn<String>({"1111", "2"}),
-             createColumn<String>({"11", "22"}),
-             createColumn<String>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<String>({"11", "2"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<String>({"1111", "2"}),
+                          createColumn<String>({"11", "22"}),
+                          createColumn<String>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", {}}),
-             createColumn<Nullable<String>>({{}, "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", {}}),
+                          createColumn<Nullable<String>>({{}, "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({{}, {}}),
-             createColumn<Nullable<String>>({{}, {}}),
-             createColumn<Nullable<String>>({{}, {}})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({{}, {}}),
+                          createColumn<Nullable<String>>({{}, {}}),
+                          createColumn<Nullable<String>>({{}, {}})},
+                         utf8mb4_general_ci_collator));
 
     // vector constant
     ASSERT_COLUMN_EQ(
@@ -404,14 +397,16 @@ try
         createConstColumn<String>(4, "11111"),
         executeFunction(
             func_name,
-            {createConstColumn<Nullable<String>>(4, "11111"), createConstColumn<Nullable<String>>(4, "22222")},
+            {createConstColumn<Nullable<String>>(4, "11111"),
+             createConstColumn<Nullable<String>>(4, "22222")},
             utf8mb4_general_ci_collator));
 
     ASSERT_COLUMN_EQ(
         createConstColumn<Nullable<String>>(4, {}),
         executeFunction(
             func_name,
-            {createConstColumn<Nullable<String>>(4, {}), createConstColumn<Nullable<String>>(4, "22222")},
+            {createConstColumn<Nullable<String>>(4, {}),
+             createConstColumn<Nullable<String>>(4, "22222")},
             utf8mb4_general_ci_collator));
 
     ASSERT_COLUMN_EQ(
@@ -426,14 +421,13 @@ try
             utf8mb4_general_ci_collator));
 
     const auto * bin_col = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::BINARY);
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", {}}),
-             createColumn<Nullable<String>>({{}, "222"})},
-            bin_col));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", {}}),
+                          createColumn<Nullable<String>>({{}, "222"})},
+                         bin_col));
 }
 CATCH
 
@@ -442,36 +436,32 @@ try
 {
     const String & func_name = "tidbGreatestString";
 
-    const auto * utf8mb4_general_ci_collator
-        = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_GENERAL_CI);
+    const auto * utf8mb4_general_ci_collator = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::UTF8MB4_GENERAL_CI);
 
     /// without collator
     // vector vector
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"111111"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"}),
-             createColumn<Nullable<String>>({"111111"})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"111111"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"}),
+                          createColumn<Nullable<String>>({"111111"})}));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"}),
-             createColumn<Nullable<String>>({""})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"}),
+                          createColumn<Nullable<String>>({""})}));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111", "2222"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "2"}),
-             createColumn<Nullable<String>>({"111", "22"})}));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111", "2222"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "2"}),
+                          createColumn<Nullable<String>>({"111", "22"})}));
     // vector constant
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<String>>({"22222", "33", "22222", "22222"}),
@@ -505,112 +495,102 @@ try
              createColumn<Nullable<String>>({"11", "33", "22", "11111111"})}));
 
     // constant constant
-    ASSERT_COLUMN_EQ(
-        createConstColumn<String>(4, "1111"),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<String>>(4, "1111"), createConstColumn<Nullable<String>>(4, "11")}));
+    ASSERT_COLUMN_EQ(createConstColumn<String>(4, "1111"),
+                     executeFunction(
+                         func_name,
+                         {createConstColumn<Nullable<String>>(4, "1111"),
+                          createConstColumn<Nullable<String>>(4, "11")}));
 
 
-    ASSERT_COLUMN_EQ(
-        createConstColumn<String>(4, "1111"),
-        executeFunction(
-            func_name,
-            {createConstColumn<Nullable<String>>(4, "11"), createConstColumn<Nullable<String>>(4, "1111")}));
+    ASSERT_COLUMN_EQ(createConstColumn<String>(4, "1111"),
+                     executeFunction(
+                         func_name,
+                         {createConstColumn<Nullable<String>>(4, "11"),
+                          createConstColumn<Nullable<String>>(4, "1111")}));
 
     /// with collator
     // vector vector
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"11"}),
-             createColumn<Nullable<String>>({"111"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"11"}),
+                          createColumn<Nullable<String>>({"111"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"2222"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111"}),
-             createColumn<Nullable<String>>({"2222"}),
-             createColumn<Nullable<String>>({"111"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"2222"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111"}),
+                          createColumn<Nullable<String>>({"2222"}),
+                          createColumn<Nullable<String>>({"111"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"c", "d"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"a", "b"}),
-             createColumn<Nullable<String>>({"b", "c"}),
-             createColumn<Nullable<String>>({"c", "d"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"c", "d"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"a", "b"}),
+                          createColumn<Nullable<String>>({"b", "c"}),
+                          createColumn<Nullable<String>>({"c", "d"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
-             createColumn<Nullable<String>>({"b", "c", "sadhhdask"}),
-             createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"a", "b", "asdhkas-\\"}),
+                          createColumn<Nullable<String>>({"b", "c", "sadhhdask"}),
+                          createColumn<Nullable<String>>({"c", "d", "sahdjkdsahk"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111", "2222"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111", "2222"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111", "2222"}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"}),
-             createColumn<Nullable<String>>({"1", "2"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111", "2222"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"}),
+                          createColumn<Nullable<String>>({"1", "2"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({"1111", {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", {}}),
-             createColumn<Nullable<String>>({"11", "22"}),
-             createColumn<Nullable<String>>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({"1111", {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", {}}),
+                          createColumn<Nullable<String>>({"11", "22"}),
+                          createColumn<Nullable<String>>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<String>({"1111", "222"}),
-        executeFunction(
-            func_name,
-            {createColumn<String>({"1111", "2"}),
-             createColumn<String>({"11", "22"}),
-             createColumn<String>({"111", "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<String>({"1111", "222"}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<String>({"1111", "2"}),
+                          createColumn<String>({"11", "22"}),
+                          createColumn<String>({"111", "222"})},
+                         utf8mb4_general_ci_collator));
 
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", {}}),
-             createColumn<Nullable<String>>({{}, "222"})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", {}}),
+                          createColumn<Nullable<String>>({{}, "222"})},
+                         utf8mb4_general_ci_collator));
 
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({{}, {}}),
-             createColumn<Nullable<String>>({{}, {}}),
-             createColumn<Nullable<String>>({{}, {}})},
-            utf8mb4_general_ci_collator));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({{}, {}}),
+                          createColumn<Nullable<String>>({{}, {}}),
+                          createColumn<Nullable<String>>({{}, {}})},
+                         utf8mb4_general_ci_collator));
 
     // vector constant
     ASSERT_COLUMN_EQ(
@@ -649,14 +629,16 @@ try
         createConstColumn<String>(4, "22222"),
         executeFunction(
             func_name,
-            {createConstColumn<Nullable<String>>(4, "11111"), createConstColumn<Nullable<String>>(4, "22222")},
+            {createConstColumn<Nullable<String>>(4, "11111"),
+             createConstColumn<Nullable<String>>(4, "22222")},
             utf8mb4_general_ci_collator));
 
     ASSERT_COLUMN_EQ(
         createConstColumn<Nullable<String>>(4, {}),
         executeFunction(
             func_name,
-            {createConstColumn<Nullable<String>>(4, {}), createConstColumn<Nullable<String>>(4, "22222")},
+            {createConstColumn<Nullable<String>>(4, {}),
+             createConstColumn<Nullable<String>>(4, "22222")},
             utf8mb4_general_ci_collator));
 
     ASSERT_COLUMN_EQ(
@@ -671,14 +653,13 @@ try
             utf8mb4_general_ci_collator));
 
     const auto * bin_col = TiDB::ITiDBCollator::getCollator(TiDB::ITiDBCollator::BINARY);
-    ASSERT_COLUMN_EQ(
-        createColumn<Nullable<String>>({{}, {}}),
-        executeFunction(
-            func_name,
-            {createColumn<Nullable<String>>({"1111", "2222"}),
-             createColumn<Nullable<String>>({"11", {}}),
-             createColumn<Nullable<String>>({{}, "222"})},
-            bin_col));
+    ASSERT_COLUMN_EQ(createColumn<Nullable<String>>({{}, {}}),
+                     executeFunction(
+                         func_name,
+                         {createColumn<Nullable<String>>({"1111", "2222"}),
+                          createColumn<Nullable<String>>({"11", {}}),
+                          createColumn<Nullable<String>>({{}, "222"})},
+                         bin_col));
 }
 CATCH
 
@@ -750,12 +731,18 @@ try
     // bigint unsigned + bigint unsigned = bigint unsigned
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<UInt64>>({100, 100, {}}),
-        executeFunction(func_name, createColumn<Nullable<UInt64>>({1, 1, {}}), createColumn<UInt64>({100, 100, 1000})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<UInt64>>({1, 1, {}}),
+            createColumn<UInt64>({100, 100, 1000})));
 
     // bigint + bigint = bigint
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({1, 100, {}}),
-        executeFunction(func_name, createColumn<Nullable<Int64>>({1, 1, {}}), createColumn<Int64>({-100, 100, 1000})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<Int64>>({1, 1, {}}),
+            createColumn<Int64>({-100, 100, 1000})));
 
     // consider null
     ASSERT_COLUMN_EQ(
@@ -769,14 +756,13 @@ try
 
     // real Greatest
     ASSERT_COLUMN_EQ(
-        createColumn<Nullable<Float64>>({1.4, 1.1, 1.3, -1.1, 3.3, 1.1, 3.3, -1.1, 12.34, 12.34, 0.0, {}, {}, {}}),
+        createColumn<Nullable<Float64>>(
+            {1.4, 1.1, 1.3, -1.1, 3.3, 1.1, 3.3, -1.1, 12.34, 12.34, 0.0, {}, {}, {}}),
         executeFunction(
             func_name,
             createColumn<Nullable<Float64>>({1.4, -1.4, 1.3, -1.3, 3.3, -3.3, 3.3, -3.3, 12.34, 0.0, 0.0, 0.0, {}, {}}),
-            createColumn<Nullable<Float64>>(
-                {1.3, -1.3, 1.3, -1.3, 3.3, -3.3, 3.3, -3.48, -12.34, 0.0, 0.0, 0.0, {}, {}}),
-            createColumn<Nullable<Float64>>(
-                {1.1, 1.1, -1.1, -1.1, 1.1, 1.1, -1.1, -1.1, 0.0, 12.34, 0.0, {}, 0.0, {}})));
+            createColumn<Nullable<Float64>>({1.3, -1.3, 1.3, -1.3, 3.3, -3.3, 3.3, -3.48, -12.34, 0.0, 0.0, 0.0, {}, {}}),
+            createColumn<Nullable<Float64>>({1.1, 1.1, -1.1, -1.1, 1.1, 1.1, -1.1, -1.1, 0.0, 12.34, 0.0, {}, 0.0, {}})));
 
 
     ASSERT_COLUMN_EQ(
@@ -816,7 +802,10 @@ try
     // only null greatest
     ASSERT_COLUMN_EQ(
         createColumn<Nullable<Int64>>({{}, {}}),
-        executeFunction(func_name, createColumn<Nullable<Int64>>({{}, {}}), createColumn<Nullable<Int64>>({{}, {}})));
+        executeFunction(
+            func_name,
+            createColumn<Nullable<Int64>>({{}, {}}),
+            createColumn<Nullable<Int64>>({{}, {}})));
 
     // const and only null greatest
     ASSERT_COLUMN_EQ(

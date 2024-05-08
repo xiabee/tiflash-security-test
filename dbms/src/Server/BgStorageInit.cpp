@@ -17,7 +17,7 @@
 #include <Interpreters/Context.h>
 #include <Server/BgStorageInit.h>
 #include <Storages/IManageableStorage.h>
-#include <Storages/KVStore/TMTContext.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <common/logger_useful.h>
 
 #include <thread>
@@ -39,7 +39,7 @@ void BgStorageInitHolder::waitUntilFinish()
 
 void doInitStores(Context & global_context, const LoggerPtr & log)
 {
-    const auto storages = global_context.getTMTContext().getStorages().getAllStorage();
+    auto storages = global_context.getTMTContext().getStorages().getAllStorage();
 
     std::atomic<int> init_cnt = 0;
     std::atomic<int> err_cnt = 0;
@@ -54,26 +54,25 @@ void doInitStores(Context & global_context, const LoggerPtr & log)
         try
         {
             init_cnt += storage->initStoreIfDataDirExist(restore_segments_thread_pool) ? 1 : 0;
-            LOG_INFO(log, "Storage inited done, keyspace={} table_id={}", ks_id, table_id);
+            LOG_INFO(log, "Storage inited done, keyspace_id={} table_id={}", ks_id, table_id);
         }
         catch (...)
         {
             err_cnt++;
-            tryLogCurrentException(log, fmt::format("Storage inited fail, keyspace={} table_id={}", ks_id, table_id));
+            tryLogCurrentException(log, fmt::format("Storage inited fail, keyspace_id={} table_id={}", ks_id, table_id));
         }
     };
 
-    size_t num_threads
-        = std::max(4UL, std::thread::hardware_concurrency()) * global_context.getSettingsRef().init_thread_count_scale;
+    size_t num_threads = std::max(4UL, std::thread::hardware_concurrency()) * global_context.getSettingsRef().init_thread_count_scale;
     auto init_storages_thread_pool = ThreadPool(num_threads, num_threads / 2, num_threads * 2);
     auto init_storages_wait_group = init_storages_thread_pool.waitGroup();
 
     auto restore_segments_thread_pool = ThreadPool(num_threads, num_threads / 2, num_threads * 2);
 
-    for (const auto & iter : storages)
+    for (auto & iter : storages)
     {
         const auto & ks_table_id = iter.first;
-        const auto & storage = iter.second;
+        auto & storage = iter.second;
         auto task = [&init_stores_function, &ks_table_id, &storage, &restore_segments_thread_pool] {
             init_stores_function(ks_table_id, storage, &restore_segments_thread_pool);
         };
@@ -92,11 +91,7 @@ void doInitStores(Context & global_context, const LoggerPtr & log)
         DataTypeFactory::instance().getFullNameCacheSize());
 }
 
-void BgStorageInitHolder::start(
-    Context & global_context,
-    const LoggerPtr & log,
-    bool lazily_init_store,
-    bool is_s3_enabled)
+void BgStorageInitHolder::start(Context & global_context, const LoggerPtr & log, bool lazily_init_store, bool is_s3_enabled)
 {
     RUNTIME_CHECK_MSG(
         lazily_init_store || !is_s3_enabled,

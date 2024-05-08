@@ -29,16 +29,13 @@ struct DAGPipeline;
 class Context;
 class DAGContext;
 
-class PipelineExecutorContext;
+class PipelineExecutorStatus;
 
-class PipelineExecGroupBuilder;
+struct PipelineExecGroupBuilder;
 
 class Pipeline;
 using PipelinePtr = std::shared_ptr<Pipeline>;
 class PipelineBuilder;
-
-class Event;
-using EventPtr = std::shared_ptr<Event>;
 
 class PhysicalPlanNode;
 using PhysicalPlanNodePtr = std::shared_ptr<PhysicalPlanNode>;
@@ -65,23 +62,18 @@ public:
 
     virtual size_t childrenSize() const = 0;
 
-    void buildBlockInputStream(DAGPipeline & pipeline, Context & context, size_t max_streams);
+    virtual void buildBlockInputStream(DAGPipeline & pipeline, Context & context, size_t max_streams);
 
-    void buildPipelineExecGroup(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        Context & context,
-        size_t concurrency);
-
-    virtual void buildPipeline(
-        PipelineBuilder & /*builder*/,
+    virtual void buildPipelineExecGroup(
+        PipelineExecutorStatus & /*exec_status*/,
+        PipelineExecGroupBuilder & /*group_builder*/,
         Context & /*context*/,
-        PipelineExecutorContext & /*exec_status*/);
+        size_t /*concurrency*/);
 
-    EventPtr sinkComplete(PipelineExecutorContext & exec_context);
+    virtual void buildPipeline(PipelineBuilder & builder);
 
-    virtual void finalizeImpl(const Names & parent_require) = 0;
-    void finalize(const Names & parent_require);
+    virtual void finalize(const Names & parent_require) = 0;
+    void finalize();
 
     /// Obtain a sample block that contains the names and types of result columns.
     virtual const Block & getSampleBlock() const = 0;
@@ -99,24 +91,11 @@ public:
     String toSimpleString();
 
 protected:
-    /// Used for non-fine grained shuffle sink plan node to trigger two-stage execution logic.
-    virtual EventPtr doSinkComplete(PipelineExecutorContext & /*exec_status*/);
-
     virtual void buildBlockInputStreamImpl(DAGPipeline & /*pipeline*/, Context & /*context*/, size_t /*max_streams*/){};
-
-    virtual void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & /*exec_status*/,
-        PipelineExecGroupBuilder & /*group_builder*/,
-        Context & /*context*/,
-        size_t /*concurrency*/)
-    {
-        throw Exception("Unsupported");
-    }
 
     void recordProfileStreams(DAGPipeline & pipeline, const Context & context);
 
     String executor_id;
-    String req_id;
     PlanType type;
     NamesAndTypes schema;
 
@@ -127,7 +106,6 @@ protected:
 
     bool is_tidb_operator = true;
     bool is_restore_concurrency = true;
-    bool finalized = false;
 
     LoggerPtr log;
 };

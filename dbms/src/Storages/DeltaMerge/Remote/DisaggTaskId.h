@@ -33,7 +33,8 @@ public:
     DisaggTaskId(MPPTaskId task_id, String executor_id_)
         : mpp_task_id(std::move(task_id))
         , executor_id(std::move(executor_id_))
-    {}
+    {
+    }
 
     explicit DisaggTaskId(const disaggregated::DisaggTaskMeta & task_meta);
 
@@ -65,8 +66,8 @@ struct fmt::formatter<DB::DM::DisaggTaskId>
     auto format(const DB::DM::DisaggTaskId & task_id, FormatContext & ctx) const -> decltype(ctx.out())
     {
         if (task_id.mpp_task_id.isUnknown())
-            return fmt::format_to(ctx.out(), "DisTaskId<N/A>");
-        return fmt::format_to(
+            return format_to(ctx.out(), "DisTaskId<N/A>");
+        return format_to(
             ctx.out(),
             "DisTaskId<{},executor={}>",
             task_id.mpp_task_id.toString(),

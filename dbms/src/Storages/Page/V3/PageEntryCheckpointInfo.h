@@ -14,11 +14,8 @@
 
 #pragma once
 
-#include <Common/Logger.h>
-#include <Common/StackTrace.h>
 #include <Storages/Page/V3/CheckpointFile/Proto/manifest_file.pb.h>
 #include <common/defines.h>
-#include <common/logger_useful.h>
 #include <fmt/format.h>
 
 namespace DB::PS::V3
@@ -50,56 +47,15 @@ struct CheckpointLocation
         const CheckpointProto::EntryDataLocation & proto_rec,
         CheckpointProto::StringsInternMap & strings_map);
 
-    bool isValid() const { return data_file_id && !data_file_id->empty(); }
-
     std::string toDebugString() const
     {
-        if (isValid())
-        {
-            return fmt::format(
-                "{{data_file_id: {}, offset_in_file: {}, size_in_file: {}}}",
-                data_file_id ? *data_file_id : "<nullptr>",
-                offset_in_file,
-                size_in_file);
-        }
-        return "invalid location";
+        return fmt::format("{{data_file_id: {}, offset_in_file: {}, size_in_file: {}}}", *data_file_id, offset_in_file, size_in_file);
     }
 };
 
 // A more memory compact struct compared to std::optional<CheckpointInfo>
 struct OptionalCheckpointInfo
 {
-    OptionalCheckpointInfo() = default;
-    OptionalCheckpointInfo(CheckpointLocation data_location_, bool is_valid_, bool is_local_data_reclaimed_)
-        : data_location(std::move(data_location_))
-        , is_valid(is_valid_)
-        , is_local_data_reclaimed(is_local_data_reclaimed_)
-    {
-        if (!data_location.isValid())
-        {
-            LOG_ERROR(
-                DB::Logger::get("OptionalCheckpointInfo"),
-                "Invalid data location, is_local_data_reclaimed={}, {}",
-                is_local_data_reclaimed,
-                StackTrace().toString());
-        }
-    }
-
-    OptionalCheckpointInfo(CheckpointLocation data_location_, bool is_valid_)
-        : data_location(std::move(data_location_))
-        , is_valid(is_valid_)
-        , is_local_data_reclaimed(false)
-    {
-        if (!data_location.isValid())
-        {
-            LOG_ERROR(
-                DB::Logger::get("OptionalCheckpointInfo"),
-                "Invalid data location, is_local_data_reclaimed={}, {}",
-                is_local_data_reclaimed,
-                StackTrace().toString());
-        }
-    }
-
     CheckpointLocation data_location;
 
     /**
@@ -119,10 +75,7 @@ struct OptionalCheckpointInfo
     {
         if (is_valid)
         {
-            return fmt::format(
-                "{{local_data_reclaimed: {}, data_location: {}}}",
-                is_local_data_reclaimed,
-                data_location.toDebugString());
+            return fmt::format("{{local_data_reclaimed: {}, data_location: {}}}", is_local_data_reclaimed, data_location.toDebugString());
         }
         else
         {

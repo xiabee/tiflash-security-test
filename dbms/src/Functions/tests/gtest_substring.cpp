@@ -51,7 +51,8 @@ try
         createColumn<Nullable<String>>({{}, "www."}),
         executeFunction(
             "substringUTF8",
-            createColumn<Nullable<String>>({{}, "www.pingcap.com"}),
+            createColumn<Nullable<String>>(
+                {{}, "www.pingcap.com"}),
             createConstColumn<Nullable<Int64>>(2, 1),
             createConstColumn<Nullable<Int64>>(2, 4)));
 }

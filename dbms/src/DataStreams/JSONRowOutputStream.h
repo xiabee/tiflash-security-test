@@ -18,8 +18,8 @@
 #include <Core/Block.h>
 #include <DataStreams/IRowOutputStream.h>
 #include <DataTypes/FormatSettingsJSON.h>
-#include <IO/Buffer/WriteBuffer.h>
 #include <IO/Progress.h>
+#include <IO/WriteBuffer.h>
 
 namespace DB
 {
@@ -29,11 +29,7 @@ namespace DB
 class JSONRowOutputStream : public IRowOutputStream
 {
 public:
-    JSONRowOutputStream(
-        WriteBuffer & ostr_,
-        const Block & sample_,
-        bool write_statistics_,
-        const FormatSettingsJSON & settings_);
+    JSONRowOutputStream(WriteBuffer & ostr_, const Block & sample_, bool write_statistics_, const FormatSettingsJSON & settings_);
 
     void writeField(const IColumn & column, const IDataType & type, size_t row_num) override;
     void writeFieldDelimiter() override;
@@ -68,8 +64,7 @@ protected:
     void writeStatistics();
 
     WriteBuffer & dst_ostr;
-    std::unique_ptr<WriteBuffer>
-        validating_ostr; /// Validates UTF-8 sequences, replaces bad sequences with replacement character.
+    std::unique_ptr<WriteBuffer> validating_ostr; /// Validates UTF-8 sequences, replaces bad sequences with replacement character.
     WriteBuffer * ostr;
 
     size_t field_number = 0;

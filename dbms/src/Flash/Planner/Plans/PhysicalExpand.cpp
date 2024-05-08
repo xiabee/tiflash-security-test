@@ -35,7 +35,7 @@ PhysicalPlanNodePtr PhysicalExpand::build(
     const tipb::Expand & expand,
     const PhysicalPlanNodePtr & child)
 {
-    RUNTIME_CHECK(child);
+    assert(child);
 
     if (unlikely(expand.grouping_sets().empty()))
     {
@@ -55,13 +55,9 @@ PhysicalPlanNodePtr PhysicalExpand::build(
     auto child_header = child->getSchema();
     for (const auto & one : child_header)
     {
-        expand_output_columns.emplace_back(
-            one.name,
-            expand_action.expand->isInGroupSetColumn(one.name) ? makeNullable(one.type) : one.type);
+        expand_output_columns.emplace_back(one.name, expand_action.expand->isInGroupSetColumn(one.name) ? makeNullable(one.type) : one.type);
     }
-    expand_output_columns.emplace_back(
-        Expand::grouping_identifier_column_name,
-        Expand::grouping_identifier_column_type);
+    expand_output_columns.emplace_back(Expand::grouping_identifier_column_name, Expand::grouping_identifier_column_type);
 
     auto physical_expand = std::make_shared<PhysicalExpand>(
         executor_id,
@@ -76,20 +72,17 @@ PhysicalPlanNodePtr PhysicalExpand::build(
 
 void PhysicalExpand::expandTransform(DAGPipeline & child_pipeline)
 {
-    String expand_extra_info = fmt::format(
-        "expand, expand_executor_id = {}: grouping set {}",
-        execId(),
-        shared_expand->getGroupingSetsDes());
+    String expand_extra_info = fmt::format("expand, expand_executor_id = {}: grouping set {}", execId(), shared_expand->getGroupingSetsDes());
     executeExpression(child_pipeline, expand_actions, log, expand_extra_info);
 }
 
-void PhysicalExpand::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalExpand::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & /*context*/,
     size_t /*concurrency*/)
 {
-    executeExpression(exec_context, group_builder, expand_actions, log);
+    executeExpression(exec_status, group_builder, expand_actions, log);
 }
 
 void PhysicalExpand::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
@@ -98,7 +91,7 @@ void PhysicalExpand::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context &
     expandTransform(pipeline);
 }
 
-void PhysicalExpand::finalizeImpl(const Names & parent_require)
+void PhysicalExpand::finalize(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
     Names required_output = parent_require;

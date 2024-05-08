@@ -17,7 +17,7 @@
 #include <Common/Logger.h>
 #include <Common/TiFlashMetrics.h>
 #include <DataTypes/IDataType.h>
-#include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
 
 #include <memory>
 
@@ -34,7 +34,7 @@ enum class ColumnCacheStatus
     GET_HIT,
     GET_COPY,
 
-    _TOTAL_COUNT, // NOLINT(bugprone-reserved-identifier)
+    _TOTAL_COUNT,
 };
 
 class ColumnSharingCache
@@ -48,8 +48,8 @@ public:
 
     void add(size_t start_pack_id, size_t pack_count, ColumnPtr & col_data)
     {
-        std::lock_guard lock(mtx);
         GET_METRIC(tiflash_storage_read_thread_counter, type_add_cache_succ).Increment();
+        std::lock_guard lock(mtx);
         auto & value = packs[start_pack_id];
         if (value.pack_count < pack_count)
         {
@@ -58,12 +58,7 @@ public:
         }
     }
 
-    ColumnCacheStatus get(
-        size_t start_pack_id,
-        size_t pack_count,
-        size_t read_rows,
-        ColumnPtr & col_data,
-        DataTypePtr data_type)
+    ColumnCacheStatus get(size_t start_pack_id, size_t pack_count, size_t read_rows, ColumnPtr & col_data, DataTypePtr data_type)
     {
         ColumnCacheStatus status;
         std::lock_guard lock(mtx);
@@ -126,7 +121,7 @@ private:
 class ColumnSharingCacheMap
 {
 public:
-    ColumnSharingCacheMap(const String & dmfile_name_, const ColumnDefines & cds, LoggerPtr & log_)
+    ColumnSharingCacheMap(const std::string & dmfile_name_, const ColumnDefines & cds, LoggerPtr & log_)
         : dmfile_name(dmfile_name_)
         , stats(static_cast<int>(ColumnCacheStatus::_TOTAL_COUNT))
         , log(log_)
@@ -137,7 +132,10 @@ public:
         }
     }
 
-    ~ColumnSharingCacheMap() { LOG_DEBUG(log, "dmfile {} stat {}", dmfile_name, statString()); }
+    ~ColumnSharingCacheMap()
+    {
+        LOG_DEBUG(log, "dmfile {} stat {}", dmfile_name, statString());
+    }
 
     // `addStale` just do some statistics.
     void addStale()
@@ -157,13 +155,7 @@ public:
         itr->second.add(start_pack_id, pack_count, col_data);
     }
 
-    bool get(
-        int64_t col_id,
-        size_t start_pack_id,
-        size_t pack_count,
-        size_t read_rows,
-        ColumnPtr & col_data,
-        DataTypePtr data_type)
+    bool get(int64_t col_id, size_t start_pack_id, size_t pack_count, size_t read_rows, ColumnPtr & col_data, DataTypePtr data_type)
     {
         auto status = ColumnCacheStatus::GET_MISS;
         auto itr = cols.find(col_id);
@@ -187,7 +179,10 @@ public:
     }
 
 private:
-    void addColumn(int64_t col_id) { cols[col_id]; }
+    void addColumn(int64_t col_id)
+    {
+        cols[col_id];
+    }
     std::string statString() const
     {
         auto add_count = stats[static_cast<int>(ColumnCacheStatus::ADD_COUNT)].load(std::memory_order_relaxed);
@@ -199,16 +194,15 @@ private:
         auto add_total = add_count + add_stale;
         auto get_cached = get_hit + get_copy;
         auto get_total = get_miss + get_part + get_hit + get_copy;
-        return fmt::format(
-            "add_count={} add_stale={} add_ratio={} get_miss={} get_part={} get_hit={} get_copy={} cached_ratio={}",
-            add_count,
-            add_stale,
-            add_total > 0 ? add_count * 1.0 / add_total : 0,
-            get_miss,
-            get_part,
-            get_hit,
-            get_copy,
-            get_total > 0 ? get_cached * 1.0 / get_total : 0);
+        return fmt::format("add_count={} add_stale={} add_ratio={} get_miss={} get_part={} get_hit={} get_copy={} cached_ratio={}",
+                           add_count,
+                           add_stale,
+                           add_total > 0 ? add_count * 1.0 / add_total : 0,
+                           get_miss,
+                           get_part,
+                           get_hit,
+                           get_copy,
+                           get_total > 0 ? get_cached * 1.0 / get_total : 0);
     }
     std::string dmfile_name;
     std::unordered_map<int64_t, ColumnSharingCache> cols;

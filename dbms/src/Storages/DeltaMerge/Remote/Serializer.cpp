@@ -13,7 +13,8 @@
 // limitations under the License.
 
 #include <Common/StringUtils/StringUtils.h>
-#include <IO/Compression/CompressionSettings.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
@@ -39,18 +40,11 @@ namespace CurrentMetrics
 extern const Metric DT_SnapshotOfDisaggReadNodeRead;
 }
 
-namespace DB::ErrorCodes
-{
-extern const int LOGICAL_ERROR;
-} // namespace DB::ErrorCodes
 
 namespace DB::DM::Remote
 {
-RemotePb::RemotePhysicalTable Serializer::serializePhysicalTable(
-    const DisaggPhysicalTableReadSnapshotPtr & snap,
-    const DisaggTaskId & task_id,
-    MemTrackerWrapper & mem_tracker_wrapper,
-    bool need_mem_data)
+RemotePb::RemotePhysicalTable
+Serializer::serializeTo(const DisaggPhysicalTableReadSnapshotPtr & snap, const DisaggTaskId & task_id)
 {
     std::shared_lock read_lock(snap->mtx);
     RemotePb::RemotePhysicalTable remote_table;
@@ -59,27 +53,24 @@ RemotePb::RemotePhysicalTable Serializer::serializePhysicalTable(
     remote_table.set_table_id(snap->ks_physical_table_id.second);
     for (const auto & [seg_id, seg_task] : snap->tasks)
     {
-        auto remote_seg = Serializer::serializeSegment(
+        auto remote_seg = Serializer::serializeTo(
             seg_task->read_snapshot,
             seg_id,
             seg_task->segment->segmentEpoch(),
             seg_task->segment->getRowKeyRange(),
-            /*read_ranges*/ seg_task->ranges,
-            mem_tracker_wrapper,
-            need_mem_data);
+            /*read_ranges*/ seg_task->ranges);
         remote_table.mutable_segments()->Add(std::move(remote_seg));
     }
     return remote_table;
 }
 
-RemotePb::RemoteSegment Serializer::serializeSegment(
+RemotePb::RemoteSegment
+Serializer::serializeTo(
     const SegmentSnapshotPtr & snap,
     PageIdU64 segment_id,
     UInt64 segment_epoch,
     const RowKeyRange & segment_range,
-    const RowKeyRanges & read_ranges,
-    MemTrackerWrapper & mem_tracker_wrapper,
-    bool need_mem_data)
+    const RowKeyRanges & read_ranges)
 {
     RemotePb::RemoteSegment remote;
     remote.set_segment_id(segment_id);
@@ -99,15 +90,11 @@ RemotePb::RemoteSegment Serializer::serializeSegment(
         auto * remote_file = remote.add_stable_pages();
         remote_file->set_page_id(dt_file->pageId());
         auto * checkpoint_info = remote_file->mutable_checkpoint_info();
-#ifndef DBMS_PUBLIC_GTEST // Don't not check path in unittests.
         RUNTIME_CHECK(startsWith(dt_file->path(), "s3://"), dt_file->path());
-#endif
         checkpoint_info->set_data_file_id(dt_file->path()); // It should be a key to remote path
     }
-    remote.mutable_column_files_memtable()->CopyFrom(
-        serializeColumnFileSet(snap->delta->getMemTableSetSnapshot(), mem_tracker_wrapper, need_mem_data));
-    remote.mutable_column_files_persisted()->CopyFrom(
-        serializeColumnFileSet(snap->delta->getPersistedFileSetSnapshot(), mem_tracker_wrapper, true));
+    remote.mutable_column_files_memtable()->CopyFrom(serializeTo(snap->delta->getMemTableSetSnapshot()));
+    remote.mutable_column_files_persisted()->CopyFrom(serializeTo(snap->delta->getPersistedFileSetSnapshot()));
 
     // serialize the read ranges to read node
     for (const auto & read_range : read_ranges)
@@ -120,10 +107,9 @@ RemotePb::RemoteSegment Serializer::serializeSegment(
     return remote;
 }
 
-SegmentSnapshotPtr Serializer::deserializeSegment(
+SegmentSnapshotPtr Serializer::deserializeSegmentSnapshotFrom(
     const DMContext & dm_context,
     StoreID remote_store_id,
-    KeyspaceID keyspace_id,
     TableID table_id,
     const RemotePb::RemoteSegment & proto)
 {
@@ -133,24 +119,27 @@ SegmentSnapshotPtr Serializer::deserializeSegment(
         segment_range = RowKeyRange::deserialize(rb);
     }
 
-    auto data_store = dm_context.global_context.getSharedContextDisagg()->remote_data_store;
+    auto data_store = dm_context.db_context.getSharedContextDisagg()->remote_data_store;
 
     auto delta_snap = std::make_shared<DeltaValueSnapshot>(CurrentMetrics::DT_SnapshotOfDisaggReadNodeRead);
     delta_snap->is_update = false;
-    delta_snap->mem_table_snap
-        = deserializeColumnFileSet(dm_context, proto.column_files_memtable(), data_store, segment_range);
-    delta_snap->persisted_files_snap
-        = deserializeColumnFileSet(dm_context, proto.column_files_persisted(), data_store, segment_range);
+    delta_snap->mem_table_snap = deserializeColumnFileSet(
+        proto.column_files_memtable(),
+        data_store,
+        segment_range);
+    delta_snap->persisted_files_snap = deserializeColumnFileSet(
+        proto.column_files_persisted(),
+        data_store,
+        segment_range);
 
     // Note: At this moment, we still cannot read from `delta_snap->mem_table_snap` and `delta_snap->persisted_files_snap`,
     // because they are constructed using ColumnFileDataProviderNop.
 
-    auto delta_index_cache = dm_context.global_context.getSharedContextDisagg()->rn_delta_index_cache;
+    auto delta_index_cache = dm_context.db_context.getSharedContextDisagg()->rn_delta_index_cache;
     if (delta_index_cache)
     {
         delta_snap->shared_delta_index = delta_index_cache->getDeltaIndex({
             .store_id = remote_store_id,
-            .keyspace_id = keyspace_id,
             .table_id = table_id,
             .segment_id = proto.segment_id(),
             .segment_epoch = proto.segment_epoch(),
@@ -172,7 +161,6 @@ SegmentSnapshotPtr Serializer::deserializeSegment(
         auto remote_key = stable_file.checkpoint_info().data_file_id();
         auto prepared = data_store->prepareDMFileByKey(remote_key);
         auto dmfile = prepared->restore(DMFile::ReadMetaMode::all());
-        RUNTIME_CHECK(dmfile != nullptr, remote_key);
         dmfiles.emplace_back(std::move(dmfile));
     }
     new_stable->setFiles(dmfiles, segment_range, &dm_context);
@@ -180,51 +168,41 @@ SegmentSnapshotPtr Serializer::deserializeSegment(
 
     return std::make_shared<SegmentSnapshot>(
         std::move(delta_snap),
-        std::move(stable_snap),
-        Logger::get(dm_context.tracing_id));
+        std::move(stable_snap));
 }
 
-RepeatedPtrField<RemotePb::ColumnFileRemote> Serializer::serializeColumnFileSet(
-    const ColumnFileSetSnapshotPtr & snap,
-    MemTrackerWrapper & mem_tracker_wrapper,
-    bool need_mem_data)
+RepeatedPtrField<RemotePb::ColumnFileRemote>
+Serializer::serializeTo(const ColumnFileSetSnapshotPtr & snap)
 {
     RepeatedPtrField<RemotePb::ColumnFileRemote> ret;
     ret.Reserve(snap->column_files.size());
     for (const auto & file : snap->column_files)
     {
-        ret.Add(serializeCF(file, snap->getDataProvider(), need_mem_data));
-        mem_tracker_wrapper.alloc(ret.rbegin()->SpaceUsedLong());
+        if (auto * cf_in_mem = file->tryToInMemoryFile(); cf_in_mem)
+        {
+            ret.Add(serializeTo(*cf_in_mem));
+        }
+        else if (auto * cf_tiny = file->tryToTinyFile(); cf_tiny)
+        {
+            ret.Add(serializeTo(*cf_tiny, snap->getDataProvider()));
+        }
+        else if (auto * cf_delete_range = file->tryToDeleteRange(); cf_delete_range)
+        {
+            ret.Add(serializeTo(*cf_delete_range));
+        }
+        else if (auto * cf_big = file->tryToBigFile(); cf_big)
+        {
+            ret.Add(serializeTo(*cf_big));
+        }
+        else
+        {
+            RUNTIME_CHECK_MSG(false, "Unknown ColumnFile, type={}", magic_enum::enum_name(file->getType()));
+        }
     }
     return ret;
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeCF(
-    const ColumnFilePtr & cf,
-    const IColumnFileDataProviderPtr & data_provider,
-    bool need_mem_data)
-{
-    if (auto * cf_in_mem = cf->tryToInMemoryFile(); cf_in_mem)
-    {
-        return serializeCFInMemory(*cf_in_mem, need_mem_data);
-    }
-    else if (auto * cf_tiny = cf->tryToTinyFile(); cf_tiny)
-    {
-        return serializeCFTiny(*cf_tiny, data_provider);
-    }
-    else if (auto * cf_delete_range = cf->tryToDeleteRange(); cf_delete_range)
-    {
-        return serializeCFDeleteRange(*cf_delete_range);
-    }
-    else if (auto * cf_big = cf->tryToBigFile(); cf_big)
-    {
-        return serializeCFBig(*cf_big);
-    }
-    throw Exception(ErrorCodes::LOGICAL_ERROR, "Unknown ColumnFile, type={}", static_cast<UInt32>(cf->getType()));
-}
-
 ColumnFileSetSnapshotPtr Serializer::deserializeColumnFileSet(
-    const DMContext & dm_context,
     const RepeatedPtrField<RemotePb::ColumnFileRemote> & proto,
     const Remote::IDataStorePtr & data_store,
     const RowKeyRange & segment_range)
@@ -238,7 +216,7 @@ ColumnFileSetSnapshotPtr Serializer::deserializeColumnFileSet(
     {
         if (remote_column_file.has_tiny())
         {
-            ret->column_files.push_back(deserializeCFTiny(dm_context, remote_column_file.tiny()));
+            ret->column_files.push_back(deserializeCFTiny(remote_column_file.tiny()));
         }
         else if (remote_column_file.has_delete_range())
         {
@@ -247,7 +225,10 @@ ColumnFileSetSnapshotPtr Serializer::deserializeColumnFileSet(
         else if (remote_column_file.has_big())
         {
             const auto & big_file = remote_column_file.big();
-            ret->column_files.push_back(deserializeCFBig(big_file, data_store, segment_range));
+            ret->column_files.push_back(deserializeCFBig(
+                big_file,
+                data_store,
+                segment_range));
         }
         else if (remote_column_file.has_in_memory())
         {
@@ -267,17 +248,10 @@ ColumnFileSetSnapshotPtr Serializer::deserializeColumnFileSet(
     return ret;
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeCFInMemory(const ColumnFileInMemory & cf_in_mem, bool need_mem_data)
+RemotePb::ColumnFileRemote Serializer::serializeTo(const ColumnFileInMemory & cf_in_mem)
 {
     RemotePb::ColumnFileRemote ret;
     auto * remote_in_memory = ret.mutable_in_memory();
-    if (!need_mem_data)
-    {
-        std::scoped_lock lock(cf_in_mem.cache->mutex);
-        remote_in_memory->set_rows(cf_in_mem.cache->block.rows());
-        return ret;
-    }
-
     {
         auto wb = WriteBufferFromString(*remote_in_memory->mutable_schema());
         serializeSchema(wb, cf_in_mem.getSchema()->getSchema());
@@ -310,11 +284,6 @@ ColumnFileInMemoryPtr Serializer::deserializeCFInMemory(const RemotePb::ColumnFi
 {
     LOG_DEBUG(Logger::get(), "Rebuild local ColumnFileInMemory from remote, rows={}", proto.rows());
 
-    if (proto.block_columns().empty())
-    {
-        return std::make_shared<ColumnFileInMemory>(proto.rows());
-    }
-
     BlockPtr block_schema;
     {
         auto read_buf = ReadBufferFromString(proto.schema());
@@ -341,9 +310,7 @@ ColumnFileInMemoryPtr Serializer::deserializeCFInMemory(const RemotePb::ColumnFi
     return std::make_shared<ColumnFileInMemory>(schema, cache);
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeCFTiny(
-    const ColumnFileTiny & cf_tiny,
-    IColumnFileDataProviderPtr data_provider)
+RemotePb::ColumnFileRemote Serializer::serializeTo(const ColumnFileTiny & cf_tiny, IColumnFileDataProviderPtr data_provider)
 {
     RemotePb::ColumnFileRemote ret;
     auto * remote_tiny = ret.mutable_tiny();
@@ -362,7 +329,7 @@ RemotePb::ColumnFileRemote Serializer::serializeCFTiny(
     return ret;
 }
 
-ColumnFileTinyPtr Serializer::deserializeCFTiny(const DMContext & dm_context, const RemotePb::ColumnFileTiny & proto)
+ColumnFileTinyPtr Serializer::deserializeCFTiny(const RemotePb::ColumnFileTiny & proto)
 {
     BlockPtr block_schema;
     {
@@ -372,13 +339,13 @@ ColumnFileTinyPtr Serializer::deserializeCFTiny(const DMContext & dm_context, co
 
     // We do not try to reuse the CFSchema from `SharedBlockSchemas`, because the ColumnFile will be freed immediately after the request.
     auto schema = std::make_shared<ColumnFileSchema>(*block_schema);
-    auto cf = std::make_shared<ColumnFileTiny>(schema, proto.rows(), proto.bytes(), proto.page_id(), dm_context);
+    auto cf = std::make_shared<ColumnFileTiny>(schema, proto.rows(), proto.bytes(), proto.page_id());
     cf->data_page_size = proto.page_size();
 
     return cf;
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeCFDeleteRange(const ColumnFileDeleteRange & cf_delete_range)
+RemotePb::ColumnFileRemote Serializer::serializeTo(const ColumnFileDeleteRange & cf_delete_range)
 {
     RemotePb::ColumnFileRemote ret;
     auto * remote_del = ret.mutable_delete_range();
@@ -399,7 +366,7 @@ ColumnFileDeleteRangePtr Serializer::deserializeCFDeleteRange(const RemotePb::Co
     return std::make_shared<ColumnFileDeleteRange>(range);
 }
 
-RemotePb::ColumnFileRemote Serializer::serializeCFBig(const ColumnFileBig & cf_big)
+RemotePb::ColumnFileRemote Serializer::serializeTo(const ColumnFileBig & cf_big)
 {
     RemotePb::ColumnFileRemote ret;
     auto * remote_big = ret.mutable_big();
@@ -418,6 +385,7 @@ ColumnFileBigPtr Serializer::deserializeCFBig(
 {
     RUNTIME_CHECK(proto.has_checkpoint_info());
     LOG_DEBUG(Logger::get(), "Rebuild local ColumnFileBig from remote, key={}", proto.checkpoint_info().data_file_id());
+
     auto prepared = data_store->prepareDMFileByKey(proto.checkpoint_info().data_file_id());
     auto dmfile = prepared->restore(DMFile::ReadMetaMode::all());
     auto * cf_big = new ColumnFileBig(dmfile, proto.valid_rows(), proto.valid_bytes(), segment_range);

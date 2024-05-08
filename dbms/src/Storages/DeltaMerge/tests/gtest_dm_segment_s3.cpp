@@ -18,17 +18,15 @@
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
-#include <Storages/DeltaMerge/StoragePool/GlobalPageIdAllocator.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/TMTContext.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/PathPool.h>
 #include <Storages/S3/S3Common.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/InputStreamTestUtils.h>
 #include <TestUtils/TiFlashStorageTestBasic.h>
@@ -37,6 +35,7 @@
 #include <gtest/gtest.h>
 
 #include <ctime>
+#include <future>
 #include <memory>
 
 namespace DB
@@ -60,7 +59,6 @@ public:
     void SetUp() override
     {
         FailPointHelper::enableFailPoint(FailPoints::force_use_dmfile_format_v3);
-        DB::tests::TiFlashTestEnv::enableS3Config();
         auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
         ASSERT_TRUE(::DB::tests::TiFlashTestEnv::createBucketIfNotExist(*s3_client));
         TiFlashStorageTestBasic::SetUp();
@@ -68,9 +66,7 @@ public:
         if (global_context.getSharedContextDisagg()->remote_data_store == nullptr)
         {
             already_initialize_data_store = false;
-            global_context.getSharedContextDisagg()->initRemoteDataStore(
-                global_context.getFileProvider(),
-                /*s3_enabled*/ true);
+            global_context.getSharedContextDisagg()->initRemoteDataStore(global_context.getFileProvider(), /*s3_enabled*/ true);
             ASSERT_TRUE(global_context.getSharedContextDisagg()->remote_data_store != nullptr);
         }
         else
@@ -98,7 +94,7 @@ public:
             kvstore->setStore(meta_store);
         }
 
-        segment = buildFirstSegment();
+        segment = reload();
         ASSERT_EQ(segment->segmentId(), DELTA_MERGE_FIRST_SEGMENT_ID);
     }
 
@@ -116,35 +112,19 @@ public:
         }
         auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
         ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client);
-        DB::tests::TiFlashTestEnv::disableS3Config();
     }
 
 protected:
-    SegmentPtr buildFirstSegment(
-        const ColumnDefinesPtr & pre_define_columns = {},
-        DB::Settings && db_settings = DB::Settings())
+    SegmentPtr reload(const ColumnDefinesPtr & pre_define_columns = {}, DB::Settings && db_settings = DB::Settings())
     {
         TiFlashStorageTestBasic::reload(std::move(db_settings));
         storage_path_pool = std::make_shared<StoragePathPool>(db_context->getPathPool().withTable("test", "t1", false));
-        page_id_allocator = std::make_shared<GlobalPageIdAllocator>();
-        storage_pool = std::make_shared<StoragePool>(
-            *db_context,
-            NullspaceID,
-            ns_id,
-            *storage_path_pool,
-            page_id_allocator,
-            "test.t1");
+        storage_pool = std::make_shared<StoragePool>(*db_context, NullspaceID, ns_id, *storage_path_pool, "test.t1");
         storage_pool->restore();
         ColumnDefinesPtr cols = (!pre_define_columns) ? DMTestEnv::getDefaultColumns() : pre_define_columns;
         setColumns(cols);
 
-        return Segment::newSegment(
-            Logger::get(),
-            *dm_context,
-            table_columns,
-            RowKeyRange::newAll(false, 1),
-            DELTA_MERGE_FIRST_SEGMENT_ID,
-            0);
+        return Segment::newSegment(Logger::get(), *dm_context, table_columns, RowKeyRange::newAll(false, 1), storage_pool->newMetaPageId(), 0);
     }
 
     // setColumns should update dm_context at the same time
@@ -152,16 +132,15 @@ protected:
     {
         *table_columns = *columns;
 
-        dm_context = DMContext::createUnique(
-            *db_context,
-            storage_path_pool,
-            storage_pool,
-            /*min_version_*/ 0,
-            NullspaceID,
-            /*physical_table_id*/ 100,
-            false,
-            1,
-            db_context->getSettingsRef());
+        dm_context = std::make_unique<DMContext>(*db_context,
+                                                 storage_path_pool,
+                                                 storage_pool,
+                                                 /*min_version_*/ 0,
+                                                 NullspaceID,
+                                                 /*physical_table_id*/ 100,
+                                                 false,
+                                                 1,
+                                                 db_context->getSettingsRef());
     }
 
     const ColumnDefinesPtr & tableColumns() const { return table_columns; }
@@ -170,7 +149,6 @@ protected:
 
 protected:
     /// all these var lives as ref in dm_context
-    GlobalPageIdAllocatorPtr page_id_allocator;
     std::shared_ptr<StoragePathPool> storage_path_pool;
     std::shared_ptr<StoragePool> storage_pool;
     ColumnDefinesPtr table_columns;
@@ -205,11 +183,7 @@ try
     }
 
 
-    auto [left, right] = segment->split(
-        dmContext(),
-        tableColumns(),
-        /* use a calculated split point */ std::nullopt,
-        Segment::SplitMode::Logical);
+    auto [left, right] = segment->split(dmContext(), tableColumns(), /* use a calculated split point */ std::nullopt, Segment::SplitMode::Logical);
     ASSERT_TRUE(left != nullptr);
     ASSERT_TRUE(right != nullptr);
 
@@ -221,11 +195,10 @@ try
     std::vector<SegmentPtr> ordered_segments = {left, right};
     segment = Segment::merge(dmContext(), tableColumns(), ordered_segments);
 
-    auto wn_ps = dmContext().global_context.getWriteNodePageStorage();
+    auto wn_ps = dmContext().db_context.getWriteNodePageStorage();
     wn_ps->gc(/*not_skip*/ true);
     {
-        auto valid_external_ids = wn_ps->page_directory->getAliveExternalIds(
-            UniversalPageIdFormat::toFullPrefix(NullspaceID, StorageType::Data, ns_id));
+        auto valid_external_ids = wn_ps->page_directory->getAliveExternalIds(UniversalPageIdFormat::toFullPrefix(NullspaceID, StorageType::Data, ns_id));
         ASSERT_TRUE(valid_external_ids.has_value());
         ASSERT_EQ(valid_external_ids->size(), 1);
         auto all_dt_file_ids = storage_path_pool->getStableDiskDelegator().getAllRemoteDTFilesForGC();

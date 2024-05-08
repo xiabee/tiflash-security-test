@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Common/Stopwatch.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 
 namespace DB
 {

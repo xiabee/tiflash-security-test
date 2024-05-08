@@ -36,7 +36,9 @@ BlockIO InterpreterExistsQuery::execute()
 
 Block InterpreterExistsQuery::getSampleBlock()
 {
-    return Block{{ColumnUInt8::create(), std::make_shared<DataTypeUInt8>(), "result"}};
+    return Block{{ColumnUInt8::create(),
+                  std::make_shared<DataTypeUInt8>(),
+                  "result"}};
 }
 
 
@@ -45,8 +47,9 @@ BlockInputStreamPtr InterpreterExistsQuery::executeImpl()
     const ASTExistsQuery & ast = typeid_cast<const ASTExistsQuery &>(*query_ptr);
     bool res = ast.temporary ? context.isExternalTableExist(ast.table) : context.isTableExist(ast.database, ast.table);
 
-    return std::make_shared<OneBlockInputStream>(
-        Block{{ColumnUInt8::create(1, res), std::make_shared<DataTypeUInt8>(), "result"}});
+    return std::make_shared<OneBlockInputStream>(Block{{ColumnUInt8::create(1, res),
+                                                        std::make_shared<DataTypeUInt8>(),
+                                                        "result"}});
 }
 
 } // namespace DB

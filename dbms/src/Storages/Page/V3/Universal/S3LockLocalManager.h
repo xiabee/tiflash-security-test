@@ -16,11 +16,11 @@
 
 #include <Common/nocopyable.h>
 #include <Flash/Disaggregated/S3LockClient.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/Page/V3/BlobStore.h>
 #include <Storages/Page/V3/PageDirectory.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
+#include <Storages/Transaction/Types.h>
 #include <aws/s3/S3Client.h>
 
 
@@ -45,10 +45,8 @@ public:
     // `last_upload_sequence`, copy the checkpoint info from the latest
     // manifest to `directory` and return a `ManifestFilePrefix`.
     // Otherwise it returns std::nullopt.
-    std::optional<CheckpointProto::ManifestFilePrefix> initStoreInfo(
-        StoreID actual_store_id,
-        DB::S3::S3LockClientPtr s3lock_client_,
-        const universal::PageDirectoryPtr & directory);
+    std::optional<CheckpointProto::ManifestFilePrefix>
+    initStoreInfo(StoreID actual_store_id, DB::S3::S3LockClientPtr s3lock_client_, const universal::PageDirectoryPtr & directory);
 
     void waitUntilInited();
 

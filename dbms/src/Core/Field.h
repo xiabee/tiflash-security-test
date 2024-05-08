@@ -42,6 +42,7 @@ using Array = std::vector<Field>;
 using TupleBackend = std::vector<Field>;
 STRONG_TYPEDEF(TupleBackend, Tuple); /// Array and Tuple are different types with equal representation inside Field.
 
+
 /** 32 is enough. Round number is used for alignment and for better arithmetic inside std::vector.
   * NOTE: Actually, sizeof(std::string) is 32 when using libc++, so Field is 40 bytes.
   */
@@ -78,37 +79,15 @@ public:
     template <typename U, std::enable_if_t<std::is_floating_point_v<U>> * = nullptr>
     operator U() const // NOLINT(google-explicit-constructor)
     {
-        // clang-format off
-        static const double ScaleMultiplierArray[] = {
-            1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
-            1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
-            1e20, 1e21, 1e22
-        };
-        // clang-format on
-
-        // Use double divide algorithm when both the dividend and the divisor can be precisely represented by double
-        // 1e0,1e1,...1e22 can be precisely represented by double
-        // Note: ensure that if precise_dividend is true, then the dividend must be precisely represented;
-        //  if precise_dividend is false, the dividend still could have chance to be precisely represented. It doesn't affect
-        // the correctness.
-        auto v = static_cast<Float64>(dec.value);
-        auto nearest_v = v > 0 ? v - 1 : v + 1;
-        bool precise_dividend
-            = ((dec.value <= (1LL << 53) && (dec.value >= -(1LL << 53)))
-               || (static_cast<NativeType>(v) == dec.value && static_cast<NativeType>(nearest_v) != dec.value));
-        // Note: even if scale = 0, we should still check precise_dividend here, because cast<double>(int256) doesn't
-        // satisfy IEEE754 perfectly
-        if likely (precise_dividend && scale <= 22)
+        U v = static_cast<U>(dec.value);
+        for (ScaleType i = 0; i < scale; i++)
         {
-            v = v / ScaleMultiplierArray[scale];
-            return v;
+            v = v / 10.0;
         }
-        return atof(toString().c_str());
+        return v;
     }
 
-    template <
-        typename U,
-        std::enable_if_t<std::is_integral_v<U> || std::is_same_v<U, Int128> || std::is_same_v<U, Int256>> * = nullptr>
+    template <typename U, std::enable_if_t<std::is_integral_v<U> || std::is_same_v<U, Int128> || std::is_same_v<U, Int256>> * = nullptr>
     operator U() const // NOLINT(google-explicit-constructor)
     {
         Int256 v = dec.value;
@@ -310,11 +289,7 @@ public:
     Field(Field && rhs) { create(std::move(rhs)); }
 
     template <typename T>
-    Field(
-        T && rhs,
-        std::integral_constant<
-            int,
-            Field::TypeToEnum<std::decay_t<T>>::value> * = nullptr) // NOLINT(google-explicit-constructor)
+    Field(T && rhs, std::integral_constant<int, Field::TypeToEnum<std::decay_t<T>>::value> * = nullptr) // NOLINT(google-explicit-constructor)
     {
         createConcrete(std::forward<T>(rhs));
     }
@@ -396,7 +371,7 @@ public:
     T & get()
     {
         using TWithoutRef = std::remove_reference_t<T>;
-        auto * MAY_ALIAS ptr = reinterpret_cast<TWithoutRef *>(&storage);
+        TWithoutRef * MAY_ALIAS ptr = reinterpret_cast<TWithoutRef *>(&storage);
         return *ptr;
     };
 
@@ -404,7 +379,7 @@ public:
     const T & get() const
     {
         using TWithoutRef = std::remove_reference_t<T>;
-        const auto * MAY_ALIAS ptr = reinterpret_cast<const TWithoutRef *>(&storage);
+        const TWithoutRef * MAY_ALIAS ptr = reinterpret_cast<const TWithoutRef *>(&storage);
         return *ptr;
     };
 
@@ -433,9 +408,8 @@ public:
     {
         const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
         if (which != requested)
-            throw Exception(
-                "Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)),
-                ErrorCodes::BAD_GET);
+            throw Exception("Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)),
+                            ErrorCodes::BAD_GET);
         return get<T>();
     }
 
@@ -444,9 +418,8 @@ public:
     {
         const Types::Which requested = TypeToEnum<std::decay_t<T>>::value;
         if (which != requested)
-            throw Exception(
-                "Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)),
-                ErrorCodes::BAD_GET);
+            throw Exception("Bad get: has " + std::string(getTypeName()) + ", requested " + std::string(Types::toString(requested)),
+                            ErrorCodes::BAD_GET);
         return get<T>();
     }
 
@@ -572,20 +545,7 @@ public:
     bool operator!=(const Field & rhs) const { return !(*this == rhs); }
 
 private:
-    std::aligned_union_t<
-        DBMS_MIN_FIELD_SIZE - sizeof(Types::Which),
-        Null,
-        UInt64,
-        UInt128,
-        Int64,
-        Float64,
-        String,
-        Array,
-        Tuple,
-        DecimalField<Decimal32>,
-        DecimalField<Decimal64>,
-        DecimalField<Decimal128>,
-        DecimalField<Decimal256>>
+    std::aligned_union_t<DBMS_MIN_FIELD_SIZE - sizeof(Types::Which), Null, UInt64, UInt128, Int64, Float64, String, Array, Tuple, DecimalField<Decimal32>, DecimalField<Decimal64>, DecimalField<Decimal128>, DecimalField<Decimal256>>
         storage;
 
     Types::Which which;
@@ -601,7 +561,7 @@ private:
     void createConcrete(T && x)
     {
         using JustT = std::decay_t<T>;
-        auto * MAY_ALIAS ptr = reinterpret_cast<JustT *>(&storage);
+        JustT * MAY_ALIAS ptr = reinterpret_cast<JustT *>(&storage);
         new (ptr) JustT(std::forward<T>(x));
         which = TypeToEnum<JustT>::value;
     }
@@ -611,7 +571,7 @@ private:
     void assignConcrete(T && x)
     {
         using JustT = std::decay_t<T>;
-        auto * MAY_ALIAS ptr = reinterpret_cast<JustT *>(&storage);
+        JustT * MAY_ALIAS ptr = reinterpret_cast<JustT *>(&storage);
         *ptr = std::forward<T>(x);
     }
 
@@ -688,7 +648,7 @@ private:
 
     void create(const char * data, size_t size)
     {
-        auto * MAY_ALIAS ptr = reinterpret_cast<String *>(&storage);
+        String * MAY_ALIAS ptr = reinterpret_cast<String *>(&storage);
         new (ptr) String(data, size);
         which = Types::String;
     }

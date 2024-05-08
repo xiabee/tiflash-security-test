@@ -42,16 +42,18 @@ public:
         const PhysicalPlanNodePtr & build_,
         const JoinPtr & join_ptr_,
         const ExpressionActionsPtr & probe_side_prepare_actions_,
-        const ExpressionActionsPtr & build_side_prepare_actions_)
+        const ExpressionActionsPtr & build_side_prepare_actions_,
+        const Block & sample_block_)
         : PhysicalBinary(executor_id_, PlanType::Join, schema_, fine_grained_shuffle_, req_id, probe_, build_)
         , join_ptr(join_ptr_)
         , probe_side_prepare_actions(probe_side_prepare_actions_)
         , build_side_prepare_actions(build_side_prepare_actions_)
+        , sample_block(sample_block_)
     {}
 
-    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
+    void buildPipeline(PipelineBuilder & builder) override;
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
@@ -59,6 +61,8 @@ private:
     void probeSideTransform(DAGPipeline & probe_pipeline, Context & context);
 
     void buildSideTransform(DAGPipeline & build_pipeline, Context & context, size_t max_streams);
+
+    void doSchemaProject(DAGPipeline & pipeline);
 
     void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
@@ -71,5 +75,7 @@ private:
 
     ExpressionActionsPtr probe_side_prepare_actions;
     ExpressionActionsPtr build_side_prepare_actions;
+
+    Block sample_block;
 };
 } // namespace DB

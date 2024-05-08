@@ -17,6 +17,7 @@
 #include <Core/Defines.h>
 #include <DataStreams/MarkInCompressedFile.h>
 #include <DataStreams/NativeBlockOutputStream.h>
+#include <IO/CompressedWriteBuffer.h>
 #include <IO/VarInt.h>
 #include <IO/WriteHelpers.h>
 
@@ -44,9 +45,7 @@ NativeBlockOutputStream::NativeBlockOutputStream(
     {
         ostr_concrete = typeid_cast<CompressedWriteBuffer<> *>(&ostr);
         if (!ostr_concrete)
-            throw Exception(
-                "When need to write index for NativeBlockOutputStream, ostr must be CompressedWriteBuffer.",
-                ErrorCodes::LOGICAL_ERROR);
+            throw Exception("When need to write index for NativeBlockOutputStream, ostr must be CompressedWriteBuffer.", ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -57,12 +56,7 @@ void NativeBlockOutputStream::flush()
 }
 
 
-void NativeBlockOutputStream::writeData(
-    const IDataType & type,
-    const ColumnPtr & column,
-    WriteBuffer & ostr,
-    size_t offset,
-    size_t limit)
+void NativeBlockOutputStream::writeData(const IDataType & type, const ColumnPtr & column, WriteBuffer & ostr, size_t offset, size_t limit)
 {
     /** If there are columns-constants - then we materialize them.
       * (Since the data type does not know how to serialize / deserialize constants.)
@@ -124,6 +118,13 @@ void NativeBlockOutputStream::write(const Block & block)
 
         /// Type
         String type_name = column.type->getName();
+
+        /// For compatibility, we will not send explicit timezone parameter in DateTime data type
+        ///  to older clients, that cannot understand it.
+        if (client_revision < DBMS_MIN_REVISION_WITH_TIME_ZONE_PARAMETER_IN_DATETIME_DATA_TYPE
+            && startsWith(type_name, "DateTime("))
+            type_name = "DateTime";
+
         writeStringBinary(type_name, ostr);
 
         /// Data

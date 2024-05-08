@@ -25,8 +25,8 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
-#include <Storages/KVStore/Types.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
+#include <Storages/Transaction/Types.h>
 #include <common/logger_useful.h>
 #include <common/types.h>
 #include <tipb/executor.pb.h>
@@ -111,9 +111,7 @@ void literalFieldToTiPBExpr(const ColumnInfo & ci, const Field & val_field, tipb
             break;
         }
         default:
-            throw Exception(fmt::format(
-                "Type {} does not support literal in function unit test",
-                getDataTypeByColumnInfo(ci)->getName()));
+            throw Exception(fmt::format("Type {} does not support literal in function unit test", getDataTypeByColumnInfo(ci)->getName()));
         }
         expr->set_val(ss.releaseStr());
     }
@@ -165,8 +163,7 @@ void foldConstant(tipb::Expr * expr, int32_t collator_id, const Context & contex
             DataTypePtr flash_type = applyVisitor(FieldToDataType(), value);
             DataTypePtr target_type = inferDataType4Literal(c);
             ColumnWithTypeAndName column;
-            column.column
-                = target_type->createColumnConst(1, convertFieldToType(value, *target_type, flash_type.get()));
+            column.column = target_type->createColumnConst(1, convertFieldToType(value, *target_type, flash_type.get()));
             column.name = exprToString(c, {}) + "_" + target_type->getName();
             column.type = target_type;
             arguments_types.emplace_back(target_type);
@@ -221,12 +218,7 @@ void astToPB(const DAGSchema & input, ASTPtr ast, tipb::Expr * expr, int32_t col
     }
 }
 
-void functionToPB(
-    const DAGSchema & input,
-    ASTFunction * func,
-    tipb::Expr * expr,
-    int32_t collator_id,
-    const Context & context)
+void functionToPB(const DAGSchema & input, ASTFunction * func, tipb::Expr * expr, int32_t collator_id, const Context & context)
 {
     /// aggregation function is handled in AggregationBinder, so just treated as a column
     auto ft = checkSchema(input, func->getColumnName());
@@ -312,11 +304,7 @@ void functionToPB(
         }
         return;
     case tipb::ScalarFuncSig::PlusInt:
-    case tipb::ScalarFuncSig::PlusReal:
-    case tipb::ScalarFuncSig::PlusDecimal:
     case tipb::ScalarFuncSig::MinusInt:
-    case tipb::ScalarFuncSig::MinusReal:
-    case tipb::ScalarFuncSig::MinusDecimal:
     {
         for (const auto & child_ast : func->arguments->children)
         {
@@ -709,15 +697,6 @@ void compileFilter(const DAGSchema & input, ASTPtr ast, std::vector<ASTPtr> & co
     }
     conditions.push_back(ast);
     compileExpr(input, ast);
-}
-
-void fillTaskMetaWithMPPInfo(mpp::TaskMeta & meta, const MPPInfo & mpp_info)
-{
-    meta.set_start_ts(mpp_info.start_ts);
-    meta.set_gather_id(mpp_info.gather_id);
-    meta.set_query_ts(mpp_info.query_ts);
-    meta.set_local_query_id(mpp_info.local_query_id);
-    meta.set_server_id(mpp_info.server_id);
 }
 
 } // namespace DB

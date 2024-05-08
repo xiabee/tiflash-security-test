@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Common/Exception.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/WriteBufferFromFile.h>
 #include <Storages/Page/V3/CheckpointFile/Proto/manifest_file.pb.h>
 #include <Storages/Page/V3/CheckpointFile/fwd.h>
 #include <Storages/Page/V3/PageEntriesEdit.h>
@@ -48,7 +48,10 @@ public:
         RUNTIME_CHECK(max_edit_records_per_part > 0, max_edit_records_per_part);
     }
 
-    ~CPManifestFileWriter() { flush(); }
+    ~CPManifestFileWriter()
+    {
+        flush();
+    }
 
     /// Must be called first.
     void writePrefix(const CheckpointProto::ManifestFilePrefix & prefix);

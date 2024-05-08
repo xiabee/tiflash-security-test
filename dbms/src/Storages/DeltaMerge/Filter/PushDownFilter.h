@@ -27,19 +27,16 @@ inline static const PushDownFilterPtr EMPTY_FILTER{};
 class PushDownFilter : public std::enable_shared_from_this<PushDownFilter>
 {
 public:
-    PushDownFilter(
-        const RSOperatorPtr & rs_operator_,
-        const ExpressionActionsPtr & beofre_where_,
-        const ExpressionActionsPtr & project_after_where_,
-        const ColumnDefinesPtr & filter_columns_,
-        const String filter_column_name_,
-        const ExpressionActionsPtr & extra_cast_,
-        const ColumnDefinesPtr & columns_after_cast_)
+    PushDownFilter(const RSOperatorPtr & rs_operator_,
+                   const ExpressionActionsPtr & beofre_where_,
+                   const ColumnDefines & filter_columns_,
+                   const String filter_column_name_,
+                   const ExpressionActionsPtr & extra_cast_,
+                   const ColumnDefinesPtr & columns_after_cast_)
         : rs_operator(rs_operator_)
         , before_where(beofre_where_)
-        , project_after_where(project_after_where_)
         , filter_column_name(std::move(filter_column_name_))
-        , filter_columns(filter_columns_)
+        , filter_columns(std::move(filter_columns_))
         , extra_cast(extra_cast_)
         , columns_after_cast(columns_after_cast_)
     {}
@@ -52,18 +49,14 @@ public:
     RSOperatorPtr rs_operator;
     // Filter expression actions and the name of the tmp filter column
     // Used construct the FilterBlockInputStream
-    const ExpressionActionsPtr before_where;
-    // The projection after the filter, used to remove the tmp filter column
-    // Used to construct the ExpressionBlockInputStream
-    // Note: ususally we will remove the tmp filter column in the LateMaterializationBlockInputStream, this only used for unexpected cases
-    const ExpressionActionsPtr project_after_where;
-    const String filter_column_name;
+    ExpressionActionsPtr before_where;
+    String filter_column_name;
     // The columns needed by the filter expression
-    const ColumnDefinesPtr filter_columns;
+    ColumnDefines filter_columns;
     // The expression actions used to cast the timestamp/datetime column
-    const ExpressionActionsPtr extra_cast;
+    ExpressionActionsPtr extra_cast;
     // If the extra_cast is not null, the types of the columns may be changed
-    const ColumnDefinesPtr columns_after_cast;
+    ColumnDefinesPtr columns_after_cast;
 };
 
 } // namespace DB::DM

@@ -17,26 +17,24 @@
 #include <DataStreams/BlocksListBlockInputStream.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/ExternalDTFileInfo.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/DeltaMerge/tests/MultiSegmentTestUtil.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/MultiRaft/Disagg/CheckpointInfo.h>
-#include <Storages/KVStore/MultiRaft/Disagg/FastAddPeerCache.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <Storages/KVStore/tests/region_helper.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/PathPool.h>
 #include <Storages/S3/S3Common.h>
+#include <Storages/Transaction/CheckpointInfo.h>
+#include <Storages/Transaction/FastAddPeerCache.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <TestUtils/InputStreamTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <TestUtils/TiFlashTestEnv.h>
@@ -51,12 +49,11 @@ extern const char force_stop_background_checkpoint_upload[];
 } // namespace FailPoints
 namespace DM
 {
-extern DMFilePtr writeIntoNewDMFile(
-    DMContext & dm_context,
-    const ColumnDefinesPtr & schema_snap,
-    const BlockInputStreamPtr & input_stream,
-    UInt64 file_id,
-    const String & parent_path);
+extern DMFilePtr writeIntoNewDMFile(DMContext & dm_context,
+                                    const ColumnDefinesPtr & schema_snap,
+                                    const BlockInputStreamPtr & input_stream,
+                                    UInt64 file_id,
+                                    const String & parent_path);
 namespace tests
 {
 // Simple test suit for DeltaMergeStoreTestFastAddPeer.
@@ -73,7 +70,6 @@ public:
     {
         FailPointHelper::enableFailPoint(FailPoints::force_use_dmfile_format_v3);
         FailPointHelper::enableFailPoint(FailPoints::force_stop_background_checkpoint_upload);
-        DB::tests::TiFlashTestEnv::enableS3Config();
         auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
         ASSERT_TRUE(::DB::tests::TiFlashTestEnv::createBucketIfNotExist(*s3_client));
         TiFlashStorageTestBasic::SetUp();
@@ -81,9 +77,7 @@ public:
         if (global_context.getSharedContextDisagg()->remote_data_store == nullptr)
         {
             already_initialize_data_store = false;
-            global_context.getSharedContextDisagg()->initRemoteDataStore(
-                global_context.getFileProvider(),
-                /*s3_enabled*/ true);
+            global_context.getSharedContextDisagg()->initRemoteDataStore(global_context.getFileProvider(), /*s3_enabled*/ true);
             ASSERT_TRUE(global_context.getSharedContextDisagg()->remote_data_store != nullptr);
         }
         else
@@ -103,7 +97,7 @@ public:
             already_initialize_write_ps = true;
         }
         resetStoreId(current_store_id);
-        global_context.getSharedContextDisagg()->initFastAddPeerContext(25);
+        global_context.getSharedContextDisagg()->initFastAddPeerContext();
     }
 
     void TearDown() override
@@ -121,7 +115,6 @@ public:
         }
         auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
         ::DB::tests::TiFlashTestEnv::deleteBucket(*s3_client);
-        DB::tests::TiFlashTestEnv::disableS3Config();
     }
 
     void resetStoreId(UInt64 store_id)
@@ -134,42 +127,37 @@ public:
         }
     }
 
-    DeltaMergeStorePtr reload(
-        const ColumnDefinesPtr & pre_define_columns = {},
-        bool is_common_handle = false,
-        size_t rowkey_column_size = 1)
+    DeltaMergeStorePtr
+    reload(const ColumnDefinesPtr & pre_define_columns = {}, bool is_common_handle = false, size_t rowkey_column_size = 1)
     {
         TiFlashStorageTestBasic::reload();
         auto kvstore = db_context->getTMTContext().getKVStore();
         auto store_id = kvstore->getStoreID();
         if (auto ps = DB::tests::TiFlashTestEnv::getGlobalContext().getWriteNodePageStorage(); ps)
         {
-            auto mock_s3lock_client
-                = std::make_shared<DB::S3::MockS3LockClient>(DB::S3::ClientFactory::instance().sharedTiFlashClient());
+            auto mock_s3lock_client = std::make_shared<DB::S3::MockS3LockClient>(DB::S3::ClientFactory::instance().sharedTiFlashClient());
             ps->initLocksLocalManager(store_id, mock_s3lock_client);
         }
         ColumnDefinesPtr cols;
         if (!pre_define_columns)
-            cols = DMTestEnv::getDefaultColumns(
-                is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
+            cols = DMTestEnv::getDefaultColumns(is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID);
         else
             cols = pre_define_columns;
 
         ColumnDefine handle_column_define = (*cols)[0];
 
-        DeltaMergeStorePtr s = std::make_shared<DeltaMergeStore>(
-            *db_context,
-            false,
-            "test",
-            fmt::format("t_{}", table_id),
-            keyspace_id,
-            table_id,
-            true,
-            *cols,
-            handle_column_define,
-            is_common_handle,
-            rowkey_column_size,
-            DeltaMergeStore::Settings());
+        DeltaMergeStorePtr s = std::make_shared<DeltaMergeStore>(*db_context,
+                                                                 false,
+                                                                 "test",
+                                                                 fmt::format("t_{}", table_id),
+                                                                 keyspace_id,
+                                                                 table_id,
+                                                                 true,
+                                                                 *cols,
+                                                                 handle_column_define,
+                                                                 is_common_handle,
+                                                                 rowkey_column_size,
+                                                                 DeltaMergeStore::Settings());
         return s;
     }
 
@@ -196,9 +184,7 @@ protected:
         HandleRange range(min_pk, max_pk + 1);
         auto handle_range = RowKeyRange::fromHandleRange(range);
         auto external_file = ExternalDTFileInfo{.id = file_id, .range = handle_range};
-        return {
-            handle_range,
-            {external_file}}; // There are some duplicated info. This is to minimize the change to our test code.
+        return {handle_range, {external_file}}; // There are some duplicated info. This is to minimize the change to our test code.
     }
 
     void dumpCheckpoint(UInt64 store_id)
@@ -246,20 +232,17 @@ protected:
     void verifyRows(const RowKeyRange & range, size_t rows)
     {
         const auto & columns = store->getTableColumns();
-        BlockInputStreamPtr in = store->read(
-            *db_context,
-            db_context->getSettingsRef(),
-            columns,
-            {range},
-            /* num_streams= */ 1,
-            /* max_version= */ std::numeric_limits<UInt64>::max(),
-            EMPTY_FILTER,
-            std::vector<RuntimeFilterPtr>{},
-            0,
-            TRACING_NAME,
-            /* keep_order= */ false,
-            /* is_fast_scan= */ false,
-            /* expected_block_size= */ 1024)[0];
+        BlockInputStreamPtr in = store->read(*db_context,
+                                             db_context->getSettingsRef(),
+                                             columns,
+                                             {range},
+                                             /* num_streams= */ 1,
+                                             /* max_version= */ std::numeric_limits<UInt64>::max(),
+                                             EMPTY_FILTER,
+                                             TRACING_NAME,
+                                             /* keep_order= */ false,
+                                             /* is_fast_scan= */ false,
+                                             /* expected_block_size= */ 1024)[0];
         ASSERT_INPUTSTREAM_NROWS(in, rows);
     }
 
@@ -312,10 +295,7 @@ try
 
     // write ColumnFileBig
     {
-        Block block = DMTestEnv::prepareSimpleWriteBlock(
-            num_rows_write + num_rows_write,
-            num_rows_write + 2 * num_rows_write,
-            false);
+        Block block = DMTestEnv::prepareSimpleWriteBlock(num_rows_write + num_rows_write, num_rows_write + 2 * num_rows_write, false);
         auto dm_context = store->newDMContext(*db_context, db_context->getSettingsRef());
         auto [range, file_ids] = genDMFile(*dm_context, block);
         {
@@ -364,27 +344,7 @@ try
 
         store = reload(table_column_defines);
     }
-
-    auto segments = store->buildSegmentsFromCheckpointInfo(
-        *db_context,
-        db_context->getSettingsRef(),
-        RowKeyRange::newAll(false, 1),
-        checkpoint_info);
-    auto start = RecordKVFormat::genKey(table_id, 0);
-    auto end = RecordKVFormat::genKey(table_id, 10);
-    RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
-    store->ingestSegmentsFromCheckpointInfo(
-        *db_context,
-        db_context->getSettingsRef(),
-        RowKeyRange::newAll(false, 1),
-        std::make_shared<CheckpointIngestInfo>(
-            db_context->getTMTContext(),
-            checkpoint_info->region_id,
-            2333,
-            checkpoint_info->remote_store_id,
-            dummy_region,
-            std::move(segments),
-            0));
+    store->ingestSegmentsFromCheckpointInfo(*db_context, db_context->getSettingsRef(), RowKeyRange::newAll(false, 1), checkpoint_info);
 
     // check data file lock exists
     {
@@ -414,15 +374,11 @@ try
         ASSERT_TRUE(current_store_lock_exist);
     }
 
-    verifyRows(
-        RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()),
-        num_rows_write / 2 + 2 * num_rows_write);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2 + 2 * num_rows_write);
 
     reload();
 
-    verifyRows(
-        RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()),
-        num_rows_write / 2 + 2 * num_rows_write);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2 + 2 * num_rows_write);
 }
 CATCH
 
@@ -465,8 +421,7 @@ try
     for (size_t i = 0; i < 100000; i++)
     {
         // write to store
-        Block block
-            = DMTestEnv::prepareSimpleWriteBlock(num_rows_write, num_rows_write + num_rows_write_per_batch, false);
+        Block block = DMTestEnv::prepareSimpleWriteBlock(num_rows_write, num_rows_write + num_rows_write_per_batch, false);
         store->write(*db_context, settings, block);
         store->flushCache(*db_context, RowKeyRange::newAll(false, 1), true);
         num_rows_write += num_rows_write_per_batch;
@@ -491,58 +446,18 @@ try
     checkpoint_info->region_id = 1000;
     checkpoint_info->checkpoint_data_holder = buildParsedCheckpointData(*db_context, manifest_key, /*dir_seq*/ 100);
     checkpoint_info->temp_ps = checkpoint_info->checkpoint_data_holder->getUniversalPageStorage();
+    store->ingestSegmentsFromCheckpointInfo(*db_context, db_context->getSettingsRef(), RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)), checkpoint_info);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2);
 
-    {
-        auto segments = store->buildSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)),
-            checkpoint_info);
-        auto start = RecordKVFormat::genKey(table_id, 0);
-        auto end = RecordKVFormat::genKey(table_id, 10);
-        RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
-        store->ingestSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)),
-            std::make_shared<CheckpointIngestInfo>(
-                db_context->getTMTContext(),
-                checkpoint_info->region_id,
-                2333,
-                checkpoint_info->remote_store_id,
-                dummy_region,
-                std::move(segments),
-                0));
-        verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2);
-    }
-
-    {
-        auto segments = store->buildSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)),
-            checkpoint_info);
-        auto start = RecordKVFormat::genKey(table_id, 0);
-        auto end = RecordKVFormat::genKey(table_id, 10);
-        RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
-        store->ingestSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)),
-            std::make_shared<CheckpointIngestInfo>(
-                db_context->getTMTContext(),
-                checkpoint_info->region_id,
-                2333,
-                checkpoint_info->remote_store_id,
-                dummy_region,
-                std::move(segments),
-                0));
-        verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write);
-    }
+    store->ingestSegmentsFromCheckpointInfo(*db_context, db_context->getSettingsRef(), RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)), checkpoint_info);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write);
 }
 CATCH
 
-INSTANTIATE_TEST_CASE_P(Type, DeltaMergeStoreTestFastAddPeer, testing::Values(NullspaceID, 300));
+INSTANTIATE_TEST_CASE_P(
+    Type,
+    DeltaMergeStoreTestFastAddPeer,
+    testing::Values(NullspaceID, 300));
 } // namespace tests
 } // namespace DM
 } // namespace DB

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Storages/DeltaMerge/DMVersionFilterBlockInputStream.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace ProfileEvents
 {
@@ -65,12 +64,6 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
 
             total_rows += rows;
             passed_rows += rows;
-            if (scan_context)
-            {
-                scan_context->mvcc_input_rows += rows;
-                scan_context->mvcc_input_bytes += cur_raw_block.bytes();
-                scan_context->mvcc_output_rows += rows;
-            }
 
             initNextBlock();
 
@@ -109,7 +102,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 for (size_t i = 0; i < batch_rows; ++i)
                 {
                     (*filter_pos)
-                        |= rowkey_column->getRowKeyValue(handle_pos) != rowkey_column->getRowKeyValue(next_handle_pos);
+                        |= compare(rowkey_column->getRowKeyValue(handle_pos), rowkey_column->getRowKeyValue(next_handle_pos)) != 0;
                     ++filter_pos;
                     ++handle_pos;
                     ++next_handle_pos;
@@ -150,8 +143,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 size_t next_handle_pos = handle_pos + 1;
                 for (size_t i = 0; i < batch_rows; ++i)
                 {
-                    (*filter_pos)
-                        = rowkey_column->getRowKeyValue(handle_pos) != rowkey_column->getRowKeyValue(next_handle_pos);
+                    (*filter_pos) = compare(rowkey_column->getRowKeyValue(handle_pos), rowkey_column->getRowKeyValue(next_handle_pos)) != 0;
                     ++filter_pos;
                     ++handle_pos;
                     ++next_handle_pos;
@@ -205,7 +197,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 for (size_t i = 0; i < batch_rows; ++i)
                 {
                     (*effective_pos)
-                        = rowkey_column->getRowKeyValue(handle_pos) != rowkey_column->getRowKeyValue(next_handle_pos);
+                        = compare(rowkey_column->getRowKeyValue(handle_pos), rowkey_column->getRowKeyValue(next_handle_pos)) != 0;
                     ++effective_pos;
                     ++handle_pos;
                     ++next_handle_pos;
@@ -234,7 +226,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 for (size_t i = 0; i < batch_rows; ++i)
                 {
                     (*not_clean_pos)
-                        = rowkey_column->getRowKeyValue(handle_pos) == rowkey_column->getRowKeyValue(next_handle_pos);
+                        = compare(rowkey_column->getRowKeyValue(handle_pos), rowkey_column->getRowKeyValue(next_handle_pos)) == 0;
                     ++not_clean_pos;
                     ++handle_pos;
                     ++next_handle_pos;
@@ -300,14 +292,12 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 for (size_t i = 0; i < batch_rows; ++i)
                 {
                     if (*filter_pos)
-                        gc_hint_version = std::min(
-                            gc_hint_version,
-                            calculateRowGcHintVersion(
-                                rowkey_column->getRowKeyValue(handle_pos),
-                                *version_pos,
-                                rowkey_column->getRowKeyValue(next_handle_pos),
-                                true,
-                                *delete_pos));
+                        gc_hint_version = std::min(gc_hint_version,
+                                                   calculateRowGcHintVersion(rowkey_column->getRowKeyValue(handle_pos),
+                                                                             *version_pos,
+                                                                             rowkey_column->getRowKeyValue(next_handle_pos),
+                                                                             true,
+                                                                             *delete_pos));
 
                     ++filter_pos;
                     ++handle_pos;
@@ -346,12 +336,7 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                     if (filter[rows - 1])
                         gc_hint_version = std::min(
                             gc_hint_version,
-                            calculateRowGcHintVersion(
-                                cur_handle,
-                                cur_version,
-                                /* just a placeholder */ cur_handle,
-                                false,
-                                deleted));
+                            calculateRowGcHintVersion(cur_handle, cur_version, /* just a placeholder */ cur_handle, false, deleted));
                 }
                 else
                 {
@@ -365,19 +350,18 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
                 if constexpr (MODE == DM_VERSION_FILTER_MODE_MVCC)
                 {
                     filter[rows - 1] = !deleted && cur_version <= version_limit
-                        && (cur_handle != next_handle || next_version > version_limit);
+                        && (compare(cur_handle, next_handle) != 0 || next_version > version_limit);
                 }
                 else if (MODE == DM_VERSION_FILTER_MODE_COMPACT)
                 {
                     filter[rows - 1] = cur_version >= version_limit
-                        || ((cur_handle != next_handle || next_version > version_limit) && !deleted);
-                    not_clean[rows - 1] = filter[rows - 1] && (cur_handle == next_handle || deleted);
+                        || ((compare(cur_handle, next_handle) != 0 || next_version > version_limit) && !deleted);
+                    not_clean[rows - 1] = filter[rows - 1] && (compare(cur_handle, next_handle) == 0 || deleted);
                     is_deleted[rows - 1] = filter[rows - 1] && deleted;
-                    effective[rows - 1] = filter[rows - 1] && (cur_handle != next_handle);
+                    effective[rows - 1] = filter[rows - 1] && (compare(cur_handle, next_handle) != 0);
                     if (filter[rows - 1])
-                        gc_hint_version = std::min(
-                            gc_hint_version,
-                            calculateRowGcHintVersion(cur_handle, cur_version, next_handle, true, deleted));
+                        gc_hint_version
+                            = std::min(gc_hint_version, calculateRowGcHintVersion(cur_handle, cur_version, next_handle, true, deleted));
                 }
                 else
                 {
@@ -398,12 +382,6 @@ Block DMVersionFilterBlockInputStream<MODE>::read(FilterPtr & res_filter, bool r
         ++total_blocks;
         total_rows += rows;
         passed_rows += passed_count;
-        if (scan_context)
-        {
-            scan_context->mvcc_input_rows += rows;
-            scan_context->mvcc_input_bytes += cur_raw_block.bytes();
-            scan_context->mvcc_output_rows += passed_count;
-        }
 
         // This block is empty after filter, continue to process next block
         if (passed_count == 0)

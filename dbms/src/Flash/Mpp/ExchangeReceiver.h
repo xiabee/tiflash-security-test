@@ -17,18 +17,15 @@
 #include <Common/ThreadManager.h>
 #include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <Flash/Mpp/AsyncRequestHandler.h>
 #include <Flash/Mpp/GRPCReceiverContext.h>
 
 #include <future>
-#include <memory>
 #include <mutex>
 #include <thread>
 
 namespace DB
 {
-constexpr Int32 batch_packet_count_v1 = 16;
-struct Settings;
+constexpr Int32 batch_packet_count = 16;
 
 struct ExchangeReceiverResult
 {
@@ -44,10 +41,7 @@ struct ExchangeReceiverResult
         : ExchangeReceiverResult(nullptr, 0)
     {}
 
-    static ExchangeReceiverResult newOk(
-        std::shared_ptr<tipb::SelectResponse> resp_,
-        size_t call_index_,
-        const String & req_info_)
+    static ExchangeReceiverResult newOk(std::shared_ptr<tipb::SelectResponse> resp_, size_t call_index_, const String & req_info_)
     {
         return {resp_, call_index_, req_info_, /*meet_error*/ false, /*error_msg*/ "", /*eof*/ false};
     }
@@ -94,6 +88,12 @@ enum class ReceiveStatus
     eof,
 };
 
+struct ReceiveResult
+{
+    ReceiveStatus recv_status;
+    std::shared_ptr<ReceivedMessage> recv_msg;
+};
+
 template <typename RPCContext>
 class ExchangeReceiverBase
 {
@@ -109,20 +109,19 @@ public:
         const String & req_id,
         const String & executor_id,
         uint64_t fine_grained_shuffle_stream_count,
-        const Settings & settings);
+        Int32 local_tunnel_version_,
+        const std::vector<RequestAndRegionIDs> & disaggregated_dispatch_reqs_ = {});
 
     ~ExchangeReceiverBase();
 
     void cancel();
     void close();
 
-    ReceiveStatus receive(size_t stream_id, ReceivedMessagePtr & recv_msg);
-    ReceiveStatus tryReceive(size_t stream_id, ReceivedMessagePtr & recv_msg);
+    ReceiveResult receive(size_t stream_id);
+    ReceiveResult nonBlockingReceive(size_t stream_id);
 
     ExchangeReceiverResult toExchangeReceiveResult(
-        size_t stream_id,
-        ReceiveStatus receive_status,
-        ReceivedMessagePtr & recv_msg,
+        ReceiveResult & recv_result,
         std::queue<Block> & block_queue,
         const Block & header,
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
@@ -135,25 +134,23 @@ public:
 
     const DAGSchema & getOutputSchema() const { return schema; }
     size_t getSourceNum() const { return source_num; }
-    uint64_t getFineGrainedShuffleStreamCount() const
-    {
-        return enable_fine_grained_shuffle_flag ? output_stream_count : 0;
-    }
+    uint64_t getFineGrainedShuffleStreamCount() const { return enable_fine_grained_shuffle_flag ? output_stream_count : 0; }
     int getExternalThreadCnt() const { return thread_count; }
+    std::vector<MsgChannelPtr> & getMsgChannels() { return msg_channels; }
     MemoryTracker * getMemoryTracker() const { return mem_tracker.get(); }
     std::atomic<Int64> * getDataSizeInQueue() { return &data_size_in_queue; }
-
-    void verifyStreamId(size_t stream_id) const;
 
 private:
     std::shared_ptr<MemoryTracker> mem_tracker;
     using Request = typename RPCContext::Request;
 
+    // Template argument enable_fine_grained_shuffle will be setup properly in setUpConnection().
+    template <bool enable_fine_grained_shuffle>
     void readLoop(const Request & req);
-
+    template <bool enable_fine_grained_shuffle>
     void reactor(const std::vector<Request> & async_requests);
-
     void setUpConnection();
+
     bool setEndState(ExchangeReceiverState new_state);
     String getStatusString();
 
@@ -162,42 +159,45 @@ private:
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
 
     DecodeDetail decodeChunks(
-        size_t stream_id,
-        const ReceivedMessagePtr & recv_msg,
+        const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::queue<Block> & block_queue,
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
 
-    void connectionDone(bool meet_error, const String & local_err_msg, const LoggerPtr & log);
+    void connectionDone(
+        bool meet_error,
+        const String & local_err_msg,
+        const LoggerPtr & log);
 
     void waitAllConnectionDone();
     void waitLocalConnectionDone(std::unique_lock<std::mutex> & lock);
-    void waitAsyncConnectionDone();
 
-    void finishReceivedQueue();
-    void cancelReceivedQueue();
+    void finishAllMsgChannels();
+    void cancelAllMsgChannels();
 
     ExchangeReceiverResult toDecodeResult(
-        size_t stream_id,
         std::queue<Block> & block_queue,
         const Block & header,
-        const ReceivedMessagePtr & recv_msg,
+        const std::shared_ptr<ReceivedMessage> & recv_msg,
         std::unique_ptr<CHBlockChunkDecodeAndSquash> & decoder_ptr);
 
+    ReceiveResult receive(
+        size_t stream_id,
+        std::function<MPMCQueueResult(size_t, std::shared_ptr<ReceivedMessage> &)> recv_func);
+
+private:
+    void prepareMsgChannels();
     void addLocalConnectionNum();
-    void createAsyncRequestHandler(Request && request);
-
-    void setUpLocalConnection(Request && req);
-    void setUpSyncConnection(Request && req);
-    void setUpAsyncConnection(std::vector<Request> && async_requests);
-
     void connectionLocalDone();
     void handleConnectionAfterException();
 
     void setUpConnectionWithReadLoop(Request && req);
     void setUpLocalConnections(std::vector<Request> & requests, bool has_remote_conn);
 
-private:
-    LoggerPtr exc_log;
+    bool isReceiverForTiFlashStorage()
+    {
+        // If not empty, need to send MPPTask to tiflash_storage.
+        return !disaggregated_dispatch_reqs.empty();
+    }
 
     std::shared_ptr<RPCContext> rpc_context;
 
@@ -212,9 +212,7 @@ private:
     std::shared_ptr<ThreadManager> thread_manager;
     DAGSchema schema;
 
-    ReceivedMessageQueue received_message_queue;
-
-    std::vector<std::unique_ptr<AsyncRequestHandler<RPCContext>>> async_handler_ptrs;
+    std::vector<MsgChannelPtr> msg_channels;
 
     std::mutex mu;
     std::condition_variable cv;
@@ -224,12 +222,16 @@ private:
     ExchangeReceiverState state;
     String err_msg;
 
+    LoggerPtr exc_log;
+
     bool collected = false;
     int thread_count = 0;
     Int32 local_tunnel_version;
-    Int32 async_recv_version;
 
     std::atomic<Int64> data_size_in_queue;
+
+    // For tiflash_compute node, need to send MPPTask to tiflash_storage node.
+    std::vector<RequestAndRegionIDs> disaggregated_dispatch_reqs;
 };
 
 class ExchangeReceiver : public ExchangeReceiverBase<GRPCReceiverContext>

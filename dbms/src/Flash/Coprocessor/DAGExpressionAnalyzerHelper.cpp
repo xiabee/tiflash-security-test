@@ -22,10 +22,8 @@
 #include <Flash/Coprocessor/DAGExpressionAnalyzerHelper.h>
 #include <Flash/Coprocessor/DAGUtils.h>
 #include <Functions/FunctionFactory.h>
-#include <Functions/FunctionsGrouping.h>
-#include <Functions/FunctionsJson.h>
 #include <Functions/FunctionsTiDBConversion.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
 
 namespace DB
 {
@@ -48,13 +46,14 @@ struct DateAdd
 };
 
 const std::unordered_map<String, String> DateAdd::unit_to_func_name_map
-    = {{"DAY", "addDays"},
-       {"WEEK", "addWeeks"},
-       {"MONTH", "addMonths"},
-       {"YEAR", "addYears"},
-       {"HOUR", "addHours"},
-       {"MINUTE", "addMinutes"},
-       {"SECOND", "addSeconds"}};
+    = {
+        {"DAY", "addDays"},
+        {"WEEK", "addWeeks"},
+        {"MONTH", "addMonths"},
+        {"YEAR", "addYears"},
+        {"HOUR", "addHours"},
+        {"MINUTE", "addMinutes"},
+        {"SECOND", "addSeconds"}};
 
 struct DateSub
 {
@@ -63,13 +62,14 @@ struct DateSub
 };
 
 const std::unordered_map<String, String> DateSub::unit_to_func_name_map
-    = {{"DAY", "subtractDays"},
-       {"WEEK", "subtractWeeks"},
-       {"MONTH", "subtractMonths"},
-       {"YEAR", "subtractYears"},
-       {"HOUR", "subtractHours"},
-       {"MINUTE", "subtractMinutes"},
-       {"SECOND", "subtractSeconds"}};
+    = {
+        {"DAY", "subtractDays"},
+        {"WEEK", "subtractWeeks"},
+        {"MONTH", "subtractMonths"},
+        {"YEAR", "subtractYears"},
+        {"HOUR", "subtractHours"},
+        {"MINUTE", "subtractMinutes"},
+        {"SECOND", "subtractSeconds"}};
 } // namespace
 
 String DAGExpressionAnalyzerHelper::buildMultiIfFunction(
@@ -114,8 +114,7 @@ String DAGExpressionAnalyzerHelper::buildIfNullFunction(
     String condition_arg_name = analyzer->getActions(expr.children(0), actions, false);
     String else_arg_name = analyzer->getActions(expr.children(1), actions, false);
     String is_null_result = analyzer->applyFunction("isNull", {condition_arg_name}, actions, getCollatorFromExpr(expr));
-    String not_null_condition_arg_name
-        = analyzer->applyFunction("assumeNotNull", {condition_arg_name}, actions, nullptr);
+    String not_null_condition_arg_name = analyzer->applyFunction("assumeNotNull", {condition_arg_name}, actions, nullptr);
 
     argument_names.push_back(std::move(is_null_result));
     argument_names.push_back(std::move(else_arg_name));
@@ -189,8 +188,7 @@ String DAGExpressionAnalyzerHelper::buildInFunction(
         eq_arg_names.push_back(analyzer->getActions(*non_constant_expr, actions));
         // do not need extra cast because TiDB will ensure type of key_name and right_expr_name is the same
         argument_names.push_back(
-            analyzer
-                ->applyFunction(is_not_in ? "notEquals" : "equals", eq_arg_names, actions, getCollatorFromExpr(expr)));
+            analyzer->applyFunction(is_not_in ? "notEquals" : "equals", eq_arg_names, actions, getCollatorFromExpr(expr)));
     }
     // logical op does not need collator
     return analyzer->applyFunction(is_not_in ? "and" : "or", argument_names, actions, nullptr);
@@ -245,7 +243,7 @@ String DAGExpressionAnalyzerHelper::buildCastFunctionInternal(
 {
     static const String tidb_cast_name = "tidb_cast";
 
-    String result_name = genFuncString(tidb_cast_name, argument_names, {nullptr}, {&field_type});
+    String result_name = genFuncString(tidb_cast_name, argument_names, {nullptr});
     if (actions->getSampleBlock().has(result_name))
         return result_name;
 
@@ -254,8 +252,7 @@ String DAGExpressionAnalyzerHelper::buildCastFunctionInternal(
     function_builder_tidb_cast->setInUnion(in_union);
     function_builder_tidb_cast->setTiDBFieldType(field_type);
 
-    const ExpressionAction & apply_function
-        = ExpressionAction::applyFunction(function_builder, argument_names, result_name, nullptr);
+    const ExpressionAction & apply_function = ExpressionAction::applyFunction(function_builder, argument_names, result_name, nullptr);
     actions->add(apply_function);
     return result_name;
 }
@@ -281,76 +278,6 @@ String DAGExpressionAnalyzerHelper::buildCastFunction(
     return buildCastFunctionInternal(analyzer, {name, type_expr_name}, false, expr.field_type(), actions);
 }
 
-String DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions(
-    DAGExpressionAnalyzer * analyzer,
-    const tipb::Expr & expr,
-    const ExpressionActionsPtr & actions)
-{
-    auto func_name = getFunctionName(expr);
-    if unlikely (expr.children_size() != 1)
-        throw TiFlashException(
-            fmt::format("{} function only support one argument", func_name),
-            Errors::Coprocessor::BadRequest);
-    if unlikely (!exprHasValidFieldType(expr))
-        throw TiFlashException(
-            fmt::format("{} function without valid field type", func_name),
-            Errors::Coprocessor::BadRequest);
-
-    const auto & input_expr = expr.children(0);
-    String arg = analyzer->getActions(input_expr, actions);
-    const auto & collator = getCollatorFromExpr(expr);
-    String result_name = genFuncString(func_name, {arg}, {collator}, {&input_expr.field_type(), &expr.field_type()});
-    if (actions->getSampleBlock().has(result_name))
-        return result_name;
-
-    const FunctionBuilderPtr & ifunction_builder = FunctionFactory::instance().get(func_name, analyzer->getContext());
-    auto * function_build_ptr = ifunction_builder.get();
-    if (auto * function_builder = dynamic_cast<DefaultFunctionBuilder *>(function_build_ptr); function_builder)
-    {
-        auto * function_impl = function_builder->getFunctionImpl().get();
-        if (auto * function_cast_int_as_json = dynamic_cast<FunctionCastIntAsJson *>(function_impl);
-            function_cast_int_as_json)
-        {
-            function_cast_int_as_json->setInputTiDBFieldType(input_expr.field_type());
-        }
-        else if (auto * function_cast_string_as_json = dynamic_cast<FunctionCastStringAsJson *>(function_impl);
-                 function_cast_string_as_json)
-        {
-            function_cast_string_as_json->setInputTiDBFieldType(input_expr.field_type());
-            function_cast_string_as_json->setOutputTiDBFieldType(expr.field_type());
-        }
-        else if (auto * function_cast_time_as_json = dynamic_cast<FunctionCastTimeAsJson *>(function_impl);
-                 function_cast_time_as_json)
-        {
-            function_cast_time_as_json->setInputTiDBFieldType(input_expr.field_type());
-        }
-        else if (auto * function_json_unquote = dynamic_cast<FunctionJsonUnquote *>(function_impl);
-                 function_json_unquote)
-        {
-            bool valid_check
-                = !(isScalarFunctionExpr(input_expr) && input_expr.sig() == tipb::ScalarFuncSig::CastJsonAsString);
-            function_json_unquote->setNeedValidCheck(valid_check);
-        }
-        else if (auto * function_cast_json_as_string = dynamic_cast<FunctionCastJsonAsString *>(function_impl);
-                 function_cast_json_as_string)
-        {
-            function_cast_json_as_string->setOutputTiDBFieldType(expr.field_type());
-        }
-        else
-        {
-            throw Exception(fmt::format("Unexpected func {} in buildSingleParamJsonRelatedFunctions", func_name));
-        }
-    }
-    else
-    {
-        throw Exception(fmt::format("Unexpected func {} in buildSingleParamJsonRelatedFunctions", func_name));
-    }
-
-    const ExpressionAction & action = ExpressionAction::applyFunction(ifunction_builder, {arg}, result_name, collator);
-    actions->add(action);
-    return result_name;
-}
-
 template <typename Impl>
 String DAGExpressionAnalyzerHelper::buildDateAddOrSubFunction(
     DAGExpressionAnalyzer * analyzer,
@@ -359,9 +286,7 @@ String DAGExpressionAnalyzerHelper::buildDateAddOrSubFunction(
 {
     if (expr.children_size() != 3)
     {
-        throw TiFlashException(
-            fmt::format("{} function requires three arguments", Impl::name),
-            Errors::Coprocessor::BadRequest);
+        throw TiFlashException(fmt::format("{} function requires three arguments", Impl::name), Errors::Coprocessor::BadRequest);
     }
     String date_column = analyzer->getActions(expr.children(0), actions);
     String delta_column = analyzer->getActions(expr.children(1), actions);
@@ -476,38 +401,6 @@ String DAGExpressionAnalyzerHelper::buildRegexpFunction(
     return analyzer->applyFunction(func_name, argument_names, actions, collator);
 }
 
-String DAGExpressionAnalyzerHelper::buildGroupingFunction(
-    DAGExpressionAnalyzer * analyzer,
-    const tipb::Expr & expr,
-    const ExpressionActionsPtr & actions)
-{
-    const String & func_name = getFunctionName(expr);
-    Names argument_names;
-    for (const auto & child : expr.children())
-    {
-        String name = analyzer->getActions(child, actions);
-        argument_names.push_back(name);
-    }
-
-    // Get the result by function name and parameters is **NOT** enough, grouping functions like: grouping(a) and grouping(b) will be rewritten as the same signature:
-    //  grouping(gid), grouping(gid) with different metadata.
-    // In TiDB, we don't reuse the action by the signature name, while TiFlash does, we should distinguish different grouping function out from their metadata.
-    String result_name = genFuncString(func_name, argument_names, {getCollatorFromExpr(expr)});
-    // grouping function's metadata has naturally been encoded as proto-message as string, just appending them to the result name as new grouping functions' result_name.
-    result_name += expr.val();
-    if (actions->getSampleBlock().has(result_name))
-        return result_name;
-
-    FunctionBuilderPtr function_builder = FunctionFactory::instance().get(func_name, analyzer->getContext());
-    auto * function_builder_grouping = dynamic_cast<FunctionBuilderGrouping *>(function_builder.get());
-    function_builder_grouping->setExpr(expr);
-
-    const ExpressionAction & apply_function
-        = ExpressionAction::applyFunction(function_builder, argument_names, result_name, nullptr);
-    actions->add(apply_function);
-    return result_name;
-}
-
 String DAGExpressionAnalyzerHelper::buildDefaultFunction(
     DAGExpressionAnalyzer * analyzer,
     const tipb::Expr & expr,
@@ -549,11 +442,6 @@ DAGExpressionAnalyzerHelper::FunctionBuilderMap DAGExpressionAnalyzerHelper::fun
      {"ifNull", DAGExpressionAnalyzerHelper::buildIfNullFunction},
      {"multiIf", DAGExpressionAnalyzerHelper::buildMultiIfFunction},
      {"tidb_cast", DAGExpressionAnalyzerHelper::buildCastFunction},
-     {"cast_int_as_json", DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions},
-     {"cast_string_as_json", DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions},
-     {"cast_time_as_json", DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions},
-     {"cast_json_as_string", DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions},
-     {"json_unquote", DAGExpressionAnalyzerHelper::buildSingleParamJsonRelatedFunctions},
      {"and", DAGExpressionAnalyzerHelper::buildLogicalFunction},
      {"or", DAGExpressionAnalyzerHelper::buildLogicalFunction},
      {"xor", DAGExpressionAnalyzerHelper::buildLogicalFunction},
@@ -569,7 +457,6 @@ DAGExpressionAnalyzerHelper::FunctionBuilderMap DAGExpressionAnalyzerHelper::fun
      {"date_sub", DAGExpressionAnalyzerHelper::buildDateAddOrSubFunction<DateSub>},
      {"regexp", DAGExpressionAnalyzerHelper::buildRegexpFunction},
      {"replaceRegexpAll", DAGExpressionAnalyzerHelper::buildRegexpFunction},
-     {"tidbRound", DAGExpressionAnalyzerHelper::buildRoundFunction},
-     {"grouping", DAGExpressionAnalyzerHelper::buildGroupingFunction}});
+     {"tidbRound", DAGExpressionAnalyzerHelper::buildRoundFunction}});
 
 } // namespace DB

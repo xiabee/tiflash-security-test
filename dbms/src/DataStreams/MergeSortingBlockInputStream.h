@@ -19,9 +19,9 @@
 #include <Core/SortDescription.h>
 #include <Core/Spiller.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/Compression/CompressedReadBuffer.h>
-#include <Interpreters/SortSpillContext.h>
+#include <DataStreams/NativeBlockInputStream.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/ReadBufferFromFile.h>
 #include <Poco/TemporaryFile.h>
 
 
@@ -40,8 +40,7 @@ public:
         size_t limit_,
         size_t max_bytes_before_external_sort_,
         const SpillConfig & spill_config_,
-        const String & req_id,
-        const RegisterOperatorSpillContext & register_operator_spill_context);
+        const String & req_id);
 
     String getName() const override { return NAME; }
 
@@ -56,12 +55,12 @@ protected:
     void appendInfo(FmtBuffer & buffer) const override;
 
 private:
-    bool hasSpilledData() const { return sort_spill_context->hasSpilledData(); }
-
-    void spillCurrentBlocks();
     SortDescription description;
     size_t max_merged_block_size;
     size_t limit;
+
+    size_t max_bytes_before_external_sort;
+    const SpillConfig spill_config;
 
     LoggerPtr log;
 
@@ -76,7 +75,7 @@ private:
     Block header_without_constants;
 
     /// Everything below is for external sorting.
-    SortSpillContextPtr sort_spill_context;
+    std::unique_ptr<Spiller> spiller;
 
     BlockInputStreams inputs_to_merge;
 };

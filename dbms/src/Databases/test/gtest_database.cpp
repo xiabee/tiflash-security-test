@@ -15,7 +15,7 @@
 #include <Common/FailPoint.h>
 #include <Common/UniThreadPool.h>
 #include <Databases/DatabaseTiFlash.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
+#include <Encryption/ReadBufferFromFileProvider.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterDropQuery.h>
@@ -26,16 +26,15 @@
 #include <Poco/File.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <Storages/KVStore/TMTStorages.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/MutableSupport.h>
+#include <Storages/Transaction/TMTContext.h>
+#include <Storages/Transaction/TMTStorages.h>
 #include <Storages/registerStorages.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <TiDB/Schema/SchemaNameMapper.h>
-#include <TiDB/Schema/TiDB.h>
 #include <common/logger_useful.h>
 
+#include <optional>
 
 namespace DB
 {
@@ -71,13 +70,19 @@ public:
         FailPointHelper::enableFailPoint(FailPoints::force_context_path);
     }
 
-    static void TearDownTestCase() { FailPointHelper::disableFailPoint(FailPoints::force_context_path); }
+    static void TearDownTestCase()
+    {
+        FailPointHelper::disableFailPoint(FailPoints::force_context_path);
+    }
 
     DatabaseTiFlashTest()
         : log(&Poco::Logger::get("DatabaseTiFlashTest"))
     {}
 
-    void SetUp() override { recreateMetadataPath(); }
+    void SetUp() override
+    {
+        recreateMetadataPath();
+    }
 
     void TearDown() override
     {
@@ -110,15 +115,14 @@ ASTPtr parseCreateStatement(const String & statement)
     ParserCreateQuery parser;
     const char * pos = statement.data();
     std::string error_msg;
-    auto ast = tryParseQuery(
-        parser,
-        pos,
-        pos + statement.size(),
-        error_msg,
-        /*hilite=*/false,
-        String("in ") + __PRETTY_FUNCTION__,
-        /*allow_multi_statements=*/false,
-        0);
+    auto ast = tryParseQuery(parser,
+                             pos,
+                             pos + statement.size(),
+                             error_msg,
+                             /*hilite=*/false,
+                             String("in ") + __PRETTY_FUNCTION__,
+                             /*allow_multi_statements=*/false,
+                             0);
     if (!ast)
         throw Exception(error_msg, ErrorCodes::SYNTAX_ERROR);
     return ast;
@@ -267,8 +271,7 @@ try
     const String to_tbl_display_name = "tbl_test";
     {
         // Rename table
-        typeid_cast<DatabaseTiFlash *>(db.get())
-            ->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, to_tbl_display_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, to_tbl_display_name);
 
         auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
@@ -383,8 +386,7 @@ try
     const String to_tbl_display_name = "tbl_test";
     {
         // Rename table
-        typeid_cast<DatabaseTiFlash *>(db.get())
-            ->renameTable(*ctx, tbl_name, *db2, tbl_name, db2_name, to_tbl_display_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db2, tbl_name, db2_name, to_tbl_display_name);
 
         auto old_storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_EQ(old_storage, nullptr);
@@ -592,8 +594,7 @@ try
     const String new_display_tbl_name = "accounts";
     {
         // Rename table with only display table name updated.
-        typeid_cast<DatabaseTiFlash *>(db.get())
-            ->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, new_display_tbl_name);
+        typeid_cast<DatabaseTiFlash *>(db.get())->renameTable(*ctx, tbl_name, *db, tbl_name, db_name, new_display_tbl_name);
 
         auto storage = db->tryGetTable(*ctx, tbl_name);
         ASSERT_NE(storage, nullptr);
@@ -894,7 +895,7 @@ String getDatabaseMetadataPath(const String & base_path)
 String readFile(Context & ctx, const String & file)
 {
     String res;
-    auto in = ReadBufferFromRandomAccessFileBuilder::build(ctx.getFileProvider(), file, EncryptionPath(file, ""));
+    ReadBufferFromFileProvider in(ctx.getFileProvider(), file, EncryptionPath(file, ""));
     readStringUntilEOF(res, in);
     return res;
 }
@@ -943,7 +944,6 @@ try
 )",
     };
 
-    size_t case_no = 0;
     for (const auto & statement : statements)
     {
         {
@@ -970,48 +970,22 @@ try
         LOG_DEBUG(log, "After create [meta={}]", meta);
 
         DB::Timestamp tso = 1000;
-        db->alterTombstone(*ctx, tso, nullptr);
+        db->alterTombstone(*ctx, tso);
         EXPECT_TRUE(db->isTombstone());
         EXPECT_EQ(db->getTombstone(), tso);
-        if (case_no != 0)
-        {
-            auto db_tiflash = std::dynamic_pointer_cast<DatabaseTiFlash>(db);
-            ASSERT_NE(db_tiflash, nullptr);
-            auto db_info = db_tiflash->getDatabaseInfo();
-            ASSERT_EQ(db_info.name, "test_db"); // not changed
-        }
 
         // Try restore from disk
         db = detachThenAttach(*ctx, db_name, std::move(db), log);
         EXPECT_TRUE(db->isTombstone());
         EXPECT_EQ(db->getTombstone(), tso);
 
-        // Recover, usually recover with a new database name
-        auto new_db_info = std::make_shared<TiDB::DBInfo>(
-            R"json({"charset":"utf8mb4","collate":"utf8mb4_bin","db_name":{"L":"test_new_db","O":"test_db"},"id":1010,"state":5})json",
-            NullspaceID);
-        db->alterTombstone(*ctx, 0, new_db_info);
+        // Recover
+        db->alterTombstone(*ctx, 0);
         EXPECT_FALSE(db->isTombstone());
-        if (case_no != 0)
-        {
-            auto db_tiflash = std::dynamic_pointer_cast<DatabaseTiFlash>(db);
-            ASSERT_NE(db_tiflash, nullptr);
-            auto db_info = db_tiflash->getDatabaseInfo();
-            ASSERT_EQ(db_info.name, "test_new_db"); // changed by the `new_db_info`
-        }
 
         // Try restore from disk
         db = detachThenAttach(*ctx, db_name, std::move(db), log);
         EXPECT_FALSE(db->isTombstone());
-        if (case_no != 0)
-        {
-            auto db_tiflash = std::dynamic_pointer_cast<DatabaseTiFlash>(db);
-            ASSERT_NE(db_tiflash, nullptr);
-            auto db_info = db_tiflash->getDatabaseInfo();
-            ASSERT_EQ(db_info.name, "test_new_db"); // changed by the `new_db_info`
-        }
-
-        case_no += 1;
     }
 }
 CATCH

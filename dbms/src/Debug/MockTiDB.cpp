@@ -23,15 +23,14 @@
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Debug/MockTiDB.h>
-#include <Debug/dbgKVStore/dbgKVStore.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTLiteral.h>
 #include <Poco/StringTokenizer.h>
-#include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <TiDB/Decode/TypeMapping.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/KVStore.h>
+#include <Storages/Transaction/TMTContext.h>
+#include <Storages/Transaction/TiDB.h>
+#include <Storages/Transaction/TypeMapping.h>
 
 #include <mutex>
 
@@ -52,11 +51,7 @@ using PartitionDefinition = TiDB::PartitionDefinition;
 using Table = MockTiDB::Table;
 using TablePtr = MockTiDB::TablePtr;
 
-Table::Table(
-    const String & database_name_,
-    DatabaseID database_id_,
-    const String & table_name_,
-    TableInfo && table_info_)
+Table::Table(const String & database_name_, DatabaseID database_id_, const String & table_name_, TableInfo && table_info_)
     : table_info(std::move(table_info_))
     , database_name(database_name_)
     , database_id(database_id_)
@@ -69,53 +64,17 @@ MockTiDB::MockTiDB()
     databases["default"] = 0;
 }
 
-TablePtr MockTiDB::dropTableByNameImpl(
-    Context & context,
-    const String & database_name,
-    const String & table_name,
-    bool drop_regions)
+TablePtr MockTiDB::dropTableInternal(Context & context, const String & database_name, const String & table_name, bool drop_regions)
 {
     String qualified_name = database_name + "." + table_name;
     auto it_by_name = tables_by_name.find(qualified_name);
     if (it_by_name == tables_by_name.end())
         return nullptr;
 
-    auto table = it_by_name->second;
-    dropTableInternal(context, table, drop_regions);
-
-    tables_by_name.erase(it_by_name);
-    return table;
-}
-
-TablePtr MockTiDB::dropTableByIdImpl(Context & context, const TableID table_id, bool drop_regions)
-{
-    auto iter = tables_by_id.find(table_id);
-    if (iter == tables_by_id.end())
-        return nullptr;
-
-    auto table = iter->second;
-    dropTableInternal(context, table, drop_regions);
-
-    // erase from `tables_by_name`
-    for (auto iter_by_name = tables_by_name.begin(); iter_by_name != tables_by_name.end(); /* empty */)
-    {
-        if (table != iter_by_name->second)
-        {
-            ++iter_by_name;
-            continue;
-        }
-        LOG_INFO(Logger::get(), "removing table from MockTiDB, name={} table_id={}", iter_by_name->first, table_id);
-        iter_by_name = tables_by_name.erase(iter_by_name);
-    }
-    return table;
-}
-
-TablePtr MockTiDB::dropTableInternal(Context & context, const TablePtr & table, bool drop_regions)
-{
     auto & kvstore = context.getTMTContext().getKVStore();
-    auto debug_kvstore = RegionBench::DebugKVStore(*kvstore);
     auto & region_table = context.getTMTContext().getRegionTable();
 
+    auto table = it_by_name->second;
     if (table->isPartitionTable())
     {
         for (const auto & partition : table->table_info.partition.definitions)
@@ -124,17 +83,19 @@ TablePtr MockTiDB::dropTableInternal(Context & context, const TablePtr & table, 
             if (drop_regions)
             {
                 for (auto & e : region_table.getRegionsByTable(NullspaceID, partition.id))
-                    debug_kvstore.mockRemoveRegion(e.first, region_table);
+                    kvstore->mockRemoveRegion(e.first, region_table);
                 region_table.removeTable(NullspaceID, partition.id);
             }
         }
     }
     tables_by_id.erase(table->id());
 
+    tables_by_name.erase(it_by_name);
+
     if (drop_regions)
     {
         for (auto & e : region_table.getRegionsByTable(NullspaceID, table->id()))
-            debug_kvstore.mockRemoveRegion(e.first, region_table);
+            kvstore->mockRemoveRegion(e.first, region_table);
         region_table.removeTable(NullspaceID, table->id());
     }
 
@@ -152,7 +113,7 @@ void MockTiDB::dropDB(Context & context, const String & database_name, bool drop
     });
 
     for (const auto & table_name : table_names)
-        dropTableByNameImpl(context, database_name, table_name, drop_regions);
+        dropTableInternal(context, database_name, table_name, drop_regions);
 
     version++;
 
@@ -172,25 +133,7 @@ void MockTiDB::dropTable(Context & context, const String & database_name, const 
 {
     std::lock_guard lock(tables_mutex);
 
-    auto table = dropTableByNameImpl(context, database_name, table_name, drop_regions);
-    if (!table)
-        return;
-
-    version++;
-
-    SchemaDiff diff;
-    diff.type = SchemaActionType::DropTable;
-    diff.schema_id = table->database_id;
-    diff.table_id = table->id();
-    diff.version = version;
-    version_diff[version] = diff;
-}
-
-void MockTiDB::dropTableById(Context & context, const TableID & table_id, bool drop_regions)
-{
-    std::lock_guard lock(tables_mutex);
-
-    auto table = dropTableByIdImpl(context, table_id, drop_regions);
+    auto table = dropTableInternal(context, database_name, table_name, drop_regions);
     if (!table)
         return;
 
@@ -210,14 +153,7 @@ DatabaseID MockTiDB::newDataBase(const String & database_name)
 
     if (databases.find(database_name) == databases.end())
     {
-        if (databases.empty())
-        {
-            schema_id = 1;
-        }
-        else
-        {
-            schema_id = databases.cbegin()->second + 1;
-        }
+        schema_id = databases.size() + 1;
         databases.emplace(database_name, schema_id);
     }
 
@@ -288,7 +224,6 @@ TiDB::TableInfoPtr MockTiDB::parseColumns(
             {
                 String & name = string_tokens[index];
                 index_info.idx_cols[index].name = name;
-                index_info.idx_cols[index].offset = pk_column_pos_map[name];
                 index_info.idx_cols[index].length = -1;
             }
         }
@@ -299,9 +234,7 @@ TiDB::TableInfoPtr MockTiDB::parseColumns(
     table_info.comment = "Mocked.";
 
     // set storage engine type
-    std::transform(engine_type.begin(), engine_type.end(), engine_type.begin(), [](unsigned char c) {
-        return std::tolower(c);
-    });
+    std::transform(engine_type.begin(), engine_type.end(), engine_type.begin(), [](unsigned char c) { return std::tolower(c); });
     if (engine_type == "dt")
         table_info.engine_type = TiDB::StorageEngine::DT;
 
@@ -340,15 +273,13 @@ TableID MockTiDB::newTable(
     return addTable(database_name, std::move(*table_info));
 }
 
-std::vector<TableID> MockTiDB::newTables(
+int MockTiDB::newTables(
     const String & database_name,
     const std::vector<std::tuple<String, ColumnsDescription, String>> & tables,
     Timestamp tso,
     const String & engine_type)
 {
     std::lock_guard lock(tables_mutex);
-    std::vector<TableID> table_ids;
-    table_ids.reserve(tables.size());
     if (databases.find(database_name) == databases.end())
     {
         throw Exception("MockTiDB not found db: " + database_name, ErrorCodes::LOGICAL_ERROR);
@@ -369,8 +300,7 @@ std::vector<TableID> MockTiDB::newTables(
         table_info.id = table_id_allocator++;
         table_info.update_timestamp = tso;
 
-        auto table
-            = std::make_shared<Table>(database_name, databases[database_name], table_info.name, std::move(table_info));
+        auto table = std::make_shared<Table>(database_name, databases[database_name], table_info.name, std::move(table_info));
         tables_by_id.emplace(table->table_info.id, table);
         tables_by_name.emplace(qualified_name, table);
 
@@ -380,8 +310,6 @@ std::vector<TableID> MockTiDB::newTables(
         opt.old_schema_id = table->database_id;
         opt.old_table_id = table->id();
         diff.affected_opts.push_back(std::move(opt));
-
-        table_ids.push_back(table->id());
     }
 
     if (diff.affected_opts.empty())
@@ -390,14 +318,12 @@ std::vector<TableID> MockTiDB::newTables(
     diff.schema_id = diff.affected_opts[0].schema_id;
     diff.version = version;
     version_diff[version] = diff;
-
-    return table_ids;
+    return 0;
 }
 
 TableID MockTiDB::addTable(const String & database_name, TiDB::TableInfo && table_info)
 {
-    auto table
-        = std::make_shared<Table>(database_name, databases[database_name], table_info.name, std::move(table_info));
+    auto table = std::make_shared<Table>(database_name, databases[database_name], table_info.name, std::move(table_info));
     String qualified_name = database_name + "." + table->table_info.name;
     tables_by_id.emplace(table->table_info.id, table);
     tables_by_name.emplace(qualified_name, table);
@@ -418,8 +344,8 @@ Field getDefaultValue(const ASTPtr & default_value_ast)
     const auto * func = typeid_cast<const ASTFunction *>(default_value_ast.get());
     if (func != nullptr)
     {
-        const auto * value_ptr = typeid_cast<const ASTLiteral *>(
-            typeid_cast<const ASTExpressionList *>(func->arguments.get())->children[0].get());
+        const auto * value_ptr
+            = typeid_cast<const ASTLiteral *>(typeid_cast<const ASTExpressionList *>(func->arguments.get())->children[0].get());
         return value_ptr->value;
     }
     else if (typeid_cast<const ASTLiteral *>(default_value_ast.get()) != nullptr)
@@ -427,11 +353,7 @@ Field getDefaultValue(const ASTPtr & default_value_ast)
     return Field();
 }
 
-TableID MockTiDB::newPartition(
-    TableID belong_logical_table,
-    const String & partition_name,
-    Timestamp tso,
-    bool is_add_part)
+TableID MockTiDB::newPartition(TableID belong_logical_table, const String & partition_name, Timestamp tso, bool is_add_part)
 {
     std::lock_guard lock(tables_mutex);
 
@@ -441,12 +363,7 @@ TableID MockTiDB::newPartition(
     return newPartitionImpl(logical_table, partition_id, partition_name, tso, is_add_part);
 }
 
-TableID MockTiDB::newPartition(
-    const String & database_name,
-    const String & table_name,
-    TableID partition_id,
-    Timestamp tso,
-    bool is_add_part)
+TableID MockTiDB::newPartition(const String & database_name, const String & table_name, TableID partition_id, Timestamp tso, bool is_add_part)
 {
     std::lock_guard lock(tables_mutex);
 
@@ -454,21 +371,15 @@ TableID MockTiDB::newPartition(
     return newPartitionImpl(logical_table, partition_id, toString(partition_id), tso, is_add_part);
 }
 
-TableID MockTiDB::newPartitionImpl(
-    const TablePtr & logical_table,
-    TableID partition_id,
-    const String & partition_name,
-    Timestamp tso,
-    bool is_add_part)
+TableID MockTiDB::newPartitionImpl(const TablePtr & logical_table, TableID partition_id, const String & partition_name, Timestamp tso, bool is_add_part)
 {
     TableInfo & table_info = logical_table->table_info;
-    RUNTIME_CHECK_MSG(
-        !logical_table->existPartitionID(partition_id),
-        "Mock TiDB table {}.{} already has partition {}, table_info={}",
-        logical_table->database_name,
-        logical_table->table_name,
-        partition_id,
-        table_info.serialize());
+    RUNTIME_CHECK_MSG(!logical_table->existPartitionID(partition_id),
+                      "Mock TiDB table {}.{} already has partition {}, table_info={}",
+                      logical_table->database_name,
+                      logical_table->table_name,
+                      partition_id,
+                      table_info.serialize());
 
     table_info.is_partition_table = true;
     table_info.partition.enable = true;
@@ -505,10 +416,8 @@ void MockTiDB::dropPartition(const String & database_name, const String & table_
         table_info.partition.definitions.end(),
         [&partition_id](PartitionDefinition & part_def) { return part_def.id == partition_id; });
     if (part_def == table_info.partition.definitions.end())
-        throw Exception(
-            "Mock TiDB table " + database_name + "." + table_name + " already drop partition "
-                + std::to_string(partition_id),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Mock TiDB table " + database_name + "." + table_name + " already drop partition " + std::to_string(partition_id),
+                        ErrorCodes::LOGICAL_ERROR);
 
     table_info.partition.num--;
     table_info.partition.definitions.erase(part_def);
@@ -534,14 +443,9 @@ void MockTiDB::addColumnToTable(
     TablePtr table = getTableByNameInternal(database_name, table_name);
     String qualified_name = database_name + "." + table_name;
     auto & columns = table->table_info.columns;
-    if (std::find_if(
-            columns.begin(),
-            columns.end(),
-            [&](const ColumnInfo & column_) { return column_.name == column.name; })
+    if (std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) { return column_.name == column.name; })
         != columns.end())
-        throw Exception(
-            "Column " + column.name + " already exists in TiDB table " + qualified_name,
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Column " + column.name + " already exists in TiDB table " + qualified_name, ErrorCodes::LOGICAL_ERROR);
 
     ColumnInfo column_info = reverseGetColumnInfo(column, table->allocColumnID(), default_value, true);
     columns.emplace_back(column_info);
@@ -563,13 +467,9 @@ void MockTiDB::dropColumnFromTable(const String & database_name, const String & 
     TablePtr table = getTableByNameInternal(database_name, table_name);
     String qualified_name = database_name + "." + table_name;
     auto & columns = table->table_info.columns;
-    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) {
-        return column_.name == column_name;
-    });
+    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) { return column_.name == column_name; });
     if (it == columns.end())
-        throw Exception(
-            "Column " + column_name + " does not exist in TiDB table  " + qualified_name,
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Column " + column_name + " does not exist in TiDB table  " + qualified_name, ErrorCodes::LOGICAL_ERROR);
 
     columns.erase(it);
 
@@ -583,23 +483,16 @@ void MockTiDB::dropColumnFromTable(const String & database_name, const String & 
     version_diff[version] = diff;
 }
 
-void MockTiDB::modifyColumnInTable(
-    const String & database_name,
-    const String & table_name,
-    const NameAndTypePair & column)
+void MockTiDB::modifyColumnInTable(const String & database_name, const String & table_name, const NameAndTypePair & column)
 {
     std::lock_guard lock(tables_mutex);
 
     TablePtr table = getTableByNameInternal(database_name, table_name);
     String qualified_name = database_name + "." + table_name;
     auto & columns = table->table_info.columns;
-    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) {
-        return column_.name == column.name;
-    });
+    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) { return column_.name == column.name; });
     if (it == columns.end())
-        throw Exception(
-            "Column " + column.name + " does not exist in TiDB table  " + qualified_name,
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Column " + column.name + " does not exist in TiDB table  " + qualified_name, ErrorCodes::LOGICAL_ERROR);
 
     ColumnInfo column_info = reverseGetColumnInfo(column, 0, Field(), true);
     if (it->hasUnsignedFlag() != column_info.hasUnsignedFlag())
@@ -630,20 +523,13 @@ void MockTiDB::renameColumnInTable(
     TablePtr table = getTableByNameInternal(database_name, table_name);
     String qualified_name = database_name + "." + table_name;
     auto & columns = table->table_info.columns;
-    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) {
-        return column_.name == old_column_name;
-    });
+    auto it = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) { return column_.name == old_column_name; });
     if (it == columns.end())
-        throw Exception(
-            "Column " + old_column_name + " does not exist in TiDB table  " + qualified_name,
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Column " + old_column_name + " does not exist in TiDB table  " + qualified_name, ErrorCodes::LOGICAL_ERROR);
 
-    if (columns.end() != std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) {
-            return column_.name == new_column_name;
-        }))
-        throw Exception(
-            "Column " + new_column_name + " exists in TiDB table  " + qualified_name,
-            ErrorCodes::LOGICAL_ERROR);
+    if (columns.end()
+        != std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo & column_) { return column_.name == new_column_name; }))
+        throw Exception("Column " + new_column_name + " exists in TiDB table  " + qualified_name, ErrorCodes::LOGICAL_ERROR);
 
     it->name = new_column_name;
 
@@ -666,8 +552,7 @@ void MockTiDB::renameTable(const String & database_name, const String & table_na
 
     TableInfo new_table_info = table->table_info;
     new_table_info.name = new_table_name;
-    auto new_table
-        = std::make_shared<Table>(database_name, table->database_id, new_table_name, std::move(new_table_info));
+    auto new_table = std::make_shared<Table>(database_name, table->database_id, new_table_name, std::move(new_table_info));
 
     tables_by_id[new_table->table_info.id] = new_table;
     tables_by_name.erase(qualified_name);
@@ -696,8 +581,7 @@ void MockTiDB::renameTables(const std::vector<std::tuple<std::string, std::strin
 
         TableInfo new_table_info = table->table_info;
         new_table_info.name = new_table_name;
-        auto new_table
-            = std::make_shared<Table>(database_name, table->database_id, new_table_name, std::move(new_table_info));
+        auto new_table = std::make_shared<Table>(database_name, table->database_id, new_table_name, std::move(new_table_info));
 
         tables_by_id[new_table->table_info.id] = new_table;
         tables_by_name.erase(qualified_name);
@@ -745,19 +629,6 @@ void MockTiDB::truncateTable(const String & database_name, const String & table_
     version_diff[version] = diff;
 }
 
-Int64 MockTiDB::regenerateSchemaMap()
-{
-    std::lock_guard lock(tables_mutex);
-
-    SchemaDiff diff;
-    diff.type = SchemaActionType::None;
-    diff.regenerate_schema_map = true;
-    diff.version = version + 1;
-    version++;
-    version_diff[version] = diff;
-    return version;
-}
-
 TablePtr MockTiDB::getTableByName(const String & database_name, const String & table_name)
 {
     std::lock_guard lock(tables_mutex);
@@ -771,7 +642,7 @@ TablePtr MockTiDB::getTableByNameInternal(const String & database_name, const St
     auto it = tables_by_name.find(qualified_name);
     if (it == tables_by_name.end())
     {
-        throw Exception(ErrorCodes::UNKNOWN_TABLE, "Mock TiDB table {} does not exists", qualified_name);
+        throw Exception("Mock TiDB table " + qualified_name + " does not exists", ErrorCodes::UNKNOWN_TABLE);
     }
 
     return it->second;
@@ -823,8 +694,6 @@ std::pair<bool, DatabaseID> MockTiDB::getDBIDByName(const String & database_name
 
 std::optional<SchemaDiff> MockTiDB::getSchemaDiff(Int64 version_)
 {
-    if (!version_diff.contains(version_))
-        return std::nullopt;
     return version_diff[version_];
 }
 

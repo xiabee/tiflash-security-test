@@ -28,16 +28,19 @@ class BlockInputStreamSourceOp : public SourceOp
 {
 public:
     BlockInputStreamSourceOp(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
         const String & req_id,
         const BlockInputStreamPtr & impl_);
 
-    String getName() const override { return "BlockInputStreamSourceOp"; }
+    String getName() const override
+    {
+        return "BlockInputStreamSourceOp";
+    }
+
+    void operatePrefix() override;
+    void operateSuffix() override;
 
 protected:
-    void operatePrefixImpl() override;
-    void operateSuffixImpl() override;
-
     OperatorStatus readImpl(Block & block) override;
 
 private:

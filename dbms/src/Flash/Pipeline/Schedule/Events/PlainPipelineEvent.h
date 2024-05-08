@@ -21,25 +21,24 @@ namespace DB
 class Pipeline;
 using PipelinePtr = std::shared_ptr<Pipeline>;
 
-class Context;
-
 class PlainPipelineEvent : public Event
 {
 public:
     PlainPipelineEvent(
-        PipelineExecutorContext & exec_context_,
+        PipelineExecutorStatus & exec_status_,
+        MemoryTrackerPtr mem_tracker_,
         const String & req_id,
         Context & context_,
         const PipelinePtr & pipeline_,
         size_t concurrency_)
-        : Event(exec_context_, req_id)
+        : Event(exec_status_, std::move(mem_tracker_), req_id)
         , context(context_)
         , pipeline(pipeline_)
         , concurrency(concurrency_)
     {}
 
 protected:
-    void scheduleImpl() override;
+    std::vector<TaskPtr> scheduleImpl() override;
 
     void finishImpl() override;
 

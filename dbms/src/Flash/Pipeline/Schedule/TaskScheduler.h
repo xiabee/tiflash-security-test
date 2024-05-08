@@ -15,25 +15,17 @@
 #pragma once
 
 #include <Common/Logger.h>
-#include <Flash/Pipeline/Schedule/Reactor/WaitReactor.h>
+#include <Flash/Pipeline/Schedule/TaskThreadPool.h>
+#include <Flash/Pipeline/Schedule/TaskThreadPoolImpl.h>
 #include <Flash/Pipeline/Schedule/Tasks/Task.h>
-#include <Flash/Pipeline/Schedule/ThreadPool/TaskThreadPool.h>
-#include <Flash/Pipeline/Schedule/ThreadPool/TaskThreadPoolImpl.h>
+#include <Flash/Pipeline/Schedule/WaitReactor.h>
 
 namespace DB
 {
 struct TaskSchedulerConfig
 {
-    ThreadPoolConfig cpu_task_thread_pool_config;
-    ThreadPoolConfig io_task_thread_pool_config;
-
-    String toString() const
-    {
-        return fmt::format(
-            "cpu: {}, io: {}",
-            cpu_task_thread_pool_config.toString(),
-            io_task_thread_pool_config.toString());
-    }
+    size_t cpu_task_thread_pool_size;
+    size_t io_task_thread_pool_size;
 };
 
 /**
@@ -66,16 +58,13 @@ public:
 
     ~TaskScheduler();
 
-    void submit(TaskPtr && task);
-    void submit(std::vector<TaskPtr> & tasks);
+    void submit(std::vector<TaskPtr> & tasks) noexcept;
 
     void submitToWaitReactor(TaskPtr && task);
     void submitToCPUTaskThreadPool(TaskPtr && task);
     void submitToCPUTaskThreadPool(std::vector<TaskPtr> & tasks);
     void submitToIOTaskThreadPool(TaskPtr && task);
     void submitToIOTaskThreadPool(std::vector<TaskPtr> & tasks);
-
-    void cancel(const String & query_id, const String & resource_group_name);
 
     static std::unique_ptr<TaskScheduler> instance;
 
@@ -87,5 +76,8 @@ private:
     WaitReactor wait_reactor;
 
     LoggerPtr logger = Logger::get();
+
+    friend class TaskThreadPool<CPUImpl>;
+    friend class WaitReactor;
 };
 } // namespace DB

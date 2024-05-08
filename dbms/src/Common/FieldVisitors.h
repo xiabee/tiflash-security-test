@@ -447,9 +447,8 @@ private:
     {
         if constexpr (std::is_same_v<U, Null>)
             return false;
-        throw Exception(
-            "Cannot compare " + demangle(typeid(T).name()) + " with " + demangle(typeid(U).name()),
-            ErrorCodes::BAD_TYPE_OF_FIELD);
+        throw Exception("Cannot compare " + demangle(typeid(T).name()) + " with " + demangle(typeid(U).name()),
+                        ErrorCodes::BAD_TYPE_OF_FIELD);
     }
 };
 
@@ -580,9 +579,8 @@ private:
     template <typename T, typename U>
     bool cantCompare(const T &, const U &) const
     {
-        throw Exception(
-            "Cannot compare " + demangle(typeid(T).name()) + " with " + demangle(typeid(U).name()),
-            ErrorCodes::BAD_TYPE_OF_FIELD);
+        throw Exception("Cannot compare " + demangle(typeid(T).name()) + " with " + demangle(typeid(U).name()),
+                        ErrorCodes::BAD_TYPE_OF_FIELD);
     }
 };
 

@@ -56,7 +56,10 @@ struct PageVersion
         return sequence < rhs.sequence;
     }
 
-    bool operator==(const PageVersion & rhs) const { return (sequence == rhs.sequence) && (epoch == rhs.epoch); }
+    bool operator==(const PageVersion & rhs) const
+    {
+        return (sequence == rhs.sequence) && (epoch == rhs.epoch);
+    }
 
     bool operator<=(const PageVersion & rhs) const
     {
@@ -149,13 +152,10 @@ inline EditRecordType typeFromProto(CheckpointProto::EditType t)
     case CheckpointProto::EDIT_TYPE_DELETE:
         return EditRecordType::VAR_DELETE;
     default:
-        throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            fmt::format("Unsupported Proto Edit Type {}", magic_enum::enum_name(t)));
+        RUNTIME_CHECK_MSG(false, "Unsupported Proto Edit Type {}", magic_enum::enum_name(t));
     }
 }
 
-/// PageEntriesEdit records the change of pages for a WriteBatch.
 /// Page entries change to apply to PageDirectory
 template <typename PageIdType>
 class PageEntriesEdit
@@ -166,7 +166,10 @@ public:
 public:
     PageEntriesEdit() = default;
 
-    explicit PageEntriesEdit(size_t capacity) { records.reserve(capacity); }
+    explicit PageEntriesEdit(size_t capacity)
+    {
+        records.reserve(capacity);
+    }
 
     void put(const PageId & page_id, const PageEntryV3 & entry)
     {
@@ -232,11 +235,7 @@ public:
         records.emplace_back(record);
     }
 
-    void varExternal(
-        const PageId & page_id,
-        const PageVersion & create_ver,
-        const PageEntryV3 & entry,
-        Int64 being_ref_count)
+    void varExternal(const PageId & page_id, const PageVersion & create_ver, const PageEntryV3 & entry, Int64 being_ref_count)
     {
         EditRecord record{};
         record.type = EditRecordType::VAR_EXTERNAL;
@@ -273,7 +272,6 @@ public:
 
     size_t size() const { return records.size(); }
 
-    /// EditRecord records the change of a page for a Write.
     struct EditRecord
     {
         EditRecordType type{EditRecordType::DEL};
@@ -291,7 +289,10 @@ public:
     };
     using EditRecords = std::vector<EditRecord>;
 
-    void appendRecord(const EditRecord & rec) { records.emplace_back(rec); }
+    void appendRecord(const EditRecord & rec)
+    {
+        records.emplace_back(rec);
+    }
 
     void merge(PageEntriesEdit && other)
     {
@@ -340,51 +341,58 @@ using PageEntriesEdit = PageEntriesEdit<UniversalPageId>;
 template <>
 struct fmt::formatter<DB::PS::V3::PageVersion>
 {
-    static constexpr auto parse(format_parse_context & ctx) { return ctx.begin(); }
+    static constexpr auto parse(format_parse_context & ctx)
+    {
+        return ctx.begin();
+    }
 
     template <typename FormatContext>
     auto format(const DB::PS::V3::PageVersion & ver, FormatContext & ctx) const
     {
-        return fmt::format_to(ctx.out(), "{}.{}", ver.sequence, ver.epoch);
+        return format_to(ctx.out(), "{}.{}", ver.sequence, ver.epoch);
     }
 };
 
 template <>
 struct fmt::formatter<DB::PS::V3::PageEntriesEdit<DB::PageIdV3Internal>::EditRecord>
 {
-    static constexpr auto parse(format_parse_context & ctx) { return ctx.begin(); }
+    static constexpr auto parse(format_parse_context & ctx)
+    {
+        return ctx.begin();
+    }
 
     template <typename FormatContext>
     auto format(const DB::PS::V3::PageEntriesEdit<DB::PageIdV3Internal>::EditRecord & rec, FormatContext & ctx) const
     {
-        return fmt::format_to(
-            ctx.out(),
-            "{{type:{}, page_id:{}, ori_id:{}, version:{}, entry:{}, being_ref_count:{}}}",
-            DB::PS::V3::typeToString(rec.type),
-            rec.page_id,
-            rec.ori_page_id,
-            rec.version,
-            rec.entry,
-            rec.being_ref_count);
+        return format_to(ctx.out(),
+                         "{{type:{}, page_id:{}, ori_id:{}, version:{}, entry:{}, being_ref_count:{}}}",
+                         DB::PS::V3::typeToString(rec.type),
+                         rec.page_id,
+                         rec.ori_page_id,
+                         rec.version,
+                         rec.entry,
+                         rec.being_ref_count);
     }
 };
 
 template <>
 struct fmt::formatter<DB::PS::V3::PageEntriesEdit<DB::UniversalPageId>::EditRecord>
 {
-    static constexpr auto parse(format_parse_context & ctx) { return ctx.begin(); }
+    static constexpr auto parse(format_parse_context & ctx)
+    {
+        return ctx.begin();
+    }
 
     template <typename FormatContext>
     auto format(const DB::PS::V3::PageEntriesEdit<DB::UniversalPageId>::EditRecord & rec, FormatContext & ctx) const
     {
-        return fmt::format_to(
-            ctx.out(),
-            "{{type:{}, page_id:{}, ori_id:{}, version:{}, entry:{}, being_ref_count:{}}}",
-            DB::PS::V3::typeToString(rec.type),
-            rec.page_id,
-            rec.ori_page_id,
-            rec.version,
-            rec.entry,
-            rec.being_ref_count);
+        return format_to(ctx.out(),
+                         "{{type:{}, page_id:{}, ori_id:{}, version:{}, entry:{}, being_ref_count:{}}}",
+                         DB::PS::V3::typeToString(rec.type),
+                         rec.page_id,
+                         rec.ori_page_id,
+                         rec.version,
+                         rec.entry,
+                         rec.being_ref_count);
     }
 };

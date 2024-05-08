@@ -35,7 +35,10 @@ struct BgStorageInitHolder
     BgStorageInitHolder() = default;
 
     // Exception safe for joining the init_thread
-    ~BgStorageInitHolder() { waitUntilFinish(); }
+    ~BgStorageInitHolder()
+    {
+        waitUntilFinish();
+    }
 
     DISALLOW_COPY_AND_MOVE(BgStorageInitHolder);
 };

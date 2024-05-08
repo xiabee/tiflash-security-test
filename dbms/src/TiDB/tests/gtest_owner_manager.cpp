@@ -28,7 +28,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <ext/scope_guard.h>
-#include <future>
 #include <magic_enum.hpp>
 #include <memory>
 #include <mutex>
@@ -43,7 +42,6 @@ extern String getPrefix(String key);
 namespace FailPoints
 {
 extern const char force_owner_mgr_state[];
-extern const char force_owner_mgr_campaign_failed[];
 extern const char force_fail_to_create_etcd_session[];
 } // namespace FailPoints
 } // namespace DB
@@ -68,9 +66,15 @@ public:
     {}
 
 protected:
-    static Etcd::LeaseID getLeaderLease(EtcdOwnerManager * o) { return o->leader.lease(); }
+    static Etcd::LeaseID getLeaderLease(EtcdOwnerManager * o)
+    {
+        return o->leader.lease();
+    }
 
-    static void changeState(EtcdOwnerManager * o, EtcdOwnerManager::State s) { o->tryChangeState(s); }
+    static void changeState(EtcdOwnerManager * o, EtcdOwnerManager::State s)
+    {
+        o->tryChangeState(s);
+    }
 
     Int64 test_ttl{10};
     Int64 test_pause{test_ttl * 6};
@@ -251,8 +255,7 @@ try
     pingcap::pd::ClientPtr pd_client = std::make_shared<pingcap::pd::Client>(Strings{etcd_endpoint}, config);
     auto etcd_client = DB::Etcd::Client::create(pd_client, config);
     const String id = "owner_0";
-    auto owner0
-        = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
+    auto owner0 = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
     auto owner_info = owner0->getOwnerID();
     EXPECT_EQ(owner_info.status, OwnerType::NoLeader) << magic_enum::enum_name(owner_info.status);
 
@@ -323,8 +326,7 @@ try
     pingcap::pd::ClientPtr pd_client = std::make_shared<pingcap::pd::Client>(Strings{etcd_endpoint}, config);
     auto etcd_client = DB::Etcd::Client::create(pd_client, config);
     const String id = "owner_0";
-    auto owner0
-        = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
+    auto owner0 = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
     auto owner_info = owner0->getOwnerID();
     EXPECT_EQ(owner_info.status, OwnerType::NoLeader) << magic_enum::enum_name(owner_info.status);
 
@@ -372,80 +374,6 @@ try
 }
 CATCH
 
-TEST_F(OwnerManagerTest, KeyDeletedWithSessionInvalid)
-try
-{
-    auto etcd_endpoint = Poco::Environment::get("ETCD_ENDPOINT", "");
-    if (etcd_endpoint.empty())
-    {
-        const auto * t = ::testing::UnitTest::GetInstance()->current_test_info();
-        LOG_INFO(
-            log,
-            "{}.{} is skipped because env ETCD_ENDPOINT not set. "
-            "Run it with an etcd cluster using `ETCD_ENDPOINT=127.0.0.1:2379 ./dbms/gtests_dbms ...`",
-            t->test_case_name(),
-            t->name());
-        return;
-    }
-
-    using namespace std::chrono_literals;
-
-    auto ctx = TiFlashTestEnv::getContext();
-    pingcap::ClusterConfig config;
-    pingcap::pd::ClientPtr pd_client = std::make_shared<pingcap::pd::Client>(Strings{etcd_endpoint}, config);
-    auto etcd_client = DB::Etcd::Client::create(pd_client, config);
-    const String id = "owner_0";
-    auto owner0
-        = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
-    auto owner_info = owner0->getOwnerID();
-    EXPECT_EQ(owner_info.status, OwnerType::NoLeader) << magic_enum::enum_name(owner_info.status);
-
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool become_owner = false;
-
-    owner0->setBeOwnerHook([&] {
-        {
-            std::unique_lock lk(mtx);
-            become_owner = true;
-        }
-        cv.notify_one();
-    });
-
-    owner0->campaignOwner();
-    {
-        std::unique_lock lk(mtx);
-        cv.wait(lk, [&] { return become_owner; });
-    }
-
-    ASSERT_TRUE(owner0->isOwner());
-    {
-        auto owner_id = owner0->getOwnerID();
-        EXPECT_EQ(owner_id.status, OwnerType::IsOwner);
-        EXPECT_EQ(owner_id.owner_id, id);
-    }
-    auto lease_0 = getLeaderLease(owner0.get());
-
-    LOG_INFO(log, "test wait for n*ttl");
-    FailPointHelper::enableFailPoint(FailPoints::force_owner_mgr_state, EtcdOwnerManager::State::CancelByKeyDeleted);
-    FailPointHelper::enableFailPoint(FailPoints::force_owner_mgr_campaign_failed);
-    SCOPE_EXIT({ FailPointHelper::disableFailPoint(FailPoints::force_owner_mgr_state); });
-    SCOPE_EXIT({ FailPointHelper::disableFailPoint(FailPoints::force_owner_mgr_campaign_failed); });
-    changeState(owner0.get(), EtcdOwnerManager::State::CancelByKeyDeleted);
-
-    std::this_thread::sleep_for(std::chrono::seconds(test_pause));
-    ASSERT_TRUE(owner0->isOwner());
-    {
-        auto owner_id = owner0->getOwnerID();
-        EXPECT_EQ(owner_id.status, OwnerType::IsOwner);
-        EXPECT_EQ(owner_id.owner_id, id);
-    }
-    auto lease_1 = getLeaderLease(owner0.get()); // should be a new lease
-    EXPECT_NE(lease_0, lease_1) << "should use a new etcd lease for elec";
-
-    LOG_INFO(log, "test wait for n*ttl passed");
-}
-CATCH
 
 TEST_F(OwnerManagerTest, CreateEtcdSessionFail)
 try
@@ -470,10 +398,9 @@ try
     pingcap::pd::ClientPtr pd_client = std::make_shared<pingcap::pd::Client>(Strings{etcd_endpoint}, config);
     auto etcd_client = DB::Etcd::Client::create(pd_client, config);
     const String id = "owner_0";
-    auto owner0
-        = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
+    auto owner0 = std::static_pointer_cast<EtcdOwnerManager>(OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
     auto owner_info = owner0->getOwnerID();
-    EXPECT_EQ(owner_info.status, OwnerType::NoLeader) << magic_enum::enum_name(owner_info.status);
+    EXPECT_EQ(owner_info.status, OwnerType::NotOwner) << magic_enum::enum_name(owner_info.status);
 
     FailPointHelper::enableFailPoint(FailPoints::force_fail_to_create_etcd_session);
 
@@ -481,78 +408,6 @@ try
 
     std::this_thread::sleep_for(5s); // wait bg task wake
     owner0->cancel();
-}
-CATCH
-
-TEST_F(OwnerManagerTest, CancelNonOwner)
-try
-{
-    auto etcd_endpoint = Poco::Environment::get("ETCD_ENDPOINT", "");
-    if (etcd_endpoint.empty())
-    {
-        const auto * t = ::testing::UnitTest::GetInstance()->current_test_info();
-        LOG_INFO(
-            log,
-            "{}.{} is skipped because env ETCD_ENDPOINT not set. "
-            "Run it with an etcd cluster using `ETCD_ENDPOINT=127.0.0.1:2379 ./dbms/gtests_dbms ...`",
-            t->test_case_name(),
-            t->name());
-        return;
-    }
-
-    using namespace std::chrono_literals;
-
-    auto ctx = TiFlashTestEnv::getContext();
-    pingcap::ClusterConfig config;
-    pingcap::pd::ClientPtr pd_client = std::make_shared<pingcap::pd::Client>(Strings{etcd_endpoint}, config);
-    auto etcd_client = DB::Etcd::Client::create(pd_client, config);
-
-    std::atomic<bool> owner0_elected = false;
-    std::shared_ptr<EtcdOwnerManager> owner0;
-    std::shared_ptr<EtcdOwnerManager> owner1;
-    auto th_owner = std::async([&]() {
-        const String id = "owner_0";
-        owner0 = std::static_pointer_cast<EtcdOwnerManager>(
-            OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
-        auto owner_info = owner0->getOwnerID();
-        EXPECT_EQ(owner_info.status, OwnerType::NoLeader) << magic_enum::enum_name(owner_info.status);
-
-        owner0->setBeOwnerHook([&] { owner0_elected = true; });
-        owner0->campaignOwner();
-
-        while (!owner0_elected)
-            ;
-
-        owner_info = owner0->getOwnerID();
-        EXPECT_EQ(owner_info.status, OwnerType::IsOwner) << magic_enum::enum_name(owner_info.status);
-    });
-
-    auto th_non_owner = std::async([&] {
-        const String id = "owner_1";
-
-        LOG_INFO(log, "waiting for owner0 elected");
-        while (!owner0_elected)
-            ;
-
-        owner1 = std::static_pointer_cast<EtcdOwnerManager>(
-            OwnerManager::createS3GCOwner(*ctx, id, etcd_client, test_ttl));
-        owner1->campaignOwner(); // this will block
-    });
-
-    auto th_cancel_non_owner = std::async([&] {
-        while (!owner0_elected)
-            ;
-
-        LOG_INFO(log, "waiting for owner1 start campaign");
-        std::this_thread::sleep_for(3s);
-        LOG_INFO(log, "cancel owner1 start");
-        owner1->cancel(); // cancel should finished th_non_owner
-        LOG_INFO(log, "cancel owner1 done");
-    });
-
-    th_cancel_non_owner.wait();
-    th_non_owner.wait();
-    th_owner.wait();
 }
 CATCH
 

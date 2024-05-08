@@ -18,11 +18,7 @@ namespace DB::tests
 {
 std::unordered_map<String, tipb::ScalarFuncSig> func_name_to_sig({
     {"plusint", tipb::ScalarFuncSig::PlusInt},
-    {"plusreal", tipb::ScalarFuncSig::PlusReal},
-    {"plusdecimal", tipb::ScalarFuncSig::PlusDecimal},
     {"minusint", tipb::ScalarFuncSig::MinusInt},
-    {"minusreal", tipb::ScalarFuncSig::MinusReal},
-    {"minusdecimal", tipb::ScalarFuncSig::MinusDecimal},
     {"equals", tipb::ScalarFuncSig::EQInt},
     {"notEquals", tipb::ScalarFuncSig::NEInt},
     {"and", tipb::ScalarFuncSig::LogicalAnd},
@@ -92,7 +88,6 @@ std::unordered_map<String, tipb::ExprType> agg_func_name_to_sig({
     {"first_row", tipb::ExprType::First},
     {"uniqRawRes", tipb::ExprType::ApproxCountDistinct},
     {"group_concat", tipb::ExprType::GroupConcat},
-    {"avg", tipb::ExprType::Avg},
 });
 
 std::unordered_map<String, tipb::ExprType> window_func_name_to_sig({
@@ -101,7 +96,5 @@ std::unordered_map<String, tipb::ExprType> window_func_name_to_sig({
     {"DenseRank", tipb::ExprType::DenseRank},
     {"Lead", tipb::ExprType::Lead},
     {"Lag", tipb::ExprType::Lag},
-    {"FirstValue", tipb::ExprType::FirstValue},
-    {"LastValue", tipb::ExprType::LastValue},
 });
 } // namespace DB::tests

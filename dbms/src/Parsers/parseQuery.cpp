@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/StringUtils/StringUtils.h>
-#include <Common/UTF8Helpers.h>
-#include <Common/typeid_cast.h>
-#include <IO/Buffer/WriteBufferFromString.h>
-#include <IO/Operators.h>
-#include <IO/WriteHelpers.h>
+#include <Parsers/parseQuery.h>
+#include <Parsers/ParserQuery.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/Lexer.h>
-#include <Parsers/ParserQuery.h>
 #include <Parsers/TokenIterator.h>
-#include <Parsers/parseQuery.h>
+#include <Common/StringUtils/StringUtils.h>
+#include <Common/typeid_cast.h>
+#include <Common/UTF8Helpers.h>
+#include <IO/WriteHelpers.h>
+#include <IO/WriteBufferFromString.h>
+#include <IO/Operators.h>
 
 
 namespace DB
@@ -30,7 +30,7 @@ namespace DB
 
 namespace ErrorCodes
 {
-extern const int SYNTAX_ERROR;
+    extern const int SYNTAX_ERROR;
 }
 
 namespace
@@ -51,11 +51,11 @@ std::pair<size_t, size_t> getLineAndCol(const char * begin, const char * pos)
     }
 
     /// Lines numbered from 1.
-    return {line + 1, pos - begin + 1};
+    return { line + 1, pos - begin + 1 };
 }
 
 
-WriteBuffer & operator<<(WriteBuffer & out, const Expected & expected)
+WriteBuffer & operator<< (WriteBuffer & out, const Expected & expected)
 {
     if (expected.variants.empty())
         return out;
@@ -82,7 +82,7 @@ void writeQueryWithHighlightedErrorPositions(
     WriteBuffer & out,
     const char * begin,
     const char * end,
-    const Token * positions_to_hilite, /// must go in ascending order
+    const Token * positions_to_hilite,   /// must go in ascending order
     size_t num_positions_to_hilite)
 {
     const char * pos = begin;
@@ -128,11 +128,7 @@ void writeQueryAroundTheError(
     else
     {
         if (num_positions_to_hilite)
-            out << ": "
-                << std::string(
-                       positions_to_hilite[0].begin,
-                       std::min(SHOW_CHARS_ON_SYNTAX_ERROR, end - positions_to_hilite[0].begin))
-                << ". ";
+            out << ": " << std::string(positions_to_hilite[0].begin, std::min(SHOW_CHARS_ON_SYNTAX_ERROR, end - positions_to_hilite[0].begin)) << ". ";
     }
 }
 
@@ -221,12 +217,12 @@ std::string getUnmatchedParenthesesErrorMessage(
     return out.str();
 }
 
-} // namespace
+}
 
 
 ASTPtr tryParseQuery(
     IParser & parser,
-    const char *& pos,
+    const char * & pos,
     const char * end,
     std::string & out_error_message,
     bool hilite,
@@ -237,7 +233,8 @@ ASTPtr tryParseQuery(
     Tokens tokens(pos, end, max_query_size);
     TokenIterator token_iterator(tokens);
 
-    if (token_iterator->isEnd() || token_iterator->type == TokenType::Semicolon)
+    if (token_iterator->isEnd()
+        || token_iterator->type == TokenType::Semicolon)
     {
         out_error_message = "Empty query";
         return nullptr;
@@ -267,8 +264,7 @@ ASTPtr tryParseQuery(
         UnmatchedParentheses unmatched_parens = checkUnmatchedParentheses(TokenIterator(tokens), &last_token);
         if (!unmatched_parens.empty())
         {
-            out_error_message
-                = getUnmatchedParenthesesErrorMessage(pos, end, unmatched_parens, hilite, query_description);
+            out_error_message = getUnmatchedParenthesesErrorMessage(pos, end, unmatched_parens, hilite, query_description);
             return nullptr;
         }
     }
@@ -281,7 +277,9 @@ ASTPtr tryParseQuery(
     }
 
     /// Excessive input after query. Parsed query must end with end of data or semicolon or data for INSERT.
-    if (!token_iterator->isEnd() && token_iterator->type != TokenType::Semicolon && !(insert && insert->data))
+    if (!token_iterator->isEnd()
+        && token_iterator->type != TokenType::Semicolon
+        && !(insert && insert->data))
     {
         expected.add(pos, "end of query");
         out_error_message = getSyntaxErrorMessage(pos, end, last_token, expected, hilite, query_description);
@@ -292,14 +290,11 @@ ASTPtr tryParseQuery(
         ++token_iterator;
 
     /// If multi-statements are not allowed, then after semicolon, there must be no non-space characters.
-    if (!allow_multi_statements && !token_iterator->isEnd() && !(insert && insert->data))
+    if (!allow_multi_statements
+        && !token_iterator->isEnd()
+        && !(insert && insert->data))
     {
-        out_error_message = getSyntaxErrorMessage(
-            pos,
-            end,
-            last_token,
-            {},
-            hilite,
+        out_error_message = getSyntaxErrorMessage(pos, end, last_token, {}, hilite,
             (query_description.empty() ? std::string() : std::string(". ")) + "Multi-statements are not allowed");
         return nullptr;
     }
@@ -311,22 +306,14 @@ ASTPtr tryParseQuery(
 
 ASTPtr parseQueryAndMovePosition(
     IParser & parser,
-    const char *& pos,
+    const char * & pos,
     const char * end,
     const std::string & query_description,
     bool allow_multi_statements,
     size_t max_query_size)
 {
     std::string error_message;
-    ASTPtr res = tryParseQuery(
-        parser,
-        pos,
-        end,
-        error_message,
-        false,
-        query_description,
-        allow_multi_statements,
-        max_query_size);
+    ASTPtr res = tryParseQuery(parser, pos, end, error_message, false, query_description, allow_multi_statements, max_query_size);
 
     if (res)
         return res;
@@ -342,7 +329,7 @@ ASTPtr parseQuery(
     const std::string & query_description,
     size_t max_query_size)
 {
-    const auto * pos = begin;
+    auto pos = begin;
     return parseQueryAndMovePosition(parser, pos, end, query_description, false, max_query_size);
 }
 
@@ -383,7 +370,7 @@ std::pair<const char *, bool> splitMultipartQuery(const std::string & queries, s
         if (!ast)
             break;
 
-        auto * insert = typeid_cast<ASTInsertQuery *>(ast.get());
+        ASTInsertQuery * insert = typeid_cast<ASTInsertQuery *>(ast.get());
 
         if (insert && insert->data)
         {
@@ -404,4 +391,4 @@ std::pair<const char *, bool> splitMultipartQuery(const std::string & queries, s
 }
 
 
-} // namespace DB
+}

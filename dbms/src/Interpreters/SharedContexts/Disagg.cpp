@@ -18,17 +18,14 @@
 #include <Storages/DeltaMerge/Remote/RNDeltaIndexCache.h>
 #include <Storages/DeltaMerge/Remote/RNLocalPageCache.h>
 #include <Storages/DeltaMerge/Remote/WNDisaggSnapshotManager.h>
-#include <Storages/KVStore/MultiRaft/Disagg/FastAddPeerContext.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/PathPool.h>
+#include <Storages/Transaction/FastAddPeer.h>
 
 namespace DB
 {
 
-void SharedContextDisagg::initReadNodePageCache(
-    const PathPool & path_pool,
-    const String & cache_dir,
-    size_t cache_capacity)
+void SharedContextDisagg::initReadNodePageCache(const PathPool & path_pool, const String & cache_dir, size_t cache_capacity)
 {
     RUNTIME_CHECK(rn_page_cache_storage == nullptr && rn_page_cache == nullptr);
 
@@ -38,11 +35,7 @@ void SharedContextDisagg::initReadNodePageCache(
         if (!cache_dir.empty())
         {
             delegator = path_pool.getPSDiskDelegatorFixedDirectory(cache_dir);
-            LOG_INFO(
-                Logger::get(),
-                "Initialize Read Node page cache in cache directory. path={} capacity={}",
-                cache_dir,
-                cache_capacity);
+            LOG_INFO(Logger::get(), "Initialize Read Node page cache in cache directory. path={} capacity={}", cache_dir, cache_capacity);
         }
         else
         {
@@ -99,19 +92,9 @@ void SharedContextDisagg::initRemoteDataStore(const FileProviderPtr & file_provi
     remote_data_store = std::make_shared<DM::Remote::DataStoreS3>(file_provider);
 }
 
-void SharedContextDisagg::initFastAddPeerContext(UInt64 fap_concur)
+void SharedContextDisagg::initFastAddPeerContext()
 {
-    LOG_INFO(Logger::get(), "Init FAP Context, concurrency={}", fap_concur);
-    fap_context = std::make_shared<FastAddPeerContext>(fap_concur);
-}
-
-
-SharedContextDisagg::~SharedContextDisagg()
-{
-    if (fap_context)
-    {
-        fap_context->shutdown();
-    }
+    fap_context = std::make_shared<FastAddPeerContext>();
 }
 
 } // namespace DB

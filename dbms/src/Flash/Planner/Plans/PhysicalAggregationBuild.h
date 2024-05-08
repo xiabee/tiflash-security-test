@@ -20,13 +20,10 @@
 #include <Interpreters/AggregateDescription.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/ExpressionActions.h>
-#include <Operators/OperatorProfileInfo.h>
+#include <Operators/AggregateContext.h>
 
 namespace DB
 {
-class AggregateContext;
-using AggregateContextPtr = std::shared_ptr<AggregateContext>;
-
 class PhysicalAggregationBuild : public PhysicalUnary
 {
 public:
@@ -48,21 +45,15 @@ public:
         , is_final_agg(is_final_agg_)
         , aggregate_descriptions(aggregate_descriptions_)
         , aggregate_context(aggregate_context_)
-    {
-        // The profile info of Aggregation is collected by PhysicalAggregationConvergent,
-        // so calling notTiDBoPerator for PhysicalAggregationBuild to skip collecting profile info.
-        notTiDBOperator();
-    }
+    {}
 
-private:
-    void buildPipelineExecGroupImpl(
-        PipelineExecutorContext & exec_context,
+    void buildPipelineExecGroup(
+        PipelineExecutorStatus & exec_status,
         PipelineExecGroupBuilder & group_builder,
         Context & context,
         size_t /*concurrency*/) override;
 
-    EventPtr doSinkComplete(PipelineExecutorContext & exec_context) override;
-
+private:
     DISABLE_USELESS_FUNCTION_FOR_BREAKER
 
 private:
@@ -72,7 +63,5 @@ private:
     bool is_final_agg;
     AggregateDescriptions aggregate_descriptions;
     AggregateContextPtr aggregate_context;
-
-    OperatorProfileInfos profile_infos;
 };
 } // namespace DB

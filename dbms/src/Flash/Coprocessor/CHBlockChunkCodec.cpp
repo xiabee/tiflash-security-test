@@ -16,10 +16,9 @@
 #include <DataStreams/IBlockInputStream.h>
 #include <DataStreams/NativeBlockInputStream.h>
 #include <DataTypes/DataTypeFactory.h>
-#include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/ReadBufferFromString.h>
 
 namespace DB
 {
@@ -50,7 +49,8 @@ public:
     DataTypes expected_types;
 };
 
-CHBlockChunkCodec::CHBlockChunkCodec(const Block & header_)
+CHBlockChunkCodec::CHBlockChunkCodec(
+    const Block & header_)
     : header(header_)
 {
     for (const auto & column : header)
@@ -170,13 +170,10 @@ Block CHBlockChunkCodec::decodeImpl(ReadBuffer & istr, size_t reserve_size)
 
         /// Data
         MutableColumnPtr read_column = column.type->createColumn();
-        if (column.type->haveMaximumSizeOfValue())
-        {
-            if (reserve_size > 0)
-                read_column->reserve(std::max(rows, reserve_size));
-            else if (rows)
-                read_column->reserve(rows);
-        }
+        if (reserve_size > 0)
+            read_column->reserve(std::max(rows, reserve_size));
+        else if (rows)
+            read_column->reserve(rows);
 
         if (rows) /// If no rows, nothing to read.
             readData(*column.type, *read_column, istr, rows);
@@ -193,9 +190,9 @@ void CHBlockChunkCodec::readBlockMeta(ReadBuffer & istr, size_t & columns, size_
     readVarUInt(rows, istr);
 
     if (header)
-        CodecUtils::checkColumnSize("CHBlockChunkCodec", header.columns(), columns);
+        CodecUtils::checkColumnSize(header.columns(), columns);
     else if (!output_names.empty())
-        CodecUtils::checkColumnSize("CHBlockChunkCodec", output_names.size(), columns);
+        CodecUtils::checkColumnSize(output_names.size(), columns);
 }
 
 void CHBlockChunkCodec::readColumnMeta(size_t i, ReadBuffer & istr, ColumnWithTypeAndName & column)
@@ -213,7 +210,7 @@ void CHBlockChunkCodec::readColumnMeta(size_t i, ReadBuffer & istr, ColumnWithTy
     const DataTypeFactory & data_type_factory = DataTypeFactory::instance();
     if (header)
     {
-        CodecUtils::checkDataTypeName("CHBlockChunkCodec", i, header_datatypes[i].name, type_name);
+        CodecUtils::checkDataTypeName(i, header_datatypes[i].name, type_name);
         column.type = header_datatypes[i].type;
     }
     else

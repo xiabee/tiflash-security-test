@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Common/Logger.h>
 #include <Core/Types.h>
 
 #include <tuple>
@@ -26,8 +27,67 @@ class LayeredConfiguration;
 
 namespace DB
 {
-class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
+struct StorageIORateLimitConfig
+{
+public:
+    // For disk that read bandwidth and write bandwith are calculated together, such as AWS's EBS.
+    UInt64 max_bytes_per_sec;
+    // For disk that read bandwidth and write bandwith are calculated separatly, such as GCP's persistent disks.
+    UInt64 max_read_bytes_per_sec;
+    UInt64 max_write_bytes_per_sec;
+
+    bool use_max_bytes_per_sec;
+
+    // Currently, IORateLimiter supports 4 I/O type: foreground write, foreground read, background write and background read.
+    // Initially, We calculate bandwidth for each I/O type according to the proportion of weights.
+    // If *_weight is 0, the corresponding I/O type is not limited.
+    UInt32 fg_write_weight;
+    UInt32 bg_write_weight;
+    UInt32 fg_read_weight;
+    UInt32 bg_read_weight;
+
+    Int32 emergency_pct;
+    Int32 high_pct;
+    Int32 medium_pct;
+
+    Int32 tune_base;
+    Int64 min_bytes_per_sec;
+
+    Int32 auto_tune_sec;
+
+    StorageIORateLimitConfig()
+        : max_bytes_per_sec(0)
+        , max_read_bytes_per_sec(0)
+        , max_write_bytes_per_sec(0)
+        , use_max_bytes_per_sec(true)
+        , fg_write_weight(25)
+        , bg_write_weight(25)
+        , fg_read_weight(25)
+        , bg_read_weight(25)
+        , emergency_pct(96)
+        , high_pct(85)
+        , medium_pct(60)
+        , tune_base(2)
+        , min_bytes_per_sec(2 * 1024 * 1024)
+        , auto_tune_sec(5)
+    {}
+
+    void parse(const String & storage_io_rate_limit, const LoggerPtr & log);
+
+    std::string toString() const;
+
+    UInt64 getFgWriteMaxBytesPerSec() const;
+    UInt64 getBgWriteMaxBytesPerSec() const;
+    UInt64 getFgReadMaxBytesPerSec() const;
+    UInt64 getBgReadMaxBytesPerSec() const;
+    UInt64 getWriteMaxBytesPerSec() const;
+    UInt64 getReadMaxBytesPerSec() const;
+    UInt64 readWeight() const;
+    UInt64 writeWeight() const;
+    UInt64 totalWeight() const;
+
+    bool operator==(const StorageIORateLimitConfig & config) const;
+};
 
 struct StorageS3Config
 {
@@ -36,7 +96,7 @@ struct StorageS3Config
     // verbose logging for http requests. Use for debugging
     bool verbose = false;
 
-    bool enable_http_pool = false; // will be removed after testing
+    bool enable_http_pool = true; // will be removed after testing
     bool enable_poco_client = true; // will be removed after testing
 
     String endpoint;
@@ -55,7 +115,6 @@ struct StorageS3Config
     void parse(const String & content);
     void enable(bool check_requirements, const LoggerPtr & log);
     bool isS3Enabled() const;
-    void disable() { is_enabled = false; }
 
     String toString() const;
 };
@@ -101,9 +160,7 @@ public:
 
     Strings getAllNormalPaths() const;
 
-    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(
-        Poco::Util::LayeredConfiguration & config,
-        const LoggerPtr & log);
+    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
 
 private:
     void parseStoragePath(const String & storage_section, const LoggerPtr & log);

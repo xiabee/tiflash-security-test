@@ -18,12 +18,12 @@
 #include <Interpreters/Context.h>
 #include <Server/StorageConfigParser.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/S3/FileCache.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3WritableFile.h>
+#include <Storages/Transaction/Types.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <TestUtils/TiFlashTestEnv.h>
 #include <aws/s3/model/CreateBucketRequest.h>
@@ -58,7 +58,6 @@ public:
     void SetUp() override
     {
         tmp_dir = DB::tests::TiFlashTestEnv::getTemporaryPath("FileCacheTest");
-        DB::tests::TiFlashTestEnv::enableS3Config();
         log = Logger::get("FileCacheTest");
         std::filesystem::remove_all(std::filesystem::path(tmp_dir));
         s3_client = ::DB::S3::ClientFactory::instance().sharedTiFlashClient();
@@ -68,8 +67,6 @@ public:
         next_id = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
         capacity_metrics = TiFlashTestEnv::getContext()->getPathCapacity();
     }
-
-    void TearDown() override { DB::tests::TiFlashTestEnv::disableS3Config(); }
 
 protected:
     std::shared_ptr<TiFlashS3Client> s3_client;
@@ -136,7 +133,9 @@ protected:
             size_t size = rnd_size(rng);
 
             auto task = std::make_shared<std::packaged_task<void()>>(
-                [&, key = key, value = value, size = size]() { writeFile(key, value, size, WriteSettings{}); });
+                [&, key = key, value = value, size = size]() {
+                    writeFile(key, value, size, WriteSettings{});
+                });
             upload_results.push_back(task->get_future());
             S3FileCachePool::get().scheduleOrThrowOnError([task]() { (*task)(); });
             objects.emplace_back(ObjectInfo{.key = key, .value = value, .size = size});
@@ -148,12 +147,11 @@ protected:
         return objects;
     }
 
-    UInt64 nextId() { return next_id++; }
-    std::vector<ObjectInfo> genObjects(
-        UInt32 store_count,
-        UInt32 table_count,
-        UInt32 file_count,
-        const std::vector<String> & names)
+    UInt64 nextId()
+    {
+        return next_id++;
+    }
+    std::vector<ObjectInfo> genObjects(UInt32 store_count, UInt32 table_count, UInt32 file_count, const std::vector<String> & names)
     {
         std::vector<ObjectInfo> objects;
         for (UInt32 i = 1; i <= store_count; ++i)
@@ -162,9 +160,7 @@ protected:
             {
                 for (UInt32 k = 1; k <= file_count; ++k)
                 {
-                    auto objs = genDMFile(
-                        DMFileOID{.store_id = nextId(), .table_id = static_cast<Int64>(nextId()), .file_id = nextId()},
-                        names);
+                    auto objs = genDMFile(DMFileOID{.store_id = nextId(), .table_id = static_cast<Int64>(nextId()), .file_id = nextId()}, names);
                     objects.insert(objects.end(), objs.begin(), objs.end());
                 }
             }
@@ -190,12 +186,7 @@ protected:
         {
             std::this_thread::sleep_for(1000ms);
         }
-        LOG_DEBUG(
-            log,
-            "Download summary: succ={} fail={} cost={}s",
-            file_cache.bg_download_succ_count.load(std::memory_order_relaxed),
-            file_cache.bg_download_fail_count.load(std::memory_order_relaxed),
-            sw.elapsedSeconds());
+        LOG_DEBUG(log, "Download summary: succ={} fail={} cost={}s", file_cache.bg_download_succ_count.load(std::memory_order_relaxed), file_cache.bg_download_fail_count.load(std::memory_order_relaxed), sw.elapsedSeconds());
     }
 
     static void calculateCacheCapacity(StorageRemoteCacheConfig & config, UInt64 dt_size)
@@ -379,7 +370,7 @@ TEST_F(FileCacheTest, FileSystem)
     }
     ASSERT_TRUE(std::filesystem::exists(local_file2));
 
-    file_cache.removeDiskFile(local_fname1, false);
+    file_cache.removeDiskFile(local_fname1);
     ASSERT_FALSE(std::filesystem::exists(local_file1)) << local_file1.generic_string();
     ASSERT_TRUE(std::filesystem::exists(local_file2)) << local_file2.generic_string();
     ASSERT_TRUE(std::filesystem::exists(dmf)) << dmf.generic_string();
@@ -393,7 +384,7 @@ TEST_F(FileCacheTest, FileSystem)
     ASSERT_TRUE(std::filesystem::exists(cache_root)) << cache_root.generic_string();
     ASSERT_EQ(cache_root.generic_string(), cache_config.getDTFileCacheDir());
 
-    file_cache.removeDiskFile(local_fname2, false);
+    file_cache.removeDiskFile(local_fname2);
     ASSERT_FALSE(std::filesystem::exists(local_file2)) << local_file2.generic_string();
     ASSERT_FALSE(std::filesystem::exists(dmf)) << dmf.generic_string();
     ASSERT_FALSE(std::filesystem::exists(table)) << table.generic_string();
@@ -420,16 +411,11 @@ try
     ASSERT_EQ(FileCache::getFileType(null_mark_fname), FileType::Mark);
     auto index_fname = fmt::format("{}/1.idx", s3_fname);
     ASSERT_EQ(FileCache::getFileType(index_fname), FileType::Index);
-    auto handle_fname = fmt::format(
-        "{}/{}.dat",
-        s3_fname,
-        IDataType::getFileNameForStream(std::to_string(EXTRA_HANDLE_COLUMN_ID), {}));
+    auto handle_fname = fmt::format("{}/{}.dat", s3_fname, IDataType::getFileNameForStream(std::to_string(EXTRA_HANDLE_COLUMN_ID), {}));
     ASSERT_EQ(FileCache::getFileType(handle_fname), FileType::HandleColData);
-    auto version_fname
-        = fmt::format("{}/{}.dat", s3_fname, IDataType::getFileNameForStream(std::to_string(VERSION_COLUMN_ID), {}));
+    auto version_fname = fmt::format("{}/{}.dat", s3_fname, IDataType::getFileNameForStream(std::to_string(VERSION_COLUMN_ID), {}));
     ASSERT_EQ(FileCache::getFileType(version_fname), FileType::VersionColData);
-    auto delmark_fname
-        = fmt::format("{}/{}.dat", s3_fname, IDataType::getFileNameForStream(std::to_string(TAG_COLUMN_ID), {}));
+    auto delmark_fname = fmt::format("{}/{}.dat", s3_fname, IDataType::getFileNameForStream(std::to_string(TAG_COLUMN_ID), {}));
     ASSERT_EQ(FileCache::getFileType(delmark_fname), FileType::DeleteMarkColData);
     auto unknow_fname0 = fmt::format("{}/123456", s3_fname);
     ASSERT_EQ(FileCache::getFileType(unknow_fname0), FileType::Unknow);
@@ -439,10 +425,7 @@ try
     {
         UInt64 cache_level_ = 0;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_FALSE(file_cache.canCache(FileType::Meta));
@@ -458,10 +441,7 @@ try
     {
         UInt64 cache_level_ = 1;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -477,10 +457,7 @@ try
     {
         UInt64 cache_level_ = 2;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -496,10 +473,7 @@ try
     {
         UInt64 cache_level_ = 3;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -515,10 +489,7 @@ try
     {
         UInt64 cache_level_ = 4;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -534,10 +505,7 @@ try
     {
         UInt64 cache_level_ = 5;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -553,10 +521,7 @@ try
     {
         UInt64 cache_level_ = 6;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -572,10 +537,7 @@ try
     {
         UInt64 cache_level_ = 7;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -591,10 +553,7 @@ try
     {
         UInt64 cache_level_ = 8;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));
@@ -610,10 +569,7 @@ try
     {
         UInt64 cache_level_ = 9;
         auto cache_dir = fmt::format("{}/filetype{}", tmp_dir, cache_level_);
-        StorageRemoteCacheConfig cache_config{
-            .dir = cache_dir,
-            .capacity = cache_capacity,
-            .dtfile_level = cache_level_};
+        StorageRemoteCacheConfig cache_config{.dir = cache_dir, .capacity = cache_capacity, .dtfile_level = cache_level_};
         FileCache file_cache(capacity_metrics, cache_config);
         ASSERT_FALSE(file_cache.canCache(FileType::Unknow));
         ASSERT_TRUE(file_cache.canCache(FileType::Meta));

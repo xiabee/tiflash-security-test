@@ -59,7 +59,13 @@ MutableColumnPtr ColumnFixedString::cloneResized(size_t size) const
 void ColumnFixedString::insert(const Field & x)
 {
     const auto & s = DB::get<const String &>(x);
-    insertData(s.data(), s.size());
+
+    if (s.size() > n)
+        throw Exception("Too large string '" + s + "' for FixedString column", ErrorCodes::TOO_LARGE_STRING_SIZE);
+
+    size_t old_size = chars.size();
+    chars.resize_fill(old_size + n);
+    memcpy(&chars[old_size], s.data(), s.size());
 }
 
 void ColumnFixedString::insertFrom(const IColumn & src_, size_t index)
@@ -106,17 +112,11 @@ void ColumnFixedString::insertData(const char * pos, size_t length)
         throw Exception("Too large string for FixedString column", ErrorCodes::TOO_LARGE_STRING_SIZE);
 
     size_t old_size = chars.size();
-    chars.resize(old_size + n);
-    memcpy(chars.data() + old_size, pos, length);
-    memset(chars.data() + old_size + length, 0, n - length);
+    chars.resize_fill(old_size + n);
+    memcpy(&chars[old_size], pos, length);
 }
 
-StringRef ColumnFixedString::serializeValueIntoArena(
-    size_t index,
-    Arena & arena,
-    char const *& begin,
-    const TiDB::TiDBCollatorPtr &,
-    String &) const
+StringRef ColumnFixedString::serializeValueIntoArena(size_t index, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const
 {
     auto * pos = arena.allocContinue(n, begin);
     memcpy(pos, &chars[n * index], n);
@@ -136,8 +136,7 @@ void ColumnFixedString::updateHashWithValue(size_t index, SipHash & hash, const 
     hash.update(reinterpret_cast<const char *>(&chars[n * index]), n);
 }
 
-void ColumnFixedString::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
-    const
+void ColumnFixedString::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const
 {
     for (size_t i = 0, sz = chars.size() / n; i < sz; ++i)
     {
@@ -150,10 +149,7 @@ void ColumnFixedString::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBColl
     auto s = size();
 
     if (hash.getData().size() != s)
-        throw Exception(
-            "Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is "
-                + std::to_string(hash.getData().size()),
-            ErrorCodes::LOGICAL_ERROR);
+        throw Exception("Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is " + std::to_string(hash.getData().size()), ErrorCodes::LOGICAL_ERROR);
 
     const UInt8 * pos = chars.data();
     UInt32 * hash_data = hash.getData().data();
@@ -216,8 +212,7 @@ void ColumnFixedString::insertRangeFrom(const IColumn & src, size_t start, size_
     if (start + length > src_concrete.size())
         throw Exception(
             fmt::format(
-                "Parameters are out of bound in ColumnFixedString::insertRangeFrom method, start={}, length={}, "
-                "src.size()={}",
+                "Parameters are out of bound in ColumnFixedString::insertRangeFrom method, start={}, length={}, src.size()={}",
                 start,
                 length,
                 src_concrete.size()),
@@ -261,8 +256,7 @@ ColumnPtr ColumnFixedString::filter(const IColumn::Filter & filt, ssize_t result
 
     while (filt_pos < filt_end_sse)
     {
-        int mask
-            = _mm_movemask_epi8(_mm_cmpgt_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i *>(filt_pos)), zero16));
+        int mask = _mm_movemask_epi8(_mm_cmpgt_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i *>(filt_pos)), zero16));
 
         if (0 == mask)
         {

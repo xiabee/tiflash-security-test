@@ -16,7 +16,6 @@
 
 #include <Core/Types.h>
 #include <Parsers/TokenIterator.h>
-
 #include <map>
 #include <memory>
 
@@ -30,14 +29,8 @@ struct StringRange
     const char * second = nullptr;
 
     StringRange() {}
-    StringRange(const char * begin, const char * end)
-        : first(begin)
-        , second(end)
-    {}
-    StringRange(TokenIterator token)
-        : first(token->begin)
-        , second(token->end)
-    {}
+    StringRange(const char * begin, const char * end) : first(begin), second(end) {}
+    StringRange(TokenIterator token) : first(token->begin), second(token->end) {}
 
     StringRange(TokenIterator token_begin, TokenIterator token_end)
     {
@@ -65,4 +58,4 @@ inline String toString(const StringRange & range)
     return range.first ? String(range.first, range.second) : String();
 }
 
-} // namespace DB
+}

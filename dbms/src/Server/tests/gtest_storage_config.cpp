@@ -92,12 +92,7 @@ dir=["/data0/tiflash"]
         EXPECT_EQ(all_paths[0], "/data0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
     }
 }
 CATCH
@@ -156,12 +151,7 @@ dir=["/data222/kvstore"]
         EXPECT_EQ(all_paths[0], "/data0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
     }
 }
 CATCH
@@ -211,12 +201,7 @@ dir=["/data0/tiflash"]
         EXPECT_EQ(all_paths[0], "/data0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
     }
 }
 CATCH
@@ -269,12 +254,7 @@ dir=["/data0/tiflash", "/data1/tiflash", "/data2/tiflash"]
         EXPECT_EQ(all_paths[0], "/data0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
     }
 }
 CATCH
@@ -323,12 +303,7 @@ dir=["/ssd0/tiflash"]
         EXPECT_EQ(all_paths[0], "/ssd0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
     }
 }
 CATCH
@@ -435,8 +410,7 @@ dir = [1,2,3]
 
         size_t global_capacity_quota = 0;
         TiFlashStorageConfig storage;
-        ASSERT_ANY_THROW(
-            { std::tie(global_capacity_quota, storage) = TiFlashStorageConfig::parseSettings(*config, log); });
+        ASSERT_ANY_THROW({ std::tie(global_capacity_quota, storage) = TiFlashStorageConfig::parseSettings(*config, log); });
     }
 }
 CATCH
@@ -501,12 +475,7 @@ capacity=[ 1024 ]
         EXPECT_EQ(all_paths[0], "/data0/tiflash/");
 
         // Ensure that creating PathCapacityMetrics is OK.
-        PathCapacityMetrics path_capacity(
-            global_capacity_quota,
-            storage.main_data_paths,
-            storage.main_capacity_quota,
-            storage.latest_data_paths,
-            storage.latest_capacity_quota);
+        PathCapacityMetrics path_capacity(global_capacity_quota, storage.main_data_paths, storage.main_capacity_quota, storage.latest_data_paths, storage.latest_capacity_quota);
 
         auto idx = path_capacity.locatePath("/data0/tiflash/");
         ASSERT_NE(idx, PathCapacityMetrics::INVALID_INDEX);
@@ -585,7 +554,7 @@ max_bytes_per_sec=1024000
 }
 CATCH
 
-TEST(IORateLimitConfigTest, IORateLimitConfig)
+TEST(StorageIORateLimitConfigTest, StorageIORateLimitConfig)
 try
 {
     Strings tests = {
@@ -637,7 +606,7 @@ background_read_weight=2
 
     auto log = Logger::get();
 
-    auto verify_default = [](const IORateLimitConfig & io_config) {
+    auto verify_default = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_read_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_write_bytes_per_sec, 0);
@@ -655,7 +624,7 @@ background_read_weight=2
         ASSERT_EQ(io_config.getBgWriteMaxBytesPerSec(), 0);
     };
 
-    auto verify_case0 = [](const IORateLimitConfig & io_config) {
+    auto verify_case0 = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_read_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_write_bytes_per_sec, 0);
@@ -673,7 +642,7 @@ background_read_weight=2
         ASSERT_EQ(io_config.getBgWriteMaxBytesPerSec(), 0);
     };
 
-    auto verify_case1 = [](const IORateLimitConfig & io_config) {
+    auto verify_case1 = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 1024000);
         ASSERT_EQ(io_config.max_read_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_write_bytes_per_sec, 0);
@@ -691,7 +660,7 @@ background_read_weight=2
         ASSERT_EQ(io_config.getBgReadMaxBytesPerSec(), 102400 * 2);
     };
 
-    auto verify_case2 = [](const IORateLimitConfig & io_config) {
+    auto verify_case2 = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 0);
         ASSERT_EQ(io_config.max_read_bytes_per_sec, 1024000);
         ASSERT_EQ(io_config.max_write_bytes_per_sec, 1024000);
@@ -709,7 +678,7 @@ background_read_weight=2
         ASSERT_EQ(io_config.getBgWriteMaxBytesPerSec(), 682666);
     };
 
-    auto verify_case3 = [](const IORateLimitConfig & io_config) {
+    auto verify_case3 = [](const StorageIORateLimitConfig & io_config) {
         ASSERT_EQ(io_config.max_bytes_per_sec, 1024000);
         ASSERT_EQ(io_config.max_read_bytes_per_sec, 1024000);
         ASSERT_EQ(io_config.max_write_bytes_per_sec, 1024000);
@@ -727,7 +696,7 @@ background_read_weight=2
         ASSERT_EQ(io_config.getBgWriteMaxBytesPerSec(), 102400 * 2);
     };
 
-    std::vector<std::function<void(const IORateLimitConfig &)>> case_verifiers;
+    std::vector<std::function<void(const StorageIORateLimitConfig &)>> case_verifiers;
     case_verifiers.push_back(verify_case0);
     case_verifiers.push_back(verify_case1);
     case_verifiers.push_back(verify_case2);
@@ -741,7 +710,7 @@ background_read_weight=2
         LOG_INFO(log, "parsing [index={}] [content={}]", i, test_case);
         ASSERT_TRUE(config->has("storage.io_rate_limit"));
 
-        IORateLimitConfig io_config;
+        StorageIORateLimitConfig io_config;
         verify_default(io_config);
         io_config.parse(config->getString("storage.io_rate_limit"), log);
         case_verifiers[i](io_config);
@@ -751,9 +720,8 @@ CATCH
 
 std::pair<String, String> getS3Env()
 {
-    return {
-        Poco::Environment::get(StorageS3Config::S3_ACCESS_KEY_ID, /*default*/ ""),
-        Poco::Environment::get(StorageS3Config::S3_SECRET_ACCESS_KEY, /*default*/ "")};
+    return {Poco::Environment::get(StorageS3Config::S3_ACCESS_KEY_ID, /*default*/ ""),
+            Poco::Environment::get(StorageS3Config::S3_SECRET_ACCESS_KEY, /*default*/ "")};
 }
 
 void setS3Env(const String & id, const String & key)
@@ -790,7 +758,9 @@ root = "root123"
 
     // Save env variables and restore when exit.
     auto id_key = getS3Env();
-    SCOPE_EXIT({ setS3Env(id_key.first, id_key.second); });
+    SCOPE_EXIT({
+        setS3Env(id_key.first, id_key.second);
+    });
 
 
     const String env_access_key_id{"abcdefgh"};
@@ -937,12 +907,8 @@ delta_rate = 1.1
             ASSERT_DOUBLE_EQ(cache_config.delta_rate, 0.33);
             ASSERT_EQ(cache_config.getDTFileCacheDir(), "/tmp/StorageConfigTest/RemoteCacheConfig/0/dtfile");
             ASSERT_EQ(cache_config.getPageCacheDir(), "/tmp/StorageConfigTest/RemoteCacheConfig/0/page");
-            ASSERT_EQ(
-                cache_config.getDTFileCapacity() + cache_config.getPageCapacity() + cache_config.getReservedCapacity(),
-                cache_config.capacity);
-            ASSERT_DOUBLE_EQ(
-                cache_config.getDTFileCapacity() * 1.0 / cache_config.capacity,
-                1.0 - cache_config.delta_rate - cache_config.reserved_rate);
+            ASSERT_EQ(cache_config.getDTFileCapacity() + cache_config.getPageCapacity() + cache_config.getReservedCapacity(), cache_config.capacity);
+            ASSERT_DOUBLE_EQ(cache_config.getDTFileCapacity() * 1.0 / cache_config.capacity, 1.0 - cache_config.delta_rate - cache_config.reserved_rate);
             ASSERT_TRUE(cache_config.isCacheEnabled());
         }
         else

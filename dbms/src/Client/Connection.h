@@ -22,10 +22,10 @@
 #include <DataStreams/BlockStreamProfileInfo.h>
 #include <DataStreams/IBlockInputStream.h>
 #include <DataStreams/IBlockOutputStream.h>
-#include <IO/Compression/CompressionSettings.h>
+#include <IO/CompressionSettings.h>
 #include <IO/ConnectionTimeouts.h>
 #include <IO/Progress.h>
-#include <Interpreters/Settings_fwd.h>
+#include <Interpreters/Settings.h>
 #include <Interpreters/TablesStatus.h>
 #include <Poco/Net/StreamSocket.h>
 #include <common/logger_useful.h>
@@ -129,7 +129,10 @@ public:
     ;
 
     /// Set throttler of network traffic. One throttler could be used for multiple connections to limit total traffic.
-    void setThrottler(const ThrottlerPtr & throttler_) { throttler = throttler_; }
+    void setThrottler(const ThrottlerPtr & throttler_)
+    {
+        throttler = throttler_;
+    }
 
 
     /// Packet that could be received from server.
@@ -150,7 +153,7 @@ public:
     /// Change default database. Changes will take effect on next reconnect.
     void setDefaultDatabase(const String & database);
 
-    void getServerVersion(String & name, UInt64 & version_major, UInt64 & version_minor, UInt64 & version_patch);
+    void getServerVersion(String & name, UInt64 & version_major, UInt64 & version_minor, UInt64 & revision);
 
     const String & getServerTimezone();
     const String & getServerDisplayName();
@@ -231,7 +234,7 @@ private:
     String server_name;
     UInt64 server_version_major = 0;
     UInt64 server_version_minor = 0;
-    UInt64 server_version_patch = 0;
+    UInt64 server_revision = 0;
     String server_timezone;
     String server_display_name;
 
@@ -269,7 +272,8 @@ private:
         explicit LoggerWrapper(Connection & parent_)
             : log(nullptr)
             , parent(parent_)
-        {}
+        {
+        }
 
         Poco::Logger * get()
         {

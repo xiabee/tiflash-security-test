@@ -26,8 +26,7 @@ class Context;
 
 /** implements system table "settings", which allows to get information about the current settings.
   */
-class StorageSystemSettings
-    : public ext::SharedPtrHelper<StorageSystemSettings>
+class StorageSystemSettings : public ext::SharedPtrHelper<StorageSystemSettings>
     , public IStorage
 {
 public:

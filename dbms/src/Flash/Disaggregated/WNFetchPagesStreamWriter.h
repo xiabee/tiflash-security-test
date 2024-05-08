@@ -17,10 +17,9 @@
 #include <Common/Logger.h>
 #include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/Remote/DisaggTaskId.h>
-#include <Storages/DeltaMerge/Remote/Proto/remote.pb.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
-#include <Storages/KVStore/Types.h>
 #include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Transaction/Types.h>
 #include <kvproto/disaggregated.pb.h>
 
 #pragma GCC diagnostic push
@@ -31,9 +30,6 @@
 
 namespace DB
 {
-
-struct Settings;
-
 using SyncPagePacketWriter = grpc::ServerWriter<disaggregated::PagesPacket>;
 
 class WNFetchPagesStreamWriter;
@@ -47,26 +43,36 @@ using WNFetchPagesStreamWriterPtr = std::unique_ptr<WNFetchPagesStreamWriter>;
 class WNFetchPagesStreamWriter
 {
 public:
+    static WNFetchPagesStreamWriterPtr build(
+        const DM::Remote::SegmentPagesFetchTask & task,
+        const PageIdU64s & read_page_ids);
+
+    void pipeTo(SyncPagePacketWriter * sync_writer);
+
+private:
     WNFetchPagesStreamWriter(
-        std::function<void(const disaggregated::PagesPacket &)> && sync_write_,
         DM::SegmentReadTaskPtr seg_task_,
-        PageIdU64s read_page_ids_,
-        const Settings & settings_);
+        DM::ColumnDefinesPtr column_defines_,
+        std::shared_ptr<std::vector<tipb::FieldType>> result_field_types_,
+        PageIdU64s read_page_ids)
+        : seg_task(std::move(seg_task_))
+        , column_defines(column_defines_)
+        , result_field_types(std::move(result_field_types_))
+        , read_page_ids(std::move(read_page_ids))
+        , log(Logger::get())
+    {}
 
-    void syncWrite();
+    /// Returns the next packet that could write to the response sink.
+    disaggregated::PagesPacket nextPacket();
 
 private:
-    [[nodiscard]] std::tuple<DM::RemotePb::RemotePage, size_t> getPersistedRemotePage(UInt64 page_id);
-    [[nodiscard]] std::tuple<UInt64, UInt64, UInt64> sendMemTableSet();
-    [[nodiscard]] std::tuple<UInt64, UInt64, UInt64> sendPages();
-
-private:
-    std::function<void(const disaggregated::PagesPacket &)> sync_write;
+    const DM::DisaggTaskId task_id;
     DM::SegmentReadTaskPtr seg_task;
+    DM::ColumnDefinesPtr column_defines;
+    std::shared_ptr<std::vector<tipb::FieldType>> result_field_types;
     PageIdU64s read_page_ids;
-    UInt64 packet_limit_size;
-    bool enable_fetch_memtableset;
-    MemTrackerWrapper mem_tracker_wrapper;
+
+    LoggerPtr log;
 };
 
 } // namespace DB

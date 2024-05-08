@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/TiFlashException.h>
-#include <IO/Checksum/ChecksumBuffer.h>
+#include <IO/ChecksumBuffer.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/File/dtpb/dmfile.pb.h>
@@ -130,10 +130,7 @@ std::optional<DMChecksumConfig> DMChecksumConfig::fromDBContext(const Context & 
 }
 
 DMChecksumConfig::DMChecksumConfig(const Context & context)
-    : DMChecksumConfig(
-        {},
-        context.getSettingsRef().dt_checksum_frame_size.get(),
-        context.getSettingsRef().dt_checksum_algorithm.get()){};
+    : DMChecksumConfig({}, context.getSettingsRef().dt_checksum_frame_size.get(), context.getSettingsRef().dt_checksum_algorithm.get()){};
 
 
 } // namespace DB::DM

@@ -18,17 +18,12 @@
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/ColumnsDescription.h>
-#include <Storages/KVStore/Types.h>
+#include <Storages/Transaction/Types.h>
 
 #include <ctime>
 #include <functional>
 #include <memory>
 
-namespace TiDB
-{
-struct DBInfo;
-using DBInfoPtr = std::shared_ptr<DBInfo>;
-} // namespace TiDB
 
 namespace DB
 {
@@ -54,7 +49,7 @@ public:
     virtual const String & name() const = 0;
     virtual StoragePtr & table() const = 0;
 
-    virtual ~IDatabaseIterator() = default;
+    virtual ~IDatabaseIterator() {}
 };
 
 using DatabaseIteratorPtr = std::unique_ptr<IDatabaseIterator>;
@@ -93,7 +88,7 @@ public:
     virtual bool empty(const Context & context) const = 0;
 
     /// Add the table to the database. Record its presence in the metadata.
-    virtual void createTable(const Context & context, const String & name, const ASTPtr & query) = 0;
+    virtual void createTable(const Context & context, const String & name, const StoragePtr & table, const ASTPtr & query) = 0;
 
     /// Delete the table from the database and return it. Delete the metadata.
     virtual void removeTable(const Context & context, const String & name) = 0;
@@ -105,12 +100,7 @@ public:
     virtual StoragePtr detachTable(const String & name) = 0;
 
     /// Rename the table and possibly move the table to another database.
-    virtual void renameTable(
-        const Context & context,
-        const String & name,
-        IDatabase & to_database,
-        const String & to_name)
-        = 0;
+    virtual void renameTable(const Context & context, const String & name, IDatabase & to_database, const String & to_name) = 0;
 
     using ASTModifier = std::function<void(IAST &)>;
 
@@ -129,10 +119,7 @@ public:
     /// Get the CREATE TABLE query for the table. It can also provide information for detached tables for which there is metadata.
     virtual ASTPtr tryGetCreateTableQuery(const Context & context, const String & name) const = 0;
 
-    virtual ASTPtr getCreateTableQuery(const Context & context, const String & name) const
-    {
-        return tryGetCreateTableQuery(context, name);
-    }
+    virtual ASTPtr getCreateTableQuery(const Context & context, const String & name) const { return tryGetCreateTableQuery(context, name); }
 
     /// Get the CREATE DATABASE query for current database.
     virtual ASTPtr getCreateDatabaseQuery(const Context & context) const = 0;
@@ -149,16 +136,12 @@ public:
 
     virtual bool isTombstone() const { return false; }
     virtual Timestamp getTombstone() const { return 0; }
-    virtual void alterTombstone(
-        const Context & /*context*/,
-        Timestamp /*tombstone_*/,
-        const TiDB::DBInfoPtr & /*new_db_info*/)
-    {}
+    virtual void alterTombstone(const Context & /*context*/, Timestamp /*tombstone_*/) {}
 
     /// Delete metadata, the deletion of which differs from the recursive deletion of the directory, if any.
     virtual void drop(const Context & context) = 0;
 
-    virtual ~IDatabase() = default;
+    virtual ~IDatabase() {}
 };
 
 using DatabasePtr = std::shared_ptr<IDatabase>;

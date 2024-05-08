@@ -51,7 +51,6 @@ namespace DB
 namespace FailPoints
 {
 extern const char force_owner_mgr_state[];
-extern const char force_owner_mgr_campaign_failed[];
 extern const char force_fail_to_create_etcd_session[];
 } // namespace FailPoints
 
@@ -62,7 +61,8 @@ OwnerManagerPtr OwnerManager::createMockOwner(std::string_view id)
     return std::make_shared<MockOwnerManager>(id);
 }
 
-OwnerManagerPtr OwnerManager::createS3GCOwner(
+OwnerManagerPtr
+OwnerManager::createS3GCOwner(
     Context & context,
     std::string_view id,
     const Etcd::ClientPtr & client,
@@ -85,7 +85,8 @@ EtcdOwnerManager::EtcdOwnerManager(
     , leader_ttl(owner_ttl)
     , global_ctx(context.getGlobalContext())
     , log(Logger::get(fmt::format("owner_id={}", id)))
-{}
+{
+}
 
 EtcdOwnerManager::~EtcdOwnerManager()
 {
@@ -119,11 +120,6 @@ void EtcdOwnerManager::cancelImpl()
     }
     if (th_camaign.joinable())
     {
-        {
-            std::unique_lock lock(mtx_camaign);
-            if (campaing_ctx)
-                campaing_ctx->TryCancel();
-        }
         th_camaign.join();
     }
     if (th_watch_owner.joinable())
@@ -158,10 +154,13 @@ void EtcdOwnerManager::campaignOwner()
     th_camaign = ThreadFactory::newThread(
         false,
         /*thread_name*/ "OwnerMgr",
-        [this, s = std::move(session)] { camaignLoop(s); });
+        [this, s = std::move(session)] {
+            camaignLoop(s);
+        });
 }
 
-std::pair<bool, Etcd::SessionPtr> EtcdOwnerManager::runNextCampaign(Etcd::SessionPtr && old_session)
+std::pair<bool, Etcd::SessionPtr>
+EtcdOwnerManager::runNextCampaign(Etcd::SessionPtr && old_session)
 {
     bool run_next_campaign = true;
     std::unique_lock lk(mtx_camaign);
@@ -170,11 +169,7 @@ std::pair<bool, Etcd::SessionPtr> EtcdOwnerManager::runNextCampaign(Etcd::Sessio
         if (auto v = FailPointHelper::getFailPointVal(FailPoints::force_owner_mgr_state); v)
         {
             auto s = std::any_cast<EtcdOwnerManager::State>(v.value());
-            LOG_WARNING(
-                log,
-                "state change by failpoint {} -> {}",
-                magic_enum::enum_name(state),
-                magic_enum::enum_name(s));
+            LOG_WARNING(log, "state change by failpoint {} -> {}", magic_enum::enum_name(state), magic_enum::enum_name(s));
             state = s;
         }
     });
@@ -228,10 +223,10 @@ std::pair<bool, Etcd::SessionPtr> EtcdOwnerManager::runNextCampaign(Etcd::Sessio
 void EtcdOwnerManager::tryChangeState(State coming_state)
 {
     std::unique_lock lk(mtx_camaign);
-    // When the campaign is stopping, it will cause
-    // - leader key deleted in watch thread => try set state to `CancelByKeyDeleted`
-    // - etcd lease expired in keepalive task => try set state to `CancelByLeaseInvalid`
-    // Do not let those actually overwrite `CancelByStop` because the next campaign is expected to be stopped.
+    // The campaign is stopping, it will cause
+    // - leader key deleted in watch thread
+    // - etcd lease expired in keepalive task
+    // Do not overwrite `CancelByStop` because the next campaign is expected to be stopped.
     if (state != State::CancelByStop)
     {
         // ok to set the state
@@ -254,15 +249,7 @@ void EtcdOwnerManager::camaignLoop(Etcd::SessionPtr session)
             const auto lease_id = session->leaseID();
             LOG_DEBUG(log, "new campaign loop with lease_id={:x}", lease_id);
             // Let this thread blocks until becone owner or error occurs
-            {
-                std::unique_lock lock(mtx_camaign);
-                campaing_ctx = std::make_unique<grpc::ClientContext>();
-            }
-            auto && [new_leader, status] = client->campaign(campaing_ctx.get(), campaign_name, id, lease_id);
-            fiu_do_on(FailPoints::force_owner_mgr_campaign_failed, {
-                status = grpc::Status(grpc::StatusCode::UNKNOWN, "<mock error> etcdserver: requested lease not found");
-                LOG_WARNING(log, "force_owner_mgr_campaign_failed enabled, return failed grpc::Status");
-            });
+            auto && [new_leader, status] = client->campaign(campaign_name, id, lease_id);
             if (!status.ok())
             {
                 // if error, continue next campaign
@@ -271,11 +258,8 @@ void EtcdOwnerManager::camaignLoop(Etcd::SessionPtr session)
                     "failed to campaign, id={} lease={:x} code={} msg={}",
                     id,
                     lease_id,
-                    magic_enum::enum_name(status.error_code()),
+                    status.error_code(),
                     status.error_message());
-                // The error is possible cause by lease invalid, create a new etcd
-                // session next round.
-                tryChangeState(State::CancelByLeaseInvalid);
                 static constexpr std::chrono::milliseconds CampaignRetryInterval(200);
                 std::this_thread::sleep_for(CampaignRetryInterval);
                 continue;
@@ -294,9 +278,12 @@ void EtcdOwnerManager::camaignLoop(Etcd::SessionPtr session)
 
             grpc::ClientContext watch_ctx;
             // waits until owner key get expired and deleted
-            th_watch_owner = ThreadFactory::newThread(false, "OwnerWatch", [this, key = owner_key.value(), &watch_ctx] {
-                watchOwner(key, &watch_ctx);
-            });
+            th_watch_owner = ThreadFactory::newThread(
+                false,
+                "OwnerWatch",
+                [this, key = owner_key.value(), &watch_ctx] {
+                    watchOwner(key, &watch_ctx);
+                });
 
             {
                 // etcd session expired / owner key get deleted / caller cancel,
@@ -349,7 +336,7 @@ void EtcdOwnerManager::watchOwner(const String & owner_key, grpc::ClientContext 
         if (!ok)
         {
             auto s = rw->Finish();
-            LOG_DEBUG(log, "watch finish, code={} msg={}", magic_enum::enum_name(s.error_code()), s.error_message());
+            LOG_DEBUG(log, "watch finish, code={} msg={}", s.error_code(), s.error_message());
             return;
         }
 
@@ -380,7 +367,7 @@ void EtcdOwnerManager::watchOwner(const String & owner_key, grpc::ClientContext 
             }
         } // loop until key deleted or failed
         auto s = rw->Finish();
-        LOG_INFO(log, "watch finish, code={} msg={}", magic_enum::enum_name(s.error_code()), s.error_message());
+        LOG_DEBUG(log, "watch finish, code={} msg={}", s.error_code(), s.error_message());
     }
     catch (...)
     {
@@ -393,11 +380,7 @@ std::optional<String> EtcdOwnerManager::getOwnerKey(const String & expect_id)
     const auto & [kv, status] = client->leader(campaign_name);
     if (!status.ok())
     {
-        LOG_INFO(
-            log,
-            "failed to get leader, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_INFO(log, "failed to get leader, code={} msg={}", status.error_code(), status.error_message());
         return std::nullopt;
     }
     // Check whether the owner id get from etcd is the same as this node
@@ -513,7 +496,7 @@ void EtcdOwnerManager::revokeEtcdSession(Etcd::LeaseID lease_id)
     // revoke the session lease
     // if revoke takes longer than the ttl, lease is expired anyway. it is safe to ignore error here.
     auto status = client->leaseRevoke(lease_id);
-    LOG_INFO(log, "revoke session, code={} msg={}", magic_enum::enum_name(status.error_code()), status.error_message());
+    LOG_INFO(log, "revoke session, code={} msg={}", status.error_code(), status.error_message());
 }
 
 OwnerInfo EtcdOwnerManager::getOwnerID()
@@ -531,8 +514,7 @@ OwnerInfo EtcdOwnerManager::getOwnerID()
     if (!status.ok())
         return OwnerInfo{
             .status = OwnerType::GrpcError,
-            .owner_id
-            = fmt::format("code={} msg={}", magic_enum::enum_name(status.error_code()), status.error_message()),
+            .owner_id = fmt::format("code={} msg={}", status.error_code(), status.error_message()),
         };
     if (val.empty())
         return OwnerInfo{

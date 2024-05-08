@@ -46,12 +46,7 @@ PhysicalPlanNodePtr PhysicalMockExchangeReceiver::build(
     const tipb::ExchangeReceiver & exchange_receiver,
     const FineGrainedShuffle & fine_grained_shuffle)
 {
-    auto [schema, mock_streams] = mockSchemaAndStreamsForExchangeReceiver(
-        context,
-        executor_id,
-        log,
-        exchange_receiver,
-        fine_grained_shuffle.stream_count);
+    auto [schema, mock_streams] = mockSchemaAndStreamsForExchangeReceiver(context, executor_id, log, exchange_receiver, fine_grained_shuffle.stream_count);
 
     auto physical_mock_exchange_receiver = std::make_shared<PhysicalMockExchangeReceiver>(
         executor_id,
@@ -64,27 +59,26 @@ PhysicalPlanNodePtr PhysicalMockExchangeReceiver::build(
     return physical_mock_exchange_receiver;
 }
 
-void PhysicalMockExchangeReceiver::buildBlockInputStreamImpl(
-    DAGPipeline & pipeline,
-    Context & /*context*/,
-    size_t /*max_streams*/)
+void PhysicalMockExchangeReceiver::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & /*context*/, size_t /*max_streams*/)
 {
-    RUNTIME_CHECK(pipeline.streams.empty());
+    assert(pipeline.streams.empty());
     pipeline.streams.insert(pipeline.streams.end(), mock_streams.begin(), mock_streams.end());
 }
 
-void PhysicalMockExchangeReceiver::buildPipelineExecGroupImpl(
-    PipelineExecutorContext & exec_context,
+void PhysicalMockExchangeReceiver::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     Context & /*context*/,
     size_t /*concurrency*/)
 {
-    for (auto & mock_stream : mock_streams)
-        group_builder.addConcurrency(
-            std::make_unique<BlockInputStreamSourceOp>(exec_context, log->identifier(), mock_stream));
+    group_builder.init(mock_streams.size());
+    size_t i = 0;
+    group_builder.transform([&](auto & builder) {
+        builder.setSourceOp(std::make_unique<BlockInputStreamSourceOp>(exec_status, log->identifier(), mock_streams[i++]));
+    });
 }
 
-void PhysicalMockExchangeReceiver::finalizeImpl(const Names & parent_require)
+void PhysicalMockExchangeReceiver::finalize(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
 }

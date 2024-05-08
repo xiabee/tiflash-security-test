@@ -14,10 +14,9 @@
 
 #pragma once
 
-#include <Columns/IColumn.h>
-#include <common/types.h>
-
 #include <vector>
+#include <common/types.h>
+#include <Columns/IColumn.h>
 
 
 namespace DB
@@ -34,10 +33,7 @@ struct DictionaryStructure;
 void formatIDs(BlockOutputStreamPtr & out, const std::vector<UInt64> & ids);
 
 /// For composite key
-void formatKeys(
-    const DictionaryStructure & dict_struct,
-    BlockOutputStreamPtr & out,
-    const Columns & key_columns,
-    const std::vector<size_t> & requested_rows);
+void formatKeys(const DictionaryStructure & dict_struct, BlockOutputStreamPtr & out,
+    const Columns & key_columns, const std::vector<size_t> & requested_rows);
 
-} // namespace DB
+}

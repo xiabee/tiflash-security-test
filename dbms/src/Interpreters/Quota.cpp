@@ -20,7 +20,6 @@
 
 #include <iomanip>
 #include <random>
-#include <ranges>
 #include <set>
 
 
@@ -46,20 +45,11 @@ void QuotaValues<Counter>::initFromConfig(const String & config_elem, Poco::Util
     execution_time_usec = config.getUInt64(config_elem + ".execution_time", 0) * 1000000ULL;
 }
 
-template void QuotaValues<size_t>::initFromConfig(
-    const String & config_elem,
-    Poco::Util::AbstractConfiguration & config);
-template void QuotaValues<std::atomic<size_t>>::initFromConfig(
-    const String & config_elem,
-    Poco::Util::AbstractConfiguration & config);
+template void QuotaValues<size_t>::initFromConfig(const String & config_elem, Poco::Util::AbstractConfiguration & config);
+template void QuotaValues<std::atomic<size_t>>::initFromConfig(const String & config_elem, Poco::Util::AbstractConfiguration & config);
 
 
-void QuotaForInterval::initFromConfig(
-    const String & config_elem,
-    time_t duration_,
-    bool randomize_,
-    time_t offset_,
-    Poco::Util::AbstractConfiguration & config)
+void QuotaForInterval::initFromConfig(const String & config_elem, time_t duration_, bool randomize_, time_t offset_, Poco::Util::AbstractConfiguration & config)
 {
     rounded_time.store(0, std::memory_order_relaxed);
     duration = duration_;
@@ -77,12 +67,7 @@ void QuotaForInterval::checkExceeded(time_t current_time, const String & quota_n
     check(max.result_bytes, used.result_bytes, quota_name, user_name, "Total result bytes");
     check(max.read_rows, used.read_rows, quota_name, user_name, "Total rows read");
     check(max.read_bytes, used.read_bytes, quota_name, user_name, "Total bytes read");
-    check(
-        max.execution_time_usec / 1000000,
-        used.execution_time_usec / 1000000,
-        quota_name,
-        user_name,
-        "Total execution time");
+    check(max.execution_time_usec / 1000000, used.execution_time_usec / 1000000, quota_name, user_name, "Total execution time");
 }
 
 String QuotaForInterval::toString() const
@@ -91,8 +76,8 @@ String QuotaForInterval::toString() const
 
     auto loaded_rounded_time = rounded_time.load(std::memory_order_relaxed);
 
-    res << std::fixed << std::setprecision(3) << "Interval:       " << LocalDateTime(loaded_rounded_time).toString()
-        << " - " << LocalDateTime(loaded_rounded_time + duration).toString() << ".\n"
+    res << std::fixed << std::setprecision(3)
+        << "Interval:       " << LocalDateTime(loaded_rounded_time).toString() << " - " << LocalDateTime(loaded_rounded_time + duration).toString() << ".\n"
         << "Queries:        " << used.queries << ".\n"
         << "Errors:         " << used.errors << ".\n"
         << "Result rows:    " << used.result_rows << ".\n"
@@ -114,35 +99,21 @@ void QuotaForInterval::addError() noexcept
     ++used.errors;
 }
 
-void QuotaForInterval::checkAndAddResultRowsBytes(
-    time_t current_time,
-    const String & quota_name,
-    const String & user_name,
-    size_t rows,
-    size_t bytes)
+void QuotaForInterval::checkAndAddResultRowsBytes(time_t current_time, const String & quota_name, const String & user_name, size_t rows, size_t bytes)
 {
     used.result_rows += rows;
     used.result_bytes += bytes;
     checkExceeded(current_time, quota_name, user_name);
 }
 
-void QuotaForInterval::checkAndAddReadRowsBytes(
-    time_t current_time,
-    const String & quota_name,
-    const String & user_name,
-    size_t rows,
-    size_t bytes)
+void QuotaForInterval::checkAndAddReadRowsBytes(time_t current_time, const String & quota_name, const String & user_name, size_t rows, size_t bytes)
 {
     used.read_rows += rows;
     used.read_bytes += bytes;
     checkExceeded(current_time, quota_name, user_name);
 }
 
-void QuotaForInterval::checkAndAddExecutionTime(
-    time_t current_time,
-    const String & quota_name,
-    const String & user_name,
-    Poco::Timespan amount)
+void QuotaForInterval::checkAndAddExecutionTime(time_t current_time, const String & quota_name, const String & user_name, Poco::Timespan amount)
 {
     /// Information about internals of Poco::Timespan used.
     used.execution_time_usec += amount.totalMicroseconds();
@@ -193,9 +164,9 @@ void QuotaForInterval::check(
         else
             message << duration << " seconds";
 
-        message << " has been exceeded. " << resource_name << ": " << used_amount << ", max: " << max_amount << ". "
-                << "Interval will end at "
-                << LocalDateTime(rounded_time.load(std::memory_order_relaxed) + duration).toString() << ". "
+        message << " has been exceeded. "
+                << resource_name << ": " << used_amount << ", max: " << max_amount << ". "
+                << "Interval will end at " << LocalDateTime(rounded_time.load(std::memory_order_relaxed) + duration).toString() << ". "
                 << "Name of quota template: '" << quota_name << "'.";
 
         throw Exception(message.str(), ErrorCodes::QUOTA_EXPIRED);
@@ -203,20 +174,17 @@ void QuotaForInterval::check(
 }
 
 
-void QuotaForIntervals::initFromConfig(
-    const String & config_elem,
-    Poco::Util::AbstractConfiguration & config,
-    pcg64 & rng)
+void QuotaForIntervals::initFromConfig(const String & config_elem, Poco::Util::AbstractConfiguration & config, pcg64 & rng)
 {
     Poco::Util::AbstractConfiguration::Keys config_keys;
     config.keys(config_elem, config_keys);
 
-    for (auto & config_key : config_keys)
+    for (Poco::Util::AbstractConfiguration::Keys::const_iterator it = config_keys.begin(); it != config_keys.end(); ++it)
     {
-        if (!startsWith(config_key, "interval"))
+        if (!startsWith(*it, "interval"))
             continue;
 
-        String interval_config_elem = config_elem + "." + config_key;
+        String interval_config_elem = config_elem + "." + *it;
         time_t duration = config.getInt(interval_config_elem + ".duration", 0);
         time_t offset = 0;
 
@@ -233,7 +201,7 @@ void QuotaForIntervals::initFromConfig(
 
 void QuotaForIntervals::setMax(const QuotaForIntervals & quota)
 {
-    for (auto it = cont.begin(); it != cont.end();)
+    for (Container::iterator it = cont.begin(); it != cont.end();)
     {
         if (quota.cont.count(it->first))
             ++it;
@@ -252,37 +220,37 @@ void QuotaForIntervals::setMax(const QuotaForIntervals & quota)
 
 void QuotaForIntervals::checkExceeded(time_t current_time)
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.checkExceeded(current_time, quota_name, user_name);
 }
 
 void QuotaForIntervals::addQuery() noexcept
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.addQuery();
 }
 
 void QuotaForIntervals::addError() noexcept
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.addError();
 }
 
 void QuotaForIntervals::checkAndAddResultRowsBytes(time_t current_time, size_t rows, size_t bytes)
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.checkAndAddResultRowsBytes(current_time, quota_name, user_name, rows, bytes);
 }
 
 void QuotaForIntervals::checkAndAddReadRowsBytes(time_t current_time, size_t rows, size_t bytes)
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.checkAndAddReadRowsBytes(current_time, quota_name, user_name, rows, bytes);
 }
 
 void QuotaForIntervals::checkAndAddExecutionTime(time_t current_time, Poco::Timespan amount)
 {
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
+    for (Container::reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
         it->second.checkAndAddExecutionTime(current_time, quota_name, user_name, amount);
 }
 
@@ -290,18 +258,15 @@ String QuotaForIntervals::toString() const
 {
     std::stringstream res;
 
-    for (auto it = cont.rbegin(); it != cont.rend(); ++it) // NOLINT
-        res << std::endl << it->second.toString();
+    for (Container::const_reverse_iterator it = cont.rbegin(); it != cont.rend(); ++it)
+        res << std::endl
+            << it->second.toString();
 
     return res.str();
 }
 
 
-void Quota::loadFromConfig(
-    const String & config_elem,
-    const String & name_,
-    Poco::Util::AbstractConfiguration & config,
-    pcg64 & rng)
+void Quota::loadFromConfig(const String & config_elem, const String & name_, Poco::Util::AbstractConfiguration & config, pcg64 & rng)
 {
     name = name_;
 
@@ -331,9 +296,8 @@ void Quota::loadFromConfig(
 QuotaForIntervalsPtr Quota::get(const String & quota_key, const String & user_name, const Poco::Net::IPAddress & ip)
 {
     if (!quota_key.empty() && !ignore_key_if_not_keyed && (!is_keyed || keyed_by_ip))
-        throw Exception(
-            "Quota " + name + " (for user " + user_name + ") doesn't allow client supplied keys.",
-            ErrorCodes::QUOTA_DOESNT_ALLOW_KEYS);
+        throw Exception("Quota " + name + " (for user " + user_name + ") doesn't allow client supplied keys.",
+                        ErrorCodes::QUOTA_DOESNT_ALLOW_KEYS);
 
     /** Quota is calculated separately:
       * - for each IP-address, if 'keyed_by_ip';
@@ -341,11 +305,16 @@ QuotaForIntervalsPtr Quota::get(const String & quota_key, const String & user_na
       * - otherwise for each 'user_name'.
       */
 
-    UInt64 quota_key_hashed = sipHash64(keyed_by_ip ? ip.toString() : (!quota_key.empty() ? quota_key : user_name));
+    UInt64 quota_key_hashed = sipHash64(
+        keyed_by_ip
+            ? ip.toString()
+            : (!quota_key.empty()
+                   ? quota_key
+                   : user_name));
 
     std::lock_guard lock(mutex);
 
-    auto it = quota_for_keys.find(quota_key_hashed);
+    Container::iterator it = quota_for_keys.find(quota_key_hashed);
     if (quota_for_keys.end() == it)
         it = quota_for_keys.emplace(quota_key_hashed, std::make_shared<QuotaForIntervals>(max, user_name)).first;
 
@@ -362,7 +331,7 @@ void Quotas::loadFromConfig(Poco::Util::AbstractConfiguration & config)
 
     /// Remove keys, that now absent in config.
     std::set<std::string> keys_set(config_keys.begin(), config_keys.end());
-    for (auto it = cont.begin(); it != cont.end();)
+    for (Container::iterator it = cont.begin(); it != cont.end();)
     {
         if (keys_set.count(it->first))
             ++it;
@@ -371,24 +340,20 @@ void Quotas::loadFromConfig(Poco::Util::AbstractConfiguration & config)
     }
 
     // Load quotas from current config
-    for (auto & config_key : config_keys)
+    for (Poco::Util::AbstractConfiguration::Keys::const_iterator it = config_keys.begin(); it != config_keys.end(); ++it)
     {
-        if (!cont.count(config_key))
-            cont.try_emplace(config_key);
-        cont[config_key].loadFromConfig("quotas." + config_key, config_key, config, rng);
+        if (!cont.count(*it))
+            cont.try_emplace(*it);
+        cont[*it].loadFromConfig("quotas." + *it, *it, config, rng);
     }
     // Create a "default" if not exists
     if (!cont.count(QuotaForInterval::DEFAULT_QUOTA_NAME))
         cont.try_emplace(QuotaForInterval::DEFAULT_QUOTA_NAME);
 }
 
-QuotaForIntervalsPtr Quotas::get(
-    const String & name,
-    const String & quota_key,
-    const String & user_name,
-    const Poco::Net::IPAddress & ip)
+QuotaForIntervalsPtr Quotas::get(const String & name, const String & quota_key, const String & user_name, const Poco::Net::IPAddress & ip)
 {
-    auto it = cont.find(name);
+    Container::iterator it = cont.find(name);
     if (cont.end() == it)
         throw Exception("Unknown quota " + name, ErrorCodes::UNKNOWN_QUOTA);
 

@@ -25,8 +25,12 @@ namespace DB
 /// Do I need to use the hash table maps_*_full, in which we remember whether the row was joined and fill left columns if not joined
 inline bool getFullness(ASTTableJoin::Kind kind)
 {
-    return kind == ASTTableJoin::Kind::RightOuter || kind == ASTTableJoin::Kind::Cross_RightOuter
-        || kind == ASTTableJoin::Kind::Full;
+    return kind == ASTTableJoin::Kind::RightOuter || kind == ASTTableJoin::Kind::Cross_RightOuter || kind == ASTTableJoin::Kind::Full;
+}
+/// For semi and anti join: A semi/anti join B, that uses A as build table
+inline bool isRightSemiFamily(ASTTableJoin::Kind kind)
+{
+    return kind == ASTTableJoin::Kind::RightSemi || kind == ASTTableJoin::Kind::RightAnti;
 }
 inline bool isLeftOuterJoin(ASTTableJoin::Kind kind)
 {
@@ -40,10 +44,6 @@ inline bool isInnerJoin(ASTTableJoin::Kind kind)
 {
     return kind == ASTTableJoin::Kind::Inner || kind == ASTTableJoin::Kind::Cross;
 }
-inline bool isSemiJoin(ASTTableJoin::Kind kind)
-{
-    return kind == ASTTableJoin::Kind::Semi || kind == ASTTableJoin::Kind::Cross_Semi;
-}
 inline bool isAntiJoin(ASTTableJoin::Kind kind)
 {
     return kind == ASTTableJoin::Kind::Anti || kind == ASTTableJoin::Kind::Cross_Anti;
@@ -51,19 +51,8 @@ inline bool isAntiJoin(ASTTableJoin::Kind kind)
 inline bool isCrossJoin(ASTTableJoin::Kind kind)
 {
     return kind == ASTTableJoin::Kind::Cross || kind == ASTTableJoin::Kind::Cross_LeftOuter
-        || kind == ASTTableJoin::Kind::Cross_RightOuter || kind == ASTTableJoin::Kind::Cross_Semi
-        || kind == ASTTableJoin::Kind::Cross_Anti || kind == ASTTableJoin::Kind::Cross_LeftOuterSemi
-        || kind == ASTTableJoin::Kind::Cross_LeftOuterAnti;
-}
-/// (anti) semi join.
-inline bool isSemiFamily(ASTTableJoin::Kind kind)
-{
-    return isSemiJoin(kind) || isAntiJoin(kind);
-}
-/// For semi and anti join: A semi/anti join B, that uses A as build table
-inline bool isRightSemiFamily(ASTTableJoin::Kind kind)
-{
-    return kind == ASTTableJoin::Kind::RightSemi || kind == ASTTableJoin::Kind::RightAnti;
+        || kind == ASTTableJoin::Kind::Cross_RightOuter || kind == ASTTableJoin::Kind::Cross_Anti
+        || kind == ASTTableJoin::Kind::Cross_LeftOuterSemi || kind == ASTTableJoin::Kind::Cross_LeftOuterAnti;
 }
 /// (cartesian/null-aware) (anti) left outer semi join.
 inline bool isLeftOuterSemiFamily(ASTTableJoin::Kind kind)
@@ -86,18 +75,38 @@ inline bool needScanHashMapAfterProbe(ASTTableJoin::Kind kind)
     return getFullness(kind) || isRightSemiFamily(kind);
 }
 
-inline bool isNecessaryKindToUseRowFlaggedHashMap(ASTTableJoin::Kind kind)
+bool mayProbeSideExpandedAfterJoin(ASTTableJoin::Kind kind, ASTTableJoin::Strictness strictness);
+
+struct ProbeProcessInfo
 {
-    return isRightSemiFamily(kind) || kind == ASTTableJoin::Kind::RightOuter;
-}
+    Block block;
+    size_t partition_index;
+    UInt64 max_block_size;
+    UInt64 min_result_block_size;
+    size_t start_row;
+    size_t end_row;
+    bool all_rows_joined_finish;
 
-inline bool useRowFlaggedHashMap(ASTTableJoin::Kind kind, bool has_other_condition)
-{
-    return has_other_condition && isNecessaryKindToUseRowFlaggedHashMap(kind);
-}
+    /// these are used for probe
+    bool prepare_for_probe_done = false;
+    Columns materialized_columns;
+    ColumnRawPtrs key_columns;
+    ColumnPtr null_map_holder = nullptr;
+    ConstNullMapPtr null_map = nullptr;
+    /// Used with ANY INNER JOIN
+    std::unique_ptr<IColumn::Filter> filter = nullptr;
+    /// Used with ALL ... JOIN
+    std::unique_ptr<IColumn::Offsets> offsets_to_replicate = nullptr;
 
-bool mayProbeSideExpandedAfterJoin(ASTTableJoin::Kind kind);
+    explicit ProbeProcessInfo(UInt64 max_block_size_)
+        : max_block_size(max_block_size_)
+        , min_result_block_size((max_block_size + 1) / 2)
+        , all_rows_joined_finish(true){};
 
+    void resetBlock(Block && block_, size_t partition_index_ = 0);
+    void updateStartRow();
+    void prepareForProbe(const Names & key_names, const String & filter_column, ASTTableJoin::Kind kind, ASTTableJoin::Strictness strictness);
+};
 struct JoinBuildInfo
 {
     bool enable_fine_grained_shuffle;
@@ -111,13 +120,12 @@ struct JoinBuildInfo
         return enable_fine_grained_shuffle || (enable_spill && !is_spilled);
     }
 };
-void computeDispatchHash(
-    size_t rows,
-    const ColumnRawPtrs & key_columns,
-    const TiDB::TiDBCollators & collators,
-    std::vector<String> & partition_key_containers,
-    size_t join_restore_round,
-    WeakHash32 & hash);
+void computeDispatchHash(size_t rows,
+                         const ColumnRawPtrs & key_columns,
+                         const TiDB::TiDBCollators & collators,
+                         std::vector<String> & partition_key_containers,
+                         size_t join_restore_round,
+                         WeakHash32 & hash);
 
 template <int>
 struct PointerTypeColumnHelper;
@@ -138,16 +146,6 @@ struct PointerTypeColumnHelper<8>
     using ArrayType = PaddedPODArray<Int64>;
 };
 
-ColumnRawPtrs extractAndMaterializeKeyColumns(
-    const Block & block,
-    Columns & materialized_columns,
-    const Strings & key_columns_names);
-void recordFilteredRows(
-    const Block & block,
-    const String & filter_column,
-    ColumnPtr & null_map_holder,
-    ConstNullMapPtr & null_map);
-
-std::pair<const ColumnUInt8::Container *, ConstNullMapPtr> getDataAndNullMapVectorFromFilterColumn(
-    ColumnPtr & filter_column);
+ColumnRawPtrs extractAndMaterializeKeyColumns(const Block & block, Columns & materialized_columns, const Strings & key_columns_names);
+void recordFilteredRows(const Block & block, const String & filter_column, ColumnPtr & null_map_holder, ConstNullMapPtr & null_map);
 } // namespace DB

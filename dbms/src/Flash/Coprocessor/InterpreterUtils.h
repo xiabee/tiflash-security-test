@@ -19,38 +19,26 @@
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
 #include <Flash/Coprocessor/FilterConditions.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
 #include <Interpreters/ExpressionActions.h>
 
 namespace DB
 {
 class Context;
 
-class PipelineExecutorContext;
-class PipelineExecGroupBuilder;
+class PipelineExecutorStatus;
+struct PipelineExecGroupBuilder;
 
-void restoreConcurrency(DAGPipeline & pipeline, size_t concurrency, Int64 max_buffered_bytes, const LoggerPtr & log);
+void restoreConcurrency(
+    DAGPipeline & pipeline,
+    size_t concurrency,
+    const LoggerPtr & log);
 
 void executeUnion(
     DAGPipeline & pipeline,
     size_t max_streams,
-    Int64 max_buffered_bytes,
     const LoggerPtr & log,
     bool ignore_block = false,
     const String & extra_info = "");
-
-void restoreConcurrency(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    size_t concurrency,
-    Int64 max_buffered_bytes,
-    const LoggerPtr & log);
-
-void executeUnion(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    Int64 max_buffered_bytes,
-    const LoggerPtr & log);
 
 ExpressionActionsPtr generateProjectExpressionActions(
     const BlockInputStreamPtr & stream,
@@ -63,7 +51,7 @@ void executeExpression(
     const String & extra_info = "");
 
 void executeExpression(
-    PipelineExecutorContext & exec_context,
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     const ExpressionActionsPtr & expr_actions,
     const LoggerPtr & log);
@@ -78,49 +66,34 @@ void orderStreams(
     const LoggerPtr & log);
 
 void executeLocalSort(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    const SortDescription & order_descr,
-    std::optional<size_t> limit,
-    bool for_fine_grained_executor,
-    const Context & context,
-    const LoggerPtr & log);
-
-void executeFinalSort(
-    PipelineExecutorContext & exec_context,
+    PipelineExecutorStatus & exec_status,
     PipelineExecGroupBuilder & group_builder,
     const SortDescription & order_descr,
     std::optional<size_t> limit,
     const Context & context,
     const LoggerPtr & log);
 
-void executeCreatingSets(DAGPipeline & pipeline, const Context & context, size_t max_streams, const LoggerPtr & log);
+void executeCreatingSets(
+    DAGPipeline & pipeline,
+    const Context & context,
+    size_t max_streams,
+    const LoggerPtr & log);
 
 std::tuple<ExpressionActionsPtr, String, ExpressionActionsPtr> buildPushDownFilter(
     const google::protobuf::RepeatedPtrField<tipb::Expr> & conditions,
     DAGExpressionAnalyzer & analyzer);
 
 void executePushedDownFilter(
+    size_t remote_read_streams_start_index,
     const FilterConditions & filter_conditions,
     DAGExpressionAnalyzer & analyzer,
     LoggerPtr log,
     DAGPipeline & pipeline);
 
-void executePushedDownFilter(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    const FilterConditions & filter_conditions,
-    DAGExpressionAnalyzer & analyzer,
-    LoggerPtr log);
-
 void executeGeneratedColumnPlaceholder(
+    size_t remote_read_streams_start_index,
     const std::vector<std::tuple<UInt64, String, DataTypePtr>> & generated_column_infos,
     LoggerPtr log,
     DAGPipeline & pipeline);
 
-void executeGeneratedColumnPlaceholder(
-    PipelineExecutorContext & exec_context,
-    PipelineExecGroupBuilder & group_builder,
-    const std::vector<std::tuple<UInt64, String, DataTypePtr>> & generated_column_infos,
-    LoggerPtr log);
 } // namespace DB

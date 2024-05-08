@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #include <Common/UnifiedLogFormatter.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/MockKeyManager.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <IO/Encryption/MockKeyManager.h>
-#include <IO/FileProvider/FileProvider.h>
 #include <Interpreters/Context.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/FormattingChannel.h>
@@ -23,10 +23,9 @@
 #include <Poco/PatternFormatter.h>
 #include <Server/RaftConfigParser.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
-#include <Storages/KVStore/TMTContext.h>
-#include <Storages/PathPool.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/S3/S3Common.h>
+#include <Storages/Transaction/TMTContext.h>
 #include <TestUtils/TiFlashTestEnv.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/CreateBucketRequest.h>
@@ -94,19 +93,12 @@ void TiFlashTestEnv::tryRemovePath(const std::string & path, bool recreate)
     }
 }
 
-void TiFlashTestEnv::initializeGlobalContext(
-    Strings testdata_path,
-    PageStorageRunMode ps_run_mode,
-    uint64_t bg_thread_count)
+void TiFlashTestEnv::initializeGlobalContext(Strings testdata_path, PageStorageRunMode ps_run_mode, uint64_t bg_thread_count)
 {
     addGlobalContext(DB::Settings(), testdata_path, ps_run_mode, bg_thread_count);
 }
 
-void TiFlashTestEnv::addGlobalContext(
-    const DB::Settings & settings_,
-    Strings testdata_path,
-    PageStorageRunMode ps_run_mode,
-    uint64_t bg_thread_count)
+void TiFlashTestEnv::addGlobalContext(const DB::Settings & settings_, Strings testdata_path, PageStorageRunMode ps_run_mode, uint64_t bg_thread_count)
 {
     // set itself as global context
     auto global_context = std::shared_ptr<Context>(DB::Context::createGlobal());
@@ -121,10 +113,8 @@ void TiFlashTestEnv::addGlobalContext(
     // initialize background & blockable background thread pool
     global_context->setSettings(settings_);
     Settings & settings = global_context->getSettingsRef();
-    global_context->initializeBackgroundPool(
-        bg_thread_count == 0 ? settings.background_pool_size.get() : bg_thread_count);
-    global_context->initializeBlockableBackgroundPool(
-        bg_thread_count == 0 ? settings.background_pool_size.get() : bg_thread_count);
+    global_context->initializeBackgroundPool(bg_thread_count == 0 ? settings.background_pool_size.get() : bg_thread_count);
+    global_context->initializeBlockableBackgroundPool(bg_thread_count == 0 ? settings.background_pool_size.get() : bg_thread_count);
 
     // Theses global variables should be initialized by the following order
     // 1. capacity
@@ -155,7 +145,6 @@ void TiFlashTestEnv::addGlobalContext(
         global_context->getFileProvider());
 
     global_context->setPageStorageRunMode(ps_run_mode);
-    global_context->initializeGlobalPageIdAllocator();
     global_context->initializeGlobalStoragePoolIfNeed(global_context->getPathPool());
     global_context->initializeWriteNodePageStorageIfNeed(global_context->getPathPool());
     LOG_INFO(Logger::get(), "Storage mode : {}", static_cast<UInt8>(global_context->getPageStorageRunMode()));
@@ -186,8 +175,9 @@ ContextPtr TiFlashTestEnv::getContext(const DB::Settings & settings, Strings tes
     context.setGlobalContext(*global_contexts[0]);
     // Load `testdata_path` as path if it is set.
     const String root_path = [&]() {
-        const auto root_path = testdata_path.empty() ? getTemporaryPath(fmt::format("{}/", getpid()), /*get_abs*/ false)
-                                                     : testdata_path[0];
+        const auto root_path = testdata_path.empty()
+            ? getTemporaryPath(fmt::format("{}/", getpid()), /*get_abs*/ false)
+            : testdata_path[0];
         return Poco::Path(root_path).absolute().toString();
     }();
     if (testdata_path.empty())
@@ -195,7 +185,6 @@ ContextPtr TiFlashTestEnv::getContext(const DB::Settings & settings, Strings tes
     context.setPath(root_path);
     auto paths = getPathPool(testdata_path);
     context.setPathPool(paths.first, paths.second, Strings{}, context.getPathCapacity(), context.getFileProvider());
-    global_contexts[0]->initializeGlobalPageIdAllocator();
     global_contexts[0]->initializeGlobalStoragePoolIfNeed(context.getPathPool());
     global_contexts[0]->tryReleaseWriteNodePageStorageForTest();
     global_contexts[0]->initializeWriteNodePageStorageIfNeed(context.getPathPool());
@@ -218,24 +207,16 @@ void TiFlashTestEnv::shutdown()
     }
 }
 
-void TiFlashTestEnv::setupLogger(const String & level, std::ostream & os, bool enable_colors)
+void TiFlashTestEnv::setupLogger(const String & level, std::ostream & os)
 {
     Poco::AutoPtr<Poco::ConsoleChannel> channel = new Poco::ConsoleChannel(os);
-    Poco::AutoPtr<Poco::Formatter> formatter;
-    if (enable_colors)
-        formatter = new UnifiedLogFormatter<true>();
-    else
-        formatter = new UnifiedLogFormatter<false>();
+    Poco::AutoPtr<Poco::Formatter> formatter(new UnifiedLogFormatter<true>());
     Poco::AutoPtr<Poco::FormattingChannel> formatting_channel(new Poco::FormattingChannel(formatter, channel));
     Poco::Logger::root().setChannel(formatting_channel);
     Poco::Logger::root().setLevel(level);
 }
 
-void TiFlashTestEnv::setUpTestContext(
-    Context & context,
-    DAGContext * dag_context,
-    MockStorage * mock_storage,
-    const TestType & test_type)
+void TiFlashTestEnv::setUpTestContext(Context & context, DAGContext * dag_context, MockStorage * mock_storage, const TestType & test_type)
 {
     switch (test_type)
     {
@@ -254,20 +235,6 @@ void TiFlashTestEnv::setUpTestContext(
     context.setSetting("group_by_collation_sensitive", Field(static_cast<UInt64>(1)));
 }
 
-std::unique_ptr<PathPool> TiFlashTestEnv::createCleanPathPool(const String & path)
-{
-    // Drop files on disk
-    LOG_INFO(Logger::get("Test"), "Clean path {} for bootstrap", path);
-    tryRemovePath(path, /*recreate=*/true);
-
-    auto & global_ctx = TiFlashTestEnv::getGlobalContext();
-    auto path_capacity = global_ctx.getPathCapacity();
-    auto provider = global_ctx.getFileProvider();
-    // Create a PathPool instance on the clean directory
-    Strings main_data_paths{path};
-    return std::make_unique<PathPool>(main_data_paths, main_data_paths, Strings{}, path_capacity, provider);
-}
-
 FileProviderPtr TiFlashTestEnv::getMockFileProvider()
 {
     bool encryption_enabled = false;
@@ -283,9 +250,7 @@ bool TiFlashTestEnv::createBucketIfNotExist(::DB::S3::TiFlashS3Client & s3_clien
     {
         LOG_DEBUG(s3_client.log, "Created bucket {}", s3_client.bucket());
     }
-    else if (
-        outcome.GetError().GetExceptionName() == "BucketAlreadyOwnedByYou"
-        || outcome.GetError().GetExceptionName() == "BucketAlreadyExists")
+    else if (outcome.GetError().GetExceptionName() == "BucketAlreadyOwnedByYou" || outcome.GetError().GetExceptionName() == "BucketAlreadyExists")
     {
         LOG_DEBUG(s3_client.log, "Bucket {} already exist", s3_client.bucket());
     }
@@ -294,8 +259,7 @@ bool TiFlashTestEnv::createBucketIfNotExist(::DB::S3::TiFlashS3Client & s3_clien
         const auto & err = outcome.GetError();
         LOG_ERROR(s3_client.log, "CreateBucket: {}:{}", err.GetExceptionName(), err.GetMessage());
     }
-    return outcome.IsSuccess() || outcome.GetError().GetExceptionName() == "BucketAlreadyOwnedByYou"
-        || outcome.GetError().GetExceptionName() == "BucketAlreadyExists";
+    return outcome.IsSuccess() || outcome.GetError().GetExceptionName() == "BucketAlreadyOwnedByYou" || outcome.GetError().GetExceptionName() == "BucketAlreadyExists";
 }
 
 void TiFlashTestEnv::deleteBucket(::DB::S3::TiFlashS3Client & s3_client)
@@ -307,20 +271,15 @@ void TiFlashTestEnv::deleteBucket(::DB::S3::TiFlashS3Client & s3_client)
         // in the bucket must be deleted before the bucket itself can be
         // deleted.
         LOG_INFO(s3_client.log, "DeleteBucket, clean all existing objects begin");
-        S3::rawListPrefix(
-            s3_client,
-            s3_client.bucket(),
-            s3_client.root(),
-            "",
-            [&](const Aws::S3::Model::ListObjectsV2Result & r) -> S3::PageResult {
-                for (const auto & obj : r.GetContents())
-                {
-                    const auto & key = obj.GetKey();
-                    LOG_INFO(s3_client.log, "DeleteBucket, clean existing object, key={}", key);
-                    S3::rawDeleteObject(s3_client, s3_client.bucket(), key);
-                }
-                return S3::PageResult{.num_keys = r.GetContents().size(), .more = true};
-            });
+        S3::rawListPrefix(s3_client, s3_client.bucket(), s3_client.root(), "", [&](const Aws::S3::Model::ListObjectsV2Result & r) -> S3::PageResult {
+            for (const auto & obj : r.GetContents())
+            {
+                const auto & key = obj.GetKey();
+                LOG_INFO(s3_client.log, "DeleteBucket, clean existing object, key={}", key);
+                S3::rawDeleteObject(s3_client, s3_client.bucket(), key);
+            }
+            return S3::PageResult{.num_keys = r.GetContents().size(), .more = true};
+        });
         LOG_INFO(s3_client.log, "DeleteBucket, clean all existing objects done");
     }
     Aws::S3::Model::DeleteBucketRequest request;
@@ -333,14 +292,4 @@ void TiFlashTestEnv::deleteBucket(::DB::S3::TiFlashS3Client & s3_client)
     }
 }
 
-
-void TiFlashTestEnv::disableS3Config()
-{
-    DB::S3::ClientFactory::instance().disable();
-}
-
-void TiFlashTestEnv::enableS3Config()
-{
-    DB::S3::ClientFactory::instance().enable();
-}
 } // namespace DB::tests

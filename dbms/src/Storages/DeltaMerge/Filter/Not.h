@@ -16,24 +16,22 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 class Not : public LogicalOp
 {
 public:
-    explicit Not(const RSOperatorPtr & child)
+    Not(const RSOperatorPtr & child)
         : LogicalOp({child})
     {}
 
     String name() override { return "not"; }
 
-    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
-    {
-        auto results = children[0]->roughCheck(start_pack, pack_count, param);
-        std::transform(results.begin(), results.end(), results.begin(), [](const auto result) { return !result; });
-        return results;
-    }
+    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override { return !children[0]->roughCheck(pack_id, param); }
 };
 
-} // namespace DB::DM
+} // namespace DM
+
+} // namespace DB

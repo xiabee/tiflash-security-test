@@ -35,11 +35,7 @@ ConnectionPoolWithFailover::ConnectionPoolWithFailover(
     LoadBalancing load_balancing,
     size_t max_tries_,
     time_t decrease_error_period_)
-    : Base(
-        std::move(nested_pools_),
-        max_tries_,
-        decrease_error_period_,
-        &Poco::Logger::get("ConnectionPoolWithFailover"))
+    : Base(std::move(nested_pools_), max_tries_, decrease_error_period_, &Poco::Logger::get("ConnectionPoolWithFailover"))
     , default_load_balancing(load_balancing)
 {
     const std::string & local_hostname = getFQDNOrHostName();
@@ -52,16 +48,14 @@ ConnectionPoolWithFailover::ConnectionPoolWithFailover(
     }
 }
 
-IConnectionPool::Entry ConnectionPoolWithFailover::getImpl(
-    const Settings * settings,
-    bool /*force_connected*/) // NOLINT
+IConnectionPool::Entry ConnectionPoolWithFailover::getImpl(const Settings * settings, bool /*force_connected*/) // NOLINT
 {
     TryGetEntryFunc try_get_entry = [&](NestedPool & pool, std::string & fail_message) {
         return tryGetEntry(pool, fail_message, settings);
     };
 
     GetPriorityFunc get_priority;
-    switch (settings ? static_cast<LoadBalancing>(settings->load_balancing) : default_load_balancing)
+    switch (settings ? LoadBalancing(settings->load_balancing) : default_load_balancing)
     {
     case LoadBalancing::NEAREST_HOSTNAME:
         get_priority = [&](size_t i) {
@@ -126,7 +120,7 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
         throw DB::Exception("Unknown pool allocation mode", DB::ErrorCodes::LOGICAL_ERROR);
 
     GetPriorityFunc get_priority;
-    switch (settings ? static_cast<LoadBalancing>(settings->load_balancing) : default_load_balancing)
+    switch (settings ? LoadBalancing(settings->load_balancing) : default_load_balancing)
     {
     case LoadBalancing::NEAREST_HOSTNAME:
         get_priority = [&](size_t i) {
@@ -148,7 +142,8 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     return Base::getMany(min_entries, max_entries, try_get_entry, get_priority, fallback_to_stale_replicas);
 }
 
-ConnectionPoolWithFailover::TryResult ConnectionPoolWithFailover::tryGetEntry(
+ConnectionPoolWithFailover::TryResult
+ConnectionPoolWithFailover::tryGetEntry(
     IConnectionPool & pool,
     std::string & fail_message,
     const Settings * settings,
@@ -162,12 +157,11 @@ ConnectionPoolWithFailover::TryResult ConnectionPoolWithFailover::tryGetEntry(
         String server_name;
         UInt64 server_version_major;
         UInt64 server_version_minor;
-        UInt64 server_version_patch;
+        UInt64 server_revision;
         if (table_to_check)
-            result.entry
-                ->getServerVersion(server_name, server_version_major, server_version_minor, server_version_patch);
+            result.entry->getServerVersion(server_name, server_version_major, server_version_minor, server_revision);
 
-        if (!table_to_check)
+        if (!table_to_check || server_revision < DBMS_MIN_REVISION_WITH_TABLES_STATUS)
         {
             result.entry->forceConnected();
             result.is_usable = true;
@@ -184,11 +178,8 @@ ConnectionPoolWithFailover::TryResult ConnectionPoolWithFailover::tryGetEntry(
         auto table_status_it = status_response.table_states_by_id.find(*table_to_check);
         if (table_status_it == status_response.table_states_by_id.end())
         {
-            fail_message = fmt::format(
-                "There is no table {}.{} on server: {}",
-                table_to_check->database,
-                table_to_check->table,
-                result.entry->getDescription());
+            fail_message = "There is no table " + table_to_check->database + "." + table_to_check->table
+                + " on server: " + result.entry->getDescription();
             LOG_WARNING(log, fail_message);
 
             return result;

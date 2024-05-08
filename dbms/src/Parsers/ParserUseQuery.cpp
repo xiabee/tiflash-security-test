@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Parsers/ParserUseQuery.h>
+
 #include <Common/typeid_cast.h>
 #include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTUseQuery.h>
-#include <Parsers/CommonParsers.h>
 #include <Parsers/ExpressionElementParsers.h>
-#include <Parsers/ParserUseQuery.h>
+#include <Parsers/CommonParsers.h>
+#include <Parsers/ASTUseQuery.h>
 
 
 namespace DB
@@ -43,4 +44,4 @@ bool ParserUseQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     return true;
 }
 
-} // namespace DB
+}

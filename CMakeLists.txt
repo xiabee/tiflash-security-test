@@ -53,8 +53,8 @@ message (STATUS "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
 # ASan - build type with address sanitizer
 # UBSan - build type with undefined behaviour sanitizer
-# TSan - build type with thread sanitizer
-set (CMAKE_CONFIGURATION_TYPES "RelWithDebInfo;Debug;Release;MinSizeRel;ASan;UBSan;TSan" CACHE STRING "" FORCE)
+# TSan is not supported due to false positive errors in libstdc++ and necessity to rebuild libstdc++ with TSan
+set (CMAKE_CONFIGURATION_TYPES "RelWithDebInfo;Debug;Release;MinSizeRel;ASan;UBSan" CACHE STRING "" FORCE)
 
 if (NOT MSVC)
     set (COMMON_WARNING_FLAGS "${COMMON_WARNING_FLAGS} -Wall")    # -Werror is also added inside directories with our own code.
@@ -68,15 +68,6 @@ if (ENABLE_TIME_TRACES)
     message (STATUS "Using clang time traces flag `${CLANG_TIME_TRACES_FLAGS}`. Generates JSON file based on output filename. Results can be analyzed with chrome://tracing or https://www.speedscope.app for flamegraph visualization.")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_TIME_TRACES_FLAGS}")
-endif ()
-
-option(ENABLE_TSA "Enable clang feature thread safety analysis " ON)
-if (ENABLE_TSA)
-    set (CLANG_TSA_FLAGS "-Wthread-safety")
-    add_definitions(-D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS)
-    message (STATUS "Enable clang thread safety analysis flag: -Wthread-safety -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS.")
-    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_TSA_FLAGS}")
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_TSA_FLAGS}")
 endif ()
 
 # https://clang.llvm.org/docs/ThinLTO.html
@@ -279,6 +270,7 @@ if (NOT OPENSSL_FOUND)
 endif ()
 
 include (cmake/lib_name.cmake)
+include (cmake/find_icu4c.cmake)
 include (cmake/find_boost.cmake)
 
 option (ENABLE_CPPUNIT "Enable CppUnit" OFF)
@@ -309,18 +301,6 @@ include (cmake/find_curl.cmake)
 include (cmake/find_prometheus.cmake)
 include (cmake/find_tiflash_proxy.cmake)
 include (cmake/find_xxhash.cmake)
-
-if (OS_LINUX AND ARCH_AMD64 AND TIFLASH_ENABLE_AVX512_SUPPORT)
-    option (ENABLE_QPL "Enable Intel Query Processing Library" OFF)
-endif()
-
-if (ENABLE_QPL)
-    if (OS_LINUX AND ARCH_AMD64 AND TIFLASH_ENABLE_AVX512_SUPPORT)
-        include (cmake/find_qpl.cmake)
-    else ()
-        message (FATAL_ERROR "`ENABLE_QPL` is not supported on this platform")
-    endif ()
-endif ()
 
 include (cmake/find_contrib_lib.cmake)
 find_contrib_lib(cityhash)

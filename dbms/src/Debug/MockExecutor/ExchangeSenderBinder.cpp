@@ -16,16 +16,13 @@
 #include <Debug/MockExecutor/AstToPB.h>
 #include <Debug/MockExecutor/AstToPBUtils.h>
 #include <Debug/MockExecutor/ExchangeSenderBinder.h>
+#include <Debug/MockExecutor/ExecutorBinder.h>
 #include <Flash/Coprocessor/DAGCodec.h>
 #include <Interpreters/Context.h>
 
 namespace DB::mock
 {
-bool ExchangeSenderBinder::toTiPBExecutor(
-    tipb::Executor * tipb_executor,
-    int32_t collator_id,
-    const MPPInfo & mpp_info,
-    const Context & context)
+bool ExchangeSenderBinder::toTiPBExecutor(tipb::Executor * tipb_executor, int32_t collator_id, const MPPInfo & mpp_info, const Context & context)
 {
     tipb_executor->set_tp(tipb::ExecType::TypeExchangeSender);
     tipb_executor->set_executor_id(name);
@@ -50,11 +47,13 @@ bool ExchangeSenderBinder::toTiPBExecutor(
     for (auto task_id : mpp_info.sender_target_task_ids)
     {
         mpp::TaskMeta meta;
-        fillTaskMetaWithMPPInfo(meta, mpp_info);
+        meta.set_start_ts(mpp_info.start_ts);
+        meta.set_query_ts(mpp_info.query_ts);
+        meta.set_server_id(mpp_info.server_id);
+        meta.set_local_query_id(mpp_info.local_query_id);
         meta.set_task_id(task_id);
         meta.set_partition_id(i);
-        auto addr = context.isMPPTest() ? tests::MockComputeServerManager::instance().getServerConfigMap()[i++].addr
-                                        : Debug::LOCAL_HOST;
+        auto addr = context.isMPPTest() ? tests::MockComputeServerManager::instance().getServerConfigMap()[i++].addr : Debug::LOCAL_HOST;
         meta.set_address(addr);
 
         auto * meta_string = exchange_sender->add_encoded_task_meta();
@@ -107,10 +106,7 @@ ExecutorBinderPtr compileExchangeSender(
             return buffer.toString();
         };
         if (schema_index == input->output_schema.size())
-            throw Exception(fmt::format(
-                "Unknown partition key: {}, schema is [{}]",
-                partition_key->getColumnName(),
-                schema_string()));
+            throw Exception(fmt::format("Unknown partition key: {}, schema is [{}]", partition_key->getColumnName(), schema_string()));
     }
     ExecutorBinderPtr exchange_sender = std::make_shared<mock::ExchangeSenderBinder>(
         executor_index,

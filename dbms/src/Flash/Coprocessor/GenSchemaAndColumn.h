@@ -18,8 +18,7 @@
 #include <Core/NamesAndTypes.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
-#include <TiDB/Schema/TiDB.h>
+#include <Storages/Transaction/TiDB.h>
 #include <common/StringRef.h>
 
 namespace DB
@@ -33,7 +32,14 @@ NamesAndTypes genNamesAndTypes(const ColumnInfos & column_infos, const StringRef
 ColumnsWithTypeAndName getColumnWithTypeAndName(const NamesAndTypes & names_and_types);
 NamesAndTypes toNamesAndTypes(const DAGSchema & dag_schema);
 
+namespace DM
+{
+struct ColumnDefine;
+using ColumnDefinesPtr = std::shared_ptr<std::vector<ColumnDefine>>;
+} // namespace DM
+
 // The column defines and `extra table id index`
-std::tuple<DM::ColumnDefinesPtr, int> genColumnDefinesForDisaggregatedRead(const TiDBTableScan & table_scan);
+std::tuple<DM::ColumnDefinesPtr, size_t>
+genColumnDefinesForDisaggregatedRead(const TiDBTableScan & table_scan);
 
 } // namespace DB

@@ -14,9 +14,8 @@
 
 #include <DataTypes/DataTypesNumber.h>
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
-#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/ReadBufferFromString.h>
 #include <TestUtils/ColumnGenerator.h>
-#include <TestUtils/TiFlashTestBasic.h>
 #include <gtest/gtest.h>
 
 
@@ -31,8 +30,10 @@ static Block prepareBlock(size_t rows)
     {
         DataTypePtr int64_data_type = std::make_shared<DataTypeInt64>();
         auto int64_column = ColumnGenerator::instance().generate({rows, "Int64", RANDOM}).column;
-        block.insert(
-            ColumnWithTypeAndName{std::move(int64_column), int64_data_type, String("col") + std::to_string(i)});
+        block.insert(ColumnWithTypeAndName{
+            std::move(int64_column),
+            int64_data_type,
+            String("col") + std::to_string(i)});
     }
     return block;
 }
@@ -70,7 +71,6 @@ void test_enocde_release_data(VecCol && batch_columns, const Block & header, con
 }
 
 TEST(CHBlockChunkCodec, ChunkCodecV1)
-try
 {
     size_t block_num = 10;
     size_t rows = 10;
@@ -219,15 +219,14 @@ try
         ASSERT_FALSE(source_str.empty());
         ASSERT_EQ(static_cast<CompressionMethodByte>(source_str[0]), CompressionMethodByte::NONE);
 
-        for (const auto method : {CompressionMethod::LZ4, CompressionMethod::ZSTD})
+        for (auto mode : {CompressionMethod::LZ4, CompressionMethod::ZSTD})
         {
-            auto compressed_str_a = CHBlockChunkCodecV1::encode({&source_str[1], source_str.size() - 1}, method);
-            auto compressed_str_b = CHBlockChunkCodecV1{header}.encode(blocks.front(), method);
+            auto compressed_str_a = CHBlockChunkCodecV1::encode({&source_str[1], source_str.size() - 1}, mode);
+            auto compressed_str_b = CHBlockChunkCodecV1{header}.encode(blocks.front(), mode);
 
             ASSERT_EQ(compressed_str_a, compressed_str_b);
         }
     }
 }
-CATCH
 
 } // namespace DB::tests

@@ -199,7 +199,10 @@ public:
         }
     }
 
-    void update(const std::string & x) { update(x.data(), x.length()); }
+    void update(const std::string & x)
+    {
+        update(x.data(), x.length());
+    }
 
     /// Get the result in some form. This can only be done once!
 

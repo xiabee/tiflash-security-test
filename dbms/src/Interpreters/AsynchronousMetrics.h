@@ -38,7 +38,8 @@ public:
     explicit AsynchronousMetrics(Context & context_)
         : context(context_)
         , thread([this] { run(); })
-    {}
+    {
+    }
 
     ~AsynchronousMetrics();
 

@@ -15,7 +15,6 @@
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnsNumber.h>
 #include <Columns/IColumn.h>
-#include <Columns/VirtualColumnUtils.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
@@ -24,6 +23,7 @@
 #include <Parsers/queryToString.h>
 #include <Storages/ColumnDefault.h>
 #include <Storages/System/StorageSystemColumns.h>
+#include <Storages/VirtualColumnUtils.h>
 
 
 namespace DB
@@ -50,13 +50,12 @@ StorageSystemColumns::StorageSystemColumns(const std::string & name_)
 }
 
 
-BlockInputStreams StorageSystemColumns::read(
-    const Names & column_names,
-    const SelectQueryInfo & query_info,
-    const Context & context,
-    QueryProcessingStage::Enum & processed_stage,
-    const size_t /*max_block_size*/,
-    const unsigned /*num_streams*/)
+BlockInputStreams StorageSystemColumns::read(const Names & column_names,
+                                             const SelectQueryInfo & query_info,
+                                             const Context & context,
+                                             QueryProcessingStage::Enum & processed_stage,
+                                             const size_t /*max_block_size*/,
+                                             const unsigned /*num_streams*/)
 {
     check(column_names);
     processed_stage = QueryProcessingStage::FetchColumns;
@@ -72,8 +71,7 @@ BlockInputStreams StorageSystemColumns::read(
         MutableColumnPtr database_column_mut = ColumnString::create();
         for (const auto & database : databases)
             database_column_mut->insert(database.first);
-        block_to_filter.insert(
-            ColumnWithTypeAndName(std::move(database_column_mut), std::make_shared<DataTypeString>(), "database"));
+        block_to_filter.insert(ColumnWithTypeAndName(std::move(database_column_mut), std::make_shared<DataTypeString>(), "database"));
 
         /// Filter block with `database` column.
         VirtualColumnUtils::filterBlockWithQuery(query_info.query, block_to_filter, context);
@@ -111,8 +109,7 @@ BlockInputStreams StorageSystemColumns::read(
             column = column->replicate(offsets);
         }
 
-        block_to_filter.insert(
-            ColumnWithTypeAndName(std::move(table_column_mut), std::make_shared<DataTypeString>(), "table"));
+        block_to_filter.insert(ColumnWithTypeAndName(std::move(table_column_mut), std::make_shared<DataTypeString>(), "table"));
     }
 
     /// Filter block with `database` and `table` columns.
@@ -192,9 +189,7 @@ BlockInputStreams StorageSystemColumns::read(
         }
     }
 
-    return BlockInputStreams(
-        1,
-        std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
+    return BlockInputStreams(1, std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
 }
 
 } // namespace DB

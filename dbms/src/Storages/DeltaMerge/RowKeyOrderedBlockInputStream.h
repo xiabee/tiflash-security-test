@@ -36,8 +36,8 @@ public:
         size_t stable_rows_,
         const String & req_id_)
         : header(toEmptyBlock(columns_to_read_))
-        , stable(std::move(stable_))
-        , delta(std::move(delta_))
+        , stable(stable_)
+        , delta(delta_)
         , stable_rows(stable_rows_)
         , log(Logger::get(NAME, req_id_))
     {}
@@ -46,12 +46,12 @@ public:
 
     Block getHeader() const override { return header; }
 
-    bool getSkippedRows(size_t & /*skip_rows*/) override
-    {
-        throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED);
-    }
+    bool getSkippedRows(size_t & /*skip_rows*/) override { throw Exception("Not implemented", ErrorCodes::NOT_IMPLEMENTED); }
 
-    size_t skipNextBlock() override { return skipBlock(stable, delta); }
+    size_t skipNextBlock() override
+    {
+        return skipBlock(stable, delta);
+    }
 
     Block readWithFilter(const IColumn::Filter & filter) override
     {

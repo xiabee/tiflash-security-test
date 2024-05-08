@@ -16,8 +16,8 @@
 
 #include <Core/Block.h>
 #include <DataStreams/JSONRowOutputStream.h>
-#include <IO/Buffer/WriteBuffer.h>
-#include <IO/Buffer/WriteBufferValidUTF8.h>
+#include <IO/WriteBuffer.h>
+#include <IO/WriteBufferValidUTF8.h>
 
 namespace DB
 {
@@ -29,11 +29,7 @@ struct FormatSettingsJSON;
 class JSONCompactRowOutputStream : public JSONRowOutputStream
 {
 public:
-    JSONCompactRowOutputStream(
-        WriteBuffer & ostr_,
-        const Block & sample_,
-        bool write_statistics_,
-        const FormatSettingsJSON & settings);
+    JSONCompactRowOutputStream(WriteBuffer & ostr_, const Block & sample_, bool write_statistics_, const FormatSettingsJSON & settings);
 
     void writeField(const IColumn & column, const IDataType & type, size_t row_num) override;
     void writeFieldDelimiter() override;

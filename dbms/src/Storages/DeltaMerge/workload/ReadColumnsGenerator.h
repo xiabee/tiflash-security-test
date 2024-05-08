@@ -51,7 +51,10 @@ public:
         return cols;
     }
 
-    int streamCount() { return rand_gen() % max_stream_count + 1; }
+    int streamCount()
+    {
+        return rand_gen() % max_stream_count + 1;
+    }
 
 private:
     const TableInfo & table_info;
