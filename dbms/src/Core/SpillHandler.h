@@ -16,8 +16,8 @@
 
 #include <Core/Spiller.h>
 #include <DataStreams/NativeBlockOutputStream.h>
-#include <Encryption/WriteBufferFromFileProvider.h>
-#include <IO/CompressedWriteBuffer.h>
+#include <IO/Buffer/WriteBufferFromWritableFile.h>
+#include <IO/Compression/CompressedWriteBuffer.h>
 #include <IO/VarInt.h>
 
 namespace DB
@@ -42,18 +42,24 @@ private:
     class SpillWriter
     {
     public:
-        SpillWriter(const FileProviderPtr & file_provider, const String & file_name, bool append_write, const Block & header, size_t spill_version);
+        SpillWriter(
+            const FileProviderPtr & file_provider,
+            const String & file_name,
+            bool append_write,
+            const Block & header,
+            size_t spill_version);
         SpillDetails finishWrite();
         void write(const Block & block);
 
     private:
-        WriteBufferFromFileProvider file_buf;
+        WriteBufferFromWritableFile file_buf;
         CompressedWriteBuffer<> compressed_buf;
         std::unique_ptr<IBlockOutputStream> out;
         size_t written_rows = 0;
     };
     Spiller * spiller;
     std::vector<std::unique_ptr<SpilledFile>> spilled_files;
+    UInt64 all_constant_block_rows = 0;
     size_t partition_id;
     Int64 current_spilled_file_index;
     String current_spill_file_name;

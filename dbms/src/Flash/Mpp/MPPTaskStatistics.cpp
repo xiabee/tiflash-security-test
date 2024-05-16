@@ -71,7 +71,9 @@ void MPPTaskStatistics::initializeExecutorDAG(DAGContext * dag_context_)
     dag_context = dag_context_;
     const auto & root_executor = dag_context->dag_request.rootExecutor();
     if unlikely (!root_executor.has_exchange_sender())
-        throw TiFlashException("The root executor isn't ExchangeSender in MPP, which is unexpected.", Errors::Coprocessor::BadRequest);
+        throw TiFlashException(
+            "The root executor isn't ExchangeSender in MPP, which is unexpected.",
+            Errors::Coprocessor::BadRequest);
 
     is_root = dag_context->isRootMPPTask();
     sender_executor_id = root_executor.executor_id();
@@ -82,7 +84,9 @@ void MPPTaskStatistics::collectRuntimeStatistics()
 {
     const auto & executor_statistics_res = executor_statistics_collector.getProfiles();
     auto it = executor_statistics_res.find(sender_executor_id);
-    RUNTIME_CHECK_MSG(it != executor_statistics_res.end(), "Can't find exchange sender statistics after `collectRuntimeStatistics`");
+    RUNTIME_CHECK_MSG(
+        it != executor_statistics_res.end(),
+        "Can't find exchange sender statistics after `collectRuntimeStatistics`");
     const auto & return_statistics = it->second->getBaseRuntimeStatistics();
     // record io bytes
     output_bytes = return_statistics.bytes;
@@ -94,17 +98,24 @@ tipb::SelectResponse MPPTaskStatistics::genExecutionSummaryResponse()
     return executor_statistics_collector.genExecutionSummaryResponse();
 }
 
+tipb::TiFlashExecutionInfo MPPTaskStatistics::genTiFlashExecutionInfo()
+{
+    return executor_statistics_collector.genTiFlashExecutionInfo();
+}
+
 void MPPTaskStatistics::logTracingJson()
 {
-    LOG_INFO(
+    LOG_IMPL(
         log,
+        /// don't use info log for initializing status since it does not contains too many information
+        status == INITIALIZING ? Poco::Message::PRIO_DEBUG : Poco::Message::PRIO_INFORMATION,
         R"({{"query_tso":{},"task_id":{},"is_root":{},"sender_executor_id":"{}","executors":{},"host":"{}")"
         R"(,"task_init_timestamp":{},"task_start_timestamp":{},"task_end_timestamp":{})"
         R"(,"compile_start_timestamp":{},"compile_end_timestamp":{})"
         R"(,"read_wait_index_start_timestamp":{},"read_wait_index_end_timestamp":{})"
         R"(,"local_input_bytes":{},"remote_input_bytes":{},"output_bytes":{})"
-        R"(,"status":"{}","error_message":"{}","working_time":{},"memory_peak":{}}})",
-        id.query_id.start_ts,
+        R"(,"status":"{}","error_message":"{}","cpu_ru":{},"read_ru":{},"memory_peak":{}}})",
+        id.gather_id.query_id.start_ts,
         id.task_id,
         is_root,
         sender_executor_id,
@@ -122,13 +133,20 @@ void MPPTaskStatistics::logTracingJson()
         output_bytes,
         magic_enum::enum_name(status),
         error_message,
-        working_time,
+        ru_info.cpu_ru,
+        ru_info.read_ru,
         memory_peak);
 }
 
 void MPPTaskStatistics::setMemoryPeak(Int64 memory_peak_)
 {
     memory_peak = memory_peak_;
+}
+
+void MPPTaskStatistics::setRUInfo(const RUConsumption & ru_info_)
+{
+    ru_info = ru_info_;
+    executor_statistics_collector.setLocalRUConsumption(ru_info_);
 }
 
 void MPPTaskStatistics::setCompileTimestamp(const Timestamp & start_timestamp, const Timestamp & end_timestamp)
@@ -139,23 +157,39 @@ void MPPTaskStatistics::setCompileTimestamp(const Timestamp & start_timestamp, c
 
 void MPPTaskStatistics::recordInputBytes(DAGContext & dag_context)
 {
-    for (const auto & map_entry : dag_context.getInBoundIOInputStreamsMap())
+    switch (dag_context.getExecutionMode())
     {
-        for (const auto & io_stream : map_entry.second)
+    case ExecutionMode::None:
+        break;
+    case ExecutionMode::Stream:
+        for (const auto & map_entry : dag_context.getInBoundIOInputStreamsMap())
         {
-            if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get()); p_stream)
+            for (const auto & io_stream : map_entry.second)
             {
-                const auto & profile_info = p_stream->getProfileInfo();
-                if (dynamic_cast<ExchangeReceiverInputStream *>(p_stream) || dynamic_cast<CoprocessorBlockInputStream *>(p_stream))
+                if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(io_stream.get()); p_stream)
                 {
-                    remote_input_bytes += profile_info.bytes;
-                }
-                else
-                {
-                    local_input_bytes += profile_info.bytes;
+                    const auto & profile_info = p_stream->getProfileInfo();
+                    if (dynamic_cast<ExchangeReceiverInputStream *>(p_stream)
+                        || dynamic_cast<CoprocessorBlockInputStream *>(p_stream))
+                        remote_input_bytes += profile_info.bytes;
+                    else
+                        local_input_bytes += profile_info.bytes;
                 }
             }
         }
+        break;
+    case ExecutionMode::Pipeline:
+        for (const auto & map_entry : dag_context.getInboundIOProfileInfosMap())
+        {
+            for (const auto & profile_info : map_entry.second)
+            {
+                if (profile_info->is_local)
+                    local_input_bytes += profile_info->operator_info->bytes;
+                else
+                    remote_input_bytes += profile_info->operator_info->bytes;
+            }
+        }
+        break;
     }
 }
 } // namespace DB

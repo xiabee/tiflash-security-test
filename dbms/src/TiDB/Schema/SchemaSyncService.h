@@ -14,8 +14,9 @@
 
 #pragma once
 
+#include <Interpreters/Context_fwd.h>
 #include <Storages/BackgroundProcessingPool.h>
-#include <Storages/Transaction/Types.h>
+#include <Storages/KVStore/Types.h>
 
 #include <boost/noncopyable.hpp>
 #include <memory>
@@ -24,8 +25,11 @@
 
 namespace DB
 {
-class Context;
-class BackgroundProcessingPool;
+namespace tests
+{
+class RegionKVStoreTest;
+class SchemaSyncTest;
+} // namespace tests
 class Logger;
 using LoggerPtr = std::shared_ptr<Logger>;
 
@@ -43,31 +47,40 @@ public:
     explicit SchemaSyncService(Context & context_);
     ~SchemaSyncService();
 
+    bool gc(Timestamp gc_safepoint, KeyspaceID keyspace_id);
+
+    void shutdown();
+
 private:
     bool syncSchemas(KeyspaceID keyspace_id);
-    void removeCurrentVersion(KeyspaceID keyspace_id);
-
-    struct GCContext
-    {
-        Timestamp last_gc_safe_point = 0;
-    } gc_context;
-
-    bool gc(Timestamp gc_safe_point, KeyspaceID keyspace_id);
 
     void addKeyspaceGCTasks();
     void removeKeyspaceGCTasks();
+
+    std::optional<Timestamp> lastGcSafePoint(KeyspaceID keyspace_id) const;
+    void updateLastGcSafepoint(KeyspaceID keyspace_id, Timestamp gc_safepoint);
+    bool gcImpl(Timestamp gc_safepoint, KeyspaceID keyspace_id, bool ignore_remain_regions);
 
 private:
     Context & context;
 
     friend void dbgFuncGcSchemas(Context &, const ASTs &, DBGInvokerPrinter);
+    friend class tests::RegionKVStoreTest;
+    friend class tests::SchemaSyncTest;
+
+    struct KeyspaceGCContext
+    {
+        Timestamp last_gc_safepoint = 0;
+    };
 
     BackgroundProcessingPool & background_pool;
+    // The background task handle for adding/removing task for all keyspaces
     BackgroundProcessingPool::TaskHandle handle;
 
-    mutable std::shared_mutex ks_map_mutex;
+    mutable std::shared_mutex keyspace_map_mutex;
     // Handles for each keyspace schema sync task.
-    std::unordered_map<KeyspaceID, BackgroundProcessingPool::TaskHandle> ks_handle_map;
+    std::unordered_map<KeyspaceID, BackgroundProcessingPool::TaskHandle> keyspace_handle_map;
+    std::unordered_map<KeyspaceID, KeyspaceGCContext> keyspace_gc_context;
 
     LoggerPtr log;
 };

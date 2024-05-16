@@ -28,12 +28,10 @@
 #include <Databases/IDatabase.h>
 #include <Debug/DBGInvoker.h>
 #include <Debug/MockStorage.h>
-#include <Encryption/DataKeyManager.h>
-#include <Encryption/FileProvider.h>
-#include <Encryption/RateLimiter.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <IO/ReadBufferFromFile.h>
-#include <IO/UncompressedCache.h>
+#include <IO/BaseFile/fwd.h>
+#include <IO/Buffer/ReadBufferFromFile.h>
+#include <IO/FileProvider/FileProvider.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ISecurityManager.h>
 #include <Interpreters/ProcessList.h>
@@ -57,15 +55,18 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaIndexManager.h>
 #include <Storages/DeltaMerge/Index/MinMaxIndex.h>
-#include <Storages/DeltaMerge/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool/GlobalPageIdAllocator.h>
+#include <Storages/DeltaMerge/StoragePool/GlobalStoragePool.h>
+#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/IStorage.h>
+#include <Storages/KVStore/BackgroundService.h>
+#include <Storages/KVStore/TMTContext.h>
 #include <Storages/MarkCache.h>
+#include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/PageStorageImpl.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/PathCapacityMetrics.h>
 #include <Storages/PathPool.h>
-#include <Storages/Transaction/BackgroundService.h>
-#include <Storages/Transaction/TMTContext.h>
 #include <TableFunctions/TableFunctionFactory.h>
 #include <TiDB/Schema/SchemaSyncService.h>
 #include <common/logger_useful.h>
@@ -134,7 +135,8 @@ struct ContextShared
     String tmp_path; /// The path to the temporary files that occur when processing the request.
     String flags_path; /// Path to the directory with some control flags for server maintenance.
     String user_files_path; /// Path to the directory with user provided files, usable by 'file' table function.
-    PathPool path_pool; /// The data directories. RegionPersister and some Storage Engine like DeltaMerge will use this to manage data placement on disks.
+    PathPool
+        path_pool; /// The data directories. RegionPersister and some Storage Engine like DeltaMerge will use this to manage data placement on disks.
     ConfigurationPtr config; /// Global configuration settings.
 
     Databases databases; /// List of databases and tables in them.
@@ -143,7 +145,6 @@ struct ContextShared
     String system_profile_name; /// Profile used by system processes
     std::shared_ptr<ISecurityManager> security_manager; /// Known users.
     Quotas quotas; /// Known quotas for resource use.
-    mutable UncompressedCachePtr uncompressed_cache; /// The cache of decompressed blocks.
     mutable DBGInvoker dbg_invoker; /// Execute inner functions, debug only.
     mutable MarkCachePtr mark_cache; /// Cache of marks in compressed files.
     mutable DM::MinMaxIndexCachePtr minmax_index_cache; /// Cache of minmax index in compressed files.
@@ -152,8 +153,10 @@ struct ContextShared
     ViewDependencies view_dependencies; /// Current dependencies
     ConfigurationPtr users_config; /// Config with the users, profiles and quotas sections.
     BackgroundProcessingPoolPtr background_pool; /// The thread pool for the background work performed by the tables.
-    BackgroundProcessingPoolPtr blockable_background_pool; /// The thread pool for the blockable background work performed by the tables.
-    BackgroundProcessingPoolPtr ps_compact_background_pool; /// The thread pool for the background work performed by the ps v2.
+    BackgroundProcessingPoolPtr
+        blockable_background_pool; /// The thread pool for the blockable background work performed by the tables.
+    BackgroundProcessingPoolPtr
+        ps_compact_background_pool; /// The thread pool for the background work performed by the ps v2.
     mutable TMTContextPtr tmt_context; /// Context of TiFlash. Note that this should be free before background_pool.
     MultiVersion<Macros> macros; /// Substitutions extracted from config.
     String format_schema_path; /// Path to a directory that contains schema files used by input formats.
@@ -164,6 +167,7 @@ struct ContextShared
     FileProviderPtr file_provider; /// File provider.
     IORateLimiter io_rate_limiter;
     PageStorageRunMode storage_run_mode = PageStorageRunMode::ONLY_V3;
+    DM::GlobalPageIdAllocatorPtr global_page_id_allocator;
     DM::GlobalStoragePoolPtr global_storage_pool;
 
     /// The PS instance available on Write Node.
@@ -199,13 +203,12 @@ struct ContextShared
     bool shutdown_called = false;
 
     /// Do not allow simultaneous execution of DDL requests on the same table.
-    /// database -> table -> exception_message
+    /// table -> exception_message(because table_id is global unique)
     /// For the duration of the operation, an element is placed here, and an object is returned, which deletes the element in the destructor.
     /// In case the element already exists, an exception is thrown. See class DDLGuard below.
-    using DDLGuards = std::unordered_map<String, DDLGuard::Map>;
-    DDLGuards ddl_guards;
+    DDLGuard::Map ddl_guard_map;
     /// If you capture mutex and ddl_guards_mutex, then you need to grab them strictly in this order.
-    mutable std::mutex ddl_guards_mutex;
+    mutable std::mutex ddl_guard_map_mutex;
 
     Stopwatch uptime_watch;
 
@@ -303,10 +306,7 @@ struct ContextShared
     }
 
 private:
-    void initialize()
-    {
-        security_manager = runtime_components_factory->createSecurityManager();
-    }
+    void initialize() { security_manager = runtime_components_factory->createSecurityManager(); }
 };
 
 
@@ -399,7 +399,10 @@ void Context::scheduleCloseSession(const Context::SessionKey & key, std::chrono:
 }
 
 
-std::shared_ptr<Context> Context::acquireSession(const String & session_id, std::chrono::steady_clock::duration timeout, bool session_check) const
+std::shared_ptr<Context> Context::acquireSession(
+    const String & session_id,
+    std::chrono::steady_clock::duration timeout,
+    bool session_check) const
 {
     auto lock = getLock();
 
@@ -582,12 +585,7 @@ void Context::setPathPool(
     FileProviderPtr file_provider_)
 {
     auto lock = getLock();
-    shared->path_pool = PathPool(
-        main_data_paths,
-        latest_data_paths,
-        kvstore_paths,
-        global_capacity_,
-        file_provider_);
+    shared->path_pool = PathPool(main_data_paths, latest_data_paths, kvstore_paths, global_capacity_, file_provider_);
 }
 
 void Context::setConfig(const ConfigurationPtr & config)
@@ -651,7 +649,8 @@ void Context::reloadDeltaTreeConfig(const Poco::Util::AbstractConfiguration & co
             {
                 continue;
             }
-            dt_config_reload_log += fmt::format("config name: {}, old: {}, new: {}; ", key, settings.get(key), config_value);
+            dt_config_reload_log
+                += fmt::format("config name: {}, old: {}, new: {}; ", key, settings.get(key), config_value);
             settings.set(key, config_value);
         }
     }
@@ -679,7 +678,11 @@ void Context::calculateUserSettings()
 }
 
 
-void Context::setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key)
+void Context::setUser(
+    const String & name,
+    const String & password,
+    const Poco::Net::SocketAddress & address,
+    const String & quota_key)
 {
     auto lock = getLock();
 
@@ -698,7 +701,11 @@ void Context::setUser(const String & name, const String & password, const Poco::
 }
 
 
-void Context::setQuota(const String & name, const String & quota_key, const String & user_name, const Poco::Net::IPAddress & address)
+void Context::setQuota(
+    const String & name,
+    const String & quota_key,
+    const String & user_name,
+    const Poco::Net::IPAddress & address)
 {
     auto lock = getLock();
     quota = shared->quotas.get(name, quota_key, user_name, address);
@@ -785,8 +792,7 @@ bool Context::isTableExist(const String & database_name, const String & table_na
     checkDatabaseAccessRightsImpl(db);
 
     auto it = shared->databases.find(db);
-    return shared->databases.end() != it
-        && it->second->isTableExist(*this, table_name);
+    return shared->databases.end() != it && it->second->isTableExist(*this, table_name);
 }
 
 bool Context::isDatabaseExist(const String & database_name) const
@@ -815,11 +821,16 @@ void Context::assertTableExists(const String & database_name, const String & tab
         throw Exception(fmt::format("Database {} doesn't exist", backQuoteIfNeed(db)), ErrorCodes::UNKNOWN_DATABASE);
 
     if (!it->second->isTableExist(*this, table_name))
-        throw Exception(fmt::format("Table {}.{} doesn't exist.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)), ErrorCodes::UNKNOWN_TABLE);
+        throw Exception(
+            fmt::format("Table {}.{} doesn't exist.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)),
+            ErrorCodes::UNKNOWN_TABLE);
 }
 
 
-void Context::assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_access_rights) const
+void Context::assertTableDoesntExist(
+    const String & database_name,
+    const String & table_name,
+    bool check_database_access_rights) const
 {
     auto lock = getLock();
 
@@ -829,7 +840,9 @@ void Context::assertTableDoesntExist(const String & database_name, const String 
 
     auto it = shared->databases.find(db);
     if (shared->databases.end() != it && it->second->isTableExist(*this, table_name))
-        throw Exception(fmt::format("Table {}.{} already exists.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)), ErrorCodes::TABLE_ALREADY_EXISTS);
+        throw Exception(
+            fmt::format("Table {}.{} already exists.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)),
+            ErrorCodes::TABLE_ALREADY_EXISTS);
 }
 
 
@@ -854,7 +867,9 @@ void Context::assertDatabaseDoesntExist(const String & database_name) const
     checkDatabaseAccessRightsImpl(db);
 
     if (shared->databases.end() != shared->databases.find(db))
-        throw Exception(fmt::format("Database {} already exists.", backQuoteIfNeed(db)), ErrorCodes::DATABASE_ALREADY_EXISTS);
+        throw Exception(
+            fmt::format("Database {} already exists.", backQuoteIfNeed(db)),
+            ErrorCodes::DATABASE_ALREADY_EXISTS);
 }
 
 
@@ -924,7 +939,9 @@ StoragePtr Context::getTableImpl(const String & database_name, const String & ta
     if (shared->databases.end() == it)
     {
         if (exception)
-            *exception = Exception(fmt::format("Database {} doesn't exist", backQuoteIfNeed(db)), ErrorCodes::UNKNOWN_DATABASE);
+            *exception = Exception(
+                fmt::format("Database {} doesn't exist", backQuoteIfNeed(db)),
+                ErrorCodes::UNKNOWN_DATABASE);
         return {};
     }
 
@@ -932,7 +949,9 @@ StoragePtr Context::getTableImpl(const String & database_name, const String & ta
     if (!table)
     {
         if (exception)
-            *exception = Exception(fmt::format("Table {}.{} doesn't exist.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)), ErrorCodes::UNKNOWN_TABLE);
+            *exception = Exception(
+                fmt::format("Table {}.{} doesn't exist.", backQuoteIfNeed(db), backQuoteIfNeed(table_name)),
+                ErrorCodes::UNKNOWN_TABLE);
         return {};
     }
 
@@ -943,7 +962,9 @@ StoragePtr Context::getTableImpl(const String & database_name, const String & ta
 void Context::addExternalTable(const String & table_name, const StoragePtr & storage, const ASTPtr & ast)
 {
     if (external_tables.end() != external_tables.find(table_name))
-        throw Exception(fmt::format("Temporary table {} already exists.", backQuoteIfNeed(table_name)), ErrorCodes::TABLE_ALREADY_EXISTS);
+        throw Exception(
+            fmt::format("Temporary table {} already exists.", backQuoteIfNeed(table_name)),
+            ErrorCodes::TABLE_ALREADY_EXISTS);
 
     external_tables[table_name] = std::pair(storage, ast);
 }
@@ -983,7 +1004,12 @@ StoragePtr Context::executeTableFunction(const ASTPtr & table_expression)
 }
 
 
-DDLGuard::DDLGuard(Map & map_, std::mutex & mutex_, std::unique_lock<std::mutex> && /*lock*/, const String & elem, const String & message)
+DDLGuard::DDLGuard(
+    Map & map_,
+    std::mutex & mutex_,
+    std::unique_lock<std::mutex> && /*lock*/,
+    const String & elem,
+    const String & message)
     : map(map_)
     , mutex(mutex_)
 {
@@ -999,14 +1025,22 @@ DDLGuard::~DDLGuard()
     map.erase(it);
 }
 
-std::unique_ptr<DDLGuard> Context::getDDLGuard(const String & database, const String & table, const String & message) const
+std::unique_ptr<DDLGuard> Context::getDDLGuard(const String & table, const String & message) const
 {
-    std::unique_lock lock(shared->ddl_guards_mutex);
-    return std::make_unique<DDLGuard>(shared->ddl_guards[database], shared->ddl_guards_mutex, std::move(lock), table, message);
+    std::unique_lock lock(shared->ddl_guard_map_mutex);
+    return std::make_unique<DDLGuard>(
+        shared->ddl_guard_map,
+        shared->ddl_guard_map_mutex,
+        std::move(lock),
+        table,
+        message);
 }
 
 
-std::unique_ptr<DDLGuard> Context::getDDLGuardIfTableDoesntExist(const String & database, const String & table, const String & message) const
+std::unique_ptr<DDLGuard> Context::getDDLGuardIfTableDoesntExist(
+    const String & database,
+    const String & table,
+    const String & message) const
 {
     auto lock = getLock();
 
@@ -1014,7 +1048,7 @@ std::unique_ptr<DDLGuard> Context::getDDLGuardIfTableDoesntExist(const String & 
     if (shared->databases.end() != it && it->second->isTableExist(*this, table))
         return {};
 
-    return getDDLGuard(database, table, message);
+    return getDDLGuard(table, message);
 }
 
 
@@ -1051,7 +1085,9 @@ ASTPtr Context::getCreateExternalTableQuery(const String & table_name) const
 {
     auto jt = external_tables.find(table_name);
     if (external_tables.end() == jt)
-        throw Exception(fmt::format("Temporary table {} doesn't exist", backQuoteIfNeed(table_name)), ErrorCodes::UNKNOWN_TABLE);
+        throw Exception(
+            fmt::format("Temporary table {} doesn't exist", backQuoteIfNeed(table_name)),
+            ErrorCodes::UNKNOWN_TABLE);
 
     return jt->second.second;
 }
@@ -1070,7 +1106,10 @@ void Context::checkIsConfigLoaded() const
 {
     if (shared->application_type == ApplicationType::SERVER && !is_config_loaded)
     {
-        throw Exception("Configuration are used before load from configure file tiflash.toml, so the user config may not take effect.", ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "Configuration are used before load from configure file tiflash.toml, so the user config may not take "
+            "effect.",
+            ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -1285,30 +1324,6 @@ DAGContext * Context::getDAGContext() const
     return dag_context;
 }
 
-void Context::setUncompressedCache(size_t max_size_in_bytes)
-{
-    auto lock = getLock();
-
-    if (shared->uncompressed_cache)
-        throw Exception("Uncompressed cache has been already created.", ErrorCodes::LOGICAL_ERROR);
-
-    shared->uncompressed_cache = std::make_shared<UncompressedCache>(max_size_in_bytes);
-}
-
-
-UncompressedCachePtr Context::getUncompressedCache() const
-{
-    auto lock = getLock();
-    return shared->uncompressed_cache;
-}
-
-void Context::dropUncompressedCache() const
-{
-    auto lock = getLock();
-    if (shared->uncompressed_cache)
-        shared->uncompressed_cache->reset();
-}
-
 DBGInvoker & Context::getDBGInvoker() const
 {
     auto lock = getLock();
@@ -1392,9 +1407,6 @@ void Context::dropCaches() const
 {
     auto lock = getLock();
 
-    if (shared->uncompressed_cache)
-        shared->uncompressed_cache->reset();
-
     if (shared->mark_cache)
         shared->mark_cache->reset();
 }
@@ -1433,7 +1445,8 @@ BackgroundProcessingPool & Context::getPSBackgroundPool()
     auto lock = getLock();
     // use the same size as `background_pool_size`
     if (!shared->ps_compact_background_pool)
-        shared->ps_compact_background_pool = std::make_shared<BackgroundProcessingPool>(settings.background_pool_size, "bg-page-");
+        shared->ps_compact_background_pool
+            = std::make_shared<BackgroundProcessingPool>(settings.background_pool_size, "bg-page-");
     return *shared->ps_compact_background_pool;
 }
 
@@ -1509,12 +1522,12 @@ void Context::initializeTiFlashMetrics() const
     (void)TiFlashMetrics::instance();
 }
 
-void Context::initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption)
+void Context::initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption, bool enable_keyspace_encryption)
 {
     auto lock = getLock();
     if (shared->file_provider)
         throw Exception("File provider has already been initialized.", ErrorCodes::LOGICAL_ERROR);
-    shared->file_provider = std::make_shared<FileProvider>(key_manager, enable_encryption);
+    shared->file_provider = std::make_shared<FileProvider>(key_manager, enable_encryption, enable_keyspace_encryption);
 }
 
 FileProviderPtr Context::getFileProvider() const
@@ -1523,7 +1536,16 @@ FileProviderPtr Context::getFileProvider() const
     return shared->file_provider;
 }
 
-void Context::initializeRateLimiter(Poco::Util::AbstractConfiguration & config, BackgroundProcessingPool & bg_pool, BackgroundProcessingPool & blockable_bg_pool) const
+void Context::setFileProvider(FileProviderPtr file_provider)
+{
+    auto lock = getLock();
+    shared->file_provider = file_provider;
+}
+
+void Context::initializeRateLimiter(
+    Poco::Util::AbstractConfiguration & config,
+    BackgroundProcessingPool & bg_pool,
+    BackgroundProcessingPool & blockable_bg_pool) const
 {
     getIORateLimiter().init(config);
     auto tids = bg_pool.getThreadIds();
@@ -1625,9 +1647,11 @@ void Context::initializePageStorageMode(const PathPool & path_pool, UInt64 stora
     {
         if (isPageStorageV3Existed(path_pool) || isWriteNodeUniPSExisted(path_pool))
         {
-            throw Exception("Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V2."
-                            "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from scratch.",
-                            ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                "Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V2."
+                "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from "
+                "scratch.",
+                ErrorCodes::LOGICAL_ERROR);
         }
         // not exist newer format page data
         shared->storage_run_mode = PageStorageRunMode::ONLY_V2;
@@ -1637,11 +1661,14 @@ void Context::initializePageStorageMode(const PathPool & path_pool, UInt64 stora
     {
         if (isWriteNodeUniPSExisted(path_pool))
         {
-            throw Exception("Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V3."
-                            "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from scratch.",
-                            ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                "Invalid config `storage.format_version`, newer format page data exist. But using the PageFormat::V3."
+                "If you are downgrading the format_version for this TiFlash node, you need to rebuild the data from "
+                "scratch.",
+                ErrorCodes::LOGICAL_ERROR);
         }
-        shared->storage_run_mode = isPageStorageV2Existed(path_pool) ? PageStorageRunMode::MIX_MODE : PageStorageRunMode::ONLY_V3;
+        shared->storage_run_mode
+            = isPageStorageV2Existed(path_pool) ? PageStorageRunMode::MIX_MODE : PageStorageRunMode::ONLY_V3;
         return;
     }
     case PageFormat::V4:
@@ -1654,8 +1681,9 @@ void Context::initializePageStorageMode(const PathPool & path_pool, UInt64 stora
         return;
     }
     default:
-        throw Exception(fmt::format("Can't detect the format version of Page [page_version={}]", storage_page_format_version),
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            fmt::format("Can't detect the format version of Page [page_version={}]", storage_page_format_version),
+            ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -1671,11 +1699,28 @@ void Context::setPageStorageRunMode(PageStorageRunMode run_mode) const
     shared->storage_run_mode = run_mode;
 }
 
+bool Context::initializeGlobalPageIdAllocator()
+{
+    auto lock = getLock();
+    if (!shared->global_page_id_allocator)
+    {
+        shared->global_page_id_allocator = std::make_shared<DM::GlobalPageIdAllocator>();
+    }
+    return true;
+}
+
+DM::GlobalPageIdAllocatorPtr Context::getGlobalPageIdAllocator() const
+{
+    auto lock = getLock();
+    return shared->global_page_id_allocator;
+}
+
 bool Context::initializeGlobalStoragePoolIfNeed(const PathPool & path_pool)
 {
     auto lock = getLock();
     CurrentMetrics::set(CurrentMetrics::GlobalStorageRunMode, static_cast<UInt8>(shared->storage_run_mode));
-    if (shared->storage_run_mode == PageStorageRunMode::MIX_MODE || shared->storage_run_mode == PageStorageRunMode::ONLY_V3)
+    if (shared->storage_run_mode == PageStorageRunMode::MIX_MODE
+        || shared->storage_run_mode == PageStorageRunMode::ONLY_V3)
     {
         if (shared->global_storage_pool)
         {
@@ -1724,7 +1769,7 @@ void Context::initializeWriteNodePageStorageIfNeed(const PathPool & path_pool)
             PageStorageConfig config;
             shared->ps_write = UniversalPageStorageService::create( //
                 *this,
-                "write",
+                "uni_write",
                 path_pool.getPSDiskDelegatorGlobalMulti(PathPool::write_uni_path_prefix),
                 config);
             LOG_INFO(shared->log, "initialized GlobalUniversalPageStorage(WriteNode)");
@@ -1750,7 +1795,10 @@ UniversalPageStoragePtr Context::getWriteNodePageStorage() const
     }
     else
     {
-        LOG_WARNING(shared->log, "Calling getWriteNodePageStorage() without initialization, stack={}", StackTrace().toString());
+        LOG_WARNING(
+            shared->log,
+            "Calling getWriteNodePageStorage() without initialization, stack={}",
+            StackTrace().toString());
         return nullptr;
     }
 }
@@ -1763,12 +1811,12 @@ UniversalPageStoragePtr Context::tryGetWriteNodePageStorage() const
     return nullptr;
 }
 
-bool Context::trySyncAllDataToRemoteStore() const
+bool Context::tryUploadAllDataToRemoteStore() const
 {
     auto lock = getLock();
     if (shared->ctx_disagg->isDisaggregatedStorageMode() && shared->ps_write)
     {
-        shared->ps_write->setSyncAllData();
+        shared->ps_write->setUploadAllData();
         return true;
     }
     return false;
@@ -1833,7 +1881,9 @@ QueryLog * Context::getQueryLog()
     if (!system_logs->query_log)
     {
         if (shared->shutdown_called)
-            throw Exception("Logical error: query log should be destroyed before tables shutdown", ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                "Logical error: query log should be destroyed before tables shutdown",
+                ErrorCodes::LOGICAL_ERROR);
 
         if (!global_context)
             throw Exception("Logical error: no global context for query log", ErrorCodes::LOGICAL_ERROR);
@@ -1843,18 +1893,25 @@ QueryLog * Context::getQueryLog()
         String database = config.getString("query_log.database", "system");
         String table = config.getString("query_log.table", "query_log");
         String partition_by = config.getString("query_log.partition_by", "toYYYYMM(event_date)");
-        size_t flush_interval_milliseconds = config.getUInt64("query_log.flush_interval_milliseconds", DEFAULT_QUERY_LOG_FLUSH_INTERVAL_MILLISECONDS);
+        size_t flush_interval_milliseconds
+            = config.getUInt64("query_log.flush_interval_milliseconds", DEFAULT_QUERY_LOG_FLUSH_INTERVAL_MILLISECONDS);
 
-        String engine = "ENGINE = MergeTree PARTITION BY (" + partition_by + ") ORDER BY (event_date, event_time) SETTINGS index_granularity = 1024";
+        String engine = "ENGINE = MergeTree PARTITION BY (" + partition_by
+            + ") ORDER BY (event_date, event_time) SETTINGS index_granularity = 1024";
 
-        system_logs->query_log = std::make_unique<QueryLog>(*global_context, database, table, engine, flush_interval_milliseconds);
+        system_logs->query_log
+            = std::make_unique<QueryLog>(*global_context, database, table, engine, flush_interval_milliseconds);
     }
 
     return system_logs->query_log.get();
 }
 
 
-BlockInputStreamPtr Context::getInputFormat(const String & name, ReadBuffer & buf, const Block & sample, size_t max_block_size) const
+BlockInputStreamPtr Context::getInputFormat(
+    const String & name,
+    ReadBuffer & buf,
+    const Block & sample,
+    size_t max_block_size) const
 {
     return shared->format_factory.getInput(name, buf, sample, *this, max_block_size);
 }
@@ -1961,7 +2018,7 @@ size_t Context::getMaxStreams() const
     {
         if (isExecutorTest() || isInterpreterTest())
             max_streams = dag_context->initialize_concurrency;
-        else if (!dag_context->isBatchCop() && !dag_context->isMPPTask())
+        else if (dag_context->isCop())
         {
             is_cop_request = true;
             max_streams = 1;

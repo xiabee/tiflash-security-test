@@ -22,6 +22,7 @@ df -h
 grep ^ /sys/block/*/queue/rotational
 
 cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c
+lscpu
 cat /proc/meminfo
 uname -a
 hostname
@@ -29,6 +30,7 @@ lsmod
 dmidecode | grep 'Product Name'
 free -mh
 cat /proc/loadavg
+ldd --version
 
 set -e
 
@@ -41,7 +43,7 @@ function wait_env() {
 
   for (( i = 0; i < "${timeout}"; i++ )); do
     if [[ -n $(cat ./log/tidb0/tidb.log | grep "server is running MySQL protocol") && \
-          -n $(cat ./log/tiflash/server.log | grep "Ready for connections") ]]; then
+          -n $(cat ./log/tiflash/server.log | grep "Start to wait for terminal signal") ]]; then
         local failed='false'
         break
     fi

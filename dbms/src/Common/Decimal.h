@@ -108,7 +108,12 @@ struct IntPrec<Int256>
 
 struct PlusDecimalInferer
 {
-    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale, PrecType right_prec, ScaleType right_scale)
+    static std::tuple<PrecType, ScaleType> infer(
+        PrecType left_prec,
+        ScaleType left_scale,
+        PrecType right_prec,
+        ScaleType right_scale,
+        ScaleType /*div_precincrement is not used*/)
     {
         ScaleType result_scale = std::max(left_scale, right_scale);
         PrecType result_int = std::max(left_prec - left_scale, right_prec - right_scale);
@@ -119,16 +124,27 @@ struct PlusDecimalInferer
 
 struct MulDecimalInferer
 {
-    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale, PrecType right_prec, ScaleType right_scale)
+    static std::tuple<PrecType, ScaleType> infer(
+        PrecType left_prec,
+        ScaleType left_scale,
+        PrecType right_prec,
+        ScaleType right_scale,
+        ScaleType /*div_precincrement is not used*/)
     {
-        return {std::min(left_prec + right_prec, decimal_max_prec), std::min(left_scale + right_scale, decimal_max_scale)};
+        return {
+            std::min(left_prec + right_prec, decimal_max_prec),
+            std::min(left_scale + right_scale, decimal_max_scale)};
     }
 };
 
 struct DivDecimalInferer
 {
-    static const ScaleType div_precincrement = 4;
-    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale, PrecType /* right_prec is not used */, ScaleType right_scale)
+    static std::tuple<PrecType, ScaleType> infer(
+        PrecType left_prec,
+        ScaleType left_scale,
+        PrecType /* right_prec is not used */,
+        ScaleType right_scale,
+        ScaleType div_precincrement)
     {
         return {
             std::min(left_prec + right_scale + div_precincrement, decimal_max_prec),
@@ -147,16 +163,22 @@ struct SumDecimalInferer
 
 struct AvgDecimalInferer
 {
-    static const ScaleType div_precincrement = 4;
-    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale)
+    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale, ScaleType div_precincrement)
     {
-        return {std::min(left_prec + div_precincrement, decimal_max_prec), std::min(left_scale + div_precincrement, decimal_max_scale)};
+        return {
+            std::min(left_prec + div_precincrement, decimal_max_prec),
+            std::min(left_scale + div_precincrement, decimal_max_scale)};
     }
 };
 
 struct ModDecimalInferer
 {
-    static std::tuple<PrecType, ScaleType> infer(PrecType left_prec, ScaleType left_scale, PrecType right_prec, ScaleType right_scale)
+    static std::tuple<PrecType, ScaleType> infer(
+        PrecType left_prec,
+        ScaleType left_scale,
+        PrecType right_prec,
+        ScaleType right_scale,
+        ScaleType /*div_precincrement is not used*/)
     {
         return {std::max(left_prec, right_prec), std::max(left_scale, right_scale)};
     }
@@ -164,10 +186,7 @@ struct ModDecimalInferer
 
 struct OtherInferer
 {
-    static std::tuple<PrecType, ScaleType> infer(PrecType, ScaleType, PrecType, ScaleType)
-    {
-        return {};
-    }
+    static std::tuple<PrecType, ScaleType> infer(PrecType, ScaleType, PrecType, ScaleType, ScaleType) { return {}; }
 };
 
 template <typename T>
@@ -188,7 +207,11 @@ struct Decimal
 
     String toString(ScaleType) const;
 
-    template <typename U, std::enable_if_t<std::is_same_v<U, Int256> || std::is_same_v<U, Int512> || std::is_integral_v<U> || std::is_same_v<U, Int128>> * = nullptr>
+    template <
+        typename U,
+        std::enable_if_t<
+            std::is_same_v<U, Int256> || std::is_same_v<U, Int512> || std::is_integral_v<U>
+            || std::is_same_v<U, Int128>> * = nullptr>
     operator U() const // NOLINT(google-explicit-constructor)
     {
         return static_cast<U>(value);
@@ -419,10 +442,7 @@ public:
         return instance().getInternal(idx);
     }
 
-    static Int256 maxValue()
-    {
-        return get(maxDecimalPrecision<Decimal256>());
-    }
+    static Int256 maxValue() { return get(maxDecimalPrecision<Decimal256>()); }
 
 private:
     DecimalMaxValue()
@@ -433,10 +453,7 @@ private:
         }
     }
 
-    Int256 getInternal(PrecType idx) const
-    {
-        return number[idx];
-    }
+    Int256 getInternal(PrecType idx) const { return number[idx]; }
 };
 
 // In some case, getScaleMultiplier and its callee may not be auto inline by the compiler.

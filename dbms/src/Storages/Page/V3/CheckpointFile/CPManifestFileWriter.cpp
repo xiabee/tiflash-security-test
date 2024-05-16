@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/Logger.h>
 #include <Storages/Page/V3/CheckpointFile/CPManifestFileWriter.h>
 #include <Storages/Page/V3/CheckpointFile/ProtoHelper.h>
+#include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
 
 #include <magic_enum.hpp>
+
 
 namespace DB::PS::V3
 {
 
 void CPManifestFileWriter::writePrefix(const CheckpointProto::ManifestFilePrefix & prefix)
 {
-    RUNTIME_CHECK_MSG(write_stage == WriteStage::WritingPrefix, "unexpected write stage {}", magic_enum::enum_name(write_stage));
+    RUNTIME_CHECK_MSG(
+        write_stage == WriteStage::WritingPrefix,
+        "unexpected write stage {}",
+        magic_enum::enum_name(write_stage));
 
     details::writeMessageWithLength(*compressed_writer, prefix);
     write_stage = WriteStage::WritingEdits;
@@ -54,16 +60,25 @@ void CPManifestFileWriter::writeEdits(const universal::PageEntriesEdit & edit)
 void CPManifestFileWriter::writeEditsPart(const universal::PageEntriesEdit & edit, UInt64 start, UInt64 limit)
 {
     const auto & records = edit.getRecords();
+    bool has_data = false;
     CheckpointProto::ManifestFileEditsPart part;
     // In `CPManifestFileReader::readEdits` if `has_more` is false, it will return std::nullopt directly,
     // so we must set `has_more` to be true here and `writeEditsFinish` will write a empty part and set `has_more` to be false.
     part.set_has_more(true);
     for (UInt64 i = 0; i < limit; ++i)
     {
+        if (UniversalPageIdFormat::getUniversalPageIdType(records[start + i].page_id) == StorageType::LocalKV)
+        {
+            continue;
+        }
+        has_data = true;
         auto * out_record = part.add_edits();
         *out_record = records[start + i].toProto();
     }
-    details::writeMessageWithLength(*compressed_writer, part);
+    if (has_data)
+    {
+        details::writeMessageWithLength(*compressed_writer, part);
+    }
 }
 
 void CPManifestFileWriter::writeEditsFinish()
@@ -98,9 +113,7 @@ void CPManifestFileWriter::writeLocks(const std::unordered_set<String> & lock_fi
     std::sort(
         part.mutable_locks()->begin(),
         part.mutable_locks()->end(),
-        [](const CheckpointProto::LockFile & a, const CheckpointProto::LockFile & b) {
-            return a.name() < b.name();
-        });
+        [](const CheckpointProto::LockFile & a, const CheckpointProto::LockFile & b) { return a.name() < b.name(); });
     details::writeMessageWithLength(*compressed_writer, part);
 
     write_stage = WriteStage::WritingLocks;

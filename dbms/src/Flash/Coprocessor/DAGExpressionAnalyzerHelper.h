@@ -71,6 +71,11 @@ public:
         const tipb::Expr & expr,
         const ExpressionActionsPtr & actions);
 
+    static String buildSingleParamJsonRelatedFunctions(
+        DAGExpressionAnalyzer * analyzer,
+        const tipb::Expr & expr,
+        const ExpressionActionsPtr & actions);
+
     template <typename Impl>
     static String buildDateAddOrSubFunction(
         DAGExpressionAnalyzer * analyzer,
@@ -87,12 +92,18 @@ public:
         const tipb::Expr & expr,
         const ExpressionActionsPtr & actions);
 
+    static String buildGroupingFunction(
+        DAGExpressionAnalyzer * analyzer,
+        const tipb::Expr & expr,
+        const ExpressionActionsPtr & actions);
+
     static String buildDefaultFunction(
         DAGExpressionAnalyzer * analyzer,
         const tipb::Expr & expr,
         const ExpressionActionsPtr & actions);
 
-    using FunctionBuilder = std::function<String(DAGExpressionAnalyzer *, const tipb::Expr &, const ExpressionActionsPtr &)>;
+    using FunctionBuilder
+        = std::function<String(DAGExpressionAnalyzer *, const tipb::Expr &, const ExpressionActionsPtr &)>;
     using FunctionBuilderMap = std::unordered_map<String, FunctionBuilder>;
 
     static FunctionBuilderMap function_builder_map;

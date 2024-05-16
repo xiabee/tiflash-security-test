@@ -19,6 +19,7 @@
 #include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
 #include <fmt/core.h>
 
+#include <memory>
 #include <unordered_map>
 
 namespace DB::PS::V3
@@ -37,12 +38,14 @@ CPFilesWriter::CPFilesWriter(CPFilesWriter::Options options)
     , data_source(options.data_source)
     , locked_files(options.must_locked_files)
     , log(Logger::get())
-{
-}
+{}
 
 void CPFilesWriter::writePrefix(const CPFilesWriter::PrefixInfo & info)
 {
-    RUNTIME_CHECK_MSG(write_stage == WriteStage::WritingPrefix, "unexpected write stage {}", magic_enum::enum_name(write_stage));
+    RUNTIME_CHECK_MSG(
+        write_stage == WriteStage::WritingPrefix,
+        "unexpected write stage {}",
+        magic_enum::enum_name(write_stage));
 
     auto create_at_ms = Poco::Timestamp().epochMicroseconds() / 1000;
 
@@ -67,9 +70,13 @@ void CPFilesWriter::writePrefix(const CPFilesWriter::PrefixInfo & info)
 
 CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
     universal::PageEntriesEdit & edits,
-    const CPFilesWriter::CompactOptions & options)
+    const CPFilesWriter::CompactOptions & options,
+    bool manifest_only)
 {
-    RUNTIME_CHECK_MSG(write_stage == WriteStage::WritingEdits, "unexpected write stage {}", magic_enum::enum_name(write_stage));
+    RUNTIME_CHECK_MSG(
+        write_stage == WriteStage::WritingEdits,
+        "unexpected write stage {}",
+        magic_enum::enum_name(write_stage));
 
     if (edits.empty())
         return {.has_new_data = false};
@@ -91,6 +98,7 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
     for (auto & rec_edit : records)
     {
         StorageType id_storage_type = StorageType::Unknown;
+
         {
             id_storage_type = UniversalPageIdFormat::getUniversalPageIdType(rec_edit.page_id);
             // all keys are included in the manifest
@@ -98,13 +106,18 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
             // this is the page data size of all latest version keys, including some uploaded in the
             // previous checkpoint
             write_down_stats.num_existing_bytes[static_cast<size_t>(id_storage_type)] += rec_edit.entry.size;
+
+            if (id_storage_type == StorageType::LocalKV)
+            {
+                // These pages only contains local data which will not be dumped into checkpoint.
+                continue;
+            }
         }
 
         if (rec_edit.type == EditRecordType::VAR_EXTERNAL)
         {
             RUNTIME_CHECK_MSG(
-                rec_edit.entry.checkpoint_info.is_valid
-                    && rec_edit.entry.checkpoint_info.data_location.data_file_id
+                rec_edit.entry.checkpoint_info.is_valid && rec_edit.entry.checkpoint_info.data_location.data_file_id
                     && !rec_edit.entry.checkpoint_info.data_location.data_file_id->empty(),
                 "the checkpoint info of external id is not set, record={}",
                 rec_edit);
@@ -132,6 +145,11 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
         }
 
         assert(rec_edit.type == EditRecordType::VAR_ENTRY);
+        // No need to read and write page data for the manifest only checkpoint.
+        if (manifest_only)
+        {
+            continue;
+        }
         bool is_compaction = false;
         if (rec_edit.entry.checkpoint_info.has_value())
         {
@@ -151,7 +169,8 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
         }
 
         bool current_page_is_raft_data = (id_storage_type == StorageType::RaftEngine);
-        if (current_write_size > 0 // If current_write_size is 0, data_writer is a empty file, not need to create a new one.
+        if (current_write_size
+                > 0 // If current_write_size is 0, data_writer is a empty file, not need to create a new one.
             && (current_page_is_raft_data != last_page_is_raft_data // Data type changed
                 || (max_data_file_size != 0 && current_write_size >= max_data_file_size))) // or reach size limit.
         {
@@ -165,21 +184,15 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
         {
             auto page = data_source->read({rec_edit.page_id, rec_edit.entry});
             RUNTIME_CHECK_MSG(page.isValid(), "failed to read page, record={}", rec_edit);
-            auto data_location = data_writer->write(
-                rec_edit.page_id,
-                rec_edit.version,
-                page.data.begin(),
-                page.data.size());
+            auto data_location
+                = data_writer->write(rec_edit.page_id, rec_edit.version, page.data.begin(), page.data.size());
             // the page data size uploaded in this checkpoint
             write_down_stats.num_bytes[static_cast<size_t>(id_storage_type)] += rec_edit.entry.size;
             current_write_size += data_location.size_in_file;
             RUNTIME_CHECK(page.data.size() == rec_edit.entry.size, page.data.size(), rec_edit.entry.size);
-            bool is_local_data_reclaimed = rec_edit.entry.checkpoint_info.has_value() && rec_edit.entry.checkpoint_info.is_local_data_reclaimed;
-            rec_edit.entry.checkpoint_info = OptionalCheckpointInfo{
-                .data_location = data_location,
-                .is_valid = true,
-                .is_local_data_reclaimed = is_local_data_reclaimed,
-            };
+            bool is_local_data_reclaimed
+                = rec_edit.entry.checkpoint_info.has_value() && rec_edit.entry.checkpoint_info.is_local_data_reclaimed;
+            rec_edit.entry.checkpoint_info = OptionalCheckpointInfo(data_location, true, is_local_data_reclaimed);
             locked_files.emplace(*data_location.data_file_id);
             if (is_compaction)
             {
@@ -211,7 +224,10 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
 
 std::vector<String> CPFilesWriter::writeSuffix()
 {
-    RUNTIME_CHECK_MSG(write_stage == WriteStage::WritingEdits, "unexpected write stage {}", magic_enum::enum_name(write_stage));
+    RUNTIME_CHECK_MSG(
+        write_stage == WriteStage::WritingEdits,
+        "unexpected write stage {}",
+        magic_enum::enum_name(write_stage));
 
     manifest_writer->writeEditsFinish();
     manifest_writer->writeLocks(locked_files);
@@ -235,10 +251,16 @@ void CPFilesWriter::newDataWriter()
         data_writer->flush();
     }
     current_write_size = 0;
-    data_file_paths.push_back(fmt::format(fmt::runtime(data_file_path_pattern), fmt::arg("seq", sequence), fmt::arg("index", data_file_index)));
+    data_file_paths.push_back(fmt::format(
+        fmt::runtime(data_file_path_pattern),
+        fmt::arg("seq", sequence),
+        fmt::arg("index", data_file_index)));
     data_writer = CPDataFileWriter::create({
         .file_path = data_file_paths.back(),
-        .file_id = fmt::format(fmt::runtime(data_file_id_pattern), fmt::arg("seq", sequence), fmt::arg("index", data_file_index)),
+        .file_id = fmt::format(
+            fmt::runtime(data_file_id_pattern),
+            fmt::arg("seq", sequence),
+            fmt::arg("index", data_file_index)),
     });
     data_prefix.set_create_at_ms(Poco::Timestamp().epochMicroseconds() / 1000);
     data_prefix.set_sub_file_index(data_file_index);

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
-#include <IO/ChecksumBuffer.h>
+#include <Common/config.h>
+#include <IO/Checksum/ChecksumBuffer.h>
 #include <IO/IOSWrapper.h>
 #include <Server/DTTool/DTTool.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
@@ -33,19 +33,14 @@ bool isIgnoredInMigration(const DB::DM::DMFile & file, const std::string & targe
 }
 bool needFrameMigration(const DB::DM::DMFile & file, const std::string & target)
 {
-    return endsWith(target, ".mrk")
-        || endsWith(target, ".dat")
-        || endsWith(target, ".idx")
-        || file.packStatFileName() == target;
+    return endsWith(target, ".mrk") || endsWith(target, ".dat") || endsWith(target, ".idx")
+        || endsWith(target, ".merged") || file.packStatFileName() == target;
 }
 bool isRecognizable(const DB::DM::DMFile & file, const std::string & target)
 {
-    return file.metaFileName() == target
-        || file.configurationFileName() == target
-        || file.packPropertyFileName() == target
-        || needFrameMigration(file, target)
-        || isIgnoredInMigration(file, target)
-        || file.metav2FileName() == target;
+    return file.metaFileName() == target || file.configurationFileName() == target
+        || file.packPropertyFileName() == target || needFrameMigration(file, target)
+        || isIgnoredInMigration(file, target) || file.metav2FileName() == target;
 }
 
 namespace bpo = boost::program_options;
@@ -58,7 +53,11 @@ static constexpr char MIGRATE_HELP[] =
     "  --version     Target dtfile version. [default: 2] [available: 1, 2]\n"
     "  --algorithm   Checksum algorithm. [default: xxh3] [available: xxh3, city128, crc32, crc64, none]\n"
     "  --frame       Checksum frame length. [default: " TO_STRING(TIFLASH_DEFAULT_CHECKSUM_FRAME_SIZE) "]\n"
+#if USE_QPL
+    "  --compression Compression method. [default: lz4] [available: lz4, lz4hc, zstd, qpl, none]\n"
+#else
     "  --compression Compression method. [default: lz4] [available: lz4, lz4hc, zstd, none]\n"
+#endif
     "  --level       Compression level. [default: lz4: 1, lz4hc: 9, zstd: 1]\n"
     "  --file-id     Target file id.\n"
     "  --workdir     Target directory.\n"
@@ -100,11 +99,15 @@ struct DirLock
         auto result = ::fcntl(dir, F_SETLK, &lock);
         if (result != 0)
         {
-            std::cerr << fmt::format("cannot unlock target: {}, errno: {}, msg: {}", workdir_lock, errno, strerror(errno)) << std::endl;
+            std::cerr
+                << fmt::format("cannot unlock target: {}, errno: {}, msg: {}", workdir_lock, errno, strerror(errno))
+                << std::endl;
         }
         if (::close(dir) != 0)
         {
-            std::cerr << fmt::format("cannot close target: {}, errno: {}, msg: {}", workdir_lock, errno, strerror(errno)) << std::endl;
+            std::cerr
+                << fmt::format("cannot close target: {}, errno: {}, msg: {}", workdir_lock, errno, strerror(errno))
+                << std::endl;
         }
         if (Poco::File file(workdir_lock); file.exists())
         {
@@ -122,10 +125,11 @@ struct MigrationHouseKeeper
     size_t migration_file;
 
     DB::StorageFormatVersion old_version;
-    MigrationHouseKeeper(std::string migration_temp_dir,
-                         std::string migration_target_dir,
-                         size_t migration_file,
-                         bool no_keep)
+    MigrationHouseKeeper(
+        std::string migration_temp_dir,
+        std::string migration_target_dir,
+        size_t migration_file,
+        bool no_keep)
         : success(false)
         , no_keep(no_keep)
         , migration_temp_dir(migration_temp_dir)
@@ -139,10 +143,7 @@ struct MigrationHouseKeeper
         }
     }
 
-    void markSuccess()
-    {
-        success = true;
-    }
+    void markSuccess() { success = true; }
 
     void setStorageVersion(DB::StorageFormatVersion version)
     {
@@ -187,8 +188,22 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
             args.workdir,
             args.file_id,
             args.no_keep};
-        auto src_file = DB::DM::DMFile::restore(context.getFileProvider(), args.file_id, 0, args.workdir, DB::DM::DMFile::ReadMetaMode::all());
-        LOG_INFO(logger, "source version: {}", (src_file->getConfiguration() ? 2 : 1));
+        auto src_file = DB::DM::DMFile::restore(
+            context.getFileProvider(),
+            args.file_id,
+            0,
+            args.workdir,
+            DB::DM::DMFile::ReadMetaMode::all());
+        auto source_version = 0;
+        if (src_file->useMetaV2())
+        {
+            source_version = 3;
+        }
+        else
+        {
+            source_version = src_file->getConfiguration() ? 2 : 1;
+        }
+        LOG_INFO(logger, "source version: {}", source_version);
         LOG_INFO(logger, "source bytes: {}", src_file->getBytesOnDisk());
         LOG_INFO(logger, "migration temporary directory: {}", keeper.migration_temp_dir.path().c_str());
         LOG_INFO(logger, "target version: {}", args.version);
@@ -218,10 +233,7 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
         LOG_INFO(logger, "creating output stream");
         context.getSettingsRef().dt_compression_method.set(args.compression_method);
         context.getSettingsRef().dt_compression_level.set(args.compression_level);
-        auto output_stream = DB::DM::DMFileBlockOutputStream(
-            context,
-            new_file,
-            src_file->getColumnDefines());
+        auto output_stream = DB::DM::DMFileBlockOutputStream(context, new_file, src_file->getColumnDefines());
 
         input_stream->readPrefix();
         if (!args.dry_mode)
@@ -236,7 +248,10 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
             if (!args.dry_mode)
                 output_stream.write(
                     block,
-                    {stat_iter->not_clean, properties_iter->deleted_rows(), properties_iter->num_rows(), properties_iter->gc_hint_version()});
+                    {stat_iter->not_clean,
+                     properties_iter->deleted_rows(),
+                     properties_iter->num_rows(),
+                     properties_iter->gc_hint_version()});
             stat_iter++;
             properties_iter++;
         }
@@ -250,7 +265,12 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
         LOG_INFO(logger, "checking meta status for new file");
         if (!args.dry_mode)
         {
-            DB::DM::DMFile::restore(context.getFileProvider(), args.file_id, 1, keeper.migration_temp_dir.path(), DB::DM::DMFile::ReadMetaMode::all());
+            DB::DM::DMFile::restore(
+                context.getFileProvider(),
+                args.file_id,
+                1,
+                keeper.migration_temp_dir.path(),
+                DB::DM::DMFile::ReadMetaMode::all());
         }
     }
     LOG_INFO(logger, "migration finished");
@@ -282,11 +302,12 @@ int migrateEntry(const std::vector<std::string> & opts, RaftStoreFFIFunc ffi_fun
         ("nokeep", bpo::bool_switch(&no_keep));
     // clang-format on
 
-    bpo::store(bpo::command_line_parser(opts)
-                   .options(options)
-                   .style(bpo::command_line_style::unix_style | bpo::command_line_style::allow_long_disguise)
-                   .run(),
-               vm);
+    bpo::store(
+        bpo::command_line_parser(opts)
+            .options(options)
+            .style(bpo::command_line_style::unix_style | bpo::command_line_style::allow_long_disguise)
+            .run(),
+        vm);
 
     try
     {
@@ -335,6 +356,12 @@ int migrateEntry(const std::vector<std::string> & opts, RaftStoreFFIFunc ffi_fun
             {
                 args.compression_method = DB::CompressionMethod::ZSTD;
             }
+#if USE_QPL
+            else if (compression_method == "qpl")
+            {
+                args.compression_method = DB::CompressionMethod::QPL;
+            }
+#endif
             else if (compression_method == "none")
             {
                 args.compression_method = DB::CompressionMethod::NONE;
@@ -398,8 +425,7 @@ int migrateEntry(const std::vector<std::string> & opts, RaftStoreFFIFunc ffi_fun
     }
     catch (const boost::wrapexcept<boost::program_options::required_option> & exception)
     {
-        std::cerr << exception.what() << std::endl
-                  << MIGRATE_HELP << std::endl;
+        std::cerr << exception.what() << std::endl << MIGRATE_HELP << std::endl;
         return 1;
     }
 }

@@ -17,8 +17,8 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Functions/FunctionFactory.h>
-#include <Storages/Transaction/Collator.h>
 #include <TestUtils/FunctionTestUtils.h>
+#include <TiDB/Collation/Collator.h>
 #include <common/types.h>
 
 #pragma GCC diagnostic push
@@ -55,7 +55,9 @@ protected:
         return !column_with_type.column->isColumnConst() && column_with_type.type->isNullable();
     }
     template <typename T>
-    ColumnWithTypeAndName createNullableVectorColumn(const InferredDataVector<T> & vec, const std::vector<UInt8> & null_map)
+    ColumnWithTypeAndName createNullableVectorColumn(
+        const InferredDataVector<T> & vec,
+        const std::vector<UInt8> & null_map)
     {
         using NullableType = Nullable<T>;
         InferredDataVector<NullableType> nullable_vec;

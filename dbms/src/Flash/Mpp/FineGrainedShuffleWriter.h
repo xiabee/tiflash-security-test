@@ -45,7 +45,7 @@ public:
         tipb::CompressionMode compression_mode_);
     void prepare(const Block & sample_block) override;
     void write(const Block & block) override;
-    bool isReadyForWrite() const override;
+    bool isWritable() const override;
     void flush() override;
 
 private:
@@ -66,7 +66,9 @@ private:
 
     Block header;
     bool prepared = false;
-    size_t num_columns = 0, num_bucket = 0, batch_send_row_limit = 0; // Assign they initial values to pass clang-tidy check, they will be initialized in prepare method
+    size_t num_columns = 0, num_bucket = 0,
+           batch_send_row_limit
+        = 0; // Assign they initial values to pass clang-tidy check, they will be initialized in prepare method
     std::vector<String> partition_key_containers_for_reuse;
     WeakHash32 hash;
     IColumn::Selector selector;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <Encryption/MockKeyManager.h>
+#include <IO/Encryption/MockKeyManager.h>
 #include <Poco/Logger.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/V2/PageFile.h>
@@ -28,7 +28,7 @@ TEST(PageFileTest, Compare)
     DB::tests::TiFlashTestEnv::tryRemovePath(path);
 
     const auto file_provider = DB::tests::TiFlashTestEnv::getDefaultFileProvider();
-    Poco::Logger * log = &Poco::Logger::get("PageFile");
+    auto log = Logger::get("PageFile");
 
     {
         // Create files for tests
@@ -67,7 +67,8 @@ TEST(PageFileTest, Compare)
     ASSERT_TRUE(pf_set.rbegin()->isExist());
 
     // Test `isPageFileExist`
-    ASSERT_TRUE(PageFile::isPageFileExist(checkpoint_pf.fileIdLevel(), path, file_provider, PageFile::Type::Checkpoint, log));
+    ASSERT_TRUE(
+        PageFile::isPageFileExist(checkpoint_pf.fileIdLevel(), path, file_provider, PageFile::Type::Checkpoint, log));
     ASSERT_TRUE(PageFile::isPageFileExist(pf0.fileIdLevel(), path, file_provider, PageFile::Type::Formal, log));
     ASSERT_TRUE(PageFile::isPageFileExist(pf1.fileIdLevel(), path, file_provider, PageFile::Type::Formal, log));
     ASSERT_FALSE(PageFile::isPageFileExist(pf1.fileIdLevel(), path, file_provider, PageFile::Type::Legacy, log));
@@ -177,7 +178,7 @@ TEST(PageEntry_test, GetFieldInfo)
 
 TEST(PageFileTest, PageFileLink)
 {
-    Poco::Logger * log = &Poco::Logger::get("PageFileLink");
+    auto log = Logger::get("PageFileLink");
     PageId page_id = 55;
     UInt64 tag = 0;
     const String path = DB::tests::TiFlashTestEnv::getTemporaryPath("PageFileLink/");
@@ -226,7 +227,7 @@ TEST(PageFileTest, PageFileLink)
 
 TEST(PageFileTest, EncryptedPageFileLink)
 {
-    Poco::Logger * log = &Poco::Logger::get("EncryptedPageFileLink");
+    auto log = Logger::get("EncryptedPageFileLink");
     PageId page_id = 55;
     UInt64 tag = 0;
     const String path = DB::tests::TiFlashTestEnv::getTemporaryPath("EncryptedPageFileLink/");

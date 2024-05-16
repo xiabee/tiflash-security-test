@@ -24,23 +24,19 @@ class ExchangeSenderSinkOp : public SinkOp
 {
 public:
     ExchangeSenderSinkOp(
-        PipelineExecutorStatus & exec_status_,
+        PipelineExecutorContext & exec_context_,
         const String & req_id,
         std::unique_ptr<DAGResponseWriter> && writer)
-        : SinkOp(exec_status_, req_id)
+        : SinkOp(exec_context_, req_id)
         , writer(std::move(writer))
-    {
-    }
+    {}
 
-    String getName() const override
-    {
-        return "ExchangeSenderSinkOp";
-    }
-
-    void operatePrefix() override;
-    void operateSuffix() override;
+    String getName() const override { return "ExchangeSenderSinkOp"; }
 
 protected:
+    void operatePrefixImpl() override;
+    void operateSuffixImpl() override;
+
     OperatorStatus writeImpl(Block && block) override;
 
     OperatorStatus prepareImpl() override;
