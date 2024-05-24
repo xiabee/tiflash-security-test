@@ -56,8 +56,7 @@ function run_test_parallel() {
 		args="--gtest_break_on_failure --gtest_catch_exceptions=0"
 	fi
 
-	# run with 45 min timeout
-	python ${SRC_TESTS_PATH}/gtest_parallel.py ${test_bins} --workers=${NPROC} ${args} --print_test_times --timeout=2700
+	python ${SRC_TESTS_PATH}/gtest_parallel.py ${test_bins} --workers=${NPROC} ${args} --print_test_times
 }
 
 set -e

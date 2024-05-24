@@ -24,18 +24,14 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/BackgroundProcessingPool.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFilePersisted.h>
-#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
-#include <Storages/DeltaMerge/File/DMFile_fwd.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
-#include <Storages/KVStore/MultiRaft/Disagg/CheckpointIngestInfo.h>
 #include <Storages/Page/PageStorage_fwd.h>
 #include <TiDB/Schema/TiDB.h>
 
@@ -43,8 +39,6 @@
 
 namespace DB
 {
-
-struct Settings;
 
 class Logger;
 using LoggerPtr = std::shared_ptr<Logger>;
@@ -56,14 +50,19 @@ class StoragePathPool;
 class PipelineExecutorContext;
 class PipelineExecGroupBuilder;
 
-struct CheckpointIngestInfo;
-
 namespace DM
 {
 class StoragePool;
 using StoragePoolPtr = std::shared_ptr<StoragePool>;
+class DMFile;
+using DMFilePtr = std::shared_ptr<DMFile>;
+class Segment;
+using SegmentPtr = std::shared_ptr<Segment>;
+using SegmentPair = std::pair<SegmentPtr, SegmentPtr>;
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
+struct DMContext;
+using DMContextPtr = std::shared_ptr<DMContext>;
 using NotCompress = std::unordered_set<ColId>;
 using SegmentIdSet = std::unordered_set<UInt64>;
 struct ExternalDTFileInfo;
@@ -73,6 +72,8 @@ namespace tests
 {
 class DeltaMergeStoreTest;
 }
+
+inline static const PageIdU64 DELTA_MERGE_FIRST_SEGMENT_ID = 1;
 
 struct SegmentStats
 {
@@ -176,7 +177,6 @@ class DeltaMergeStore : private boost::noncopyable
 {
 public:
     friend class ::DB::DM::tests::DeltaMergeStoreTest;
-    friend struct DB::CheckpointIngestInfo;
     struct Settings
     {
         NotCompress not_compress_columns{};
@@ -331,7 +331,7 @@ public:
     std::vector<SegmentPtr> ingestSegmentsUsingSplit(
         const DMContextPtr & dm_context,
         const RowKeyRange & ingest_range,
-        const std::vector<SegmentPtr> & segments_to_ingest);
+        const std::vector<SegmentPtr> & target_segments);
 
     bool ingestSegmentDataIntoSegmentUsingSplit(
         DMContext & dm_context,
@@ -339,31 +339,16 @@ public:
         const RowKeyRange & ingest_range,
         const SegmentPtr & segment_to_ingest);
 
-    Segments buildSegmentsFromCheckpointInfo(
+    void ingestSegmentsFromCheckpointInfo(
         const DMContextPtr & dm_context,
         const DM::RowKeyRange & range,
-        const CheckpointInfoPtr & checkpoint_info) const;
+        CheckpointInfoPtr checkpoint_info);
 
-    Segments buildSegmentsFromCheckpointInfo(
+    void ingestSegmentsFromCheckpointInfo(
         const Context & db_context,
         const DB::Settings & db_settings,
         const DM::RowKeyRange & range,
-        const CheckpointInfoPtr & checkpoint_info)
-    {
-        auto dm_context = newDMContext(db_context, db_settings);
-        return buildSegmentsFromCheckpointInfo(dm_context, range, checkpoint_info);
-    }
-
-    UInt64 ingestSegmentsFromCheckpointInfo(
-        const DMContextPtr & dm_context,
-        const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info);
-
-    UInt64 ingestSegmentsFromCheckpointInfo(
-        const Context & db_context,
-        const DB::Settings & db_settings,
-        const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info)
+        CheckpointInfoPtr checkpoint_info)
     {
         auto dm_context = newDMContext(db_context, db_settings);
         return ingestSegmentsFromCheckpointInfo(dm_context, range, checkpoint_info);
@@ -404,7 +389,7 @@ public:
         UInt64 max_version,
         const PushDownFilterPtr & filter,
         const RuntimeFilteList & runtime_filter_list,
-        int rf_max_wait_time_ms,
+        const int rf_max_wait_time_ms,
         const String & tracing_id,
         bool keep_order,
         bool is_fast_scan = false,
@@ -429,7 +414,7 @@ public:
         UInt64 max_version,
         const PushDownFilterPtr & filter,
         const RuntimeFilteList & runtime_filter_list,
-        int rf_max_wait_time_ms,
+        const int rf_max_wait_time_ms,
         const String & tracing_id,
         bool keep_order,
         bool is_fast_scan = false,
@@ -512,7 +497,6 @@ public:
     const Settings & getSettings() const { return settings; }
     DataTypePtr getPKDataType() const { return original_table_handle_define.type; }
     SortDescription getPrimarySortDescription() const;
-    KeyspaceID getKeyspaceID() const { return keyspace_id; }
 
     void check(const Context & db_context);
 
@@ -749,7 +733,7 @@ private:
     void removeLocalStableFilesIfDisagg() const;
 
     SegmentReadTasks getReadTasksByRanges(
-        const DMContextPtr & dm_context,
+        DMContext & dm_context,
         const RowKeyRanges & sorted_ranges,
         size_t expected_tasks_count = 1,
         const SegmentIdSet & read_segments = {},
@@ -764,7 +748,7 @@ private:
      * This may be called from multiple threads, e.g. at the foreground write moment, or in background threads.
      * A `thread_type` should be specified indicating the type of the thread calling this function.
      * Depend on the thread type, the "update" to do may be varied.
-     *
+     * 
      * It returns a bool which indicates whether a flush of KVStore is recommended.
      */
     bool checkSegmentUpdate(

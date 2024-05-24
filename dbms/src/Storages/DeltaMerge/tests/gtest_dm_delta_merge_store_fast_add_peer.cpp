@@ -17,7 +17,6 @@
 #include <DataStreams/BlocksListBlockInputStream.h>
 #include <DataStreams/OneBlockInputStream.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
@@ -31,7 +30,6 @@
 #include <Storages/KVStore/MultiRaft/Disagg/CheckpointInfo.h>
 #include <Storages/KVStore/MultiRaft/Disagg/FastAddPeerCache.h>
 #include <Storages/KVStore/TMTContext.h>
-#include <Storages/KVStore/tests/region_helper.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
@@ -103,7 +101,7 @@ public:
             already_initialize_write_ps = true;
         }
         resetStoreId(current_store_id);
-        global_context.getSharedContextDisagg()->initFastAddPeerContext(25);
+        global_context.getSharedContextDisagg()->initFastAddPeerContext();
     }
 
     void TearDown() override
@@ -364,27 +362,11 @@ try
 
         store = reload(table_column_defines);
     }
-
-    auto segments = store->buildSegmentsFromCheckpointInfo(
-        *db_context,
-        db_context->getSettingsRef(),
-        RowKeyRange::newAll(false, 1),
-        checkpoint_info);
-    auto start = RecordKVFormat::genKey(table_id, 0);
-    auto end = RecordKVFormat::genKey(table_id, 10);
-    RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
     store->ingestSegmentsFromCheckpointInfo(
         *db_context,
         db_context->getSettingsRef(),
         RowKeyRange::newAll(false, 1),
-        std::make_shared<CheckpointIngestInfo>(
-            db_context->getTMTContext(),
-            checkpoint_info->region_id,
-            2333,
-            checkpoint_info->remote_store_id,
-            dummy_region,
-            std::move(segments),
-            0));
+        checkpoint_info);
 
     // check data file lock exists
     {
@@ -491,54 +473,19 @@ try
     checkpoint_info->region_id = 1000;
     checkpoint_info->checkpoint_data_holder = buildParsedCheckpointData(*db_context, manifest_key, /*dir_seq*/ 100);
     checkpoint_info->temp_ps = checkpoint_info->checkpoint_data_holder->getUniversalPageStorage();
+    store->ingestSegmentsFromCheckpointInfo(
+        *db_context,
+        db_context->getSettingsRef(),
+        RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)),
+        checkpoint_info);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2);
 
-    {
-        auto segments = store->buildSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)),
-            checkpoint_info);
-        auto start = RecordKVFormat::genKey(table_id, 0);
-        auto end = RecordKVFormat::genKey(table_id, 10);
-        RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
-        store->ingestSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(0, num_rows_write / 2)),
-            std::make_shared<CheckpointIngestInfo>(
-                db_context->getTMTContext(),
-                checkpoint_info->region_id,
-                2333,
-                checkpoint_info->remote_store_id,
-                dummy_region,
-                std::move(segments),
-                0));
-        verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write / 2);
-    }
-
-    {
-        auto segments = store->buildSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)),
-            checkpoint_info);
-        auto start = RecordKVFormat::genKey(table_id, 0);
-        auto end = RecordKVFormat::genKey(table_id, 10);
-        RegionPtr dummy_region = tests::makeRegion(checkpoint_info->region_id, start, end, nullptr);
-        store->ingestSegmentsFromCheckpointInfo(
-            *db_context,
-            db_context->getSettingsRef(),
-            RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)),
-            std::make_shared<CheckpointIngestInfo>(
-                db_context->getTMTContext(),
-                checkpoint_info->region_id,
-                2333,
-                checkpoint_info->remote_store_id,
-                dummy_region,
-                std::move(segments),
-                0));
-        verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write);
-    }
+    store->ingestSegmentsFromCheckpointInfo(
+        *db_context,
+        db_context->getSettingsRef(),
+        RowKeyRange::fromHandleRange(HandleRange(num_rows_write / 2, num_rows_write)),
+        checkpoint_info);
+    verifyRows(RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize()), num_rows_write);
 }
 CATCH
 

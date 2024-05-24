@@ -74,8 +74,7 @@ bool ColumnFileFlushTask::commit(ColumnFilePersistedSetPtr & persisted_file_set,
                 m_file->getSchema(),
                 m_file->getRows(),
                 m_file->getBytes(),
-                task.data_page,
-                context);
+                task.data_page);
         }
         else if (auto * t_file = task.column_file->tryToTinyFile(); t_file)
         {

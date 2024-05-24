@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/ConsoleChannel.h>
@@ -37,7 +37,7 @@ TEST(LegacyCompactorTest, WriteMultipleBatchRead)
 try
 {
     PageStorageConfig config;
-    auto log = Logger::get("LegacyCompactor_test");
+    Poco::Logger * log = &Poco::Logger::get("LegacyCompactor_test");
 
     PageEntriesVersionSetWithDelta original_version("test", config.version_set_config, log);
 

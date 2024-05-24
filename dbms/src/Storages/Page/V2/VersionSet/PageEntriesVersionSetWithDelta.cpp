@@ -423,7 +423,7 @@ DeltaVersionEditAcceptor::DeltaVersionEditAcceptor(
     const PageEntriesView * view_,
     const String & name_,
     bool ignore_invalid_ref_,
-    LoggerPtr log_)
+    Poco::Logger * log_)
     : view(const_cast<PageEntriesView *>(view_))
     , current_version(view->getSharedTailVersion())
     , ignore_invalid_ref(ignore_invalid_ref_)
@@ -585,7 +585,7 @@ void DeltaVersionEditAcceptor::applyInplace(
     const String & name,
     const PageEntriesVersionSetWithDelta::VersionPtr & current,
     const PageEntriesEdit & edit,
-    LoggerPtr log)
+    Poco::Logger * log)
 {
     assert(current->isBase());
     assert(current.use_count() == 1);

@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
-#include <Storages/DeltaMerge/File/DMFilePackFilter_fwd.h>
-#include <Storages/DeltaMerge/File/DMFile_fwd.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
+#include <Storages/DeltaMerge/File/DMFilePackFilter.h>
+#include <Storages/DeltaMerge/File/DMFileReader.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
@@ -30,6 +30,7 @@ namespace DM
 
 struct WriteBatches;
 
+struct DMContext;
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
@@ -45,10 +46,8 @@ public:
     {}
 
     static StableValueSpacePtr restore(DMContext & context, PageIdU64 id);
-    static StableValueSpacePtr restore(DMContext & context, ReadBuffer & buf, PageIdU64 id);
 
     static StableValueSpacePtr createFromCheckpoint( //
-        const LoggerPtr & parent_log,
         DMContext & context,
         UniversalPageStoragePtr temp_ps,
         PageIdU64 stable_id,
@@ -68,7 +67,6 @@ public:
 
     PageIdU64 getId() const { return id; }
     void saveMeta(WriteBatchWrapper & meta_wb);
-    std::string serializeMeta() const;
 
     size_t getRows() const;
     size_t getBytes() const;
@@ -261,9 +259,6 @@ public:
     void drop(const FileProviderPtr & file_provider);
 
     size_t avgRowBytes(const ColumnDefines & read_columns);
-
-private:
-    UInt64 saveMeta(WriteBuffer & buf) const;
 
 private:
     const PageIdU64 id;

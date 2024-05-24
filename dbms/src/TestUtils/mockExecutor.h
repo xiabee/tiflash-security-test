@@ -373,7 +373,6 @@ MockWindowFrame buildDefaultRowsFrame();
 #define Min(expr) makeASTFunction("min", (expr))
 #define Count(expr) makeASTFunction("count", (expr))
 #define Sum(expr) makeASTFunction("sum", (expr))
-#define Avg(expr) makeASTFunction("avg", (expr))
 #define CountDistinct(expr) makeASTFunction("countDistinct", (expr))
 
 /// Window functions

@@ -40,7 +40,7 @@ public:
         assert(result_queue);
     }
 
-    void finalizeImpl(const Names &) override { throw Exception("Unsupport"); }
+    void finalize(const Names &) override { throw Exception("Unsupport"); }
 
     const Block & getSampleBlock() const override { throw Exception("Unsupport"); }
 

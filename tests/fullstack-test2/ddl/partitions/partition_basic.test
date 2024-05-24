@@ -35,9 +35,13 @@ mysql> set session tidb_isolation_read_engines='tiflash'; select * from test.t1;
 │ 1/1/                                                │
 └─────────────────────────────────────────────────────┘
 
+
 mysql> alter table test.t1 add partition (partition p2 values less than (200));
 
-# In raftstore v1, this new empty partition will not be created in TiFlash. On the contrary in raftstore v2.
+>> DBGInvoke get_partition_tables_tiflash_replica_count("test", "t1")
+┌─get_partition_tables_tiflash_replica_count(test, t)─┐
+│ 1/1/                                                │
+└─────────────────────────────────────────────────────┘
 
 mysql> insert into test.t1 values (150, 'aaa');
 
@@ -77,7 +81,11 @@ mysql> alter table test.t1 truncate partition p1;
 
 => DBGInvoke __refresh_schemas()
 
-# In raftstore v1, this new partition will not be created in TiFlash. On the contrary in raftstore v2.
+>> DBGInvoke get_partition_tables_tiflash_replica_count("test", "t1")
+┌─get_partition_tables_tiflash_replica_count(test, t)─┐
+│ 1/                                                  │
+└─────────────────────────────────────────────────────┘
+
 func> wait_table test t1
 mysql> set session tidb_isolation_read_engines='tiflash'; select * from test.t1;
 +----+------+

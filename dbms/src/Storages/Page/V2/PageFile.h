@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/FormatVersion.h>
 #include <Storages/Page/Page.h>
@@ -25,6 +25,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace Poco
+{
+class Logger;
+} // namespace Poco
 
 namespace DB::PS::V2
 {
@@ -144,14 +148,14 @@ public:
             PageFile & page_file,
             size_t max_meta_offset,
             const ReadLimiterPtr & read_limiter = nullptr,
-            bool background = false);
+            const bool background = false);
 
         static MetaMergingReaderPtr createFrom(
             PageFile & page_file,
             const ReadLimiterPtr & read_limiter = nullptr,
-            bool background = false);
+            const bool background = false);
 
-        explicit MetaMergingReader(PageFile & page_file_); // should only called by `createFrom`
+        MetaMergingReader(PageFile & page_file_); // should only called by `createFrom`
 
         ~MetaMergingReader();
 
@@ -202,7 +206,7 @@ public:
         void initialize(
             std::optional<size_t> max_meta_offset,
             const ReadLimiterPtr & read_limiter,
-            bool background = false);
+            const bool background = false);
 
     private:
         PageFile & page_file;
@@ -233,7 +237,7 @@ public:
     public:
         static LinkingMetaAdapterPtr createFrom(PageFile & page_file, const ReadLimiterPtr & read_limiter = nullptr);
 
-        explicit LinkingMetaAdapter(PageFile & page_file_); // should only called by `createFrom`
+        LinkingMetaAdapter(PageFile & page_file_); // should only called by `createFrom`
 
         ~LinkingMetaAdapter();
 
@@ -299,7 +303,7 @@ public:
         const String & parent_path,
         const FileProviderPtr & file_provider_,
         const String & page_file_name,
-        LoggerPtr log);
+        Poco::Logger * log);
     /// Create a new page file.
     static PageFile newPageFile(
         PageFileId file_id,
@@ -307,7 +311,7 @@ public:
         const String & parent_path,
         const FileProviderPtr & file_provider_,
         Type type,
-        LoggerPtr log);
+        Poco::Logger * log);
     /// Open an existing page file for read.
     static PageFile openPageFileForRead(
         PageFileId file_id,
@@ -315,14 +319,14 @@ public:
         const String & parent_path,
         const FileProviderPtr & file_provider_,
         Type type,
-        LoggerPtr log);
+        Poco::Logger * log);
     /// If page file is exist.
     static bool isPageFileExist(
         PageFileIdAndLevel file_id,
         const String & parent_path,
         const FileProviderPtr & file_provider_,
         Type type,
-        LoggerPtr log);
+        Poco::Logger * log);
 
     /// Rename this page file into formal style.
     void setFormal();
@@ -414,7 +418,7 @@ private:
         const FileProviderPtr & file_provider_,
         Type type_,
         bool is_create,
-        LoggerPtr log);
+        Poco::Logger * log);
 
     String dataPath() const { return folderPath() + "/page"; }
     String metaPath() const { return folderPath() + "/meta"; }
@@ -441,7 +445,7 @@ private:
     UInt64 data_file_pos = 0;
     UInt64 meta_file_pos = 0;
 
-    LoggerPtr log = nullptr;
+    Poco::Logger * log = nullptr;
 };
 using PageFileSet = std::set<PageFile, PageFile::Comparator>;
 

@@ -41,7 +41,8 @@ class AggregateFunctionGroupUniqArrayDateTime : public AggregateFunctionGroupUni
     }
 };
 
-IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_type)
+
+static IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_type)
 {
     if (typeid_cast<const DataTypeDate *>(argument_type.get()))
         return new AggregateFunctionGroupUniqArrayDate;
@@ -58,7 +59,6 @@ IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_type)
 }
 
 AggregateFunctionPtr createAggregateFunctionGroupUniqArray(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)

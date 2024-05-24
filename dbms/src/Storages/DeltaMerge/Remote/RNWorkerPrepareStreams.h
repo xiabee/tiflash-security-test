@@ -15,10 +15,10 @@
 #pragma once
 
 #include <Common/ThreadedWorker.h>
-#include <Interpreters/Context.h>
-#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
-#include <Storages/DeltaMerge/SegmentReadTask.h>
+#include <Storages/DeltaMerge/Remote/RNReadTask_fwd.h>
+#include <Storages/DeltaMerge/SegmentReadTaskPool.h>
+#include <pingcap/kv/Cluster.h>
 
 #include <boost/noncopyable.hpp>
 
@@ -33,21 +33,10 @@ using RNWorkerPrepareStreamsPtr = std::shared_ptr<RNWorkerPrepareStreams>;
 /// they will be downloaded.
 class RNWorkerPrepareStreams
     : private boost::noncopyable
-    , public ThreadedWorker<SegmentReadTaskPtr, SegmentReadTaskPtr>
+    , public ThreadedWorker<RNReadSegmentTaskPtr, RNReadSegmentTaskPtr>
 {
 protected:
-    SegmentReadTaskPtr doWork(const SegmentReadTaskPtr & task) override
-    {
-        const auto & settings = task->dm_context->global_context.getSettingsRef();
-        task->initInputStream(
-            *columns_to_read,
-            read_tso,
-            push_down_filter,
-            read_mode,
-            settings.max_block_size,
-            settings.dt_enable_delta_index_error_fallback);
-        return task;
-    }
+    RNReadSegmentTaskPtr doWork(const RNReadSegmentTaskPtr & task) override;
 
     String getName() const noexcept override { return "PrepareStreams"; }
 
@@ -60,8 +49,8 @@ public:
 public:
     struct Options
     {
-        const std::shared_ptr<MPMCQueue<SegmentReadTaskPtr>> & source_queue;
-        const std::shared_ptr<MPMCQueue<SegmentReadTaskPtr>> & result_queue;
+        const std::shared_ptr<MPMCQueue<RNReadSegmentTaskPtr>> & source_queue;
+        const std::shared_ptr<MPMCQueue<RNReadSegmentTaskPtr>> & result_queue;
         const LoggerPtr & log;
         const size_t concurrency;
         const ColumnDefinesPtr & columns_to_read;
@@ -76,7 +65,7 @@ public:
     }
 
     explicit RNWorkerPrepareStreams(const Options & options)
-        : ThreadedWorker<SegmentReadTaskPtr, SegmentReadTaskPtr>(
+        : ThreadedWorker<RNReadSegmentTaskPtr, RNReadSegmentTaskPtr>(
             options.source_queue,
             options.result_queue,
             options.log,
@@ -88,6 +77,11 @@ public:
     {}
 
     ~RNWorkerPrepareStreams() override { wait(); }
+
+    bool initInputStream(const RNReadSegmentTaskPtr & task, bool enable_delta_index_error_fallback);
+
+    // Only use in unit-test.
+    RNReadSegmentTaskPtr testDoWork(const RNReadSegmentTaskPtr & task) { return doWork(task); }
 };
 
 } // namespace DB::DM::Remote

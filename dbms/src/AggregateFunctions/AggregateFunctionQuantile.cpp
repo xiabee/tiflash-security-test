@@ -37,7 +37,6 @@ template <
     typename FloatReturnType,
     bool returns_many>
 AggregateFunctionPtr createAggregateFunctionQuantile(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & params)

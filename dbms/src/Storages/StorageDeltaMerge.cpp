@@ -43,6 +43,7 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
+#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/FilterParser/FilterParser.h>
@@ -60,6 +61,7 @@
 #include <common/config_common.h>
 #include <common/logger_useful.h>
 
+#include <random>
 
 namespace DB
 {
@@ -673,8 +675,6 @@ DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(
     const String & req_id,
     const LoggerPtr & tracing_logger)
 {
-    LOG_DEBUG(tracing_logger, "Read with tso: {}", mvcc_query_info.read_tso);
-
     auto keyspace_id = getTableInfo().getKeyspaceID();
     checkReadTso(mvcc_query_info.read_tso, context, req_id, keyspace_id);
 
@@ -1178,17 +1178,9 @@ UInt64 StorageDeltaMerge::ingestFiles(
     return getAndMaybeInitStore()->ingestFiles(global_context, settings, range, external_files, clear_data_in_range);
 }
 
-DM::Segments StorageDeltaMerge::buildSegmentsFromCheckpointInfo(
+void StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
     const DM::RowKeyRange & range,
     CheckpointInfoPtr checkpoint_info,
-    const Settings & settings)
-{
-    return getAndMaybeInitStore()->buildSegmentsFromCheckpointInfo(global_context, settings, range, checkpoint_info);
-}
-
-UInt64 StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
-    const DM::RowKeyRange & range,
-    const CheckpointIngestInfoPtr & checkpoint_info,
     const Settings & settings)
 {
     GET_METRIC(tiflash_storage_command_count, type_ingest_checkpoint).Increment();
@@ -1303,8 +1295,7 @@ DM::DeltaMergeStorePtr StorageDeltaMerge::getStoreIfInited() const
 
 std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> StorageDeltaMerge::getSchemaSnapshotAndBlockForDecoding(
     const TableStructureLockHolder & table_structure_lock,
-    bool need_block,
-    bool with_version_column)
+    bool need_block)
 {
     (void)table_structure_lock;
     std::lock_guard lock{decode_schema_mutex};
@@ -1315,18 +1306,16 @@ std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> StorageDeltaMerg
             store->getStoreColumns(),
             tidb_table_info,
             store->getHandle(),
-            decoding_schema_epoch++,
-            with_version_column);
+            decoding_schema_epoch++);
         cache_blocks.clear();
         decoding_schema_changed = false;
     }
 
     if (need_block)
     {
-        if (cache_blocks.empty() || !with_version_column)
+        if (cache_blocks.empty())
         {
-            BlockUPtr block
-                = std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot, with_version_column));
+            BlockUPtr block = std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot));
             auto digest = hashSchema(*block);
             auto schema = global_context.getSharedBlockSchemas()->find(digest);
             if (schema)

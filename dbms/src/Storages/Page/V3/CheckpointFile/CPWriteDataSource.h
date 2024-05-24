@@ -44,19 +44,14 @@ public:
     /**
      * The caller must ensure `blob_store` is valid when using with the CPFilesWriter.
      */
-    explicit CPWriteDataSourceBlobStore(
-        BlobStore<universal::BlobStoreTrait> & blob_store_,
-        const FileProviderPtr & file_provider_)
+    explicit CPWriteDataSourceBlobStore(BlobStore<universal::BlobStoreTrait> & blob_store_)
         : blob_store(blob_store_)
         , remote_reader(std::make_unique<S3PageReader>())
-        , file_provider(file_provider_)
     {}
 
-    static CPWriteDataSourcePtr create(
-        BlobStore<universal::BlobStoreTrait> & blob_store_,
-        const FileProviderPtr & file_provider_)
+    static CPWriteDataSourcePtr create(BlobStore<universal::BlobStoreTrait> & blob_store_)
     {
-        return std::make_shared<CPWriteDataSourceBlobStore>(blob_store_, file_provider_);
+        return std::make_shared<CPWriteDataSourceBlobStore>(blob_store_);
     }
 
     Page read(const BlobStore<universal::BlobStoreTrait>::PageIdAndEntry & page_id_and_entry) override;
@@ -64,7 +59,6 @@ public:
 private:
     BlobStore<universal::BlobStoreTrait> & blob_store;
     S3PageReaderPtr remote_reader;
-    FileProviderPtr file_provider;
 };
 
 /**

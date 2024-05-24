@@ -31,14 +31,15 @@ inline RSOperatorPtr toFilter(RowKeyRange & rowkey_range)
     {
         auto left = createGreaterEqual(
             handle_attr,
-            Field(rowkey_range.start.value->data(), rowkey_range.start.value->size()));
-        auto right = createLess(handle_attr, Field(rowkey_range.end.value->data(), rowkey_range.end.value->size()));
+            Field(rowkey_range.start.value->data(), rowkey_range.start.value->size()),
+            -1);
+        auto right = createLess(handle_attr, Field(rowkey_range.end.value->data(), rowkey_range.end.value->size()), -1);
         return createAnd({left, right});
     }
     else
     {
-        auto left = createGreaterEqual(handle_attr, Field(rowkey_range.start.int_value));
-        auto right = createLess(handle_attr, Field(rowkey_range.end.int_value));
+        auto left = createGreaterEqual(handle_attr, Field(rowkey_range.start.int_value), -1);
+        auto right = createLess(handle_attr, Field(rowkey_range.end.int_value), -1);
         return createAnd({left, right});
     }
 }

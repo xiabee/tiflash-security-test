@@ -74,6 +74,8 @@ public:
 
     Events toEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
 
+    static bool isSupported(const tipb::DAGRequest & dag_request, const Settings & settings);
+
     Block getSampleBlock() const;
 
     bool isFineGrainedMode() const;

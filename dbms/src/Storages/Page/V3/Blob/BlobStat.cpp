@@ -21,14 +21,6 @@
 
 #include <boost/algorithm/string/classification.hpp>
 
-#pragma GCC diagnostic push
-#ifdef __clang__
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-// include to suppress warnings on NO_THREAD_SAFETY_ANALYSIS. clang can't work without this include, don't know why
-#include <grpcpp/security/credentials.h>
-#pragma GCC diagnostic pop
-
 namespace ProfileEvents
 {
 extern const Event PSMWritePages;
@@ -110,7 +102,7 @@ void BlobStats::restore()
     }
 }
 
-std::lock_guard<std::mutex> BlobStats::lock() const NO_THREAD_SAFETY_ANALYSIS
+std::lock_guard<std::mutex> BlobStats::lock() const
 {
     return std::lock_guard(lock_stats);
 }
@@ -197,7 +189,7 @@ void BlobStats::eraseStat(BlobFileId blob_file_id, const std::lock_guard<std::mu
     eraseStat(std::move(stat), lock);
 }
 
-void BlobStats::setAllToReadOnly() NO_THREAD_SAFETY_ANALYSIS
+void BlobStats::setAllToReadOnly()
 {
     auto lock_stats = lock();
     for (const auto & [path, stats] : stats_map)
@@ -266,7 +258,7 @@ std::pair<BlobStats::BlobStatPtr, BlobFileId> BlobStats::chooseStat(
     return std::make_pair(nullptr, next_id);
 }
 
-BlobStats::BlobStatPtr BlobStats::blobIdToStat(BlobFileId file_id, bool ignore_not_exist) NO_THREAD_SAFETY_ANALYSIS
+BlobStats::BlobStatPtr BlobStats::blobIdToStat(BlobFileId file_id, bool ignore_not_exist)
 {
     auto guard = lock();
     for (const auto & [path, stats] : stats_map)
@@ -287,12 +279,6 @@ BlobStats::BlobStatPtr BlobStats::blobIdToStat(BlobFileId file_id, bool ignore_n
     }
 
     return nullptr;
-}
-
-BlobStats::StatsMap BlobStats::getStats() const NO_THREAD_SAFETY_ANALYSIS
-{
-    auto guard = lock();
-    return stats_map;
 }
 
 /*********************

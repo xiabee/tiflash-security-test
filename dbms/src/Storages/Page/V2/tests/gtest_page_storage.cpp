@@ -14,8 +14,8 @@
 
 #include <Common/CurrentMetrics.h>
 #include <Common/FailPoint.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/ConsoleChannel.h>
@@ -50,10 +50,10 @@ extern const int CANNOT_WRITE_TO_FILE_DESCRIPTOR;
 
 namespace PS::V2::tests
 {
-class PageStorageV2Test : public DB::base::TiFlashStorageTestBasic
+class PageStorage_test : public DB::base::TiFlashStorageTestBasic
 {
 public:
-    PageStorageV2Test()
+    PageStorage_test()
         : file_provider{DB::tests::TiFlashTestEnv::getDefaultFileProvider()}
     {}
 
@@ -89,7 +89,7 @@ protected:
     const FileProviderPtr file_provider;
 };
 
-TEST_F(PageStorageV2Test, WriteRead)
+TEST_F(PageStorage_test, WriteRead)
 try
 {
     const UInt64 tag = 0;
@@ -126,7 +126,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, WriteMultipleBatchRead)
+TEST_F(PageStorage_test, WriteMultipleBatchRead)
 try
 {
     const UInt64 tag = 0;
@@ -167,7 +167,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, WriteReadAfterGc)
+TEST_F(PageStorage_test, WriteReadAfterGc)
 try
 {
     const size_t buf_sz = 256;
@@ -234,7 +234,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, WriteReadGcExternalPage)
+TEST_F(PageStorage_test, WriteReadGcExternalPage)
 try
 {
     {
@@ -309,7 +309,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, IdempotentDelAndRef)
+TEST_F(PageStorage_test, IdempotentDelAndRef)
 try
 {
     const size_t buf_sz = 1024;
@@ -387,7 +387,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, ListPageFiles)
+TEST_F(PageStorage_test, ListPageFiles)
 try
 {
     constexpr size_t buf_sz = 128;
@@ -440,7 +440,7 @@ try
         auto page_files = storage->listAllPageFiles(file_provider, storage->delegator, storage->log, opt);
         // Legacy should be ignored
         ASSERT_EQ(page_files.size(), 1UL);
-        for (const auto & page_file : page_files)
+        for (auto & page_file : page_files)
         {
             EXPECT_TRUE(page_file.getType() != PageFile::Type::Legacy);
         }
@@ -452,7 +452,7 @@ try
         auto page_files = storage->listAllPageFiles(file_provider, storage->delegator, storage->log, opt);
         // Snapshot should be ignored
         ASSERT_EQ(page_files.size(), 1UL);
-        for (const auto & page_file : page_files)
+        for (auto & page_file : page_files)
         {
             EXPECT_TRUE(page_file.getType() != PageFile::Type::Checkpoint);
         }
@@ -460,7 +460,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, RenewWriter)
+TEST_F(PageStorage_test, RenewWriter)
 try
 {
     constexpr size_t buf_sz = 100;
@@ -493,7 +493,7 @@ try
 CATCH
 
 /// Check if we can correctly do read / write after restore from disk.
-TEST_F(PageStorageV2Test, WriteReadRestore)
+TEST_F(PageStorage_test, WriteReadRestore)
 try
 {
     const UInt64 tag = 0;
@@ -620,7 +620,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, WriteReadWithSpecifyFields)
+TEST_F(PageStorage_test, WriteReadWithSpecifyFields)
 try
 {
     const UInt64 tag = 0;
@@ -787,7 +787,7 @@ try
 }
 CATCH
 
-TEST_F(PageStorageV2Test, IgnoreIncompleteWriteBatch1)
+TEST_F(PageStorage_test, IgnoreIncompleteWriteBatch1)
 try
 {
     // If there is any incomplete write batch, we should able to ignore those
@@ -849,7 +849,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -866,14 +866,14 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
 }
 CATCH
 
-TEST_F(PageStorageV2Test, IgnoreIncompleteWriteBatch2)
+TEST_F(PageStorage_test, IgnoreIncompleteWriteBatch2)
 try
 {
     // If there is any incomplete write batch, we should able to ignore those
@@ -934,7 +934,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -951,7 +951,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -961,15 +961,17 @@ CATCH
 /**
  * PageStorage tests with predefine Page1 && Page2
  */
-class PageStorageV2With2PagesTest : public PageStorageV2Test
+class PageStorageWith2Pages_test : public PageStorage_test
 {
 public:
-    PageStorageV2With2PagesTest() = default;
+    PageStorageWith2Pages_test()
+        : PageStorage_test()
+    {}
 
 protected:
     void SetUp() override
     {
-        PageStorageV2Test::SetUp();
+        PageStorage_test::SetUp();
         // put predefine Page1, Page2
         const size_t buf_sz = 1024;
         char buf[buf_sz];
@@ -988,7 +990,7 @@ protected:
     }
 };
 
-TEST_F(PageStorageV2With2PagesTest, UpdateRefPages)
+TEST_F(PageStorageWith2Pages_test, UpdateRefPages)
 {
     /// update on RefPage, all references get updated.
     const UInt64 tag = 0;
@@ -1043,7 +1045,7 @@ TEST_F(PageStorageV2With2PagesTest, UpdateRefPages)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, DeleteRefPages)
+TEST_F(PageStorageWith2Pages_test, DeleteRefPages)
 {
     // put ref page: RefPage3 -> Page2, RefPage4 -> Page2
     {
@@ -1071,7 +1073,7 @@ TEST_F(PageStorageV2With2PagesTest, DeleteRefPages)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, PutRefPagesOverRefPages)
+TEST_F(PageStorageWith2Pages_test, PutRefPagesOverRefPages)
 {
     /// put ref page to ref page, ref path collapse to normal page
     {
@@ -1112,7 +1114,7 @@ TEST_F(PageStorageV2With2PagesTest, PutRefPagesOverRefPages)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, PutDuplicateRefPages)
+TEST_F(PageStorageWith2Pages_test, PutDuplicateRefPages)
 {
     /// put duplicated RefPages in different WriteBatch
     {
@@ -1155,7 +1157,7 @@ TEST_F(PageStorageV2With2PagesTest, PutDuplicateRefPages)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, PutCollapseDuplicatedRefPages)
+TEST_F(PageStorageWith2Pages_test, PutCollapseDuplicatedRefPages)
 {
     /// put duplicated RefPages due to ref-path-collapse
     {
@@ -1206,7 +1208,7 @@ TEST_F(PageStorageV2With2PagesTest, PutCollapseDuplicatedRefPages)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, AddRefPageToNonExistPage)
+TEST_F(PageStorageWith2Pages_test, AddRefPageToNonExistPage)
 try
 {
     {
@@ -1265,7 +1267,7 @@ CurrentMetrics::Value getPSMVCCNumSnapshots()
 } // namespace
 
 
-TEST_F(PageStorageV2With2PagesTest, SnapshotReadSnapshotVersion)
+TEST_F(PageStorageWith2Pages_test, SnapshotReadSnapshotVersion)
 {
     char ch_before = 0x01;
     char ch_update = 0xFF;
@@ -1329,7 +1331,7 @@ TEST_F(PageStorageV2With2PagesTest, SnapshotReadSnapshotVersion)
     }
 }
 
-TEST_F(PageStorageV2With2PagesTest, GetIdenticalSnapshots)
+TEST_F(PageStorageWith2Pages_test, GetIdenticalSnapshots)
 {
     char ch_before = 0x01;
     char ch_update = 0xFF;

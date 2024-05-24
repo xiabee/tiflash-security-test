@@ -62,7 +62,7 @@ public:
     static constexpr char DEFAULT_GRAPHITE_CONFIG_NAME[] = "graphite";
 
     BaseDaemon();
-    ~BaseDaemon() override;
+    ~BaseDaemon();
 
     /// Load configuration, prepare loggers, etc.
     void initialize(Poco::Util::Application &) override;
@@ -148,7 +148,7 @@ public:
     std::optional<size_t> getLayer() const { return layer; }
 
 protected:
-    virtual void logVersion() const;
+    virtual void logRevision() const;
 
     /// Used when exitOnTaskError()
     void handleNotification(Poco::TaskFailedNotification *);

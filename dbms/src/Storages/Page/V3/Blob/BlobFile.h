@@ -15,7 +15,8 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/WriteReadableFile.h>
 #include <Poco/Logger.h>
 #include <Storages/FormatVersion.h>
 #include <Storages/Page/V3/PageDefines.h>
@@ -23,10 +24,6 @@
 
 namespace DB::PS::V3
 {
-
-/**
- * BlobFile is a file that stores the data of multiple pages.
- */
 class BlobFile
 {
 public:

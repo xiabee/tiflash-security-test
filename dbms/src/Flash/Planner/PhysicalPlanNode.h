@@ -80,8 +80,8 @@ public:
 
     EventPtr sinkComplete(PipelineExecutorContext & exec_context);
 
-    virtual void finalizeImpl(const Names & parent_require) = 0;
-    void finalize(const Names & parent_require);
+    virtual void finalize(const Names & parent_require) = 0;
+    void finalize();
 
     /// Obtain a sample block that contains the names and types of result columns.
     virtual const Block & getSampleBlock() const = 0;
@@ -116,7 +116,6 @@ protected:
     void recordProfileStreams(DAGPipeline & pipeline, const Context & context);
 
     String executor_id;
-    String req_id;
     PlanType type;
     NamesAndTypes schema;
 
@@ -127,7 +126,6 @@ protected:
 
     bool is_tidb_operator = true;
     bool is_restore_concurrency = true;
-    bool finalized = false;
 
     LoggerPtr log;
 };

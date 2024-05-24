@@ -15,7 +15,6 @@
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
 #include <Flash/Mpp/MPPTunnelSetHelper.h>
-#include <IO/Compression/CompressionInfo.h>
 
 namespace DB::MPPTunnelSetHelper
 {

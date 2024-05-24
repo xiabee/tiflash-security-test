@@ -24,15 +24,14 @@
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 #include <Storages/DeltaMerge/StableValueSpace.h>
 #include <Storages/KVStore/MultiRaft/Disagg/CheckpointInfo.h>
-#include <Storages/KVStore/MultiRaft/Disagg/fast_add_peer.pb.h>
 #include <Storages/Page/PageDefinesBase.h>
 
 namespace DB::DM
 {
+class Segment;
 struct SegmentSnapshot;
 using SegmentSnapshotPtr = std::shared_ptr<SegmentSnapshot>;
 class StableValueSpace;
@@ -43,6 +42,10 @@ class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 class PushDownFilter;
 using PushDownFilterPtr = std::shared_ptr<PushDownFilter>;
+
+using SegmentPtr = std::shared_ptr<Segment>;
+using SegmentPair = std::pair<SegmentPtr, SegmentPtr>;
+using Segments = std::vector<SegmentPtr>;
 
 enum class ReadMode;
 
@@ -161,13 +164,13 @@ public:
 
     struct SegmentMetaInfo
     {
-        SegmentFormat::Version version{};
-        UInt64 epoch{};
+        SegmentFormat::Version version;
+        UInt64 epoch;
         RowKeyRange range;
-        PageIdU64 segment_id{};
-        PageIdU64 next_segment_id{};
-        PageIdU64 delta_id{};
-        PageIdU64 stable_id{};
+        PageIdU64 segment_id;
+        PageIdU64 next_segment_id;
+        PageIdU64 delta_id;
+        PageIdU64 stable_id;
     };
 
     using SegmentMetaInfos = std::vector<SegmentMetaInfo>;
@@ -187,9 +190,7 @@ public:
         UniversalPageStoragePtr temp_ps,
         WriteBatches & wbs);
 
-    void serializeToFAPTempSegment(DB::FastAddPeerProto::FAPTempSegmentInfo * segment_info);
-    UInt64 storeSegmentMetaInfo(WriteBuffer & buf) const;
-    void serialize(WriteBatchWrapper & wb) const;
+    void serialize(WriteBatchWrapper & wb);
 
     /// Attach a new ColumnFile into the Segment. The ColumnFile will be added to MemFileSet and flushed to disk later.
     /// The block data of the passed in ColumnFile should be placed on disk before calling this function.
@@ -579,9 +580,6 @@ public:
     void setValidDataRatioChecked() { check_valid_data_ratio.store(true, std::memory_order_relaxed); }
 
     void drop(const FileProviderPtr & file_provider, WriteBatches & wbs);
-    /// Only used in FAP.
-    /// Drop a segment built with invalid id.
-    void dropAsFAPTemp(const FileProviderPtr & file_provider, WriteBatches & wbs);
 
     bool isFlushing() const { return delta->isFlushing(); }
 
@@ -664,7 +662,7 @@ public:
         bool relevant_place) const;
 
     static bool useCleanRead(const SegmentSnapshotPtr & segment_snap, const ColumnDefines & columns_to_read);
-    RowKeyRanges shrinkRowKeyRanges(const RowKeyRanges & read_ranges) const;
+    RowKeyRanges shrinkRowKeyRanges(const RowKeyRanges & read_ranges);
     BitmapFilterPtr buildBitmapFilter(
         const DMContext & dm_context,
         const SegmentSnapshotPtr & segment_snap,
@@ -759,5 +757,4 @@ public:
     const LoggerPtr log;
 };
 
-void readSegmentMetaInfo(ReadBuffer & buf, Segment::SegmentMetaInfo & segment_info);
 } // namespace DB::DM

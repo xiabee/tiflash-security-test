@@ -57,18 +57,18 @@ DecodedLockCFValuePtr Region::getLockInfo(const RegionLockReadQuery & query) con
 
 void Region::insert(const std::string & cf, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
-    insert(NameToCF(cf), std::move(key), std::move(value), mode);
+    return insert(NameToCF(cf), std::move(key), std::move(value), mode);
 }
 
 void Region::insert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    doInsert(type, std::move(key), std::move(value), mode);
+    return doInsert(type, std::move(key), std::move(value), mode);
 }
 
-RegionDataRes Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
+void Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
-    if unlikely (getClusterRaftstoreVer() == RaftstoreVer::V2)
+    if (getClusterRaftstoreVer() == RaftstoreVer::V2)
     {
         if (type == ColumnFamilyType::Write)
         {
@@ -76,12 +76,11 @@ RegionDataRes Region::doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue 
             {
                 // We can't assert the key exists in write_cf here,
                 // since it may be already written into DeltaTree.
-                return 0;
+                return;
             }
         }
     }
-    auto ans = data.insert(type, std::move(key), std::move(value), mode);
-    return ans;
+    data.insert(type, std::move(key), std::move(value), mode);
 }
 
 void Region::remove(const std::string & cf, const TiKVKey & key)
@@ -131,15 +130,14 @@ std::string Region::getDebugString() const
 {
     const auto & meta_snap = meta.dumpRegionMetaSnapshot();
     return fmt::format(
-        "[region_id={} index={} table_id={} ver={} conf_ver={} state={} peer={} range={}]",
+        "[region_id={} index={} table_id={} ver={} conf_ver={} state={} peer={}]",
         id(),
         meta.appliedIndex(),
         mapped_table_id,
         meta_snap.ver,
         meta_snap.conf_ver,
         raft_serverpb::PeerState_Name(peerState()),
-        meta_snap.peer.ShortDebugString(),
-        getRange()->toDebugString());
+        meta_snap.peer.ShortDebugString());
 }
 
 std::string Region::toString(bool dump_status) const
@@ -331,6 +329,10 @@ RegionMetaSnapshot Region::dumpRegionMetaSnapshot() const
     return meta.dumpRegionMetaSnapshot();
 }
 
+Region::Region(RegionMeta && meta_)
+    : Region(std::move(meta_), nullptr)
+{}
+
 Region::Region(DB::RegionMeta && meta_, const TiFlashRaftProxyHelper * proxy_helper_)
     : meta(std::move(meta_))
     , eager_truncated_index(meta.truncateIndex())
@@ -339,11 +341,6 @@ Region::Region(DB::RegionMeta && meta_, const TiFlashRaftProxyHelper * proxy_hel
     , mapped_table_id(meta.getRange()->getMappedTableID())
     , proxy_helper(proxy_helper_)
 {}
-
-Region::~Region()
-{
-    data.reportDealloc(data.cf_data_size);
-}
 
 TableID Region::getMappedTableID() const
 {

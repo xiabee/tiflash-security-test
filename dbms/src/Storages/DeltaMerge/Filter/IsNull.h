@@ -30,7 +30,7 @@ public:
 
     String name() override { return "isnull"; }
 
-    ColIds getColumnIDs() override { return {attr.col_id}; }
+    Attrs getAttrs() override { return {attr}; }
 
     String toDebugString() override { return fmt::format(R"({{"op":"{}","col":"{}"}})", name(), attr.col_name); }
 

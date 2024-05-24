@@ -17,7 +17,7 @@
 #include <Common/FileChangesTracker.h>
 #include <Common/grpcpp.h>
 #include <Core/Types.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
+#include <IO/createReadBufferFromFileBase.h>
 #include <Poco/Crypto/X509Certificate.h>
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
@@ -177,11 +177,13 @@ public:
         return allowed_common_names.count(cert.commonName()) > 0;
     }
 
-    grpc::SslCredentialsOptions readAndCacheSslCredentialOptions()
+    std::optional<grpc::SslCredentialsOptions> readAndCacheSslCredentialOptions()
     {
         std::unique_lock lock(mu);
+        // if ssl_cerd_options_cached = true, it means the same options has already been returned to grpc-core
+        // don't need to return it again if ssl cert is not actually changed
         if (ssl_cerd_options_cached)
-            return options;
+            return {};
         options.pem_root_certs = readFile(ca_path);
         options.pem_cert_chain = readFile(cert_path);
         options.pem_private_key = readFile(key_path);
@@ -212,7 +214,7 @@ private:
         {
             return "";
         }
-        auto buffer = std::make_unique<ReadBufferFromFile>(filename);
+        auto buffer = createReadBufferFromFileBase(filename, 1024, 0);
         String result;
         while (!buffer->eof())
         {

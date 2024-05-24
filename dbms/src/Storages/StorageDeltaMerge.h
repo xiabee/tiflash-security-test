@@ -22,11 +22,9 @@
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
 #include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
@@ -38,8 +36,6 @@ namespace DB
 {
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 namespace DM
 {
 struct RowKeyRange;
@@ -63,7 +59,6 @@ public:
     String getName() const override;
     String getTableName() const override;
     String getDatabaseName() const override;
-    KeyspaceID getKeyspaceID() const { return _store->getKeyspaceID(); }
 
     void clearData() override;
 
@@ -126,14 +121,9 @@ public:
         bool clear_data_in_range,
         const Settings & settings);
 
-    DM::Segments buildSegmentsFromCheckpointInfo(
+    void ingestSegmentsFromCheckpointInfo(
         const DM::RowKeyRange & range,
         CheckpointInfoPtr checkpoint_info,
-        const Settings & settings);
-
-    UInt64 ingestSegmentsFromCheckpointInfo(
-        const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info,
         const Settings & settings);
 
     UInt64 onSyncGc(Int64, const DM::GCOptions &) override;
@@ -199,8 +189,7 @@ public:
 
     std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
         const TableStructureLockHolder & table_structure_lock,
-        bool need_block,
-        bool with_version_column) override;
+        bool /* need_block */) override;
 
     void releaseDecodingBlock(Int64 block_decoding_schema_epoch, BlockUPtr block) override;
 

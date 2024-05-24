@@ -14,11 +14,9 @@
 
 #pragma once
 
-#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFilePersisted.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
-#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/Remote/Serializer_fwd.h>
 #include <Storages/Page/PageStorage_fwd.h>
 
@@ -50,12 +48,7 @@ private:
     /// HACK: Currently this field is only available when ColumnFileTiny is restored from remote proto.
     /// It is not available when ColumnFileTiny is constructed or restored locally.
     /// Maybe we should just drop this field, and store the data_page_size in somewhere else.
-    UInt64 data_page_size = 0;
-
-    /// The id of the keyspace which this ColumnFileTiny belongs to.
-    KeyspaceID keyspace_id;
-    /// The global file_provider
-    const FileProviderPtr file_provider;
+    UInt64 data_page_size;
 
     /// The members below are not serialized.
 
@@ -87,8 +80,13 @@ public:
         UInt64 rows_,
         UInt64 bytes_,
         PageIdU64 data_page_id_,
-        const DMContext & dm_context,
-        const CachePtr & cache_ = nullptr);
+        const CachePtr & cache_ = nullptr)
+        : schema(schema_)
+        , rows(rows_)
+        , bytes(bytes_)
+        , data_page_id(data_page_id_)
+        , cache(cache_)
+    {}
 
     Type getType() const override { return Type::TINY_FILE; }
 
@@ -146,7 +144,6 @@ public:
         ColumnFileSchemaPtr & last_schema);
 
     static std::tuple<ColumnFilePersistedPtr, BlockPtr> createFromCheckpoint(
-        const LoggerPtr & parent_log,
         const DMContext & context,
         ReadBuffer & buf,
         UniversalPageStoragePtr temp_ps,

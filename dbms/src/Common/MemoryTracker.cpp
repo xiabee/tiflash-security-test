@@ -28,7 +28,6 @@ namespace CurrentMetrics
 extern const Metric MemoryTrackingQueryStorageTask;
 extern const Metric MemoryTrackingFetchPages;
 extern const Metric MemoryTrackingSharedColumnData;
-extern const Metric MemoryTrackingKVStore;
 } // namespace CurrentMetrics
 
 std::atomic<Int64> real_rss{0}, proc_num_threads{1}, baseline_of_query_mem_tracker{0};
@@ -77,7 +76,6 @@ static String storageMemoryUsageDetail()
 {
     return fmt::format(
         "non-query: peak={}, amount={}; "
-        "kvstore: peak={}, amount={}; "
         "query-storage-task: peak={}, amount={}; "
         "fetch-pages: peak={}, amount={}; "
         "shared-column-data: peak={}, amount={}.",
@@ -85,9 +83,6 @@ static String storageMemoryUsageDetail()
                                        : "0",
         root_of_non_query_mem_trackers ? formatReadableSizeWithBinarySuffix(root_of_non_query_mem_trackers->get())
                                        : "0",
-        root_of_kvstore_mem_trackers ? formatReadableSizeWithBinarySuffix(root_of_kvstore_mem_trackers->getPeak())
-                                     : "0",
-        root_of_kvstore_mem_trackers ? formatReadableSizeWithBinarySuffix(root_of_kvstore_mem_trackers->get()) : "0",
         sub_root_of_query_storage_task_mem_trackers
             ? formatReadableSizeWithBinarySuffix(sub_root_of_query_storage_task_mem_trackers->getPeak())
             : "0",
@@ -298,7 +293,6 @@ thread_local MemoryTracker * current_memory_tracker = nullptr;
 
 std::shared_ptr<MemoryTracker> root_of_non_query_mem_trackers = MemoryTracker::createGlobalRoot();
 std::shared_ptr<MemoryTracker> root_of_query_mem_trackers = MemoryTracker::createGlobalRoot();
-std::shared_ptr<MemoryTracker> root_of_kvstore_mem_trackers = MemoryTracker::createGlobalRoot();
 
 std::shared_ptr<MemoryTracker> sub_root_of_query_storage_task_mem_trackers;
 std::shared_ptr<MemoryTracker> fetch_pages_mem_tracker;
@@ -329,8 +323,6 @@ void initStorageMemoryTracker(Int64 limit, Int64 larger_than_limit)
     shared_column_data_mem_tracker
         = MemoryTracker::create(0, sub_root_of_query_storage_task_mem_trackers.get(), log_in_destructor);
     shared_column_data_mem_tracker->setAmountMetric(CurrentMetrics::MemoryTrackingSharedColumnData);
-
-    root_of_kvstore_mem_trackers->setAmountMetric(CurrentMetrics::MemoryTrackingKVStore);
 }
 
 namespace CurrentMemoryTracker

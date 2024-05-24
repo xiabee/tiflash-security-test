@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/BaseFile/PosixRandomAccessFile.h>
-#include <IO/BaseFile/PosixWritableFile.h>
+#include <Encryption/PosixRandomAccessFile.h>
+#include <Encryption/PosixWritableFile.h>
 #include <Poco/Logger.h>
 #include <Storages/Page/PageUtil.h>
 #include <TestUtils/TiFlashTestBasic.h>

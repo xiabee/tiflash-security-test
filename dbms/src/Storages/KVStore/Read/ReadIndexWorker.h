@@ -85,7 +85,6 @@ public:
 
     explicit ReadIndexWorkerManager(
         const TiFlashRaftProxyHelper & proxy_helper_,
-        KVStore & kvstore_,
         size_t workers_cnt,
         FnGetTickTime && fn_min_dur_handle_region_,
         size_t runner_cnt);
@@ -101,7 +100,6 @@ public:
 
     static std::unique_ptr<ReadIndexWorkerManager> newReadIndexWorkerManager(
         const TiFlashRaftProxyHelper & proxy_helper,
-        KVStore & kvstore,
         size_t cap,
         FnGetTickTime && fn_min_dur_handle_region,
         size_t runner_cnt = 1);
@@ -137,7 +135,6 @@ private:
         ReadIndexRunner(
             size_t id_,
             size_t runner_cnt_,
-            KVStore & kvstore_,
             ReadIndexWorkers & workers_,
             LoggerPtr logger_,
             FnGetTickTime fn_min_dur_handle_region_,
@@ -145,7 +142,6 @@ private:
 
         const size_t id;
         const size_t runner_cnt;
-        KVStore & kvstore;
         ReadIndexWorkers & workers;
         LoggerPtr logger;
         const FnGetTickTime fn_min_dur_handle_region;
@@ -157,7 +153,6 @@ private:
 
 private:
     const TiFlashRaftProxyHelper & proxy_helper;
-    KVStore & kvstore;
     /// Each runner is mapped to a part of workers(worker_id % runner_cnt == runner_id).
     std::vector<std::unique_ptr<ReadIndexRunner>> runners;
     /// Each worker controls read-index process of region(region_id % worker_cnt == worker_id).
@@ -172,9 +167,21 @@ struct RegionNotifyMap : MutexLockWrap
 {
     using Data = std::unordered_set<RegionID>;
 
-    bool empty() const;
-    void add(RegionID id);
-    Data popAll();
+    bool empty() const
+    {
+        auto _ = genLockGuard();
+        return data.empty();
+    }
+    void add(RegionID id)
+    {
+        auto _ = genLockGuard();
+        data.emplace(id);
+    }
+    Data popAll()
+    {
+        auto _ = genLockGuard();
+        return std::move(data);
+    }
 
     Data data;
 };
@@ -222,11 +229,25 @@ struct ReadIndexDataNode : MutexLockWrap
     {
         using Data = std::deque<std::pair<Timestamp, ReadIndexFuturePtr>>;
 
-        void add(Timestamp ts, ReadIndexFuturePtr f);
+        void add(Timestamp ts, ReadIndexFuturePtr f)
+        {
+            auto _ = genLockGuard();
+            waiting_tasks.emplace_back(ts, std::move(f));
+        }
 
-        std::optional<Data> popAll();
+        std::optional<Data> popAll()
+        {
+            auto _ = genLockGuard();
+            if (waiting_tasks.empty())
+                return {};
+            return std::move(waiting_tasks);
+        }
 
-        size_t size() const;
+        size_t size() const
+        {
+            auto _ = genLockGuard();
+            return waiting_tasks.size();
+        }
 
         Data waiting_tasks;
     };
@@ -289,7 +310,6 @@ struct ReadIndexWorker
 
     explicit ReadIndexWorker(
         const TiFlashRaftProxyHelper & proxy_helper_,
-        KVStore & kvstore_,
         size_t id_,
         AsyncWaker::NotifierPtr notifier_);
 
@@ -317,7 +337,6 @@ struct ReadIndexWorker
     //    static std::atomic<size_t> max_read_index_history;
 
     const TiFlashRaftProxyHelper & proxy_helper;
-    KVStore & kvstore;
     const size_t id;
     DataMap data_map;
 

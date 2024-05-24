@@ -37,7 +37,6 @@ enum class OperatorStatus
     CANCELLED,
     /// waiting status
     WAITING,
-    WAIT_FOR_NOTIFY,
     /// io status
     IO_IN,
     IO_OUT,

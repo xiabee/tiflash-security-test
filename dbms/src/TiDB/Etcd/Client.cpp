@@ -23,8 +23,6 @@
 #include <etcd/v3election.pb.h>
 #include <fmt/chrono.h>
 
-#include <magic_enum.hpp>
-
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -162,11 +160,7 @@ SessionPtr Client::createSession(grpc::ClientContext * grpc_context, Int64 ttl)
     const auto & [lease_id, status] = leaseGrant(ttl);
     if (!status.ok())
     {
-        LOG_ERROR(
-            log,
-            "etcd lease grant failed, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_ERROR(log, "etcd lease grant failed, code={} msg={}", status.error_code(), status.error_message());
         return {};
     }
 
@@ -376,11 +370,7 @@ bool Session::keepAliveOne()
     if (!ok)
     {
         auto status = writer->Finish();
-        LOG_INFO(
-            log,
-            "keep alive write fail, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_INFO(log, "keep alive write fail, code={} msg={}", status.error_code(), status.error_message());
         finished = true;
         return false;
     }
@@ -390,11 +380,7 @@ bool Session::keepAliveOne()
     if (!ok)
     {
         auto status = writer->Finish();
-        LOG_INFO(
-            log,
-            "keep alive read fail, code={} msg={}",
-            magic_enum::enum_name(status.error_code()),
-            status.error_message());
+        LOG_INFO(log, "keep alive read fail, code={} msg={}", status.error_code(), status.error_message());
         finished = true;
         return false;
     }
@@ -407,7 +393,7 @@ bool Session::keepAliveOne()
             log,
             "keep alive fail, ttl={}, code={} msg={}",
             resp.ttl(),
-            magic_enum::enum_name(status.error_code()),
+            status.error_code(),
             status.error_message());
         finished = true;
         return false;

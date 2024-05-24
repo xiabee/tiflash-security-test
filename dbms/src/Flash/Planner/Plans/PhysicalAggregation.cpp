@@ -100,7 +100,7 @@ void PhysicalAggregation::buildBlockInputStreamImpl(DAGPipeline & pipeline, Cont
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        log->identifier(),
+        fmt::format("{}_aggregation", log->identifier()),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
@@ -216,7 +216,7 @@ void PhysicalAggregation::buildPipelineExecGroupImpl(
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        log->identifier(),
+        fmt::format("{}_aggregation", log->identifier()),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
@@ -264,7 +264,7 @@ void PhysicalAggregation::buildPipeline(
         auto agg_build = std::make_shared<PhysicalAggregationBuild>(
             executor_id,
             schema,
-            req_id,
+            log->identifier(),
             child,
             before_agg_actions,
             aggregation_keys,
@@ -281,14 +281,14 @@ void PhysicalAggregation::buildPipeline(
         auto agg_convergent = std::make_shared<PhysicalAggregationConvergent>(
             executor_id,
             schema,
-            req_id,
+            log->identifier(),
             aggregate_context,
             expr_after_agg);
         builder.addPlanNode(agg_convergent);
     }
 }
 
-void PhysicalAggregation::finalizeImpl(const Names & parent_require)
+void PhysicalAggregation::finalize(const Names & parent_require)
 {
     // schema.size() >= parent_require.size()
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);

@@ -647,11 +647,8 @@ try
     {
         UInt64 tso1 = 1;
         UInt64 tso2 = 100;
-        // [0,32)
         Block block1 = DMTestEnv::prepareSimpleWriteBlock(0, 1 * num_write_rows, false, tso1);
-        // [32,64)
         Block block2 = DMTestEnv::prepareSimpleWriteBlock(1 * num_write_rows, 2 * num_write_rows, false, tso1);
-        // [16,48), overlap
         Block block3
             = DMTestEnv::prepareSimpleWriteBlock(num_write_rows / 2, num_write_rows / 2 + num_write_rows, false, tso2);
 
@@ -723,13 +720,13 @@ try
         {
             auto pk_coldata = []() {
                 std::vector<Int64> res;
-                // first [0, 32)
+                // first [0, 128)
                 auto tmp = createNumbers<Int64>(0, num_write_rows);
                 res.insert(res.end(), tmp.begin(), tmp.end());
-                // then [32, 64)
+                // then [128, 256)
                 tmp = createNumbers<Int64>(num_write_rows, 2 * num_write_rows);
                 res.insert(res.end(), tmp.begin(), tmp.end());
-                // then [32/2, 32 * 1.5)
+                // then [128/2, 128 * 1.5)
                 tmp = createNumbers<Int64>(num_write_rows / 2, 1.5 * num_write_rows);
                 res.insert(res.end(), tmp.begin(), tmp.end());
                 // the pk is sorted by flush cache

@@ -18,7 +18,6 @@
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/StoragePool/GlobalPageIdAllocator.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
@@ -37,6 +36,7 @@
 #include <gtest/gtest.h>
 
 #include <ctime>
+#include <future>
 #include <memory>
 
 namespace DB
@@ -152,7 +152,7 @@ protected:
     {
         *table_columns = *columns;
 
-        dm_context = DMContext::createUnique(
+        dm_context = std::make_unique<DMContext>(
             *db_context,
             storage_path_pool,
             storage_pool,
@@ -221,7 +221,7 @@ try
     std::vector<SegmentPtr> ordered_segments = {left, right};
     segment = Segment::merge(dmContext(), tableColumns(), ordered_segments);
 
-    auto wn_ps = dmContext().global_context.getWriteNodePageStorage();
+    auto wn_ps = dmContext().db_context.getWriteNodePageStorage();
     wn_ps->gc(/*not_skip*/ true);
     {
         auto valid_external_ids = wn_ps->page_directory->getAliveExternalIds(

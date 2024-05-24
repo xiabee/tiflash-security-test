@@ -35,7 +35,6 @@ namespace DB
  */
 enum class ExecTaskStatus
 {
-    WAIT_FOR_NOTIFY,
     WAITING,
     RUNNING,
     IO_IN,
@@ -67,8 +66,6 @@ public:
     ExecTaskStatus executeIO();
 
     ExecTaskStatus await();
-
-    void notify();
 
     // `finalize` must be called before destructuring.
     // `TaskHelper::FINALIZE_TASK` can help this.

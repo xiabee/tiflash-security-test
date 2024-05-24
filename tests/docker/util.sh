@@ -21,7 +21,6 @@ function show_env() {
   grep ^ /sys/block/*/queue/rotational
 
   cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c
-  lscpu
   cat /proc/meminfo
   uname -a
   hostname
@@ -29,7 +28,6 @@ function show_env() {
   dmidecode | grep 'Product Name'
   free -mh
   cat /proc/loadavg
-  ldd --version
 
   set -e
 }

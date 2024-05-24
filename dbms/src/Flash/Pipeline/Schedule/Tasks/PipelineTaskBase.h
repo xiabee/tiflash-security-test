@@ -29,30 +29,26 @@ namespace DB
 /// - OperatorStatus::WAITING                  ==>     ExecTaskStatus::WAITING
 /// - OperatorStatus::NEED_INPUT/HAS_OUTPUT    ==>     ExecTaskStatus::RUNNING
 
-#define MAP_NOT_RUNNING_TASK_STATUS             \
-    case OperatorStatus::FINISHED:              \
-    {                                           \
-        return ExecTaskStatus::FINISHED;        \
-    }                                           \
-    case OperatorStatus::CANCELLED:             \
-    {                                           \
-        return ExecTaskStatus::CANCELLED;       \
-    }                                           \
-    case OperatorStatus::IO_IN:                 \
-    {                                           \
-        return ExecTaskStatus::IO_IN;           \
-    }                                           \
-    case OperatorStatus::IO_OUT:                \
-    {                                           \
-        return ExecTaskStatus::IO_OUT;          \
-    }                                           \
-    case OperatorStatus::WAITING:               \
-    {                                           \
-        return ExecTaskStatus::WAITING;         \
-    }                                           \
-    case OperatorStatus::WAIT_FOR_NOTIFY:       \
-    {                                           \
-        return ExecTaskStatus::WAIT_FOR_NOTIFY; \
+#define MAP_NOT_RUNNING_TASK_STATUS       \
+    case OperatorStatus::FINISHED:        \
+    {                                     \
+        return ExecTaskStatus::FINISHED;  \
+    }                                     \
+    case OperatorStatus::CANCELLED:       \
+    {                                     \
+        return ExecTaskStatus::CANCELLED; \
+    }                                     \
+    case OperatorStatus::IO_IN:           \
+    {                                     \
+        return ExecTaskStatus::IO_IN;     \
+    }                                     \
+    case OperatorStatus::IO_OUT:          \
+    {                                     \
+        return ExecTaskStatus::IO_OUT;    \
+    }                                     \
+    case OperatorStatus::WAITING:         \
+    {                                     \
+        return ExecTaskStatus::WAITING;   \
     }
 
 #define UNEXPECTED_OP_STATUS(op_status, function_name) \
@@ -124,11 +120,11 @@ protected:
         }
     }
 
-    void runFinalize(UInt64 extra_time)
+    void runFinalize(UInt64 queuing_time, UInt64 pipeline_breaker_wait_time)
     {
         assert(pipeline_exec);
         pipeline_exec->executeSuffix();
-        pipeline_exec->finalizeProfileInfo(extra_time);
+        pipeline_exec->finalizeProfileInfo(queuing_time, pipeline_breaker_wait_time);
         pipeline_exec = nullptr;
         pipeline_exec_holder.reset();
     }

@@ -29,8 +29,8 @@ namespace DB
   */
 struct MarkInCompressedFile
 {
-    size_t offset_in_compressed_file = 0;
-    size_t offset_in_decompressed_block = 0;
+    size_t offset_in_compressed_file;
+    size_t offset_in_decompressed_block;
 
     bool operator==(const MarkInCompressedFile & rhs) const
     {

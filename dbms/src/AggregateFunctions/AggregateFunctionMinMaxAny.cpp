@@ -22,7 +22,6 @@ namespace DB
 namespace
 {
 AggregateFunctionPtr createAggregateFunctionAny(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -35,7 +34,6 @@ AggregateFunctionPtr createAggregateFunctionAny(
 }
 
 AggregateFunctionPtr createAggregateFunctionFirstRow(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -48,7 +46,6 @@ AggregateFunctionPtr createAggregateFunctionFirstRow(
 }
 
 AggregateFunctionPtr createAggregateFunctionAnyLast(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -61,7 +58,6 @@ AggregateFunctionPtr createAggregateFunctionAnyLast(
 }
 
 AggregateFunctionPtr createAggregateFunctionAnyHeavy(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -74,7 +70,6 @@ AggregateFunctionPtr createAggregateFunctionAnyHeavy(
 }
 
 AggregateFunctionPtr createAggregateFunctionMin(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -87,7 +82,6 @@ AggregateFunctionPtr createAggregateFunctionMin(
 }
 
 AggregateFunctionPtr createAggregateFunctionMax(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -100,7 +94,6 @@ AggregateFunctionPtr createAggregateFunctionMax(
 }
 
 AggregateFunctionPtr createAggregateFunctionArgMin(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -110,7 +103,6 @@ AggregateFunctionPtr createAggregateFunctionArgMin(
 }
 
 AggregateFunctionPtr createAggregateFunctionArgMax(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)

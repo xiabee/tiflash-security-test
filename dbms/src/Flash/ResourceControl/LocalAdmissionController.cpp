@@ -22,8 +22,7 @@ namespace DB
 {
 void LocalAdmissionController::warmupResourceGroupInfoCache(const std::string & name)
 {
-    if (unlikely(stopped))
-        return;
+    assert(!stopped);
 
     if (name.empty())
         return;

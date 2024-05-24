@@ -32,17 +32,10 @@ class ReadIndexRequest;
 
 namespace DB
 {
-namespace RegionBench
-{
-struct DebugRegion;
-} // namespace RegionBench
-
 namespace tests
 {
-class KVStoreTestBase;
-class RegionKVStoreOldTest;
 class RegionKVStoreTest;
-} // namespace tests
+}
 
 class Region;
 using RegionPtr = std::shared_ptr<Region>;
@@ -123,11 +116,9 @@ public:
         std::unique_lock<std::shared_mutex> lock; // A unique_lock so that we can safely remove committed data.
     };
 
-public: // Simple Read and Write
+public:
+    explicit Region(RegionMeta && meta_);
     explicit Region(RegionMeta && meta_, const TiFlashRaftProxyHelper *);
-    Region(const Region &) = delete;
-    Region() = delete;
-    ~Region();
 
     void insert(const std::string & cf, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
     void insert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
@@ -136,20 +127,14 @@ public: // Simple Read and Write
     // Directly drop all data in this Region object.
     void clearAllData();
 
-    void mergeDataFrom(const Region & other);
+    CommittedScanner createCommittedScanner(bool use_lock, bool need_value);
+    CommittedRemover createCommittedRemover(bool use_lock = true);
 
-    // Assign data and meta by moving from `new_region`.
-    void assignRegion(Region && new_region);
-
-public: // Stats
     RegionID id() const;
     ImutRegionRangePtr getRange() const;
 
     std::string getDebugString() const;
     std::string toString(bool dump_status = true) const;
-
-    RegionMeta & mutMeta() { return meta; }
-    const RegionMeta & getMeta() const { return meta; }
 
     bool isPendingRemove() const;
     void setPendingRemove();
@@ -198,36 +183,9 @@ public: // Stats
         return region1.meta == region2.meta && region1.data == region2.data;
     }
 
-    // Requires RegionMeta's lock
-    UInt64 appliedIndex() const;
-    // Requires RegionMeta's lock
-    UInt64 appliedIndexTerm() const;
-    void notifyApplied() { meta.notifyAll(); }
-    // Export for tests.
-    void setApplied(UInt64 index, UInt64 term);
-
-    RegionVersion version() const;
-    RegionVersion confVer() const;
-
-    TableID getMappedTableID() const;
-    KeyspaceID getKeyspaceID() const;
-
-    /// get approx rows, bytes info about mem cache.
-    std::pair<size_t, size_t> getApproxMemCacheInfo() const;
-    void cleanApproxMemCacheInfo() const;
-
-    // Check the raftstore cluster version of this region.
-    // Currently, all version in the same TiFlash store should be the same.
-    RaftstoreVer getClusterRaftstoreVer();
-    RegionData::OrphanKeysInfo & orphanKeysInfo() { return data.orphan_keys_info; }
-    const RegionData::OrphanKeysInfo & orphanKeysInfo() const { return data.orphan_keys_info; }
-
-public: // Raft Read and Write
-    CommittedScanner createCommittedScanner(bool use_lock, bool need_value);
-    CommittedRemover createCommittedRemover(bool use_lock = true);
-
     // Check if we can read by this index.
     bool checkIndex(UInt64 index) const;
+
     // Return <WaitIndexStatus, time cost(seconds)> for wait-index.
     std::tuple<WaitIndexStatus, double> waitIndex(
         UInt64 index,
@@ -235,7 +193,22 @@ public: // Raft Read and Write
         std::function<bool(void)> && check_running,
         const LoggerPtr & log);
 
+    // Requires RegionMeta's lock
+    UInt64 appliedIndex() const;
+    // Requires RegionMeta's lock
+    UInt64 appliedIndexTerm() const;
+
+    void notifyApplied() { meta.notifyAll(); }
+    // Export for tests.
+    void setApplied(UInt64 index, UInt64 term);
+
+    RegionVersion version() const;
+    RegionVersion confVer() const;
+
     RegionMetaSnapshot dumpRegionMetaSnapshot() const;
+
+    // Assign data and meta by moving from `new_region`.
+    void assignRegion(Region && new_region);
 
     void tryCompactionFilter(Timestamp safe_point);
 
@@ -245,35 +218,47 @@ public: // Raft Read and Write
     raft_serverpb::MergeState cloneMergeState() const;
     const raft_serverpb::MergeState & getMergeState() const;
 
+    TableID getMappedTableID() const;
+    KeyspaceID getKeyspaceID() const;
     std::pair<EngineStoreApplyRes, DM::WriteResult> handleWriteRaftCmd(
         const WriteCmdsView & cmds,
         UInt64 index,
         UInt64 term,
         TMTContext & tmt);
 
-    std::shared_ptr<const TiKVValue> getLockByKey(const TiKVKey & key) { return data.getLockByKey(key); }
+    /// get approx rows, bytes info about mem cache.
+    std::pair<size_t, size_t> getApproxMemCacheInfo() const;
+    void cleanApproxMemCacheInfo() const;
+
+    RegionMeta & mutMeta() { return meta; }
+
     UInt64 getSnapshotEventFlag() const { return snapshot_event_flag; }
 
     // IngestSST will first be applied to the `temp_region`, then we need to
     // copy the key-values from `temp_region` and move forward the `index` and `term`
     void finishIngestSSTByDTFile(RegionPtr && temp_region, UInt64 index, UInt64 term);
 
+    // Check the raftstore cluster version of this region.
+    // Currently, all version in the same TiFlash store should be the same.
+    RaftstoreVer getClusterRaftstoreVer();
     // Methods to handle orphan keys under raftstore v2.
     void beforePrehandleSnapshot(uint64_t region_id, std::optional<uint64_t> deadline_index);
     void afterPrehandleSnapshot(int64_t ongoing);
+    RegionData::OrphanKeysInfo & orphanKeysInfo() { return data.orphan_keys_info; }
+    const RegionData::OrphanKeysInfo & orphanKeysInfo() const { return data.orphan_keys_info; }
+
+    void mergeDataFrom(const Region & other);
+
+    Region() = delete;
 
 private:
     friend class RegionRaftCommandDelegate;
     friend class RegionMockTest;
-    friend class tests::KVStoreTestBase;
-    friend class tests::RegionKVStoreOldTest;
     friend class tests::RegionKVStoreTest;
-    friend struct RegionBench::DebugRegion;
 
     // Private methods no need to lock mutex, normally
 
-    // Returns the size of data change(inc or dec)
-    RegionDataRes doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode);
+    void doInsert(ColumnFamilyType type, TiKVKey && key, TiKVValue && value, DupCheck mode);
     void doRemove(ColumnFamilyType type, const TiKVKey & key);
 
     std::optional<RegionDataReadInfo> readDataByWriteIt(
@@ -333,7 +318,7 @@ public:
     RegionRaftCommandDelegate() = delete;
 
 private:
-    friend class tests::KVStoreTestBase;
+    friend class tests::RegionKVStoreTest;
 
     Regions execBatchSplit(
         const raft_cmdpb::AdminRequest & request,

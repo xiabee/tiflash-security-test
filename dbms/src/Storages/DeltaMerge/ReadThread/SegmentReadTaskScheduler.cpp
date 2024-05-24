@@ -11,9 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include <Common/setThreadName.h>
-#include <Interpreters/Settings.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReadTaskScheduler.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
 #include <Storages/DeltaMerge/Segment.h>
@@ -21,7 +19,8 @@
 namespace DB::DM
 {
 SegmentReadTaskScheduler::SegmentReadTaskScheduler(bool run_sched_thread)
-    : log(Logger::get())
+    : stop(false)
+    , log(Logger::get())
 {
     if (likely(run_sched_thread))
     {
@@ -40,31 +39,59 @@ SegmentReadTaskScheduler::~SegmentReadTaskScheduler()
 
 void SegmentReadTaskScheduler::add(const SegmentReadTaskPoolPtr & pool)
 {
+    // To avoid schedule from always failing to acquire the pending_mtx.
+    std::lock_guard lock(add_mtx);
+    submitPendingPool(pool);
+}
+
+void SegmentReadTaskScheduler::addPool(const SegmentReadTaskPoolPtr & pool)
+{
     assert(pool != nullptr);
-    Stopwatch sw_add;
-    // `add_lock` is only used in this function to make all threads calling `add` to execute serially.
-    std::lock_guard add_lock(add_mtx);
-    add_waittings.fetch_add(1, std::memory_order_relaxed);
-    // `lock` is used to protect data.
-    std::lock_guard lock(mtx);
-    add_waittings.fetch_sub(1, std::memory_order_relaxed);
-    Stopwatch sw_do_add;
     read_pools.emplace(pool->pool_id, pool);
 
     const auto & tasks = pool->getTasks();
-    for (const auto & [seg_id, task] : tasks)
+    for (const auto & pa : tasks)
     {
-        merging_segments[seg_id].push_back(pool->pool_id);
+        auto seg_id = pa.first;
+        merging_segments[pool->physical_table_id][seg_id].push_back(pool->pool_id);
     }
+}
+
+void SegmentReadTaskScheduler::submitPendingPool(SegmentReadTaskPoolPtr pool)
+{
+    assert(pool != nullptr);
+    if (pool->getPendingSegmentCount() <= 0)
+    {
+        LOG_INFO(pool->getLogger(), "Ignored for no segment to read, pool_id={}", pool->pool_id);
+        return;
+    }
+    Stopwatch sw;
+    std::lock_guard lock(pending_mtx);
+    pending_pools.push_back(pool);
     LOG_INFO(
         pool->getLogger(),
-        "Added, pool_id={} block_slots={} segment_count={} pool_count={} cost={:.3f}us do_add_cost={:.3f}us", //
+        "Submitted, pool_id={} segment_count={} pending_pools={} cost={}ns",
         pool->pool_id,
-        pool->getFreeBlockSlots(),
-        tasks.size(),
-        read_pools.size(),
-        sw_add.elapsed() / 1000.0,
-        sw_do_add.elapsed() / 1000.0);
+        pool->getPendingSegmentCount(),
+        pending_pools.size(),
+        sw.elapsed());
+}
+
+void SegmentReadTaskScheduler::reapPendingPools()
+{
+    SegmentReadTaskPools pools;
+    {
+        std::lock_guard lock(pending_mtx);
+        pools.swap(pending_pools);
+    }
+    if (!pools.empty())
+    {
+        for (const auto & pool : pools)
+        {
+            addPool(pool);
+        }
+        LOG_INFO(log, "Added, pool_ids={}, pool_count={}", pools, read_pools.size());
+    }
 }
 
 MergedTaskPtr SegmentReadTaskScheduler::scheduleMergedTask(SegmentReadTaskPoolPtr & pool)
@@ -168,27 +195,38 @@ bool SegmentReadTaskScheduler::needSchedule(const SegmentReadTaskPoolPtr & pool)
     return pool != nullptr && (needScheduleToRead(pool) || !pool->valid());
 }
 
-std::optional<std::pair<GlobalSegmentID, std::vector<UInt64>>> SegmentReadTaskScheduler::scheduleSegmentUnlock(
+std::optional<std::pair<uint64_t, std::vector<uint64_t>>> SegmentReadTaskScheduler::scheduleSegmentUnlock(
     const SegmentReadTaskPoolPtr & pool)
 {
     auto expected_merge_seg_count = std::min(read_pools.size(), 2); // Not accurate.
-
-    std::optional<std::pair<GlobalSegmentID, std::vector<uint64_t>>> result;
-    auto target = pool->scheduleSegment(merging_segments, expected_merge_seg_count, enable_data_sharing);
-    if (target != merging_segments.end())
+    auto itr = merging_segments.find(pool->physical_table_id);
+    if (itr == merging_segments.end())
     {
-        if ((enable_data_sharing && MergedTask::getPassiveMergedSegments() < 100) || target->second.size() == 1)
+        // No segment of tableId left.
+        return std::nullopt;
+    }
+    std::optional<std::pair<uint64_t, std::vector<uint64_t>>> result;
+    auto & segments = itr->second;
+    auto target = pool->scheduleSegment(segments, expected_merge_seg_count);
+    if (target != segments.end())
+    {
+        if (MergedTask::getPassiveMergedSegments() < 100 || target->second.size() == 1)
         {
             result = *target;
-            merging_segments.erase(target);
+            segments.erase(target);
+            if (segments.empty())
+            {
+                merging_segments.erase(itr);
+            }
         }
         else
         {
             result = std::pair{target->first, std::vector<uint64_t>(1, pool->pool_id)};
-            auto itr = std::find(target->second.begin(), target->second.end(), pool->pool_id);
-            // SegmentReadTaskPool::scheduleSegment ensures `pool->poolId` must exists in `target`.
-            *itr = target->second.back();
-            target->second.resize(target->second.size() - 1);
+            auto mutable_target = segments.find(target->first);
+            auto itr = std::find(mutable_target->second.begin(), mutable_target->second.end(), pool->pool_id);
+            *itr = mutable_target->second
+                       .back(); // SegmentReadTaskPool::scheduleSegment ensures `pool->poolId` must exists in `target`.
+            mutable_target->second.resize(mutable_target->second.size() - 1);
         }
     }
     return result;
@@ -243,49 +281,43 @@ std::tuple<UInt64, UInt64, UInt64> SegmentReadTaskScheduler::scheduleOneRound()
 
 bool SegmentReadTaskScheduler::schedule()
 {
-    Stopwatch sw_sched_total;
-    std::lock_guard lock(mtx);
-    Stopwatch sw_do_sched;
-
-    auto pool_count = read_pools.size();
+    Stopwatch sw_sched;
     UInt64 erased_pool_count = 0;
     UInt64 sched_null_count = 0;
     UInt64 sched_succ_count = 0;
     UInt64 sched_round = 0;
     bool can_sched_more_tasks = false;
+    UInt64 reap_pending_pools_ns = 0;
     do
     {
         ++sched_round;
+        Stopwatch sw;
+        reapPendingPools();
+        reap_pending_pools_ns += sw.elapsed();
         auto [erase, null, succ] = scheduleOneRound();
         erased_pool_count += erase;
         sched_null_count += null;
         sched_succ_count += succ;
 
         can_sched_more_tasks = succ > 0 && !read_pools.empty();
-        // If no thread is waitting to add tasks and there are some tasks to be scheduled, run scheduling again.
-        // Avoid releasing and acquiring `mtx` repeatly.
-        // This is common when query concurrency is low, but individual queries are heavy.
-    } while (add_waittings.load(std::memory_order_relaxed) <= 0 && can_sched_more_tasks);
+    } while (can_sched_more_tasks);
 
     if (read_pools.empty())
     {
         GET_METRIC(tiflash_storage_read_thread_counter, type_sche_no_pool).Increment();
     }
 
-    auto total_ms = sw_sched_total.elapsedMilliseconds();
-    if (total_ms >= 100)
+    if (auto total_ms = sw_sched.elapsedMilliseconds(); total_ms >= 50)
     {
         LOG_INFO(
             log,
-            "schedule sched_round={} pool_count={} erased_pool_count={} sched_null_count={} sched_succ_count={} "
-            "cost={}ms do_sched_cost={}ms",
+            "schedule sched_round={} erased_pool_count={} sched_null_count={} sched_succ_count={} reap={}ms cost={}ms",
             sched_round,
-            pool_count,
             erased_pool_count,
             sched_null_count,
             sched_succ_count,
-            total_ms,
-            sw_do_sched.elapsedMilliseconds());
+            reap_pending_pools_ns / 1000'000,
+            total_ms);
     }
     return can_sched_more_tasks;
 }
@@ -301,11 +333,6 @@ void SegmentReadTaskScheduler::schedLoop()
             std::this_thread::sleep_for(2ms);
         }
     }
-}
-
-void SegmentReadTaskScheduler::updateConfig(const Settings & settings)
-{
-    enable_data_sharing = settings.dt_max_sharing_column_bytes_for_all > 0;
 }
 
 } // namespace DB::DM

@@ -16,7 +16,7 @@
 #include <Common/Logger.h>
 #include <Common/escapeForFileName.h>
 #include <Core/Types.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
@@ -31,6 +31,7 @@
 #include <fmt/core.h>
 
 #include <mutex>
+#include <random>
 #include <set>
 #include <unordered_map>
 #include <utility>

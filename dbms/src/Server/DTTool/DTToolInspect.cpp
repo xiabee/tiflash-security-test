@@ -15,8 +15,7 @@
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
 #include <Common/formatReadable.h>
-#include <IO/FileProvider/ChecksumReadBufferBuilder.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
+#include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
 #include <Server/DTTool/DTTool.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
@@ -26,6 +25,7 @@
 #include <boost/program_options.hpp>
 #include <boost/program_options/value_semantic.hpp>
 #include <iostream>
+#include <random>
 
 namespace bpo = boost::program_options;
 
@@ -95,7 +95,7 @@ int inspectServiceMain(DB::Context & context, const InspectArgs & args)
                 LOG_INFO(logger, "checking full_path is {}: ", full_path);
                 if (dmfile->getConfiguration())
                 {
-                    consume(*DB::ChecksumReadBufferBuilder::build(
+                    consume(*DB::createReadBufferFromFileBaseByFileProvider(
                         fp,
                         full_path,
                         DB::EncryptionPath(full_path, i),
@@ -106,10 +106,13 @@ int inspectServiceMain(DB::Context & context, const InspectArgs & args)
                 }
                 else
                 {
-                    consume(*DB::ReadBufferFromRandomAccessFileBuilder::buildPtr(
+                    consume(*DB::createReadBufferFromFileBaseByFileProvider(
                         fp,
                         full_path,
-                        DB::EncryptionPath(full_path, i)));
+                        DB::EncryptionPath(full_path, i),
+                        DBMS_DEFAULT_BUFFER_SIZE,
+                        0,
+                        nullptr));
                 }
                 LOG_INFO(logger, "[success]");
             }

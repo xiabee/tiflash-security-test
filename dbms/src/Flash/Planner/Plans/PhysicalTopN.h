@@ -46,7 +46,7 @@ public:
         , limit(limit_)
     {}
 
-    void finalizeImpl(const Names & parent_require) override;
+    void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 

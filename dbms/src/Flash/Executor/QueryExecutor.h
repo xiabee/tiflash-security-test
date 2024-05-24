@@ -49,11 +49,13 @@ public:
 
     virtual int estimateNewThreadCount() = 0;
 
-    virtual UInt64 collectCPUTimeNs() = 0;
+    virtual RU collectRequestUnit() = 0;
 
     virtual Block getSampleBlock() const = 0;
 
     virtual BaseRuntimeStatistics getRuntimeStatistics() const = 0;
+
+    virtual String getExtraJsonInfo() const { return "{}"; }
 
 protected:
     virtual ExecutionResult execute(ResultHandler &&) = 0;

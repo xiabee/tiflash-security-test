@@ -24,7 +24,7 @@ namespace DB
 
 struct TiKVRangeKey;
 using RegionRange = RegionRangeKeys::RegionRange;
-using RegionDataRes = int64_t;
+using RegionDataRes = size_t;
 
 enum class DupCheck
 {
@@ -60,7 +60,7 @@ struct RegionCFDataBase
 
     size_t getSize() const;
 
-    RegionCFDataBase() = default;
+    RegionCFDataBase() {}
     RegionCFDataBase(RegionCFDataBase && region);
     RegionCFDataBase & operator=(RegionCFDataBase && region);
 

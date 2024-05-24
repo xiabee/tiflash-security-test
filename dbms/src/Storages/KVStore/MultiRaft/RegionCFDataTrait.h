@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Storages/KVStore/TiKVHelpers/DecodedLockCFValue.h>
 #include <Storages/KVStore/TiKVHelpers/TiKVRecordFormat.h>
 
 #include <map>

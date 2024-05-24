@@ -17,6 +17,7 @@
 #include <DataStreams/AddExtraTableIDColumnTransformAction.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
+#include <Storages/DeltaMerge/Remote/RNReadTask_fwd.h>
 #include <Storages/DeltaMerge/Remote/RNWorkers_fwd.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
 
@@ -68,7 +69,7 @@ private:
     const RNWorkersPtr workers;
     AddExtraTableIDColumnTransformAction action;
 
-    SegmentReadTaskPtr current_seg_task = nullptr;
+    RNReadSegmentTaskPtr current_seg_task = nullptr;
     bool done = false;
     size_t processed_seg_tasks = 0;
 

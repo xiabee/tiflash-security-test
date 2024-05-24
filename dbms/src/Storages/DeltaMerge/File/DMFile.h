@@ -15,20 +15,23 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <IO/Buffer/WriteBufferFromWritableFile.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/ReadBufferFromFileProvider.h>
+#include <Encryption/WriteBufferFromFileProvider.h>
 #include <Poco/File.h>
+#include <Storages/DeltaMerge/ColumnStat.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/File/ColumnStat.h>
-#include <Storages/DeltaMerge/File/DMFile_fwd.h>
 #include <Storages/DeltaMerge/File/MergedFile.h>
 #include <Storages/DeltaMerge/File/dtpb/dmfile.pb.h>
 #include <Storages/FormatVersion.h>
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <common/logger_useful.h>
-
+namespace DB::DM
+{
+class DMFile;
+}
 namespace DTTool::Migrate
 {
 struct MigrateArgs;
@@ -37,18 +40,13 @@ bool needFrameMigration(const DB::DM::DMFile & file, const std::string & target)
 int migrateServiceMain(DB::Context & context, const MigrateArgs & args);
 } // namespace DTTool::Migrate
 
-namespace DB::DM
+namespace DB
 {
-namespace tests
+namespace DM
 {
-class DMFileTest;
-class DMFileMetaV2Test;
-class DMStoreForSegmentReadTaskTest;
-} // namespace tests
+using DMFilePtr = std::shared_ptr<DMFile>;
+using DMFiles = std::vector<DMFilePtr>;
 
-// TODO: Split DMFile into subclasses and separate
-//       the logic under different version? There are
-//       some member is not used under the latest version
 class DMFile : private boost::noncopyable
 {
 public:
@@ -59,6 +57,23 @@ public:
         READABLE,
         DROPPED,
     };
+
+    static String statusString(Status status)
+    {
+        switch (status)
+        {
+        case WRITABLE:
+            return "WRITABLE";
+        case WRITING:
+            return "WRITING";
+        case READABLE:
+            return "READABLE";
+        case DROPPED:
+            return "DROPPED";
+        default:
+            throw Exception("Unexpected status: " + DB::toString(static_cast<int>(status)));
+        }
+    }
 
     struct ReadMetaMode
     {
@@ -143,9 +158,8 @@ public:
     {
         PackStat = 0,
         PackProperty,
-        ColumnStat, // Deprecated, use `ExtendColumnStat` instead
+        ColumnStat,
         MergedSubFilePos,
-        ExtendColumnStat,
     };
     struct MetaBlockHandle
     {
@@ -205,7 +219,6 @@ public:
         DMConfigurationOpt configuration = std::nullopt,
         UInt64 small_file_size_threshold = 128 * 1024,
         UInt64 merged_file_max_size = 16 * 1024 * 1024,
-        KeyspaceID keyspace_id = NullspaceID,
         DMFileFormat::Version = STORAGE_FORMAT_CURRENT.dm_file);
 
     static DMFilePtr restore(
@@ -213,8 +226,7 @@ public:
         UInt64 file_id,
         UInt64 page_id,
         const String & parent_path,
-        const ReadMetaMode & read_meta_mode,
-        KeyspaceID keyspace_id = NullspaceID);
+        const ReadMetaMode & read_meta_mode);
 
     struct ListOptions
     {
@@ -228,8 +240,7 @@ public:
     static std::set<UInt64> listAllInPath(
         const FileProviderPtr & file_provider,
         const String & parent_path,
-        const ListOptions & options,
-        KeyspaceID keyspace_id = NullspaceID);
+        const ListOptions & options);
 
     // static helper function for getting path
     static String getPathByStatus(const String & parent_path, UInt64 file_id, DMFile::Status status);
@@ -306,7 +317,7 @@ public:
      * Note that only the column id and type is valid.
      * @return All columns
      */
-    ColumnDefines getColumnDefines(bool sort_by_id = true)
+    ColumnDefines getColumnDefines()
     {
         ColumnDefines results{};
         results.reserve(this->column_stats.size());
@@ -314,19 +325,18 @@ public:
         {
             results.emplace_back(cs.first, "", cs.second.type);
         }
-        if (sort_by_id)
-            std::sort(results.begin(), results.end(), [](const auto & lhs, const auto & rhs) {
-                return lhs.id < rhs.id;
-            });
         return results;
     }
 
     static String metav2FileName() { return "meta"; }
-    bool useMetaV2() const { return version == DMFileFormat::V3; }
-    std::vector<String> listFilesForUpload() const;
+    std::vector<String> listFilesForUpload();
     void switchToRemote(const S3::DMFileOID & oid);
 
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#else
+public:
+#endif
     DMFile(
         UInt64 file_id_,
         UInt64 page_id_,
@@ -335,11 +345,9 @@ private:
         UInt64 small_file_size_threshold_ = 128 * 1024,
         UInt64 merged_file_max_size_ = 16 * 1024 * 1024,
         DMConfigurationOpt configuration_ = std::nullopt,
-        DMFileFormat::Version version_ = STORAGE_FORMAT_CURRENT.dm_file,
-        KeyspaceID keyspace_id_ = NullspaceID)
+        DMFileFormat::Version version_ = STORAGE_FORMAT_CURRENT.dm_file)
         : file_id(file_id_)
         , page_id(page_id_)
-        , keyspace_id(keyspace_id_)
         , parent_path(std::move(parent_path_))
         , status(status_)
         , configuration(std::move(configuration_))
@@ -368,13 +376,7 @@ private:
         return Poco::File(colDataPath(file_name_base)).getSize();
     }
     size_t colIndexSize(ColId id);
-    enum class ColDataType
-    {
-        Elements,
-        NullMap,
-        ArraySizes,
-    };
-    size_t colDataSize(ColId id, ColDataType type);
+    size_t colDataSize(ColId id, bool is_null_map);
 
     String colDataPath(const FileNameBase & file_name_base) const
     {
@@ -421,7 +423,7 @@ private:
     static String colMarkFileName(const FileNameBase & file_name_base);
 
     using OffsetAndSize = std::tuple<size_t, size_t>;
-    OffsetAndSize writeMetaToBuffer(WriteBuffer & buffer) const;
+    OffsetAndSize writeMetaToBuffer(WriteBuffer & buffer);
     OffsetAndSize writePackStatToBuffer(WriteBuffer & buffer);
     OffsetAndSize writePackPropertyToBuffer(WriteBuffer & buffer, UnifiedDigestBase * digest = nullptr);
 
@@ -437,7 +439,7 @@ private:
     void writeMetadata(const FileProviderPtr & file_provider, const WriteLimiterPtr & write_limiter);
     void readMetadata(const FileProviderPtr & file_provider, const ReadMetaMode & read_meta_mode);
 
-    void tryUpgradeColumnStatInMetaV1(const FileProviderPtr & file_provider, DMFileFormat::Version ver);
+    void upgradeMetaIfNeed(const FileProviderPtr & file_provider, DMFileFormat::Version ver);
 
     void addPack(const PackStat & pack_stat) { pack_stats.push_back(pack_stat); }
 
@@ -462,29 +464,26 @@ private:
     static constexpr size_t meta_buffer_size = 64 * 1024;
     void finalizeMetaV2(WriteBuffer & buffer);
     MetaBlockHandle writeSLPackStatToBuffer(WriteBuffer & buffer);
-    MetaBlockHandle writeSLPackPropertyToBuffer(WriteBuffer & buffer) const;
+    MetaBlockHandle writeSLPackPropertyToBuffer(WriteBuffer & buffer);
     MetaBlockHandle writeColumnStatToBuffer(WriteBuffer & buffer);
-    MetaBlockHandle writeExtendColumnStatToBuffer(WriteBuffer & buffer);
     MetaBlockHandle writeMergedSubFilePosotionsToBuffer(WriteBuffer & buffer);
-    std::vector<char> readMetaV2(const FileProviderPtr & file_provider) const;
+    std::vector<char> readMetaV2(const FileProviderPtr & file_provider);
     void parseMetaV2(std::string_view buffer);
     void parseColumnStat(std::string_view buffer);
-    void parseExtendColumnStat(std::string_view buffer);
     void parseMergedSubFilePos(std::string_view buffer);
     void parsePackProperty(std::string_view buffer);
     void parsePackStat(std::string_view buffer);
     void finalizeDirName();
+    bool useMetaV2() const { return version == DMFileFormat::V3; }
 
     UInt64 getFileSize(ColId col_id, const String & filename) const;
     UInt64 getReadFileSize(ColId col_id, const String & filename) const;
     UInt64 getMergedFileSizeOfColumn(const MergedSubFileInfo & file_info) const;
 
     // The id to construct the file path on disk.
-    const UInt64 file_id;
+    UInt64 file_id;
     // It is the page_id that represent this file in the PageStorage. It could be the same as file id.
-    const UInt64 page_id;
-    // The id of the keyspace that this file belongs to.
-    const KeyspaceID keyspace_id;
+    UInt64 page_id;
     String parent_path;
 
     PackStats pack_stats;
@@ -508,7 +507,7 @@ private:
     struct MergedFileWriter
     {
         MergedFile file_info;
-        WriteBufferFromWritableFilePtr buffer;
+        std::unique_ptr<WriteBufferFromWritableFile> buffer;
     };
     PaddedPODArray<MergedFile> merged_files;
     // Filename -> MergedSubFileInfo
@@ -527,13 +526,8 @@ private:
     friend class DMFileWriter;
     friend class DMFileWriterRemote;
     friend class DMFileReader;
-    friend class MarkLoader;
-    friend class ColumnReadStream;
     friend class DMFilePackFilter;
     friend class DMFileBlockInputStreamBuilder;
-    friend class tests::DMFileTest;
-    friend class tests::DMFileMetaV2Test;
-    friend class tests::DMStoreForSegmentReadTaskTest;
     friend int ::DTTool::Migrate::migrateServiceMain(
         DB::Context & context,
         const ::DTTool::Migrate::MigrateArgs & args);
@@ -541,17 +535,18 @@ private:
     friend bool ::DTTool::Migrate::needFrameMigration(const DB::DM::DMFile & file, const std::string & target);
 };
 
-inline ReadBufferFromRandomAccessFile openForRead(
+inline ReadBufferFromFileProvider openForRead(
     const FileProviderPtr & file_provider,
     const String & path,
     const EncryptionPath & encryption_path,
     const size_t & file_size)
 {
-    return ReadBufferFromRandomAccessFileBuilder::build(
+    return ReadBufferFromFileProvider(
         file_provider,
         path,
         encryption_path,
         std::min(static_cast<size_t>(DBMS_DEFAULT_BUFFER_SIZE), file_size));
 }
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

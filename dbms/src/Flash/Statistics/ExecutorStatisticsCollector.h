@@ -15,10 +15,8 @@
 #pragma once
 
 #include <Common/Exception.h>
-#include <Flash/Executor/toRU.h>
 #include <Flash/Statistics/ExecutorStatisticsBase.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
-#include <kvproto/resource_manager.pb.h>
 #include <tipb/executor.pb.h>
 #include <tipb/select.pb.h>
 
@@ -27,13 +25,6 @@
 namespace DB
 {
 class DAGContext;
-struct RUConsumption
-{
-    RU cpu_ru;
-    UInt64 cpu_time_ns;
-    RU read_ru;
-    UInt64 read_bytes;
-};
 
 class ExecutorStatisticsCollector
 {
@@ -54,8 +45,6 @@ public:
     tipb::TiFlashExecutionInfo genTiFlashExecutionInfo();
 
     const std::map<String, ExecutorStatisticsPtr> & getProfiles() const { return profiles; }
-
-    void setLocalRUConsumption(const RUConsumption & ru_info);
 
 private:
     void collectRuntimeDetails();
@@ -97,7 +86,6 @@ private:
     std::map<String, ExecutorStatisticsPtr> profiles;
     const LoggerPtr log;
     bool force_fill_executor_id; // for testing list based executors
-    std::optional<resource_manager::Consumption> local_ru;
 };
 using ExecutorStatisticsCollectorPtr = std::unique_ptr<ExecutorStatisticsCollector>;
 } // namespace DB

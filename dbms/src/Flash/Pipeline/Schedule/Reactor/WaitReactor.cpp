@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/CPUAffinityManager.h>
 #include <Common/Exception.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Flash/Pipeline/Schedule/Reactor/WaitReactor.h>
 #include <Flash/Pipeline/Schedule/TaskScheduler.h>
-#include <Flash/Pipeline/Schedule/Tasks/NotifyFuture.h>
 #include <Flash/Pipeline/Schedule/Tasks/TaskHelper.h>
 #include <common/logger_useful.h>
 #include <errno.h>
@@ -30,7 +28,6 @@ WaitReactor::WaitReactor(TaskScheduler & scheduler_)
     : scheduler(scheduler_)
 {
     GET_METRIC(tiflash_pipeline_scheduler, type_waiting_tasks_count).Set(0);
-    GET_METRIC(tiflash_pipeline_scheduler, type_wait_for_notify_tasks_count).Set(0);
     thread = std::thread(&WaitReactor::loop, this);
 }
 
@@ -51,9 +48,6 @@ bool WaitReactor::awaitAndCollectReadyTask(WaitingTask && task)
     case ExecTaskStatus::IO_OUT:
         task_ptr->profile_info.elapsedAwaitTime();
         io_tasks.push_back(std::move(task.first));
-        return true;
-    case ExecTaskStatus::WAIT_FOR_NOTIFY:
-        registerTaskToFuture(std::move(task.first));
         return true;
     case FINISH_STATUS:
         task_ptr->profile_info.elapsedAwaitTime();
@@ -166,7 +160,11 @@ void WaitReactor::react(WaitingTasks & local_waiting_tasks)
             ++task_it;
     }
 
+#ifdef __APPLE__
+    auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_waiting_tasks_count);
+#else
     thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_waiting_tasks_count);
+#endif
     metrics.Set(local_waiting_tasks.size());
 
     submitReadyTasks();
@@ -176,7 +174,6 @@ void WaitReactor::loop()
 {
     try
     {
-        CPUAffinityManager::getInstance().bindSelfQueryThread();
         doLoop();
     }
     CATCH_AND_TERMINATE(logger)

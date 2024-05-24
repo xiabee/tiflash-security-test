@@ -14,6 +14,7 @@
 
 #include <AggregateFunctions/registerAggregateFunctions.h>
 #include <Common/CPUAffinityManager.h>
+#include <Common/ClickHouseRevision.h>
 #include <Common/ComputeLabelHolder.h>
 #include <Common/Config/ConfigReloader.h>
 #include <Common/CurrentMetrics.h>
@@ -37,21 +38,21 @@
 #include <Common/getNumberOfCPUCores.h>
 #include <Common/setThreadName.h>
 #include <Core/TiFlashDisaggregatedMode.h>
+#include <Encryption/DataKeyManager.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/MockKeyManager.h>
+#include <Encryption/RateLimiter.h>
 #include <Flash/DiagnosticsService.h>
 #include <Flash/FlashService.h>
 #include <Flash/Mpp/GRPCCompletionQueuePool.h>
 #include <Flash/Pipeline/Schedule/TaskScheduler.h>
 #include <Flash/ResourceControl/LocalAdmissionController.h>
 #include <Functions/registerFunctions.h>
-#include <IO/BaseFile/RateLimiter.h>
-#include <IO/Encryption/DataKeyManager.h>
-#include <IO/Encryption/KeyspacesKeyManager.h>
-#include <IO/Encryption/MockKeyManager.h>
-#include <IO/FileProvider/FileProvider.h>
 #include <IO/HTTPCommon.h>
 #include <IO/IOThreadPools.h>
 #include <IO/ReadHelpers.h>
 #include <IO/UseSSL.h>
+#include <IO/createReadBufferFromFileBase.h>
 #include <Interpreters/AsynchronousMetrics.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/SharedContexts/Disagg.h>
@@ -77,7 +78,6 @@
 #include <Storages/DeltaMerge/ReadThread/ColumnSharingCache.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReadTaskScheduler.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/FormatVersion.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/KVStore/FFI/FileEncryption.h>
@@ -103,6 +103,7 @@
 
 #include <boost/algorithm/string/classification.hpp>
 #include <ext/scope_guard.h>
+#include <limits>
 #include <magic_enum.hpp>
 #include <memory>
 #include <thread>
@@ -366,7 +367,7 @@ pingcap::ClusterConfig getClusterConfig(
         ca_path,
         cert_path,
         key_path,
-        fmt::underlying(config.api_version));
+        config.api_version);
     return config;
 }
 
@@ -954,6 +955,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
 
     const auto disaggregated_mode = getDisaggregatedMode(config());
     const auto use_autoscaler = useAutoScaler(config());
+    const bool use_autoscaler_without_s3 = useAutoScalerWithoutS3(config());
 
     // Some Storage's config is necessary for Proxy
     TiFlashStorageConfig storage_config;
@@ -968,8 +970,12 @@ int Server::main(const std::vector<std::string> & /*args*/)
     }
     else if (disaggregated_mode == DisaggregatedMode::Compute && use_autoscaler)
     {
-        // compute node with auto scaler, the requirements will be initted later.
-        storage_config.s3_config.enable(/*check_requirements*/ false, log);
+        if (!use_autoscaler_without_s3)
+        {
+            // compute node with auto scaler, the requirements will be initted later.
+            storage_config.s3_config.enable(/*check_requirements*/ false, log);
+        }
+        // else keep the behavior running disagg without S3 when auto scaler is enable.
     }
 
     if (storage_config.format_version != 0)
@@ -1032,12 +1038,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
         LOG_INFO(log, "UniPS is not enabled for proxy, page_version={}", STORAGE_FORMAT_CURRENT.page);
     }
 
-#ifdef USE_JEMALLOC
-    LOG_INFO(log, "Using Jemalloc for TiFlash");
-#else
-    LOG_INFO(log, "Not using Jemalloc for TiFlash");
-#endif
-
     RaftStoreProxyRunner proxy_runner(RaftStoreProxyRunner::RunRaftStoreProxyParms{&helper, proxy_conf}, log);
 
     if (proxy_conf.is_proxy_runnable)
@@ -1048,6 +1048,13 @@ int Server::main(const std::vector<std::string> & /*args*/)
         while (!tiflash_instance_wrap.proxy_helper)
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         LOG_INFO(log, "tiflash proxy is initialized");
+        if (tiflash_instance_wrap.proxy_helper->checkEncryptionEnabled())
+        {
+            auto method = tiflash_instance_wrap.proxy_helper->getEncryptionMethod();
+            LOG_INFO(log, "encryption is enabled, method is {}", IntoEncryptionMethodName(method));
+        }
+        else
+            LOG_INFO(log, "encryption is disabled");
     }
     else
     {
@@ -1056,8 +1063,10 @@ int Server::main(const std::vector<std::string> & /*args*/)
 
     SCOPE_EXIT({
         if (!proxy_conf.is_proxy_runnable)
+        {
+            proxy_runner.join();
             return;
-
+        }
         LOG_INFO(log, "Let tiflash proxy shutdown");
         tiflash_instance_wrap.status = EngineStoreServerStatus::Terminated;
         tiflash_instance_wrap.tmt = nullptr;
@@ -1090,30 +1099,17 @@ int Server::main(const std::vector<std::string> & /*args*/)
     global_context->getSharedContextDisagg()->use_autoscaler = use_autoscaler;
 
     /// Init File Provider
+    bool enable_encryption = false;
     if (proxy_conf.is_proxy_runnable)
     {
-        const bool enable_encryption = tiflash_instance_wrap.proxy_helper->checkEncryptionEnabled();
-        if (enable_encryption && storage_config.s3_config.isS3Enabled())
+        enable_encryption = tiflash_instance_wrap.proxy_helper->checkEncryptionEnabled();
+        if (enable_encryption)
         {
-            LOG_INFO(log, "encryption can be enabled, method is Aes256Ctr");
-            // The UniversalPageStorage has not been init yet, the UniversalPageStoragePtr in KeyspacesKeyManager is nullptr.
-            KeyManagerPtr key_manager
-                = std::make_shared<KeyspacesKeyManager<TiFlashRaftProxyHelper>>(tiflash_instance_wrap.proxy_helper);
-            global_context->initializeFileProvider(key_manager, true);
+            auto method = tiflash_instance_wrap.proxy_helper->getEncryptionMethod();
+            enable_encryption = (method != EncryptionMethod::Plaintext);
         }
-        else if (enable_encryption)
-        {
-            const auto method = tiflash_instance_wrap.proxy_helper->getEncryptionMethod();
-            LOG_INFO(log, "encryption is enabled, method is {}", magic_enum::enum_name(method));
-            KeyManagerPtr key_manager = std::make_shared<DataKeyManager>(&tiflash_instance_wrap);
-            global_context->initializeFileProvider(key_manager, method != EncryptionMethod::Plaintext);
-        }
-        else
-        {
-            LOG_INFO(log, "encryption is disabled");
-            KeyManagerPtr key_manager = std::make_shared<DataKeyManager>(&tiflash_instance_wrap);
-            global_context->initializeFileProvider(key_manager, false);
-        }
+        KeyManagerPtr key_manager = std::make_shared<DataKeyManager>(&tiflash_instance_wrap);
+        global_context->initializeFileProvider(key_manager, enable_encryption);
     }
     else
     {
@@ -1135,7 +1131,14 @@ int Server::main(const std::vector<std::string> & /*args*/)
         storage_config.s3_config.isS3Enabled());
 
     if (storage_config.s3_config.isS3Enabled())
+    {
+        if (enable_encryption)
+        {
+            LOG_ERROR(log, "Cannot support S3 when encryption enabled.");
+            throw Exception("Cannot support S3 when encryption enabled.");
+        }
         S3::ClientFactory::instance().init(storage_config.s3_config);
+    }
 
     global_context->getSharedContextDisagg()->initRemoteDataStore(
         global_context->getFileProvider(),
@@ -1281,10 +1284,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
     /// It internally depends on UserConfig::parseSettings.
     // TODO: Parse the settings from config file at the program beginning
     global_context->setDefaultProfiles(config());
-    LOG_INFO(
-        log,
-        "Loaded global settings from default_profile and system_profile, changed configs: {{{}}}",
-        global_context->getSettingsRef().toString());
+    LOG_INFO(log, "Loaded global settings from default_profile and system_profile.");
 
     ///
     /// The config value in global settings can only be used from here because we just loaded it from config file.
@@ -1323,10 +1323,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
         global_context->initializeWriteNodePageStorageIfNeed(global_context->getPathPool());
         if (auto wn_ps = global_context->tryGetWriteNodePageStorage(); wn_ps != nullptr)
         {
-            if (tiflash_instance_wrap.proxy_helper->checkEncryptionEnabled() && storage_config.s3_config.isS3Enabled())
-            {
-                global_context->getFileProvider()->setPageStoragePtrForKeyManager(wn_ps);
-            }
             store_ident = tryGetStoreIdent(wn_ps);
             if (!store_ident)
             {
@@ -1342,7 +1338,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
     if (global_context->getSharedContextDisagg()->isDisaggregatedStorageMode())
     {
         global_context->getSharedContextDisagg()->initWriteNodeSnapManager();
-        global_context->getSharedContextDisagg()->initFastAddPeerContext(settings.fap_handle_concurrency);
+        global_context->getSharedContextDisagg()->initFastAddPeerContext();
     }
 
     if (global_context->getSharedContextDisagg()->isDisaggregatedComputeMode())
@@ -1386,7 +1382,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
             global_context->getTMTContext().reloadConfig(*config);
             global_context->getIORateLimiter().updateConfig(*config);
             global_context->reloadDeltaTreeConfig(*config);
-            DM::SegmentReadTaskScheduler::instance().updateConfig(global_context->getSettingsRef());
             if (FileCache::instance() != nullptr)
             {
                 FileCache::instance()->updateConfig(global_context->getSettingsRef());
@@ -1419,6 +1414,11 @@ int Server::main(const std::vector<std::string> & /*args*/)
 
     /// Limit on total number of concurrently executed queries.
     global_context->getProcessList().setMaxSize(config().getInt("max_concurrent_queries", 0));
+
+    /// Size of cache for uncompressed blocks. Zero means disabled.
+    size_t uncompressed_cache_size = config().getUInt64("uncompressed_cache_size", 0);
+    if (uncompressed_cache_size)
+        global_context->setUncompressedCache(uncompressed_cache_size);
 
     /// Size of cache for marks (index of MergeTree family of tables). It is necessary.
     size_t mark_cache_size = config().getUInt64("mark_cache_size", DEFAULT_MARK_CACHE_SIZE);
@@ -1500,7 +1500,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
     DM::SegmentReaderPoolManager::instance().init(
         server_info.cpu_info.logical_cores,
         settings.dt_read_thread_count_scale);
-    DM::SegmentReadTaskScheduler::instance().updateConfig(global_context->getSettingsRef());
+    DM::SegmentReadTaskScheduler::instance();
 
     auto schema_cache_size = config().getInt("schema_cache_size", 10000);
     global_context->initializeSharedBlockSchemas(schema_cache_size);
@@ -1567,6 +1567,58 @@ int Server::main(const std::vector<std::string> & /*args*/)
         }
     });
 
+    auto & tmt_context = global_context->getTMTContext();
+    const bool is_disagg_storage = global_context->getSharedContextDisagg()->isDisaggregatedStorageMode();
+    const bool is_prod = !global_context->isTest();
+
+    // TODO: resource control is not supported for WN. So disable pipeline model and LAC.
+    if (!is_disagg_storage)
+    {
+#ifdef DBMS_PUBLIC_GTEST
+        LocalAdmissionController::global_instance = std::make_unique<MockLocalAdmissionController>();
+#else
+        LocalAdmissionController::global_instance
+            = std::make_unique<LocalAdmissionController>(tmt_context.getKVCluster(), tmt_context.getEtcdClient());
+#endif
+
+        // For test mode, TaskScheduler is controlled by test case.
+        if (is_prod)
+        {
+            auto get_pool_size = [](const auto & setting) {
+                return setting == 0 ? getNumberOfLogicalCPUCores() : static_cast<size_t>(setting);
+            };
+            TaskSchedulerConfig config{
+                {get_pool_size(settings.pipeline_cpu_task_thread_pool_size),
+                 settings.pipeline_cpu_task_thread_pool_queue_type},
+                {get_pool_size(settings.pipeline_io_task_thread_pool_size),
+                 settings.pipeline_io_task_thread_pool_queue_type},
+            };
+            RUNTIME_CHECK(!TaskScheduler::instance);
+            TaskScheduler::instance = std::make_unique<TaskScheduler>(config);
+            LOG_INFO(log, "init pipeline task scheduler");
+        }
+    }
+
+    SCOPE_EXIT({
+        if (!is_disagg_storage)
+            LocalAdmissionController::global_instance.reset();
+    });
+    SCOPE_EXIT({
+        if (!is_disagg_storage && is_prod)
+        {
+            assert(TaskScheduler::instance);
+            TaskScheduler::instance.reset();
+        }
+    });
+
+    if (settings.enable_async_grpc_client)
+    {
+        auto size = settings.grpc_completion_queue_pool_size;
+        if (size == 0)
+            size = std::thread::hardware_concurrency();
+        GRPCCompletionQueuePool::global_instance = std::make_unique<GRPCCompletionQueuePool>(size);
+    }
+
     // FIXME: (bootstrap) we should bootstrap the tiflash node more early!
     if (global_context->getSharedContextDisagg()->notDisaggregatedMode()
         || /*has_been_bootstrap*/ store_ident.has_value())
@@ -1587,8 +1639,11 @@ int Server::main(const std::vector<std::string> & /*args*/)
         wn_ps->waitUntilInitedFromRemoteStore();
     }
 
+    /// Then, startup grpc server to serve raft and/or flash services.
+    FlashGrpcServerHolder flash_grpc_server_holder(this->context(), this->config(), raft_config, log);
+
     {
-        TcpHttpServersHolder tcp_http_servers_holder(*this, settings, log);
+        TcpHttpServersHolder tcpHttpServersHolder(*this, settings, log);
 
         main_config_reloader->addConfigObject(global_context->getSecurityConfig());
         main_config_reloader->start();
@@ -1612,7 +1667,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
         SCOPE_EXIT({
             is_cancelled = true;
 
-            tcp_http_servers_holder.onExit();
+            tcpHttpServersHolder.onExit();
 
             main_config_reloader.reset();
             users_config_reloader.reset();
@@ -1633,7 +1688,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
         auto metrics_prometheus = std::make_unique<MetricsPrometheus>(*global_context, async_metrics);
 
         SessionCleaner session_cleaner(*global_context);
-        auto & tmt_context = global_context->getTMTContext();
 
         if (proxy_conf.is_proxy_runnable)
         {
@@ -1717,8 +1771,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
                 LOG_ERROR(log, "Current status of engine-store is NOT Running, should not happen");
                 exit(-1);
             }
-            LOG_INFO(log, "Stop collecting thread alloc metrics");
-            tmt_context.getKVStore()->stopThreadAllocInfo();
             LOG_INFO(log, "Set store context status Stopping");
             tmt_context.setStatusStopping();
             {
@@ -1749,68 +1801,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
             Poco::Timestamp ts;
             GET_METRIC(tiflash_server_info, start_time).Set(ts.epochTime());
         }
-
-        // For test mode, TaskScheduler and LAC is controlled by test case.
-        // TODO: resource control is not supported for WN. So disable pipeline model and LAC.
-        const bool init_pipeline_and_lac
-            = !global_context->isTest() && !global_context->getSharedContextDisagg()->isDisaggregatedStorageMode();
-        if (init_pipeline_and_lac)
-        {
-#ifdef DBMS_PUBLIC_GTEST
-            LocalAdmissionController::global_instance = std::make_unique<MockLocalAdmissionController>();
-#else
-            LocalAdmissionController::global_instance
-                = std::make_unique<LocalAdmissionController>(tmt_context.getKVCluster(), tmt_context.getEtcdClient());
-#endif
-
-            auto get_pool_size = [](const auto & setting) {
-                return setting == 0 ? getNumberOfLogicalCPUCores() : static_cast<size_t>(setting);
-            };
-            TaskSchedulerConfig config{
-                {get_pool_size(settings.pipeline_cpu_task_thread_pool_size),
-                 settings.pipeline_cpu_task_thread_pool_queue_type},
-                {get_pool_size(settings.pipeline_io_task_thread_pool_size),
-                 settings.pipeline_io_task_thread_pool_queue_type},
-            };
-            RUNTIME_CHECK(!TaskScheduler::instance);
-            TaskScheduler::instance = std::make_unique<TaskScheduler>(config);
-            LOG_INFO(log, "init pipeline task scheduler with {}", config.toString());
-        }
-
-        SCOPE_EXIT({
-            if (init_pipeline_and_lac)
-            {
-                assert(TaskScheduler::instance);
-                TaskScheduler::instance.reset();
-                // Stop LAC instead of reset, because storage layer still needs it.
-                // Workload will not be throttled when LAC is stopped.
-                // It's ok because flash service has already been destructed, so throllting is meaningless.
-                assert(LocalAdmissionController::global_instance);
-                LocalAdmissionController::global_instance->stop();
-            }
-        });
-
-        if (settings.enable_async_grpc_client)
-        {
-            auto size = settings.grpc_completion_queue_pool_size;
-            if (size == 0)
-                size = std::thread::hardware_concurrency();
-            GRPCCompletionQueuePool::global_instance = std::make_unique<GRPCCompletionQueuePool>(size);
-        }
-
-        /// startup grpc server to serve raft and/or flash services.
-        FlashGrpcServerHolder flash_grpc_server_holder(this->context(), this->config(), raft_config, log);
-
-        SCOPE_EXIT({
-            // Stop LAC for AutoScaler managed CN before FlashGrpcServerHolder is destructed.
-            // Because AutoScaler it will kill tiflash process when port of flash_server_addr is down.
-            // And we want to make sure LAC is cleanedup.
-            // The effects are there will be no resource control during [lac.stop(), FlashGrpcServer destruct done],
-            // but it's basically ok, that duration is small(normally 100-200ms).
-            if (global_context->getSharedContextDisagg()->isDisaggregatedComputeMode() && use_autoscaler
-                && LocalAdmissionController::global_instance)
-                LocalAdmissionController::global_instance->stop();
-        });
 
         tmt_context.setStatusRunning();
 

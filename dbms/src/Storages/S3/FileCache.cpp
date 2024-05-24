@@ -18,7 +18,7 @@
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/escapeForFileName.h>
-#include <IO/BaseFile/PosixRandomAccessFile.h>
+#include <Encryption/PosixRandomAccessFile.h>
 #include <IO/IOThreadPools.h>
 #include <Interpreters/Settings.h>
 #include <Server/StorageConfigParser.h>
@@ -553,7 +553,7 @@ String FileCache::toLocalFilename(const String & s3_key)
     return fmt::format("{}/{}", cache_dir, s3_key);
 }
 
-String FileCache::toS3Key(const String & local_fname) const
+String FileCache::toS3Key(const String & local_fname)
 {
     return local_fname.substr(cache_dir.size() + 1);
 }

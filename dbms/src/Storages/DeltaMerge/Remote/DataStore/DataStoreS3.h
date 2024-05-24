@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Encryption/FileProvider.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/KVStore/Types.h>
 
@@ -22,7 +23,7 @@ namespace DB::DM::Remote
 class DataStoreS3 final : public IDataStore
 {
 public:
-    explicit DataStoreS3(const FileProviderPtr & file_provider_)
+    explicit DataStoreS3(FileProviderPtr file_provider_)
         : file_provider(file_provider_)
         , log(Logger::get("DataStoreS3"))
     {}

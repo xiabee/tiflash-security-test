@@ -42,28 +42,27 @@ static IAggregateFunction * createWithNumericOrTimeType(const IDataType & argume
 }
 
 
-template <typename HasLimit, typename... TArgs>
+template <typename has_limit, typename... TArgs>
 inline AggregateFunctionPtr createAggregateFunctionGroupArrayImpl(const DataTypePtr & argument_type, TArgs... args)
 {
-    if (auto res = createWithNumericOrTimeType<GroupArrayNumericImpl, HasLimit>(
+    if (auto res = createWithNumericOrTimeType<GroupArrayNumericImpl, has_limit>(
             *argument_type,
             argument_type,
             std::forward<TArgs>(args)...))
         return AggregateFunctionPtr(res);
 
     if (typeid_cast<const DataTypeString *>(argument_type.get()))
-        return std::make_shared<GroupArrayGeneralListImpl<GroupArrayListNodeString, HasLimit::value>>(
+        return std::make_shared<GroupArrayGeneralListImpl<GroupArrayListNodeString, has_limit::value>>(
             argument_type,
             std::forward<TArgs>(args)...);
 
-    return std::make_shared<GroupArrayGeneralListImpl<GroupArrayListNodeGeneral, HasLimit::value>>(
+    return std::make_shared<GroupArrayGeneralListImpl<GroupArrayListNodeGeneral, has_limit::value>>(
         argument_type,
         std::forward<TArgs>(args)...);
 };
 
 
-AggregateFunctionPtr createAggregateFunctionGroupArray(
-    const Context & /* context not used */,
+static AggregateFunctionPtr createAggregateFunctionGroupArray(
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)

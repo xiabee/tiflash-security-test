@@ -157,7 +157,7 @@ protected:
                 {
                     if (decoding_schema->is_common_handle)
                     {
-                        ASSERT_FIELD_EQ((*column_element.column)[row], Field(*data_list_read[row].pk))
+                        ASSERT_FIELD_EQ((*column_element.column)[row], Field(*std::get<0>(data_list_read[row])))
                             << gen_error_log();
                     }
                     else

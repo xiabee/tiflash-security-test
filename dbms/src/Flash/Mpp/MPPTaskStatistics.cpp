@@ -114,7 +114,7 @@ void MPPTaskStatistics::logTracingJson()
         R"(,"compile_start_timestamp":{},"compile_end_timestamp":{})"
         R"(,"read_wait_index_start_timestamp":{},"read_wait_index_end_timestamp":{})"
         R"(,"local_input_bytes":{},"remote_input_bytes":{},"output_bytes":{})"
-        R"(,"status":"{}","error_message":"{}","cpu_ru":{},"read_ru":{},"memory_peak":{}}})",
+        R"(,"status":"{}","error_message":"{}","cpu_ru":{},"read_ru":{},"memory_peak":{},"extra_info":{}}})",
         id.gather_id.query_id.start_ts,
         id.task_id,
         is_root,
@@ -133,9 +133,10 @@ void MPPTaskStatistics::logTracingJson()
         output_bytes,
         magic_enum::enum_name(status),
         error_message,
-        ru_info.cpu_ru,
-        ru_info.read_ru,
-        memory_peak);
+        cpu_ru,
+        read_ru,
+        memory_peak,
+        extra_info);
 }
 
 void MPPTaskStatistics::setMemoryPeak(Int64 memory_peak_)
@@ -143,16 +144,21 @@ void MPPTaskStatistics::setMemoryPeak(Int64 memory_peak_)
     memory_peak = memory_peak_;
 }
 
-void MPPTaskStatistics::setRUInfo(const RUConsumption & ru_info_)
+void MPPTaskStatistics::setRU(RU cpu_ru_, RU read_ru_)
 {
-    ru_info = ru_info_;
-    executor_statistics_collector.setLocalRUConsumption(ru_info_);
+    cpu_ru = cpu_ru_;
+    read_ru = read_ru_;
 }
 
 void MPPTaskStatistics::setCompileTimestamp(const Timestamp & start_timestamp, const Timestamp & end_timestamp)
 {
     compile_start_timestamp = start_timestamp;
     compile_end_timestamp = end_timestamp;
+}
+
+void MPPTaskStatistics::setExtraInfo(const String & extra_info_)
+{
+    extra_info = extra_info_;
 }
 
 void MPPTaskStatistics::recordInputBytes(DAGContext & dag_context)

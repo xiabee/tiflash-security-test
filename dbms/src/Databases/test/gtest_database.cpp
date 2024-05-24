@@ -15,7 +15,7 @@
 #include <Common/FailPoint.h>
 #include <Common/UniThreadPool.h>
 #include <Databases/DatabaseTiFlash.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
+#include <Encryption/ReadBufferFromFileProvider.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Interpreters/InterpreterDropQuery.h>
@@ -36,6 +36,7 @@
 #include <TiDB/Schema/TiDB.h>
 #include <common/logger_useful.h>
 
+#include <optional>
 
 namespace DB
 {
@@ -894,7 +895,7 @@ String getDatabaseMetadataPath(const String & base_path)
 String readFile(Context & ctx, const String & file)
 {
     String res;
-    auto in = ReadBufferFromRandomAccessFileBuilder::build(ctx.getFileProvider(), file, EncryptionPath(file, ""));
+    ReadBufferFromFileProvider in(ctx.getFileProvider(), file, EncryptionPath(file, ""));
     readStringUntilEOF(res, in);
     return res;
 }

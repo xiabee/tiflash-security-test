@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Flash/Coprocessor/JoinInterpreterHelper.h>
-#include <Flash/Mpp/MPPTaskId.h>
 #include <Interpreters/Context.h>
 #include <TestUtils/FailPointUtils.h>
 #include <TestUtils/MPPTaskTestUtils.h>
@@ -140,20 +139,17 @@ public:
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         gather_ids.push_back(gather_id);
         running_queries.emplace_back([&, properties, gather_id]() {
             BlockInputStreamPtr stream;
             try
             {
-                std::function<DAGRequestBuilder()> gen_builder = [&]() {
-                    return context.scan("test_db", "l_table")
+                auto tasks = prepareMPPTasks(
+                    context.scan("test_db", "l_table")
                         .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
-                        .project({col("max(l_table.s)"), col("l_table.s")});
-                };
-                QueryTasks tasks = prepareMPPTasks(gen_builder, properties);
+                        .project({col("max(l_table.s)"), col("l_table.s")}),
+                    properties);
                 executeProblematicMPPTasks(tasks, properties, stream);
             }
             catch (...)
@@ -582,9 +578,7 @@ try
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto res = prepareMPPStreams(
             context.scan("test_db", "test_table_1")
                 .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
@@ -603,9 +597,7 @@ try
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto tasks = prepareMPPTasks(
             context.scan("test_db", "test_table_1")
                 .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
@@ -639,9 +631,7 @@ try
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto res = prepareMPPStreams(
             context.scan("test_db", "l_table")
                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
@@ -668,9 +658,7 @@ try
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto stream = prepareMPPStreams(
             context.scan("test_db", "l_table")
                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
@@ -699,9 +687,7 @@ try
             properties1.local_query_id,
             properties1.server_id,
             properties1.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto res1 = prepareMPPStreams(
             context.scan("test_db", "l_table")
                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
@@ -713,9 +699,7 @@ try
             properties2.local_query_id,
             properties2.server_id,
             properties2.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         auto res2 = prepareMPPStreams(
             context.scan("test_db", "l_table")
                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
@@ -734,9 +718,8 @@ try
 
     // start 10 queries
     {
-        size_t query_num = 10;
         std::vector<std::tuple<MPPGatherId, BlockInputStreamPtr>> queries;
-        for (size_t i = 0; i < query_num; ++i)
+        for (size_t i = 0; i < 10; ++i)
         {
             auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
             MPPGatherId gather_id(
@@ -745,9 +728,7 @@ try
                 properties.local_query_id,
                 properties.server_id,
                 properties.start_ts,
-                /*resource_group_name=*/"",
-                0,
-                "");
+                /*resource_group_name=*/"");
             queries.push_back(std::make_tuple(
                 gather_id,
                 prepareMPPStreams(
@@ -755,19 +736,12 @@ try
                         .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
                     properties)));
         }
-
+        for (size_t i = 0; i < 10; ++i)
         {
-            auto thread_mgr = newThreadManager();
-            for (size_t i = 0; i < query_num; ++i)
-            {
-                auto gather_id = std::get<0>(queries[i]);
-                thread_mgr->schedule(false, "test_cancel", [=]() {
-                    EXPECT_TRUE(assertQueryActive(gather_id.query_id));
-                    MockComputeServerManager::instance().cancelGather(gather_id);
-                    EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
-                });
-            }
-            thread_mgr->wait();
+            auto gather_id = std::get<0>(queries[i]);
+            EXPECT_TRUE(assertQueryActive(gather_id.query_id));
+            MockComputeServerManager::instance().cancelGather(gather_id);
+            EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
         }
     }
     WRAP_FOR_SERVER_TEST_END
@@ -878,9 +852,7 @@ try
             properties.local_query_id,
             properties.server_id,
             properties.start_ts,
-            /*resource_group_name=*/"",
-            0,
-            "");
+            /*resource_group_name=*/"");
         try
         {
             BlockInputStreamPtr tmp = prepareMPPStreams(
@@ -934,9 +906,7 @@ try
                 properties.local_query_id,
                 properties.server_id,
                 properties.start_ts,
-                /*resource_group_name=*/"",
-                0,
-                "");
+                /*resource_group_name=*/"");
             /// currently all the failpoints are automatically disabled after triggered once, so have to enable it before every run
             FailPointHelper::enableFailPoint(failpoint);
             BlockInputStreamPtr stream;
@@ -995,7 +965,7 @@ try
             addOneQuery(i + 10, running_queries, gather_ids);
         }
         using namespace std::literals::chrono_literals;
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         ASSERT_TRUE(
             TiFlashMetrics::instance()
                 .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
@@ -1007,7 +977,7 @@ try
                 .Value()
             == 0);
         addOneQuery(1, running_queries, gather_ids);
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         ASSERT_TRUE(
             TiFlashMetrics::instance()
                 .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
@@ -1030,7 +1000,7 @@ try
             addOneQuery((i + 1) * 20, running_queries, gather_ids);
         }
         using namespace std::literals::chrono_literals;
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         ASSERT_TRUE(
             TiFlashMetrics::instance()
                 .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
@@ -1042,7 +1012,7 @@ try
                 .Value()
             == 0);
         addOneQuery(30, running_queries, gather_ids);
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         ASSERT_TRUE(
             TiFlashMetrics::instance()
                 .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
@@ -1056,7 +1026,7 @@ try
         /// cancel 1 running query
         MockComputeServerManager::instance().cancelGather(gather_ids[0]);
         running_queries[0].join();
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         ASSERT_TRUE(
             TiFlashMetrics::instance()
                 .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
@@ -1113,7 +1083,7 @@ try
         single_gather_properties.gather_id = 1;
         addOneGather(running_queries, gather_ids, single_gather_properties);
         using namespace std::literals::chrono_literals;
-        std::this_thread::sleep_for(4s);
+        std::this_thread::sleep_for(2s);
         /// 6 gathers, but two query
         ASSERT_TRUE(
             TiFlashMetrics::instance()

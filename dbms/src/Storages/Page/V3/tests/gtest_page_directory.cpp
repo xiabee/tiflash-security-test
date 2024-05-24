@@ -15,7 +15,7 @@
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
 #include <Common/SyncPoint/Ctl.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/PageConstants.h>
@@ -2789,7 +2789,7 @@ try
         auto config = BlobConfig{};
         BlobStats stats(log, delegator, config);
         {
-            std::lock_guard lock(stats.lock_stats);
+            const auto & lock = stats.lock();
             stats.createStatNotChecking(file_id1, BLOBFILE_LIMIT_SIZE, lock);
             stats.createStatNotChecking(file_id2, BLOBFILE_LIMIT_SIZE, lock);
         }
