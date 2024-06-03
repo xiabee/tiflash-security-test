@@ -13,47 +13,27 @@
 // limitations under the License.
 
 #include <Flash/Coprocessor/ExecutionSummary.h>
-#include <Flash/Statistics/BaseRuntimeStatistics.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB
 {
-ExecutionSummary::ExecutionSummary()
-    : scan_context(std::make_shared<DM::ScanContext>())
-{}
 
-void ExecutionSummary::merge(const ExecutionSummary & other)
+void ExecutionSummary::merge(const ExecutionSummary & other, bool streaming_call)
 {
-    time_processed_ns = std::max(time_processed_ns, other.time_processed_ns);
-    num_produced_rows += other.num_produced_rows;
-    num_iterations += other.num_iterations;
-    concurrency += other.concurrency;
-    scan_context->merge(*other.scan_context);
-}
-
-void ExecutionSummary::merge(const tipb::ExecutorExecutionSummary & other)
-{
-    time_processed_ns = std::max(time_processed_ns, other.time_processed_ns());
-    num_produced_rows += other.num_produced_rows();
-    num_iterations += other.num_iterations();
-    concurrency += other.concurrency();
-    scan_context->merge(other.tiflash_scan_context());
-}
-
-void ExecutionSummary::fill(const BaseRuntimeStatistics & other)
-{
-    time_processed_ns = other.execution_time_ns;
-    num_produced_rows = other.rows;
-    num_iterations = other.blocks;
-    concurrency = other.concurrency;
-}
-
-void ExecutionSummary::init(const tipb::ExecutorExecutionSummary & other)
-{
-    time_processed_ns = other.time_processed_ns();
-    num_produced_rows = other.num_produced_rows();
-    num_iterations = other.num_iterations();
-    concurrency = other.concurrency();
-    scan_context->deserialize(other.tiflash_scan_context());
+    if (streaming_call)
+    {
+        time_processed_ns = std::max(time_processed_ns, other.time_processed_ns);
+        num_produced_rows = std::max(num_produced_rows, other.num_produced_rows);
+        num_iterations = std::max(num_iterations, other.num_iterations);
+        concurrency = std::max(concurrency, other.concurrency);
+        scan_context->merge(*other.scan_context);
+    }
+    else
+    {
+        time_processed_ns = std::max(time_processed_ns, other.time_processed_ns);
+        num_produced_rows += other.num_produced_rows;
+        num_iterations += other.num_iterations;
+        concurrency += other.concurrency;
+        scan_context->merge(*other.scan_context);
+    }
 }
 } // namespace DB

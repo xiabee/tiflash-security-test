@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "MetricsPrometheus.h"
+
 #include <Common/CurrentMetrics.h>
 #include <Common/FunctionTimerTask.h>
 #include <Common/ProfileEvents.h>
-#include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
-#include <Common/TiFlashSecurity.h>
 #include <Common/setThreadName.h>
 #include <Interpreters/AsynchronousMetrics.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Poco/Crypto/X509Certificate.h>
 #include <Poco/Net/Context.h>
 #include <Poco/Net/HTTPRequestHandler.h>
@@ -29,10 +28,6 @@
 #include <Poco/Net/HTTPServerRequest.h>
 #include <Poco/Net/HTTPServerResponse.h>
 #include <Poco/Net/SecureServerSocket.h>
-#include <Server/CertificateReloader.h>
-#include <Server/MetricsPrometheus.h>
-#include <Storages/PathCapacityMetrics.h>
-#include <common/logger_useful.h>
 #include <daemon/BaseDaemon.h>
 #include <fmt/core.h>
 #include <prometheus/collectable.h>
@@ -42,54 +37,11 @@
 
 namespace DB
 {
-namespace
-{
-std::string getHostName()
-{
-    char hostname[1024];
-    if (::gethostname(hostname, sizeof(hostname)))
-    {
-        return {};
-    }
-    return hostname;
-}
-
-std::string getInstanceValue(const Poco::Util::AbstractConfiguration & conf)
-{
-    if (conf.has("flash.service_addr"))
-    {
-        auto service_addr = conf.getString("flash.service_addr");
-        if (service_addr.empty())
-            return getHostName();
-        // "0.0.0.0", "127.x.x.x", "localhost", "0:0:0:0:0:0:0:0", "0:0:0:0:0:0:0:1", "::", "::1", ":${port}"
-        static const std::vector<std::string> blacklist{// ivp4
-                                                        "0.0.0.0",
-                                                        "127.",
-                                                        "localhost",
-                                                        // ipv6
-                                                        "0:0:0:0:0:0:0",
-                                                        "[0:0:0:0:0:0:0",
-                                                        ":",
-                                                        "[:"};
-        for (const auto & prefix : blacklist)
-        {
-            if (startsWith(service_addr, prefix))
-                return getHostName();
-        }
-        return service_addr;
-    }
-    else
-    {
-        return getHostName();
-    }
-}
-} // namespace
-
 class MetricHandler : public Poco::Net::HTTPRequestHandler
 {
 public:
-    explicit MetricHandler(const std::vector<std::weak_ptr<prometheus::Collectable>> & collectables_)
-        : collectables(collectables_)
+    explicit MetricHandler(const std::weak_ptr<prometheus::Collectable> & collectable_)
+        : collectable(collectable_)
     {}
 
     ~MetricHandler() override = default;
@@ -107,29 +59,26 @@ private:
     {
         auto collected_metrics = std::vector<prometheus::MetricFamily>{};
 
-        for (const auto & collectable : collectables)
+        auto collect = collectable.lock();
+        if (collect)
         {
-            auto collect = collectable.lock();
-            if (collect)
-            {
-                auto && metrics = collect->Collect();
-                collected_metrics.insert(
-                    collected_metrics.end(),
-                    std::make_move_iterator(metrics.begin()),
-                    std::make_move_iterator(metrics.end()));
-            }
+            auto && metrics = collect->Collect();
+            collected_metrics.insert(
+                collected_metrics.end(),
+                std::make_move_iterator(metrics.begin()),
+                std::make_move_iterator(metrics.end()));
         }
         return collected_metrics;
     }
 
-    std::vector<std::weak_ptr<prometheus::Collectable>> collectables;
+    std::weak_ptr<prometheus::Collectable> collectable;
 };
 
 class MetricHandlerFactory : public Poco::Net::HTTPRequestHandlerFactory
 {
 public:
-    explicit MetricHandlerFactory(const std::vector<std::weak_ptr<prometheus::Collectable>> & collectables_)
-        : collectables(collectables_)
+    explicit MetricHandlerFactory(const std::weak_ptr<prometheus::Collectable> & collectable_)
+        : collectable(collectable_)
     {}
 
     ~MetricHandlerFactory() override = default;
@@ -137,50 +86,49 @@ public:
     Poco::Net::HTTPRequestHandler * createRequestHandler(const Poco::Net::HTTPServerRequest & request) override
     {
         const String & uri = request.getURI();
-        if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_GET
-            || request.getMethod() == Poco::Net::HTTPRequest::HTTP_HEAD)
+        if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_GET || request.getMethod() == Poco::Net::HTTPRequest::HTTP_HEAD)
         {
             if (uri == "/metrics")
             {
-                return new MetricHandler(collectables);
+                return new MetricHandler(collectable);
             }
         }
         return nullptr;
     }
 
 private:
-    std::vector<std::weak_ptr<prometheus::Collectable>> collectables;
+    std::weak_ptr<prometheus::Collectable> collectable;
 };
 
 std::shared_ptr<Poco::Net::HTTPServer> getHTTPServer(
-    Context & global_context,
-    std::vector<std::weak_ptr<prometheus::Collectable>> collectables,
+    const TiFlashSecurityConfig & security_config,
+    const std::weak_ptr<prometheus::Collectable> & collectable,
     const String & address)
 {
-    auto security_config = global_context.getSecurityConfig();
-    auto [ca_path, cert_path, key_path] = security_config->getPaths();
     Poco::Net::Context::Ptr context = new Poco::Net::Context(
         Poco::Net::Context::TLSV1_2_SERVER_USE,
-        key_path,
-        cert_path,
-        ca_path,
+        security_config.key_path,
+        security_config.cert_path,
+        security_config.ca_path,
         Poco::Net::Context::VerificationMode::VERIFY_STRICT);
 
-    auto check_common_name = [&](const Poco::Crypto::X509Certificate & cert) {
-        return global_context.getSecurityConfig()->checkCommonName(cert);
+    std::function<bool(const Poco::Crypto::X509Certificate &)> check_common_name = [&](const Poco::Crypto::X509Certificate & cert) {
+        if (security_config.allowed_common_names.empty())
+        {
+            return true;
+        }
+        return security_config.allowed_common_names.count(cert.commonName()) > 0;
     };
 
     context->setAdhocVerification(check_common_name);
-#if Poco_NetSSL_FOUND
-    CertificateReloader::initSSLCallback(context, &global_context);
-#endif
+
     Poco::Net::SecureServerSocket socket(context);
 
     Poco::Net::HTTPServerParams::Ptr http_params = new Poco::Net::HTTPServerParams;
     Poco::Net::SocketAddress addr = Poco::Net::SocketAddress(address);
     socket.bind(addr, true);
     socket.listen();
-    auto server = std::make_shared<Poco::Net::HTTPServer>(new MetricHandlerFactory(collectables), socket, http_params);
+    auto server = std::make_shared<Poco::Net::HTTPServer>(new MetricHandlerFactory(collectable), socket, http_params);
     return server;
 }
 
@@ -198,11 +146,13 @@ inline bool isIPv6(const String & input_address)
 }
 } // namespace
 
-MetricsPrometheus::MetricsPrometheus(Context & context, const AsynchronousMetrics & async_metrics_)
+MetricsPrometheus::MetricsPrometheus(
+    Context & context,
+    const AsynchronousMetrics & async_metrics_,
+    const TiFlashSecurityConfig & security_config)
     : timer("Prometheus")
-    , path_capacity_metrics(context.getPathCapacity())
     , async_metrics(async_metrics_)
-    , log(Logger::get("Prometheus"))
+    , log(&Poco::Logger::get("Prometheus"))
 {
     auto & tiflash_metrics = TiFlashMetrics::instance();
     auto & conf = context.getConfigRef();
@@ -241,17 +191,19 @@ MetricsPrometheus::MetricsPrometheus(Context & context, const AsynchronousMetric
             auto host = metrics_addr.substr(0, pos);
             auto port = metrics_addr.substr(pos + 1, metrics_addr.size());
 
-            const String & job_name = "tiflash";
-            const auto & labels = prometheus::Gateway::GetInstanceLabel(getInstanceValue(conf));
-            gateway = std::make_shared<prometheus::Gateway>(host, port, job_name, labels);
-            gateway->RegisterCollectable(tiflash_metrics.registry);
-            if (context.getSharedContextDisagg()->isDisaggregatedComputeMode()
-                && context.getSharedContextDisagg()->use_autoscaler)
-            {
-                gateway->RegisterCollectable(tiflash_metrics.cn_process_collector);
-            }
+            auto service_addr = conf.getString("flash.service_addr");
+            std::string job_name = service_addr;
+            std::replace(job_name.begin(), job_name.end(), ':', '_');
+            std::replace(job_name.begin(), job_name.end(), '.', '_');
+            job_name = "tiflash_" + job_name;
 
-            LOG_INFO(log, "Enable prometheus push mode; interval = {}; addr = {}", metrics_interval, metrics_addr);
+            char hostname[1024];
+            ::gethostname(hostname, sizeof(hostname));
+
+            gateway = std::make_shared<prometheus::Gateway>(host, port, job_name, prometheus::Gateway::GetInstanceLabel(hostname));
+            gateway->RegisterCollectable(tiflash_metrics.registry);
+
+            LOG_INFO(log, "Enable prometheus push mode; interval ={}; addr = {}", metrics_interval, metrics_addr);
         }
     }
 
@@ -266,36 +218,17 @@ MetricsPrometheus::MetricsPrometheus(Context & context, const AsynchronousMetric
             addr = "[" + listen_host + "]:" + metrics_port;
         else
             addr = listen_host + ":" + metrics_port;
-        if (context.getSecurityConfig()->hasTlsConfig() && !conf.getBool(status_disable_metrics_tls, false))
+        if (security_config.has_tls_config)
         {
-            std::vector<std::weak_ptr<prometheus::Collectable>> collectables{tiflash_metrics.registry};
-            if (context.getSharedContextDisagg()->isDisaggregatedComputeMode()
-                && context.getSharedContextDisagg()->use_autoscaler)
-            {
-                collectables.push_back(tiflash_metrics.cn_process_collector);
-            }
-            server = getHTTPServer(context, collectables, addr);
+            server = getHTTPServer(security_config, tiflash_metrics.registry, addr);
             server->start();
-            LOG_INFO(
-                log,
-                "Enable prometheus secure pull mode; Listen Host = {}, Metrics Port = {}",
-                listen_host,
-                metrics_port);
+            LOG_INFO(log, "Enable prometheus secure pull mode; Listen Host = {}, Metrics Port = {}", listen_host, metrics_port);
         }
         else
         {
             exposer = std::make_shared<prometheus::Exposer>(addr);
             exposer->RegisterCollectable(tiflash_metrics.registry);
-            if (context.getSharedContextDisagg()->isDisaggregatedComputeMode()
-                && context.getSharedContextDisagg()->use_autoscaler)
-            {
-                exposer->RegisterCollectable(tiflash_metrics.cn_process_collector);
-            }
-            LOG_INFO(
-                log,
-                "Enable prometheus pull mode; Listen Host = {}, Metrics Port = {}",
-                listen_host,
-                metrics_port);
+            LOG_INFO(log, "Enable prometheus pull mode; Listen Host = {}, Metrics Port = {}", listen_host, metrics_port);
         }
     }
     else
@@ -317,49 +250,17 @@ MetricsPrometheus::~MetricsPrometheus()
 void MetricsPrometheus::run()
 {
     auto & tiflash_metrics = TiFlashMetrics::instance();
-    for (ProfileEvents::Event event = 0; event < ProfileEvents::end(); ++event)
+    for (ProfileEvents::Event event = 0; event < ProfileEvents::end(); event++)
     {
         const auto value = ProfileEvents::counters[event].load(std::memory_order_relaxed);
         tiflash_metrics.registered_profile_events[event]->Set(value);
     }
 
-    for (CurrentMetrics::Metric metric = 0; metric < CurrentMetrics::end(); ++metric)
+    for (CurrentMetrics::Metric metric = 0; metric < CurrentMetrics::end(); metric++)
     {
         const auto value = CurrentMetrics::values[metric].load(std::memory_order_relaxed);
         tiflash_metrics.registered_current_metrics[metric]->Set(value);
     }
-
-    size_t total_size = 0;
-    {
-        // Add keyspace store usage here
-        const auto & keyspace_usage = path_capacity_metrics->getKeyspaceUsedSizes();
-        for (const auto & [keyspace_id, usage] : keyspace_usage)
-        {
-            total_size += usage;
-            if (!tiflash_metrics.registered_keypace_store_used_metrics.count(keyspace_id))
-            {
-                // Add new keyspace store usage metric
-                tiflash_metrics.registered_keypace_store_used_metrics.emplace(
-                    keyspace_id,
-                    &tiflash_metrics.registered_keypace_store_used_family->Add(
-                        {{"keyspace_id", std::to_string(keyspace_id)}, {"type", "used"}}));
-            }
-            tiflash_metrics.registered_keypace_store_used_metrics[keyspace_id]->Set(usage);
-        }
-
-        for (auto & [keyspace_id, metric] : tiflash_metrics.registered_keypace_store_used_metrics)
-        {
-            if (!keyspace_usage.count(keyspace_id))
-            {
-                // Remove stale keyspace store usage metric
-                LOG_DEBUG(log, "Remove stale keyspace store usage metric: keyspace_id = {}", keyspace_id);
-                tiflash_metrics.registered_keypace_store_used_family->Remove(metric);
-                tiflash_metrics.registered_keypace_store_used_metrics.erase(keyspace_id);
-                tiflash_metrics.removeReplicaSyncRUCounter(keyspace_id);
-            }
-        }
-    }
-    tiflash_metrics.store_used_total_metric->Set(total_size);
 
     auto async_metric_values = async_metrics.getValues();
     for (const auto & metric : async_metric_values)

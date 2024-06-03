@@ -35,7 +35,10 @@ namespace DB
 class AsynchronousBlockInputStream : public IProfilingBlockInputStream
 {
 public:
-    AsynchronousBlockInputStream(const BlockInputStreamPtr & in) { children.push_back(in); }
+    AsynchronousBlockInputStream(const BlockInputStreamPtr & in)
+    {
+        children.push_back(in);
+    }
 
     String getName() const override { return "Asynchronous"; }
 
@@ -87,7 +90,7 @@ public:
     }
 
 protected:
-    legacy::ThreadPool pool{1};
+    ThreadPool pool{1};
     Poco::Event ready;
     bool started = false;
     bool first = true;

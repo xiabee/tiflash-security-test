@@ -25,13 +25,14 @@ struct DataTypeWithTypeName
     DataTypeWithTypeName(const DataTypePtr & t, const String & n)
         : type(t)
         , name(n)
-    {}
+    {
+    }
 
     DataTypePtr type;
     String name;
 };
 
-void checkColumnSize(size_t expected, size_t actual);
-void checkDataTypeName(size_t column_index, const String & expected, const String & actual);
+void checkColumnSize(const String & identifier, size_t expected, size_t actual);
+void checkDataTypeName(const String & identifier, size_t column_index, const String & expected, const String & actual);
 } // namespace CodecUtils
 } // namespace DB

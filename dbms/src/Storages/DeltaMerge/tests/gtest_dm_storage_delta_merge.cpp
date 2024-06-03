@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Columns/IColumn.h>
-#include <Common/FailPoint.h>
 #include <Core/Block.h>
 #include <Core/ColumnWithTypeAndName.h>
 #include <Core/Field.h>
@@ -22,7 +21,6 @@
 #include <DataStreams/copyData.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <Flash/Coprocessor/DAGQueryInfo.h>
 #include <IO/ReadBufferFromFile.h>
 #include <IO/WriteBufferFromFile.h>
 #include <Interpreters/Context.h>
@@ -33,19 +31,17 @@
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/DeltaTree.h>
-#include <Storages/DeltaMerge/ScanContext.h>
-#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
-#include <Storages/KVStore/Decode/TiKVRange.h>
-#include <Storages/KVStore/MultiRaft/RegionRangeKeys.h>
-#include <Storages/KVStore/TiKVHelpers/TiKVRecordFormat.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/StorageDeltaMergeHelpers.h>
+#include <Storages/Transaction/RegionRangeKeys.h>
+#include <Storages/Transaction/TiDB.h>
+#include <Storages/Transaction/TiKVRange.h>
+#include <Storages/Transaction/TiKVRecordFormat.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/InputStreamTestUtils.h>
-#include <TiDB/Schema/TiDB.h>
 
-#include <ext/scope_guard.h>
 #include <limits>
 
 namespace DB
@@ -65,10 +61,14 @@ try
     size_t num_rows_write = 100;
     // prepare block data
     Block sample;
-    sample.insert(DB::tests::createColumn<Int64>(createNumbers<Int64>(0, num_rows_write, /*reversed*/ true), "col1"));
-    sample.insert(DB::tests::createColumn<String>(Strings(num_rows_write, "a"), "col2"));
+    sample.insert(DB::tests::createColumn<Int64>(
+        createNumbers<Int64>(0, num_rows_write, /*reversed*/ true),
+        "col1"));
+    sample.insert(DB::tests::createColumn<String>(
+        Strings(num_rows_write, "a"),
+        "col2"));
 
-    auto ctx = DMTestEnv::getContext();
+    Context ctx = DMTestEnv::getContext();
     std::shared_ptr<StorageDeltaMerge> storage;
     DataTypes data_types;
     Names column_names;
@@ -93,22 +93,21 @@ try
         ASTPtr astptr(new ASTIdentifier(table_name, ASTIdentifier::Kind::Table));
         astptr->children.emplace_back(new ASTIdentifier("col1"));
 
-        storage = StorageDeltaMerge::create(
-            "TiFlash",
-            /* db_name= */ "default",
-            table_name,
-            std::nullopt,
-            ColumnsDescription{names_and_types_list},
-            astptr,
-            0,
-            *ctx);
+        storage = StorageDeltaMerge::create("TiFlash",
+                                            /* db_name= */ "default",
+                                            table_name,
+                                            std::nullopt,
+                                            ColumnsDescription{names_and_types_list},
+                                            astptr,
+                                            0,
+                                            ctx);
         storage->startup();
     }
 
     // test writing to DeltaMergeStorage
     {
         ASTPtr insertptr(new ASTInsertQuery());
-        BlockOutputStreamPtr output = storage->write(insertptr, ctx->getSettingsRef());
+        BlockOutputStreamPtr output = storage->write(insertptr, ctx.getSettingsRef());
 
         output->writePrefix();
         output->write(sample);
@@ -116,30 +115,17 @@ try
     }
 
     // get read stream from DeltaMergeStorage
-    auto scan_context = std::make_shared<DM::ScanContext>();
     QueryProcessingStage::Enum stage2;
     SelectQueryInfo query_info;
     query_info.query = std::make_shared<ASTSelectQuery>();
-    query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(
-        ctx->getSettingsRef().resolve_locks,
-        std::numeric_limits<UInt64>::max(),
-        scan_context);
-    const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-    query_info.dag_query = std::make_unique<DAGQueryInfo>(
-        google::protobuf::RepeatedPtrField<tipb::Expr>(),
-        pushed_down_filters, // Not care now
-        std::vector<TiDB::ColumnInfo>{}, // Not care now
-        std::vector<int>{},
-        0,
-        ctx->getTimezoneInfo());
-    BlockInputStreams ins = storage->read(column_names, query_info, *ctx, stage2, 8192, 1);
+    query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(ctx.getSettingsRef().resolve_locks, std::numeric_limits<UInt64>::max());
+    BlockInputStreams ins = storage->read(column_names, query_info, ctx, stage2, 8192, 1);
     ASSERT_EQ(ins.size(), 1);
     BlockInputStreamPtr in = ins[0];
     ASSERT_INPUTSTREAM_BLOCK_UR(
         in,
-        Block(
-            {createColumn<Int64>(createNumbers<Int64>(0, num_rows_write), "col1"),
-             createColumn<String>(Strings(num_rows_write, "a"), "col2")}));
+        Block({createColumn<Int64>(createNumbers<Int64>(0, num_rows_write), "col1"),
+               createColumn<String>(Strings(num_rows_write, "a"), "col2")}));
 
     auto store_status = storage->status();
     Block status = store_status->read();
@@ -173,7 +159,7 @@ CATCH
 TEST(StorageDeltaMergeTest, Rename)
 try
 {
-    auto ctx = DMTestEnv::getContext();
+    Context ctx = DMTestEnv::getContext();
     std::shared_ptr<StorageDeltaMerge> storage;
     DataTypes data_types;
     Names column_names;
@@ -202,15 +188,14 @@ try
         ASTPtr astptr(new ASTIdentifier(table_name, ASTIdentifier::Kind::Table));
         astptr->children.emplace_back(new ASTIdentifier("col1"));
 
-        storage = StorageDeltaMerge::create(
-            "TiFlash",
-            db_name,
-            table_name,
-            std::nullopt,
-            ColumnsDescription{names_and_types_list},
-            astptr,
-            0,
-            *ctx);
+        storage = StorageDeltaMerge::create("TiFlash",
+                                            db_name,
+                                            table_name,
+                                            std::nullopt,
+                                            ColumnsDescription{names_and_types_list},
+                                            astptr,
+                                            0,
+                                            ctx);
         storage->startup();
     }
 
@@ -231,12 +216,16 @@ try
 
     // prepare block data
     Block sample;
-    sample.insert(DB::tests::createColumn<Int64>(createNumbers<Int64>(0, 100, /*reversed*/ true), "col1"));
-    sample.insert(DB::tests::createColumn<String>(Strings(100, "a"), "col2"));
+    sample.insert(DB::tests::createColumn<Int64>(
+        createNumbers<Int64>(0, 100, /*reversed*/ true),
+        "col1"));
+    sample.insert(DB::tests::createColumn<String>(
+        Strings(100, "a"),
+        "col2"));
     // Writing will create store object.
     {
         ASTPtr insertptr(new ASTInsertQuery());
-        BlockOutputStreamPtr output = storage->write(insertptr, ctx->getSettingsRef());
+        BlockOutputStreamPtr output = storage->write(insertptr, ctx.getSettingsRef());
         output->writePrefix();
         output->write(sample);
         output->writeSuffix();
@@ -257,7 +246,7 @@ CATCH
 TEST(StorageDeltaMergeTest, HandleCol)
 try
 {
-    auto ctx = DMTestEnv::getContext();
+    Context ctx = DMTestEnv::getContext();
     std::shared_ptr<StorageDeltaMerge> storage;
     DataTypes data_types;
     Names column_names;
@@ -285,15 +274,14 @@ try
         ASTPtr astptr(new ASTIdentifier(table_name, ASTIdentifier::Kind::Table));
         astptr->children.emplace_back(new ASTIdentifier("col1"));
 
-        storage = StorageDeltaMerge::create(
-            "TiFlash",
-            db_name,
-            table_name,
-            std::nullopt,
-            ColumnsDescription{names_and_types_list},
-            astptr,
-            0,
-            *ctx);
+        storage = StorageDeltaMerge::create("TiFlash",
+                                            db_name,
+                                            table_name,
+                                            std::nullopt,
+                                            ColumnsDescription{names_and_types_list},
+                                            astptr,
+                                            0,
+                                            ctx);
         storage->startup();
     }
 
@@ -302,7 +290,7 @@ try
     auto sort_desc = storage->getPrimarySortDescription();
     ASSERT_FALSE(storage->storeInited());
 
-    const auto & store = storage->getStore();
+    auto & store = storage->getStore();
     ASSERT_TRUE(storage->storeInited());
     auto pk_type2 = store->getPKDataType();
     auto sort_desc2 = store->getPrimarySortDescription();
@@ -424,8 +412,7 @@ TEST(StorageDeltaMergeInternalTest, GetFullQueryRanges)
 {
     MvccQueryInfo::RegionsQueryInfo regions;
     RegionQueryInfo region(1, 1, 1, 1);
-    region.range_in_table
-        = GET_REGION_RANGE(std::numeric_limits<HandleID>::min(), std::numeric_limits<HandleID>::max(), 1);
+    region.range_in_table = GET_REGION_RANGE(std::numeric_limits<HandleID>::min(), std::numeric_limits<HandleID>::max(), 1);
     regions.emplace_back(region);
 
     auto ranges = ::DB::getQueryRanges(regions, 1, false, 1);
@@ -490,14 +477,11 @@ TEST(StorageDeltaMergeInternalTest, WeirdRangeCommonHandle)
     RegionQueryInfo region(1, 1, 1, 1);
     region.range_in_table = DMTestEnv::getRowKeyRangeForClusteredIndex(100, 200, 2).toRegionRange(1);
     regions.emplace_back(region);
-    region.range_in_table = DMTestEnv::getRowKeyRangeForClusteredIndex(
-                                std::numeric_limits<HandleID>::max(),
-                                std::numeric_limits<HandleID>::max(),
-                                2)
-                                .toRegionRange(1);
-    regions.emplace_back(region);
     region.range_in_table
-        = DMTestEnv::getRowKeyRangeForClusteredIndex(200, std::numeric_limits<HandleID>::max(), 2).toRegionRange(1);
+        = DMTestEnv::getRowKeyRangeForClusteredIndex(std::numeric_limits<HandleID>::max(), std::numeric_limits<HandleID>::max(), 2)
+              .toRegionRange(1);
+    regions.emplace_back(region);
+    region.range_in_table = DMTestEnv::getRowKeyRangeForClusteredIndex(200, std::numeric_limits<HandleID>::max(), 2).toRegionRange(1);
     regions.emplace_back(region);
 
     auto ranges = ::DB::getQueryRanges(regions, 1, true, 2);
@@ -610,12 +594,16 @@ try
     // prepare block data
     size_t num_rows_write = 100;
     Block sample;
-    sample.insert(DB::tests::createColumn<Int64>(createNumbers<Int64>(0, num_rows_write, /*reversed*/ true), "col1"));
-    sample.insert(DB::tests::createColumn<String>(Strings(num_rows_write, "a"), "col2"));
+    sample.insert(DB::tests::createColumn<Int64>(
+        createNumbers<Int64>(0, num_rows_write, /*reversed*/ true),
+        "col1"));
+    sample.insert(DB::tests::createColumn<String>(
+        Strings(num_rows_write, "a"),
+        "col2"));
     constexpr TiDB::TableID table_id = 1;
     const String table_name = fmt::format("t_{}", table_id);
 
-    auto ctx = DMTestEnv::getContext();
+    Context ctx = DMTestEnv::getContext();
     std::shared_ptr<StorageDeltaMerge> storage;
     DataTypes data_types;
     Names column_names;
@@ -631,8 +619,7 @@ try
             column_names.push_back(name_type.name);
         }
 
-        const String path_name
-            = DB::tests::TiFlashTestEnv::getTemporaryPath("StorageDeltaMerge_ReadExtraPhysicalTableID");
+        const String path_name = DB::tests::TiFlashTestEnv::getTemporaryPath("StorageDeltaMerge_ReadWriteCase1");
         if (Poco::File path(path_name); path.exists())
             path.remove(true);
 
@@ -643,22 +630,21 @@ try
         TiDB::TableInfo tidb_table_info;
         tidb_table_info.id = table_id;
 
-        storage = StorageDeltaMerge::create(
-            "TiFlash",
-            /* db_name= */ "default",
-            table_name,
-            tidb_table_info,
-            ColumnsDescription{names_and_types_list},
-            astptr,
-            0,
-            *ctx);
+        storage = StorageDeltaMerge::create("TiFlash",
+                                            /* db_name= */ "default",
+                                            table_name,
+                                            tidb_table_info,
+                                            ColumnsDescription{names_and_types_list},
+                                            astptr,
+                                            0,
+                                            ctx);
         storage->startup();
     }
 
     // test writing to DeltaMergeStorage
     {
         ASTPtr insertptr(new ASTInsertQuery());
-        BlockOutputStreamPtr output = storage->write(insertptr, ctx->getSettingsRef());
+        BlockOutputStreamPtr output = storage->write(insertptr, ctx.getSettingsRef());
 
         output->writePrefix();
         output->write(sample);
@@ -666,24 +652,12 @@ try
     }
 
     // get read stream from DeltaMergeStorage
-    auto scan_context = std::make_shared<DM::ScanContext>();
     QueryProcessingStage::Enum stage2;
     SelectQueryInfo query_info;
     query_info.query = std::make_shared<ASTSelectQuery>();
-    query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(
-        ctx->getSettingsRef().resolve_locks,
-        std::numeric_limits<UInt64>::max(),
-        scan_context);
-    const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-    query_info.dag_query = std::make_unique<DAGQueryInfo>(
-        google::protobuf::RepeatedPtrField<tipb::Expr>(),
-        pushed_down_filters, // Not care now
-        std::vector<TiDB::ColumnInfo>{}, // Not care now
-        std::vector<int>{},
-        0,
-        ctx->getTimezoneInfo());
+    query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(ctx.getSettingsRef().resolve_locks, std::numeric_limits<UInt64>::max());
     Names read_columns = {"col1", EXTRA_TABLE_ID_COLUMN_NAME, "col2"};
-    BlockInputStreams ins = storage->read(read_columns, query_info, *ctx, stage2, 8192, 1);
+    BlockInputStreams ins = storage->read(read_columns, query_info, ctx, stage2, 8192, 1);
     ASSERT_EQ(ins.size(), 1);
     BlockInputStreamPtr in = ins[0];
     ASSERT_INPUTSTREAM_BLOCK_UR(
@@ -706,7 +680,9 @@ try
     auto & global_settings = ::DB::tests::TiFlashTestEnv::getGlobalContext().getSettingsRef();
     // store the old value to restore global_context settings after the test finish to avoid influence other tests
     auto old_global_settings = global_settings;
-    SCOPE_EXIT({ global_settings = old_global_settings; });
+    SCOPE_EXIT({
+        global_settings = old_global_settings;
+    });
     // change the settings to make it more easy to trigger splitting segments
     Settings settings;
     settings.dt_segment_limit_rows = 11;
@@ -721,7 +697,7 @@ try
     // and when initialize `DeltaMergeStore`, it will call `checkSegmentUpdate` with the global_context above.
     // so we need to make the settings in these two contexts consistent.
     global_settings = settings;
-    auto ctx = DMTestEnv::getContext(settings);
+    Context ctx = DMTestEnv::getContext(settings);
     std::shared_ptr<StorageDeltaMerge> storage;
     DataTypes data_types;
     Names column_names;
@@ -752,51 +728,39 @@ try
         table_info.is_common_handle = false;
         table_info.pk_is_handle = false;
 
-        // max page id is only updated at restart, so we need recreate page v3 before recreate table
-        ctx->getGlobalContext().initializeGlobalPageIdAllocator();
-        ctx->getGlobalContext().initializeGlobalStoragePoolIfNeed(ctx->getPathPool());
-        storage = StorageDeltaMerge::create(
-            "TiFlash",
-            /* db_name= */ "default",
-            table_name,
-            table_info,
-            ColumnsDescription{names_and_types_list},
-            astptr,
-            0,
-            *ctx);
+        storage = StorageDeltaMerge::create("TiFlash",
+                                            /* db_name= */ "default",
+                                            table_name,
+                                            table_info,
+                                            ColumnsDescription{names_and_types_list},
+                                            astptr,
+                                            0,
+                                            ctx);
         storage->startup();
     };
     auto write_data = [&](Int64 start, Int64 limit) {
         ASTPtr insertptr(new ASTInsertQuery());
-        BlockOutputStreamPtr output = storage->write(insertptr, ctx->getSettingsRef());
+        BlockOutputStreamPtr output = storage->write(insertptr, ctx.getSettingsRef());
         // prepare block data
         Block sample;
-        sample.insert(DB::tests::createColumn<Int64>(createNumbers<Int64>(start, start + limit), "col1"));
-        sample.insert(DB::tests::createColumn<String>(Strings(limit, "a"), "col2"));
+        sample.insert(DB::tests::createColumn<Int64>(
+            createNumbers<Int64>(start, start + limit),
+            "col1"));
+        sample.insert(DB::tests::createColumn<String>(
+            Strings(limit, "a"),
+            "col2"));
 
         output->writePrefix();
         output->write(sample);
         output->writeSuffix();
     };
     auto read_data = [&]() {
-        auto scan_context = std::make_shared<DM::ScanContext>();
         QueryProcessingStage::Enum stage2;
         SelectQueryInfo query_info;
         query_info.query = std::make_shared<ASTSelectQuery>();
-        query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(
-            ctx->getSettingsRef().resolve_locks,
-            std::numeric_limits<UInt64>::max(),
-            scan_context);
-        const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-        query_info.dag_query = std::make_unique<DAGQueryInfo>(
-            google::protobuf::RepeatedPtrField<tipb::Expr>(),
-            pushed_down_filters, // Not care now
-            std::vector<TiDB::ColumnInfo>{}, // Not care now
-            std::vector<int>{},
-            0,
-            ctx->getTimezoneInfo());
+        query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(ctx.getSettingsRef().resolve_locks, std::numeric_limits<UInt64>::max());
         Names read_columns = {"col1", EXTRA_TABLE_ID_COLUMN_NAME, "col2"};
-        BlockInputStreams ins = storage->read(read_columns, query_info, *ctx, stage2, 8192, 1);
+        BlockInputStreams ins = storage->read(read_columns, query_info, ctx, stage2, 8192, 1);
         return getInputStreamNRows(ins[0]);
     };
 
@@ -815,7 +779,7 @@ try
         ASSERT_GT(storage->getStore()->getSegmentsStats().size(), 1);
         ASSERT_EQ(read_data(), num_rows_write);
     }
-    storage->flushCache(*ctx);
+    storage->flushCache(ctx);
     // throw exception before drop first segment
     DB::FailPointHelper::enableFailPoint(DB::FailPoints::exception_before_drop_segment);
     ASSERT_ANY_THROW(storage->clearData());
@@ -838,7 +802,7 @@ try
         ASSERT_GT(storage->getStore()->getSegmentsStats().size(), 1);
         ASSERT_EQ(read_data(), num_rows_write);
     }
-    storage->flushCache(*ctx);
+    storage->flushCache(ctx);
     // throw exception after drop first segment
     DB::FailPointHelper::enableFailPoint(DB::FailPoints::exception_after_drop_segment);
     ASSERT_ANY_THROW(storage->clearData());

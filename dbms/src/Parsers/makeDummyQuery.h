@@ -22,3 +22,4 @@ namespace DB
 ASTPtr makeDummyQuery();
 
 } // namespace DB
+

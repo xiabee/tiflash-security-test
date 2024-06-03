@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/IParserBase.h>
+#include <Parsers/ExpressionElementParsers.h>
 
 
 namespace DB
@@ -27,9 +27,7 @@ namespace DB
 class ParserSetQuery : public IParserBase
 {
 public:
-    explicit ParserSetQuery(bool parse_only_internals_ = false)
-        : parse_only_internals(parse_only_internals_)
-    {}
+    explicit ParserSetQuery(bool parse_only_internals_ = false) : parse_only_internals(parse_only_internals_) {}
 
 protected:
     const char * getName() const override { return "SET query"; }
@@ -39,4 +37,4 @@ protected:
     bool parse_only_internals;
 };
 
-} // namespace DB
+}

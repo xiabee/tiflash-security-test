@@ -24,7 +24,9 @@ namespace DB
 class ExternalLoaderConfigRepository : public IExternalLoaderConfigRepository
 {
 public:
-    Files list(const Poco::Util::AbstractConfiguration & config, const std::string & path_key) const override;
+    Files list(
+        const Poco::Util::AbstractConfiguration & config,
+        const std::string & path_key) const override;
 
     bool exists(const std::string & config_file) const override;
 

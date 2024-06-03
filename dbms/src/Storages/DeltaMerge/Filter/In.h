@@ -16,9 +16,10 @@
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 class In : public RSOperator
 {
     Attr attr;
@@ -28,7 +29,10 @@ public:
     In(const Attr & attr_, const Fields & values_)
         : attr(attr_)
         , values(values_)
-    {}
+    {
+        if (unlikely(values.empty()))
+            throw Exception("Unexpected empty values");
+    }
 
     String name() override { return "in"; }
 
@@ -37,25 +41,25 @@ public:
     String toDebugString() override
     {
         String s = R"({"op":")" + name() + R"(","col":")" + attr.col_name + R"(","value":"[)";
-        if (!values.empty())
-        {
-            for (auto & v : values)
-                s += "\"" + applyVisitor(FieldVisitorToDebugString(), v) + "\",";
-            s.pop_back();
-        }
+        for (auto & v : values)
+            s += "\"" + applyVisitor(FieldVisitorToDebugString(), v) + "\",";
+        s.pop_back();
         return s + "]}";
     };
 
-    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
+
+    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override
     {
-        // If values is empty (for example where a in ()), all packs will not match.
-        // So return none directly.
-        if (values.empty())
-            return RSResults(pack_count, RSResult::None);
-        RSResults results(pack_count, RSResult::Some);
-        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
-        return rsindex.minmax->checkIn(start_pack, pack_count, values, rsindex.type);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_SOME(param, attr, rsindex);
+        // TODO optimize for IN
+        RSResult res = rsindex.minmax->checkEqual(pack_id, values[0], rsindex.type);
+        for (size_t i = 1; i < values.size(); ++i)
+            res = res || rsindex.minmax->checkEqual(pack_id, values[i], rsindex.type);
+        return res;
     }
 };
 
-} // namespace DB::DM
+
+} // namespace DM
+
+} // namespace DB

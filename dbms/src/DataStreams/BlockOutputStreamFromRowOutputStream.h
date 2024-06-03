@@ -37,6 +37,7 @@ public:
     void flush() override { row_output->flush(); }
 
     void setRowsBeforeLimit(size_t rows_before_limit) override;
+    void setTotals(const Block & totals) override;
     void setExtremes(const Block & extremes) override;
     void onProgress(const Progress & progress) override;
 
@@ -48,4 +49,4 @@ private:
     bool first_row = true;
 };
 
-} // namespace DB
+}

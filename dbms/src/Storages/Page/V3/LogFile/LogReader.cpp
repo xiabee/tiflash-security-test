@@ -102,7 +102,8 @@ LogReader::~LogReader() = default;
 // |                      | End with            | End with            |                 |                    |
 // |                      | no record read      | no record read      |                 |                    |
 // +----------------------+---------------------+---------------------+-----------------+--------------------+
-std::tuple<bool, String> LogReader::readRecord()
+std::tuple<bool, String>
+LogReader::readRecord()
 {
     String record;
     bool in_fragmented_record = false;
@@ -186,8 +187,7 @@ std::tuple<bool, String> LogReader::readRecord()
             {
             case ParseErrorType::BadHeader:
             {
-                if (recovery_mode == WALRecoveryMode::AbsoluteConsistency
-                    || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
+                if (recovery_mode == WALRecoveryMode::AbsoluteConsistency || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
                 {
                     // In clean shutdown we don't expect any error in the log files.
                     // In point-in-time recovery an incomplete record at the end could produce
@@ -201,8 +201,7 @@ std::tuple<bool, String> LogReader::readRecord()
             {
                 if (in_fragmented_record)
                 {
-                    if (recovery_mode == WALRecoveryMode::AbsoluteConsistency
-                        || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
+                    if (recovery_mode == WALRecoveryMode::AbsoluteConsistency || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
                     {
                         // In clean shutdown we don't expect any error in the log files.
                         // In point-in-time recovery an incomplete record at the end could produce
@@ -225,8 +224,7 @@ std::tuple<bool, String> LogReader::readRecord()
                     // Treat a record from a previous instance of the log as EOF.
                     if (in_fragmented_record)
                     {
-                        if (recovery_mode == WALRecoveryMode::AbsoluteConsistency
-                            || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
+                        if (recovery_mode == WALRecoveryMode::AbsoluteConsistency || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
                         {
                             // In clean shutdown we don't expect any error in the log files.
                             // In point-in-time recovery an incomplete record at the end could produce
@@ -257,8 +255,7 @@ std::tuple<bool, String> LogReader::readRecord()
             {
                 if (is_last_block)
                 {
-                    if (recovery_mode == WALRecoveryMode::AbsoluteConsistency
-                        || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
+                    if (recovery_mode == WALRecoveryMode::AbsoluteConsistency || recovery_mode == WALRecoveryMode::PointInTimeRecovery)
                     {
                         // In clean shutdown we don't expect any error in the log files.
                         // In point-in-time recovery an incomplete record at the end could produce
@@ -295,9 +292,7 @@ std::tuple<bool, String> LogReader::readRecord()
             }
             default:
             {
-                reportCorruption(
-                    (fragment.size() + (in_fragmented_record ? record.size() : 0)),
-                    fmt::format("unknown record type {}", record_type_or_error));
+                reportCorruption((fragment.size() + (in_fragmented_record ? record.size() : 0)), fmt::format("unknown record type {}", record_type_or_error));
                 in_fragmented_record = false;
                 record.clear();
                 break;
@@ -313,11 +308,12 @@ struct LogReader::RecyclableHeader
 {
     Format::ChecksumType checksum = 0;
     UInt16 length = 0;
-    UInt8 type = 0;
-    Format::LogNumberType log_num = 0;
+    UInt8 type;
+    Format::LogNumberType log_num;
 };
 
-std::tuple<UInt8, size_t> LogReader::deserializeHeader(LogReader::RecyclableHeader * hdr, size_t * drop_size)
+std::tuple<UInt8, size_t>
+LogReader::deserializeHeader(LogReader::RecyclableHeader * hdr, size_t * drop_size)
 {
     readIntBinary(hdr->checksum, *file);
     readIntBinary(hdr->length, *file);
@@ -452,9 +448,7 @@ UInt8 LogReader::readMore(size_t * drop_size)
         catch (...)
         {
             // Exception thrown while reading data by `file->next()`, consider it as meeting EOF
-            reportDrop(
-                Format::BLOCK_SIZE,
-                fmt::format("while reading Log file: {}, {}", file->getFileName(), getCurrentExceptionMessage(true)));
+            reportDrop(Format::BLOCK_SIZE, fmt::format("while reading Log file: {}, {}", file->getFileName(), getCurrentExceptionMessage(true)));
             buffer.remove_prefix(buffer.size());
             read_error = true;
             return ParseErrorType::MeetEOF;
@@ -476,9 +470,7 @@ UInt8 LogReader::readMore(size_t * drop_size)
 
 void LogReader::reportCorruption(size_t bytes, const String & reason)
 {
-    reportDrop(
-        bytes,
-        fmt::format("Corruption: {} [offset={}] [file={}]", reason, file->getPositionInFile(), file->getFileName()));
+    reportDrop(bytes, fmt::format("Corruption: {} [offset={}] [file={}]", reason, file->getPositionInFile(), file->getFileName()));
 }
 
 void LogReader::reportDrop(size_t bytes, const String & reason)

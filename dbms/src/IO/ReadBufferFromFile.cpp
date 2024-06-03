@@ -56,9 +56,7 @@ ReadBufferFromFile::ReadBufferFromFile(
     if (-1 == fd)
     {
         ProfileEvents::increment(ProfileEvents::FileOpenFailed);
-        throwFromErrno(
-            "Cannot open file " + file_name,
-            errno == ENOENT ? ErrorCodes::FILE_DOESNT_EXIST : ErrorCodes::CANNOT_OPEN_FILE);
+        throwFromErrno("Cannot open file " + file_name, errno == ENOENT ? ErrorCodes::FILE_DOESNT_EXIST : ErrorCodes::CANNOT_OPEN_FILE);
     }
 #ifdef __APPLE__
     if (o_direct)
@@ -81,7 +79,8 @@ ReadBufferFromFile::ReadBufferFromFile(
     size_t alignment)
     : ReadBufferFromFileDescriptor(fd, buf_size, existing_memory, alignment)
     , file_name(original_file_name.empty() ? "(fd = " + toString(fd) + ")" : original_file_name)
-{}
+{
+}
 
 
 ReadBufferFromFile::~ReadBufferFromFile()

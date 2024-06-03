@@ -38,8 +38,7 @@ bool ParserTableExpression::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
 
     if (!ParserWithOptionalAlias(std::make_unique<ParserSubquery>(), true).parse(pos, res->subquery, expected)
         && !ParserWithOptionalAlias(std::make_unique<ParserFunction>(), true).parse(pos, res->table_function, expected)
-        && !ParserWithOptionalAlias(std::make_unique<ParserCompoundIdentifier>(), true)
-                .parse(pos, res->database_and_table_name, expected))
+        && !ParserWithOptionalAlias(std::make_unique<ParserCompoundIdentifier>(), true).parse(pos, res->database_and_table_name, expected))
         return false;
 
     /// FINAL
@@ -111,9 +110,9 @@ bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expec
             if (ParserKeyword("INNER").ignore(pos))
                 table_join->kind = ASTTableJoin::Kind::Inner;
             else if (ParserKeyword("LEFT").ignore(pos))
-                table_join->kind = ASTTableJoin::Kind::LeftOuter;
+                table_join->kind = ASTTableJoin::Kind::Left;
             else if (ParserKeyword("RIGHT").ignore(pos))
-                table_join->kind = ASTTableJoin::Kind::RightOuter;
+                table_join->kind = ASTTableJoin::Kind::Right;
             else if (ParserKeyword("FULL").ignore(pos))
                 table_join->kind = ASTTableJoin::Kind::Full;
             else if (ParserKeyword("CROSS").ignore(pos))
@@ -129,7 +128,8 @@ bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expec
                 throw Exception("You must not specify ANY or ALL for CROSS JOIN.", ErrorCodes::SYNTAX_ERROR);
 
             /// Optional OUTER keyword for outer joins.
-            if (table_join->kind == ASTTableJoin::Kind::LeftOuter || table_join->kind == ASTTableJoin::Kind::RightOuter
+            if (table_join->kind == ASTTableJoin::Kind::Left
+                || table_join->kind == ASTTableJoin::Kind::Right
                 || table_join->kind == ASTTableJoin::Kind::Full)
             {
                 ParserKeyword("OUTER").ignore(pos);
@@ -142,7 +142,8 @@ bool ParserTablesInSelectQueryElement::parseImpl(Pos & pos, ASTPtr & node, Expec
         if (!ParserTableExpression().parse(pos, res->table_expression, expected))
             return false;
 
-        if (table_join->kind != ASTTableJoin::Kind::Comma && table_join->kind != ASTTableJoin::Kind::Cross)
+        if (table_join->kind != ASTTableJoin::Kind::Comma
+            && table_join->kind != ASTTableJoin::Kind::Cross)
         {
             if (ParserKeyword("USING").ignore(pos, expected))
             {

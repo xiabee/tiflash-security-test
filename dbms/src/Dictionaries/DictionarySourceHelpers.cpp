@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Columns/ColumnsNumber.h>
-#include <Core/Block.h>
-#include <Core/ColumnWithTypeAndName.h>
-#include <DataStreams/IBlockOutputStream.h>
-#include <DataTypes/DataTypesNumber.h>
 #include <Dictionaries/DictionarySourceHelpers.h>
 #include <Dictionaries/DictionaryStructure.h>
+#include <Core/ColumnWithTypeAndName.h>
+#include <Core/Block.h>
+#include <Columns/ColumnsNumber.h>
+#include <DataTypes/DataTypesNumber.h>
+#include <DataStreams/IBlockOutputStream.h>
 #include <IO/WriteHelpers.h>
 
 
@@ -31,7 +31,7 @@ void formatIDs(BlockOutputStreamPtr & out, const std::vector<UInt64> & ids)
     auto column = ColumnUInt64::create(ids.size());
     memcpy(column->getData().data(), ids.data(), ids.size() * sizeof(ids.front()));
 
-    Block block{{std::move(column), std::make_shared<DataTypeUInt64>(), "id"}};
+    Block block{{ std::move(column), std::make_shared<DataTypeUInt64>(), "id" }};
 
     out->writePrefix();
     out->write(block);
@@ -40,11 +40,8 @@ void formatIDs(BlockOutputStreamPtr & out, const std::vector<UInt64> & ids)
 }
 
 /// For composite key
-void formatKeys(
-    const DictionaryStructure & dict_struct,
-    BlockOutputStreamPtr & out,
-    const Columns & key_columns,
-    const std::vector<size_t> & requested_rows)
+void formatKeys(const DictionaryStructure & dict_struct, BlockOutputStreamPtr & out,
+    const Columns & key_columns, const std::vector<size_t> & requested_rows)
 {
     Block block;
     for (size_t i = 0, size = key_columns.size(); i < size; ++i)
@@ -56,7 +53,7 @@ void formatKeys(
         for (size_t idx : requested_rows)
             filtered_column->insertFrom(*source_column, idx);
 
-        block.insert({std::move(filtered_column), (*dict_struct.key)[i].type, toString(i)});
+        block.insert({ std::move(filtered_column), (*dict_struct.key)[i].type, toString(i) });
     }
 
     out->writePrefix();
@@ -65,4 +62,4 @@ void formatKeys(
     out->flush();
 }
 
-} // namespace DB
+}

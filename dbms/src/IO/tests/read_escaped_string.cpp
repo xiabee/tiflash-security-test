@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Core/Types.h>
-#include <IO/ConcatReadBuffer.h>
-#include <IO/ReadBufferFromMemory.h>
-#include <IO/ReadHelpers.h>
+#include <string>
 
 #include <iostream>
-#include <string>
+
+#include <Core/Types.h>
+#include <IO/ReadHelpers.h>
+#include <IO/ReadBufferFromMemory.h>
+#include <IO/ConcatReadBuffer.h>
 
 
 using namespace DB;

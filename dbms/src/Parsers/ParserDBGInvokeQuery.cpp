@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/typeid_cast.h>
-#include <Parsers/ASTDBGInvokeQuery.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTDBGInvokeQuery.h>
+
 #include <Parsers/CommonParsers.h>
 #include <Parsers/ParserDBGInvokeQuery.h>
 
+#include <Common/typeid_cast.h>
 #include "ASTFunction.h"
 
 namespace DB
@@ -51,4 +52,4 @@ bool ParserDBGInvokeQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & expect
 }
 
 
-} // namespace DB
+}

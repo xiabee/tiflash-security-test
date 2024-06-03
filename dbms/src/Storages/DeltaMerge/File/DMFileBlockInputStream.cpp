@@ -29,23 +29,14 @@ DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & con
     setFromSettings(context.getSettingsRef());
 }
 
-DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
-    const DMFilePtr & dmfile,
-    const ColumnDefines & read_columns,
-    const RowKeyRanges & rowkey_ranges,
-    const ScanContextPtr & scan_context)
+DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr & dmfile, const ColumnDefines & read_columns, const RowKeyRanges & rowkey_ranges, const ScanContextPtr & scan_context)
 {
-    RUNTIME_CHECK(
-        dmfile->getStatus() == DMFile::Status::READABLE,
-        dmfile->fileId(),
-        DMFile::statusString(dmfile->getStatus()));
+    RUNTIME_CHECK(dmfile->getStatus() == DMFile::Status::READABLE, dmfile->fileId(), DMFile::statusString(dmfile->getStatus()));
 
     // if `rowkey_ranges` is empty, we unconditionally read all packs
     // `rowkey_ranges` and `is_common_handle`  will only be useful in clean read mode.
     // It is safe to ignore them here.
-    RUNTIME_CHECK_MSG(
-        !(rowkey_ranges.empty() && enable_handle_clean_read),
-        "rowkey ranges shouldn't be empty with clean-read enabled");
+    RUNTIME_CHECK_MSG(!(rowkey_ranges.empty() && enable_handle_clean_read), "rowkey ranges shouldn't be empty with clean-read enabled");
 
     bool is_common_handle = !rowkey_ranges.empty() && rowkey_ranges[0].is_common_handle;
 
@@ -89,8 +80,7 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
         read_one_pack_every_time,
         tracing_id,
         max_sharing_column_bytes_for_all,
-        scan_context,
-        read_tag);
+        scan_context);
 
     return std::make_shared<DMFileBlockInputStream>(std::move(reader), max_sharing_column_bytes_for_all > 0);
 }

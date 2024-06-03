@@ -15,7 +15,6 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileBig.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
-#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 
 namespace DB
@@ -25,7 +24,7 @@ namespace DM
 void serializeSavedColumnFilesInV3Format(WriteBuffer & buf, const ColumnFilePersisteds & column_files)
 {
     writeIntBinary(column_files.size(), buf);
-    ColumnFileSchemaPtr last_schema;
+    BlockPtr last_schema;
 
     for (const auto & column_file : column_files)
     {
@@ -62,52 +61,7 @@ void serializeSavedColumnFilesInV3Format(WriteBuffer & buf, const ColumnFilePers
     }
 }
 
-ColumnFilePersisteds deserializeSavedColumnFilesInV3Format(
-    const DMContext & context,
-    const RowKeyRange & segment_range,
-    ReadBuffer & buf)
-{
-    size_t column_file_count;
-    readIntBinary(column_file_count, buf);
-    ColumnFilePersisteds column_files;
-    column_files.reserve(column_file_count);
-    ColumnFileSchemaPtr last_schema;
-    for (size_t i = 0; i < column_file_count; ++i)
-    {
-        std::underlying_type<ColumnFile::Type>::type column_file_type;
-        readIntBinary(column_file_type, buf);
-        ColumnFilePersistedPtr column_file;
-        switch (column_file_type)
-        {
-        case ColumnFile::Type::DELETE_RANGE:
-            column_file = ColumnFileDeleteRange::deserializeMetadata(buf);
-            break;
-        case ColumnFile::Type::TINY_FILE:
-        {
-            column_file = ColumnFileTiny::deserializeMetadata(context, buf, last_schema);
-            break;
-        }
-        case ColumnFile::Type::BIG_FILE:
-        {
-            column_file = ColumnFileBig::deserializeMetadata(context, segment_range, buf);
-            break;
-        }
-        default:
-            throw Exception(
-                "Unexpected column file type: " + DB::toString(column_file_type),
-                ErrorCodes::LOGICAL_ERROR);
-        }
-        column_files.emplace_back(std::move(column_file));
-    }
-    return column_files;
-}
-
-ColumnFilePersisteds createColumnFilesInV3FormatFromCheckpoint( //
-    DMContext & context,
-    const RowKeyRange & segment_range,
-    ReadBuffer & buf,
-    UniversalPageStoragePtr temp_ps,
-    WriteBatches & wbs)
+ColumnFilePersisteds deserializeSavedColumnFilesInV3Format(DMContext & context, const RowKeyRange & segment_range, ReadBuffer & buf)
 {
     size_t column_file_count;
     readIntBinary(column_file_count, buf);
@@ -126,19 +80,16 @@ ColumnFilePersisteds createColumnFilesInV3FormatFromCheckpoint( //
             break;
         case ColumnFile::Type::TINY_FILE:
         {
-            std::tie(column_file, last_schema)
-                = ColumnFileTiny::createFromCheckpoint(context, buf, temp_ps, last_schema, wbs);
+            std::tie(column_file, last_schema) = ColumnFileTiny::deserializeMetadata(buf, last_schema);
             break;
         }
         case ColumnFile::Type::BIG_FILE:
         {
-            column_file = ColumnFileBig::createFromCheckpoint(context, segment_range, buf, temp_ps, wbs);
+            column_file = ColumnFileBig::deserializeMetadata(context, segment_range, buf);
             break;
         }
         default:
-            throw Exception(
-                "Unexpected column file type: " + DB::toString(column_file_type),
-                ErrorCodes::LOGICAL_ERROR);
+            throw Exception("Unexpected column file type: " + DB::toString(column_file_type), ErrorCodes::LOGICAL_ERROR);
         }
         column_files.emplace_back(std::move(column_file));
     }

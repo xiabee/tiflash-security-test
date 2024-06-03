@@ -29,3 +29,4 @@ ASTPtr makeDummyQuery()
 }
 
 } // namespace DB
+

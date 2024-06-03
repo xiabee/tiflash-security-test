@@ -72,12 +72,7 @@ static IAggregateFunction * createWithDecimalType(const IDataType & argument_typ
     return nullptr;
 }
 
-template <
-    template <typename, typename, typename>
-    class AggregateSumTemplate,
-    typename ResultType,
-    typename SumName,
-    typename... TArgs>
+template <template <typename, typename, typename> class AggregateSumTemplate, typename ResultType, typename SumName, typename... TArgs>
 static IAggregateFunction * createSumAggWithDecimalType(const IDataType & argument_type, TArgs &&... args)
 {
 #define DISPATCH(FIELDTYPE, DATATYPE)                  \
@@ -112,12 +107,7 @@ static IAggregateFunction * createWithNumericType(const IDataType & argument_typ
     return nullptr;
 }
 
-template <
-    template <typename, typename>
-    class AggregateFunctionTemplate,
-    template <typename>
-    class Data,
-    typename... TArgs>
+template <template <typename, typename> class AggregateFunctionTemplate, template <typename> class Data, typename... TArgs>
 static IAggregateFunction * createWithNumericType(const IDataType & argument_type, TArgs &&... args)
 {
 #define DISPATCH(FIELDTYPE, DATATYPE)                  \
@@ -129,12 +119,7 @@ static IAggregateFunction * createWithNumericType(const IDataType & argument_typ
 }
 
 
-template <
-    template <typename, typename>
-    class AggregateFunctionTemplate,
-    template <typename>
-    class Data,
-    typename... TArgs>
+template <template <typename, typename> class AggregateFunctionTemplate, template <typename> class Data, typename... TArgs>
 static IAggregateFunction * createWithUnsignedIntegerType(const IDataType & argument_type, TArgs &&... args)
 {
 #define DISPATCH(TYPE)                                       \
@@ -160,16 +145,11 @@ static IAggregateFunction * createWithTwoNumericTypesSecond(const IDataType & se
 }
 
 template <template <typename, typename> class AggregateFunctionTemplate, typename... TArgs>
-static IAggregateFunction * createWithTwoNumericTypes(
-    const IDataType & first_type,
-    const IDataType & second_type,
-    TArgs &&... args)
+static IAggregateFunction * createWithTwoNumericTypes(const IDataType & first_type, const IDataType & second_type, TArgs &&... args)
 {
-#define DISPATCH(FIELDTYPE, DATATYPE)                                                 \
-    if (typeid_cast<const DATATYPE *>(&first_type))                                   \
-        return createWithTwoNumericTypesSecond<FIELDTYPE, AggregateFunctionTemplate>( \
-            second_type,                                                              \
-            std::forward<TArgs>(args)...);
+#define DISPATCH(FIELDTYPE, DATATYPE)               \
+    if (typeid_cast<const DATATYPE *>(&first_type)) \
+        return createWithTwoNumericTypesSecond<FIELDTYPE, AggregateFunctionTemplate>(second_type, std::forward<TArgs>(args)...);
     FOR_NUMERIC_TYPES_AND_ENUMS(DISPATCH)
 #undef DISPATCH
     return nullptr;

@@ -77,18 +77,16 @@ void StressWorkload::onDumpResult()
         return ss.str();
     }());
 
-    LOG_INFO(
-        options.logger,
-        "W: {} pages, {:.4f} GB, {:.4f} GB/s",
-        total_pages_written,
-        static_cast<double>(total_bytes_written) / DB::GB,
-        static_cast<double>(total_bytes_written) / DB::GB / seconds_run);
-    LOG_INFO(
-        options.logger,
-        "R: {} pages, {:.4f} GB, {:.4f} GB/s",
-        total_pages_read,
-        static_cast<double>(total_bytes_read) / DB::GB,
-        static_cast<double>(total_bytes_read) / DB::GB / seconds_run);
+    LOG_INFO(options.logger,
+             "W: {} pages, {:.4f} GB, {:.4f} GB/s",
+             total_pages_written,
+             static_cast<double>(total_bytes_written) / DB::GB,
+             static_cast<double>(total_bytes_written) / DB::GB / seconds_run);
+    LOG_INFO(options.logger,
+             "R: {} pages, {:.4f} GB, {:.4f} GB/s",
+             total_pages_read,
+             static_cast<double>(total_bytes_read) / DB::GB,
+             static_cast<double>(total_bytes_read) / DB::GB / seconds_run);
 
     if (options.status_interval != 0)
     {
@@ -98,8 +96,7 @@ void StressWorkload::onDumpResult()
 
 void StressWorkload::initPageStorage(DB::PageStorageConfig & config, String path_prefix)
 {
-    DB::FileProviderPtr file_provider
-        = std::make_shared<DB::FileProvider>(std::make_shared<DB::MockKeyManager>(false), false);
+    DB::FileProviderPtr file_provider = std::make_shared<DB::FileProvider>(std::make_shared<DB::MockKeyManager>(false), false);
 
     if (path_prefix.empty())
     {
@@ -128,7 +125,8 @@ void StressWorkload::initPageStorage(DB::PageStorageConfig & config, String path
     }
     else
     {
-        throw DB::Exception(fmt::format("Invalid PageStorage version {}", options.running_ps_version));
+        throw DB::Exception(fmt::format("Invalid PageStorage version {}",
+                                        options.running_ps_version));
     }
 
     ps->restore();
@@ -145,10 +143,10 @@ void StressWorkload::initPageStorage(DB::PageStorageConfig & config, String path
     runtime_stat = std::make_unique<GlobalStat>();
 }
 
-void StressWorkload::initPages(const DB::PageIdU64 & max_page_id)
+void StressWorkload::initPages(const DB::PageId & max_page_id)
 {
     auto writer = std::make_shared<PSWriter>(ps, 0, runtime_stat);
-    for (DB::PageIdU64 page_id = 0; page_id <= max_page_id; ++page_id)
+    for (DB::PageId page_id = 0; page_id <= max_page_id; ++page_id)
     {
         RandomPageId r(page_id);
         writer->write(r);

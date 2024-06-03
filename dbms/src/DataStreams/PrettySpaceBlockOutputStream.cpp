@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <DataStreams/PrettySpaceBlockOutputStream.h>
 #include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
+#include <DataStreams/PrettySpaceBlockOutputStream.h>
 
 
 namespace DB
@@ -53,9 +53,7 @@ void PrettySpaceBlockOutputStream::write(const Block & block)
 
         if (col.type->shouldAlignRightInPrettyFormats())
         {
-            for (ssize_t k = 0;
-                 k < std::max(static_cast<ssize_t>(0), static_cast<ssize_t>(max_widths[i] - name_widths[i]));
-                 ++k)
+            for (ssize_t k = 0; k < std::max(static_cast<ssize_t>(0), static_cast<ssize_t>(max_widths[i] - name_widths[i])); ++k)
                 writeChar(' ', ostr);
 
             if (!no_escapes)
@@ -72,9 +70,7 @@ void PrettySpaceBlockOutputStream::write(const Block & block)
             if (!no_escapes)
                 writeCString("\033[0m", ostr);
 
-            for (ssize_t k = 0;
-                 k < std::max(static_cast<ssize_t>(0), static_cast<ssize_t>(max_widths[i] - name_widths[i]));
-                 ++k)
+            for (ssize_t k = 0; k < std::max(static_cast<ssize_t>(0), static_cast<ssize_t>(max_widths[i] - name_widths[i])); ++k)
                 writeChar(' ', ostr);
         }
     }
@@ -87,11 +83,7 @@ void PrettySpaceBlockOutputStream::write(const Block & block)
             if (j != 0)
                 writeCString("   ", ostr);
 
-            writeValueWithPadding(
-                block.getByPosition(j),
-                i,
-                widths[j].empty() ? max_widths[j] : widths[j][i],
-                max_widths[j]);
+            writeValueWithPadding(block.getByPosition(j), i, widths[j].empty() ? max_widths[j] : widths[j][i], max_widths[j]);
         }
 
         writeChar('\n', ostr);
@@ -111,7 +103,8 @@ void PrettySpaceBlockOutputStream::writeSuffix()
     }
 
     total_rows = 0;
+    writeTotals();
     writeExtremes();
 }
 
-} // namespace DB
+}

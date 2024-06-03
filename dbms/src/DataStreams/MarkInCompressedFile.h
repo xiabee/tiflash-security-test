@@ -14,11 +14,11 @@
 
 #pragma once
 
-#include <Common/PODArray.h>
+#include <tuple>
+
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
-
-#include <tuple>
+#include <Common/PODArray.h>
 
 
 namespace DB
@@ -37,7 +37,10 @@ struct MarkInCompressedFile
         return std::tie(offset_in_compressed_file, offset_in_decompressed_block)
             == std::tie(rhs.offset_in_compressed_file, rhs.offset_in_decompressed_block);
     }
-    bool operator!=(const MarkInCompressedFile & rhs) const { return !(*this == rhs); }
+    bool operator!=(const MarkInCompressedFile & rhs) const
+    {
+        return !(*this == rhs);
+    }
 
     String toString() const
     {
@@ -47,4 +50,28 @@ struct MarkInCompressedFile
 
 using MarksInCompressedFile = PODArray<MarkInCompressedFile>;
 using MarksInCompressedFilePtr = std::shared_ptr<MarksInCompressedFile>;
-} // namespace DB
+
+struct MarkWithSizeInCompressedFile
+{
+    MarkInCompressedFile mark;
+    size_t mark_size;
+
+    bool operator==(const MarkWithSizeInCompressedFile & rhs) const
+    {
+        return std::tie(mark, mark_size) == std::tie(rhs.mark, rhs.mark_size);
+    }
+    bool operator!=(const MarkWithSizeInCompressedFile & rhs) const
+    {
+        return !(*this == rhs);
+    }
+
+    String toString() const
+    {
+        return "(" + mark.toString() + "," + DB::toString(mark_size) + ")";
+    }
+};
+
+using MarkWithSizesInCompressedFile = PODArray<MarkWithSizeInCompressedFile>;
+using MarkWithSizesInCompressedFilePtr = std::shared_ptr<MarkWithSizesInCompressedFile>;
+
+}

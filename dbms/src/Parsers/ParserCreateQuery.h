@@ -14,14 +14,14 @@
 
 #pragma once
 
-#include <Common/typeid_cast.h>
-#include <Parsers/ASTColumnDeclaration.h>
-#include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTNameTypePair.h>
-#include <Parsers/CommonParsers.h>
+#include <Parsers/IParserBase.h>
 #include <Parsers/ExpressionElementParsers.h>
 #include <Parsers/ExpressionListParsers.h>
-#include <Parsers/IParserBase.h>
+#include <Parsers/ASTNameTypePair.h>
+#include <Parsers/ASTColumnDeclaration.h>
+#include <Parsers/ASTIdentifier.h>
+#include <Parsers/CommonParsers.h>
+#include <Common/typeid_cast.h>
 #include <Poco/String.h>
 
 
@@ -90,7 +90,8 @@ bool IParserNameTypePair<NameParser>::parseImpl(Pos & pos, ASTPtr & node, Expect
     ParserIdentifierWithOptionalParameters type_parser;
 
     ASTPtr name, type;
-    if (name_parser.parse(pos, name, expected) && type_parser.parse(pos, type, expected))
+    if (name_parser.parse(pos, name, expected)
+        && type_parser.parse(pos, type, expected))
     {
         auto name_type_pair = std::make_shared<ASTNameTypePair>();
         name_type_pair->name = typeid_cast<const ASTIdentifier &>(*name).name;
@@ -143,7 +144,9 @@ bool IParserColumnDeclaration<NameParser>::parseImpl(Pos & pos, ASTPtr & node, E
       */
     ASTPtr type;
     const auto fallback_pos = pos;
-    if (!s_default.check(pos, expected) && !s_materialized.check(pos, expected) && !s_alias.check(pos, expected))
+    if (!s_default.check(pos, expected) &&
+        !s_materialized.check(pos, expected) &&
+        !s_alias.check(pos, expected))
     {
         type_parser.parse(pos, type, expected);
     }
@@ -154,7 +157,9 @@ bool IParserColumnDeclaration<NameParser>::parseImpl(Pos & pos, ASTPtr & node, E
     String default_specifier;
     ASTPtr default_expression;
     Pos pos_before_specifier = pos;
-    if (s_default.ignore(pos, expected) || s_materialized.ignore(pos, expected) || s_alias.ignore(pos, expected))
+    if (s_default.ignore(pos, expected) ||
+        s_materialized.ignore(pos, expected) ||
+        s_alias.ignore(pos, expected))
     {
         default_specifier = Poco::toUpper(std::string{pos_before_specifier->begin, pos_before_specifier->end});
 
@@ -228,4 +233,4 @@ protected:
     bool parseImpl(Pos & pos, ASTPtr & node, Expected & expected);
 };
 
-} // namespace DB
+}

@@ -97,9 +97,7 @@ CachedCompressedReadBuffer<has_checksum>::CachedCompressedReadBuffer(
 {}
 
 template <bool has_checksum>
-void CachedCompressedReadBuffer<has_checksum>::seek(
-    size_t offset_in_compressed_file,
-    size_t offset_in_decompressed_block)
+void CachedCompressedReadBuffer<has_checksum>::seek(size_t offset_in_compressed_file, size_t offset_in_decompressed_block)
 {
     if (owned_cell && offset_in_compressed_file == file_pos - owned_cell->compressed_size
         && offset_in_decompressed_block <= working_buffer.size())
@@ -116,11 +114,10 @@ void CachedCompressedReadBuffer<has_checksum>::seek(
         nextImpl();
 
         if (offset_in_decompressed_block > working_buffer.size())
-            throw Exception(
-                "Seek position is beyond the decompressed block"
-                " (pos: "
-                    + toString(offset_in_decompressed_block) + ", block size: " + toString(working_buffer.size()) + ")",
-                ErrorCodes::SEEK_POSITION_OUT_OF_BOUND);
+            throw Exception("Seek position is beyond the decompressed block"
+                            " (pos: "
+                                + toString(offset_in_decompressed_block) + ", block size: " + toString(working_buffer.size()) + ")",
+                            ErrorCodes::SEEK_POSITION_OUT_OF_BOUND);
 
         pos = working_buffer.begin() + offset_in_decompressed_block;
         bytes -= offset();

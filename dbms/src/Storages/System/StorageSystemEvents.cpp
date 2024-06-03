@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Columns/ColumnString.h>
 #include <Common/ProfileEvents.h>
-#include <DataStreams/OneBlockInputStream.h>
+#include <Columns/ColumnString.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <DataStreams/OneBlockInputStream.h>
 #include <Storages/System/StorageSystemEvents.h>
 
 
@@ -27,7 +27,8 @@ namespace DB
 StorageSystemEvents::StorageSystemEvents(const std::string & name_)
     : name(name_)
 {
-    setColumns(ColumnsDescription({
+    setColumns(ColumnsDescription(
+    {
         {"event", std::make_shared<DataTypeString>()},
         {"value", std::make_shared<DataTypeUInt64>()},
     }));
@@ -58,10 +59,8 @@ BlockInputStreams StorageSystemEvents::read(
         }
     }
 
-    return BlockInputStreams(
-        1,
-        std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
+    return BlockInputStreams(1, std::make_shared<OneBlockInputStream>(getSampleBlock().cloneWithColumns(std::move(res_columns))));
 }
 
 
-} // namespace DB
+}

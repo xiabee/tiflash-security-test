@@ -14,28 +14,44 @@
 
 #pragma once
 
-#include <Common/MemoryTracker.h>
-#include <Common/PtrHolder.h>
-#include <Flash/Executor/ExecutionResult.h>
 #include <Flash/Executor/ResultHandler.h>
-#include <Flash/Executor/toRU.h>
-#include <Flash/Statistics/BaseRuntimeStatistics.h>
 #include <common/types.h>
 
 #include <memory>
+#include <utility>
 
 namespace DB
 {
-class Context;
-class DAGContext;
+struct ExecutionResult
+{
+    bool is_success;
+    String err_msg;
+
+    void verify()
+    {
+        RUNTIME_CHECK(is_success, err_msg);
+    }
+
+    static ExecutionResult success()
+    {
+        return {true, ""};
+    }
+
+    static ExecutionResult fail(const String & err_msg)
+    {
+        RUNTIME_CHECK(!err_msg.empty());
+        return {false, err_msg};
+    }
+};
+
+class ProcessListEntry;
+using ProcessListEntryPtr = std::shared_ptr<ProcessListEntry>;
 
 class QueryExecutor
 {
 public:
-    QueryExecutor(const MemoryTrackerPtr & memory_tracker_, Context & context_, const String & req_id)
-        : memory_tracker(memory_tracker_)
-        , context(context_)
-        , log(Logger::get(req_id))
+    explicit QueryExecutor(const ProcessListEntryPtr & process_list_entry_)
+        : process_list_entry(process_list_entry_)
     {}
 
     virtual ~QueryExecutor() = default;
@@ -43,31 +59,18 @@ public:
     ExecutionResult execute();
     ExecutionResult execute(ResultHandler::Handler handler);
 
-    virtual void cancel() = 0;
+    virtual void cancel(bool is_kill) = 0;
 
-    virtual String toString() const = 0;
+    virtual String dump() const = 0;
 
     virtual int estimateNewThreadCount() = 0;
 
-    virtual RU collectRequestUnit() = 0;
-
-    virtual Block getSampleBlock() const = 0;
-
-    virtual BaseRuntimeStatistics getRuntimeStatistics() const = 0;
-
-    virtual String getExtraJsonInfo() const { return "{}"; }
+protected:
+    virtual ExecutionResult execute(ResultHandler) = 0;
 
 protected:
-    virtual ExecutionResult execute(ResultHandler &&) = 0;
-
-    DAGContext & dagContext() const;
-
-protected:
-    MemoryTrackerPtr memory_tracker;
-    Context & context;
-    LoggerPtr log;
+    ProcessListEntryPtr process_list_entry;
 };
 
 using QueryExecutorPtr = std::unique_ptr<QueryExecutor>;
-using QueryExecutorHolder = PtrHolder<QueryExecutorPtr>;
 } // namespace DB

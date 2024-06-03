@@ -16,10 +16,6 @@ if (USE_INTERNAL_ZSTD_LIBRARY)
     add_subdirectory (zstd-cmake)
 endif ()
 
-if (USE_QPL AND USE_INTERNAL_QPL_LIBRARY)
-    add_subdirectory (qpl-cmake)
-endif ()
-
 if (USE_INTERNAL_RE2_LIBRARY)
     add_subdirectory (re2-cmake)
 endif ()
@@ -132,8 +128,6 @@ set (ENABLE_TESTS ${_save})
 # -------
 add_subdirectory (tipb/cpp)
 
-add_subdirectory (etcd)
-
 if (USE_INTERNAL_TIFLASH_PROXY)
     add_subdirectory (tiflash-proxy-cmake)
 endif ()
@@ -183,5 +177,3 @@ if (ARCH_AARCH64 AND OS_LINUX)
 endif ()
 
 add_subdirectory(magic_enum)
-
-add_subdirectory(aws-cmake)

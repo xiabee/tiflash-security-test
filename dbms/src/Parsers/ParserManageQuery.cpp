@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/typeid_cast.h>
-#include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTLiteral.h>
-#include <Parsers/ASTManageQuery.h>
 #include <Parsers/CommonParsers.h>
 #include <Parsers/ParserManageQuery.h>
 #include <Parsers/ParserPartition.h>
+
+#include <Parsers/ASTIdentifier.h>
+#include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTManageQuery.h>
+
+#include <Common/typeid_cast.h>
 
 
 namespace DB

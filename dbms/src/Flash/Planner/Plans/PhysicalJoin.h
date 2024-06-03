@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Planner/Plans/PhysicalBinary.h>
+#include <Flash/Planner/plans/PhysicalBinary.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/Join.h>
 #include <tipb/executor.pb.h>
@@ -36,33 +36,38 @@ public:
     PhysicalJoin(
         const String & executor_id_,
         const NamesAndTypes & schema_,
-        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const PhysicalPlanNodePtr & probe_,
         const PhysicalPlanNodePtr & build_,
         const JoinPtr & join_ptr_,
+        const NamesAndTypesList & columns_added_by_join_,
         const ExpressionActionsPtr & probe_side_prepare_actions_,
         const ExpressionActionsPtr & build_side_prepare_actions_,
-        const Block & sample_block_)
-        : PhysicalBinary(executor_id_, PlanType::Join, schema_, fine_grained_shuffle_, req_id, probe_, build_)
+        bool has_non_joined_,
+        const Block & sample_block_,
+        const FineGrainedShuffle & fine_grained_shuffle_)
+        : PhysicalBinary(executor_id_, PlanType::Join, schema_, req_id, probe_, build_)
         , join_ptr(join_ptr_)
+        , columns_added_by_join(columns_added_by_join_)
         , probe_side_prepare_actions(probe_side_prepare_actions_)
         , build_side_prepare_actions(build_side_prepare_actions_)
+        , has_non_joined(has_non_joined_)
         , sample_block(sample_block_)
+        , fine_grained_shuffle(fine_grained_shuffle_)
     {}
-
-    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
 
     void finalize(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
 private:
-    void probeSideTransform(DAGPipeline & probe_pipeline, Context & context);
+    void probeSideTransform(DAGPipeline & probe_pipeline, Context & context, size_t max_streams);
 
     void buildSideTransform(DAGPipeline & build_pipeline, Context & context, size_t max_streams);
 
-    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+    void doSchemaProject(DAGPipeline & pipeline, Context & context);
+
+    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
     /// the right side is the build side.
     const PhysicalPlanNodePtr & probe() const { return left; }
@@ -71,9 +76,14 @@ private:
 private:
     JoinPtr join_ptr;
 
+    NamesAndTypesList columns_added_by_join;
+
     ExpressionActionsPtr probe_side_prepare_actions;
     ExpressionActionsPtr build_side_prepare_actions;
 
+    bool has_non_joined;
+
     Block sample_block;
+    FineGrainedShuffle fine_grained_shuffle;
 };
 } // namespace DB

@@ -17,7 +17,7 @@
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
 #include <Storages/DeltaMerge/Delta/MinorCompaction.h>
-#include <Storages/DeltaMerge/WriteBatchesImpl.h>
+#include <Storages/DeltaMerge/WriteBatches.h>
 #include <Storages/Page/PageStorage.h>
 
 namespace DB
@@ -35,7 +35,7 @@ void MinorCompaction::prepare(DMContext & context, WriteBatches & wbs, const Pag
         if (task.is_trivial_move)
             continue;
 
-        const auto & schema = task.to_compact[0]->tryToTinyFile()->getSchema()->getSchema();
+        auto & schema = *(task.to_compact[0]->tryToTinyFile()->getSchema());
         auto compact_columns = schema.cloneEmptyColumns();
         for (auto & file : task.to_compact)
         {
@@ -56,7 +56,7 @@ void MinorCompaction::prepare(DMContext & context, WriteBatches & wbs, const Pag
         Block compact_block = schema.cloneWithColumns(std::move(compact_columns));
         auto compact_rows = compact_block.rows();
         auto compact_bytes = compact_block.bytes();
-        auto compact_column_file = ColumnFileTiny::writeColumnFile(context, compact_block, 0, compact_rows, wbs);
+        auto compact_column_file = ColumnFileTiny::writeColumnFile(context, compact_block, 0, compact_rows, wbs, task.to_compact.front()->tryToTinyFile()->getSchema());
         wbs.writeLogAndData();
         task.result = compact_column_file;
 
@@ -74,12 +74,7 @@ bool MinorCompaction::commit(ColumnFilePersistedSetPtr & persisted_file_set, Wri
 
 String MinorCompaction::info() const
 {
-    return fmt::format(
-        "Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}",
-        total_compact_files,
-        result_compact_files,
-        total_compact_rows,
-        total_compact_bytes);
+    return fmt::format("Compact end, total_compact_files={} result_compact_files={} total_compact_rows={} total_compact_bytes={}", total_compact_files, result_compact_files, total_compact_rows, total_compact_bytes);
 }
 } // namespace DM
 } // namespace DB

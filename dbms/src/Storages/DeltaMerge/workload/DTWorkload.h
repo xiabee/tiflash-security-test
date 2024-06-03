@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <Interpreters/Context_fwd.h>
 #include <fmt/ranges.h>
 
 #include <atomic>
@@ -54,10 +53,16 @@ class SharedHandleTable;
 class ThreadStat
 {
 public:
-    std::string toString() const { return fmt::format("ms {} count {} speed {}", ms, count, speed()); }
+    std::string toString() const
+    {
+        return fmt::format("ms {} count {} speed {}", ms, count, speed());
+    }
 
     // count per second
-    uint64_t speed() const { return ms == 0 ? 0 : count * 1000 / ms; }
+    uint64_t speed() const
+    {
+        return ms == 0 ? 0 : count * 1000 / ms;
+    }
 
 private:
     uint64_t ms = 0;
@@ -118,16 +123,15 @@ class DTWorkload
 public:
     static int mainEntry(int argc, char ** argv);
 
-    DTWorkload(
-        const WorkloadOptions & opts_,
-        std::shared_ptr<SharedHandleTable> handle_table_,
-        const TableInfo & table_info_,
-        ContextPtr context_);
+    DTWorkload(const WorkloadOptions & opts_, std::shared_ptr<SharedHandleTable> handle_table_, const TableInfo & table_info_);
     ~DTWorkload();
 
     void run(uint64_t r);
 
-    const Statistics & getStat() const { return stat; }
+    const Statistics & getStat() const
+    {
+        return stat;
+    }
 
 private:
     void write(ThreadStat & write_stat);
@@ -139,7 +143,7 @@ private:
 
     Poco::Logger * log;
 
-    ContextPtr context;
+    std::unique_ptr<Context> context;
     std::unique_ptr<WorkloadOptions> opts;
     std::unique_ptr<TableInfo> table_info;
     std::unique_ptr<KeyGenerator> key_gen;

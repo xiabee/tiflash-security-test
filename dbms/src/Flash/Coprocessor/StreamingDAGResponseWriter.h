@@ -18,14 +18,13 @@
 #include <Core/Types.h>
 #include <DataTypes/IDataType.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 #include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <common/logger_useful.h>
 
 namespace DB
 {
-class DAGContext;
-
 /// Serializes the stream of blocks and sends them to TiDB/TiSpark with different serialization paths.
 template <class StreamWriterPtr>
 class StreamingDAGResponseWriter : public DAGResponseWriter
@@ -37,7 +36,6 @@ public:
         Int64 batch_send_min_limit_,
         DAGContext & dag_context_);
     void write(const Block & block) override;
-    bool isWritable() const override;
     void flush() override;
 
 private:
