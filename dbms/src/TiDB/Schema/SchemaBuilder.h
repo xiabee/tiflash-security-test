@@ -14,12 +14,13 @@
 
 #pragma once
 
-#include <Interpreters/Context.h>
+#include <Interpreters/Context_fwd.h>
 #include <Storages/Transaction/TMTStorages.h>
 #include <TiDB/Schema/SchemaGetter.h>
 
 namespace DB
 {
+using KeyspaceDatabaseMap = std::unordered_map<KeyspaceDatabaseID, TiDB::DBInfoPtr, boost::hash<KeyspaceDatabaseID>>;
 template <typename Getter, typename NameMapper>
 struct SchemaBuilder
 {
@@ -29,31 +30,34 @@ struct SchemaBuilder
 
     Context & context;
 
-    std::unordered_map<DB::DatabaseID, TiDB::DBInfoPtr> & databases;
+    KeyspaceDatabaseMap & databases;
 
     Int64 target_version;
 
+    const KeyspaceID keyspace_id;
+
     LoggerPtr log;
 
-    SchemaBuilder(Getter & getter_, Context & context_, std::unordered_map<DB::DatabaseID, TiDB::DBInfoPtr> & dbs_, Int64 version)
+    SchemaBuilder(Getter & getter_, Context & context_, KeyspaceDatabaseMap & dbs_, Int64 version)
         : getter(getter_)
         , context(context_)
         , databases(dbs_)
         , target_version(version)
-        , log(Logger::get())
+        , keyspace_id(getter_.getKeyspaceID())
+        , log(Logger::get(fmt::format("keyspace={}", keyspace_id)))
     {}
 
     void applyDiff(const SchemaDiff & diff);
 
     void syncAllSchema();
 
+    void dropAllSchema();
+
 private:
     void applyDropSchema(DatabaseID schema_id);
 
     /// Parameter db_name should be mapped.
     void applyDropSchema(const String & db_name);
-
-    void applyRecoverSchema(DatabaseID database_id);
 
     bool applyCreateSchema(DatabaseID schema_id);
 
@@ -72,8 +76,7 @@ private:
 
     void applyPartitionDiff(const TiDB::DBInfoPtr & db_info, TableID table_id);
 
-    void applyPartitionDiff(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage, bool drop_part_if_not_exist);
-    TiDB::DBInfoPtr tryFindDatabaseByPartitionTable(const TiDB::DBInfoPtr & db_info, const String & part_table_name);
+    void applyPartitionDiff(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage);
 
     void applyAlterTable(const TiDB::DBInfoPtr & db_info, TableID table_id);
 

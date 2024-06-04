@@ -14,6 +14,7 @@
 
 #include <Common/FailPoint.h>
 #include <Common/Stopwatch.h>
+#include <Common/UniThreadPool.h>
 #include <Common/escapeForFileName.h>
 #include <Common/typeid_cast.h>
 #include <Databases/DatabaseTiFlash.h>
@@ -31,7 +32,6 @@
 #include <Storages/IManageableStorage.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/TMTStorages.h>
-#include <common/ThreadPool.h>
 #include <common/logger_useful.h>
 
 namespace DB
@@ -46,6 +46,7 @@ extern const int FILE_DOESNT_EXIST;
 extern const int LOGICAL_ERROR;
 extern const int CANNOT_GET_CREATE_TABLE_QUERY;
 extern const int SYNTAX_ERROR;
+extern const int TIDB_TABLE_ALREADY_EXISTS;
 } // namespace ErrorCodes
 
 namespace FailPoints
@@ -122,6 +123,11 @@ void DatabaseTiFlash::loadTables(Context & context, ThreadPool * thread_pool, bo
     AtomicStopwatch watch;
     std::atomic<size_t> tables_processed{0};
 
+    auto wait_group = thread_pool ? thread_pool->waitGroup() : nullptr;
+
+    std::mutex failed_tables_mutex;
+    Tables tables_failed_to_startup;
+
     auto task_function = [&](std::vector<String>::const_iterator begin, std::vector<String>::const_iterator end) {
         for (auto it = begin; it != end; ++it)
         {
@@ -133,7 +139,7 @@ void DatabaseTiFlash::loadTables(Context & context, ThreadPool * thread_pool, bo
             }
 
             const String & table_file = *it;
-            DatabaseLoading::loadTable(
+            auto [table_name, table] = DatabaseLoading::loadTable(
                 context,
                 *this,
                 metadata_path,
@@ -142,6 +148,31 @@ void DatabaseTiFlash::loadTables(Context & context, ThreadPool * thread_pool, bo
                 getEngineName(),
                 table_file,
                 has_force_restore_data_flag);
+
+            /// After table was basically initialized, startup it.
+            if (table)
+            {
+                try
+                {
+                    table->startup();
+                }
+                catch (DB::Exception & e)
+                {
+                    if (e.code() == ErrorCodes::TIDB_TABLE_ALREADY_EXISTS)
+                    {
+                        // While doing IStorage::startup, Exception thorwn with TIDB_TABLE_ALREADY_EXISTS,
+                        // means that we may crashed in the middle of renaming tables. We clean the meta file
+                        // for those storages by `cleanupTables`.
+                        // - If the storage is the outdated one after renaming, remove it is right.
+                        // - If the storage should be the target table, remove it means we "rollback" the
+                        //   rename action. And the table will be renamed by TiDBSchemaSyncer later.
+                        std::lock_guard lock(failed_tables_mutex);
+                        tables_failed_to_startup.emplace(table_name, table);
+                    }
+                    else
+                        throw;
+                }
+            }
         }
     };
 
@@ -155,17 +186,17 @@ void DatabaseTiFlash::loadTables(Context & context, ThreadPool * thread_pool, bo
         auto task = [&task_function, begin, end] {
             task_function(begin, end);
         };
+
         if (thread_pool)
-            thread_pool->schedule(task);
+            wait_group->schedule(task);
         else
             task();
     }
 
     if (thread_pool)
-        thread_pool->wait();
+        wait_group->wait();
 
-    // After all tables was basically initialized, startup them.
-    DatabaseLoading::startupTables(*this, name, tables, thread_pool, log);
+    DatabaseLoading::cleanupTables(*this, name, tables_failed_to_startup, log);
 }
 
 
@@ -508,8 +539,7 @@ void DatabaseTiFlash::shutdown()
     tables.clear();
 }
 
-
-void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombstone_, const TiDB::DBInfoPtr & new_db_info)
+void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombstone_)
 {
     const auto database_metadata_path = getDatabaseMetadataPath(metadata_path);
     const auto database_metadata_tmp_path = database_metadata_path + ".tmp";
@@ -521,18 +551,7 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
 
     {
         // Alter the attach statement in metadata.
-        std::shared_ptr<ASTLiteral> dbinfo_literal = [&]() {
-            String seri_info;
-            if (new_db_info != nullptr)
-            {
-                seri_info = new_db_info->serialize();
-            }
-            else if (db_info != nullptr)
-            {
-                seri_info = db_info->serialize();
-            }
-            return std::make_shared<ASTLiteral>(Field(seri_info));
-        }();
+        auto dbinfo_literal = std::make_shared<ASTLiteral>(Field(db_info == nullptr ? "" : (db_info->serialize())));
         Field format_version_field(static_cast<UInt64>(DatabaseTiFlash::CURRENT_VERSION));
         auto version_literal = std::make_shared<ASTLiteral>(format_version_field);
         auto tombstone_literal = std::make_shared<ASTLiteral>(Field(tombstone_));
@@ -561,9 +580,6 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
         }
         else
         {
-            // update the seri dbinfo
-            args.children[0] = dbinfo_literal;
-            args.children[1] = version_literal;
             // udpate the tombstone mark
             args.children[2] = tombstone_literal;
         }
@@ -581,17 +597,10 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
         // Atomic replace database metadata file and its encryption info
         auto provider = context.getFileProvider();
         bool reuse_encrypt_info = provider->isFileEncrypted(EncryptionPath(database_metadata_path, ""));
-        EncryptionPath encryption_path = reuse_encrypt_info ? EncryptionPath(database_metadata_path, "")
-                                                            : EncryptionPath(database_metadata_tmp_path, "");
+        EncryptionPath encryption_path
+            = reuse_encrypt_info ? EncryptionPath(database_metadata_path, "") : EncryptionPath(database_metadata_tmp_path, "");
         {
-            WriteBufferFromFileProvider out(
-                provider,
-                database_metadata_tmp_path,
-                encryption_path,
-                !reuse_encrypt_info,
-                nullptr,
-                statement.size(),
-                O_WRONLY | O_CREAT | O_TRUNC);
+            WriteBufferFromFileProvider out(provider, database_metadata_tmp_path, encryption_path, !reuse_encrypt_info, nullptr, statement.size(), O_WRONLY | O_CREAT | O_TRUNC);
             writeString(statement, out);
             out.next();
             if (context.getSettingsRef().fsync_metadata)
@@ -601,12 +610,7 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
 
         try
         {
-            provider->renameFile(
-                database_metadata_tmp_path,
-                encryption_path,
-                database_metadata_path,
-                EncryptionPath(database_metadata_path, ""),
-                !reuse_encrypt_info);
+            provider->renameFile(database_metadata_tmp_path, encryption_path, database_metadata_path, EncryptionPath(database_metadata_path, ""), !reuse_encrypt_info);
         }
         catch (...)
         {
@@ -617,11 +621,6 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
 
     // After all done, set the tombstone
     tombstone = tombstone_;
-    // Overwrite db_info if not null
-    if (new_db_info)
-    {
-        db_info = new_db_info;
-    }
 }
 
 void DatabaseTiFlash::drop(const Context & context)

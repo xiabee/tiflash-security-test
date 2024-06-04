@@ -22,7 +22,7 @@
 #include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 
-#include <memory>
+
 namespace DB
 {
 class Context;
@@ -33,19 +33,19 @@ namespace DM
 class DMFileBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    explicit DMFileBlockInputStream(DMFileReader && reader_, bool enable_data_sharing_)
+    explicit DMFileBlockInputStream(DMFileReader && reader_, bool enable_read_thread_)
         : reader(std::move(reader_))
-        , enable_data_sharing(enable_data_sharing_)
+        , enable_read_thread(enable_read_thread_)
     {
-        if (enable_data_sharing)
+        if (enable_read_thread)
         {
             DMFileReaderPool::instance().add(reader);
         }
     }
 
-    ~DMFileBlockInputStream()
+    ~DMFileBlockInputStream() override
     {
-        if (enable_data_sharing)
+        if (enable_read_thread)
         {
             DMFileReaderPool::instance().del(reader);
         }
@@ -57,14 +57,22 @@ public:
 
     bool getSkippedRows(size_t & skip_rows) override { return reader.getSkippedRows(skip_rows); }
 
+    size_t skipNextBlock() override { return reader.skipNextBlock(); }
+
     Block read() override
     {
         return reader.read();
     }
 
+    Block readWithFilter(const IColumn::Filter & filter) override
+    {
+        return reader.readWithFilter(filter);
+    }
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#endif
     DMFileReader reader;
-    bool enable_data_sharing;
+    bool enable_read_thread;
 };
 
 using DMFileBlockInputStreamPtr = std::shared_ptr<DMFileBlockInputStream>;
@@ -153,7 +161,7 @@ private:
         enable_column_cache = settings.dt_enable_stable_column_cache;
         aio_threshold = settings.min_bytes_to_use_direct_io;
         max_read_buffer_size = settings.max_read_buffer_size;
-        max_sharing_column_bytes_for_all = settings.dt_max_sharing_column_bytes_for_all;
+        enable_read_thread = settings.dt_enable_read_thread;
         return *this;
     }
     DMFileBlockInputStreamBuilder & setCaches(const MarkCachePtr & mark_cache_, const MinMaxIndexCachePtr & index_cache_)
@@ -186,7 +194,7 @@ private:
     size_t max_read_buffer_size{};
     size_t rows_threshold_per_read = DMFILE_READ_ROWS_THRESHOLD;
     bool read_one_pack_every_time = false;
-    size_t max_sharing_column_bytes_for_all = 0;
+    bool enable_read_thread = false;
     String tracing_id;
 };
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 
 namespace DB
@@ -23,12 +24,15 @@ TiDBTableScan::TiDBTableScan(
     : table_scan(table_scan_)
     , executor_id(executor_id_)
     , is_partition_table_scan(table_scan->tp() == tipb::TypePartitionTableScan)
-    , columns(is_partition_table_scan ? table_scan->partition_table_scan().columns() : table_scan->tbl_scan().columns())
+    , columns(is_partition_table_scan ? std::move(TiDB::toTiDBColumnInfos(table_scan->partition_table_scan().columns())) : std::move(TiDB::toTiDBColumnInfos(table_scan->tbl_scan().columns())))
+    , pushed_down_filters(is_partition_table_scan ? std::move(table_scan->partition_table_scan().pushed_down_filter_conditions()) : std::move(table_scan->tbl_scan().pushed_down_filter_conditions()))
     // Only No-partition table need keep order when tablescan executor required keep order.
     // If keep_order is not set, keep order for safety.
     , keep_order(!is_partition_table_scan && (table_scan->tbl_scan().keep_order() || !table_scan->tbl_scan().has_keep_order()))
     , is_fast_scan(is_partition_table_scan ? table_scan->partition_table_scan().is_fast_scan() : table_scan->tbl_scan().is_fast_scan())
 {
+    RUNTIME_CHECK_MSG(!keep_order || pushed_down_filters.empty(), "Bad TiDB table scan executor: push down filter is not empty when keep order is true");
+
     if (is_partition_table_scan)
     {
         if (table_scan->partition_table_scan().has_table_id())
@@ -68,6 +72,8 @@ void TiDBTableScan::constructTableScanForRemoteRead(tipb::TableScan * tipb_table
         tipb_table_scan->set_table_id(table_id);
         for (const auto & column : partition_table_scan.columns())
             *tipb_table_scan->add_columns() = column;
+        for (const auto & filter : partition_table_scan.pushed_down_filter_conditions())
+            *tipb_table_scan->add_pushed_down_filter_conditions() = filter;
         tipb_table_scan->set_desc(partition_table_scan.desc());
         for (auto id : partition_table_scan.primary_column_ids())
             tipb_table_scan->add_primary_column_ids(id);

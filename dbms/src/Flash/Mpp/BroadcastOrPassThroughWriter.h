@@ -15,13 +15,16 @@
 #pragma once
 
 #include <Flash/Coprocessor/ChunkCodec.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
 #include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <common/types.h>
 
 namespace DB
 {
+class DAGContext;
+enum class CompressionMethod;
+enum MPPDataPacketVersion : int64_t;
+
 template <class ExchangeWriterPtr>
 class BroadcastOrPassThroughWriter : public DAGResponseWriter
 {
@@ -29,19 +32,28 @@ public:
     BroadcastOrPassThroughWriter(
         ExchangeWriterPtr writer_,
         Int64 batch_send_min_limit_,
-        DAGContext & dag_context_);
+        DAGContext & dag_context_,
+        MPPDataPacketVersion data_codec_version_,
+        tipb::CompressionMode compression_mode_,
+        tipb::ExchangeType exchange_type_);
     void write(const Block & block) override;
+    bool isReadyForWrite() const override;
     void flush() override;
 
 private:
-    void encodeThenWriteBlocks();
+    void writeBlocks();
 
 private:
     Int64 batch_send_min_limit;
     ExchangeWriterPtr writer;
     std::vector<Block> blocks;
     size_t rows_in_blocks;
-    std::unique_ptr<ChunkCodecStream> chunk_codec_stream;
+    const tipb::ExchangeType exchange_type;
+
+    // support data compression
+    DataTypes expected_types;
+    MPPDataPacketVersion data_codec_version;
+    CompressionMethod compression_method{};
 };
 
 } // namespace DB

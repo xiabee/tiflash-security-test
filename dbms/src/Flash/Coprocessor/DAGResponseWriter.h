@@ -14,11 +14,14 @@
 
 #pragma once
 
-#include <Flash/Coprocessor/DAGContext.h>
+#include <Core/Block.h>
+#include <common/types.h>
 #include <tipb/select.pb.h>
 
 namespace DB
 {
+class DAGContext;
+
 class DAGResponseWriter
 {
 public:
@@ -28,6 +31,14 @@ public:
     /// prepared with sample block
     virtual void prepare(const Block &){};
     virtual void write(const Block & block) = 0;
+
+    // For async writer, `isReadyForWrite` need to be called before calling `write`.
+    // ```
+    // while (!isReadyForWrite()) {}
+    // write(block);
+    // ```
+    virtual bool isReadyForWrite() const { throw Exception("Unsupport"); }
+
     /// flush cached blocks for batch writer
     virtual void flush() = 0;
     virtual ~DAGResponseWriter() = default;

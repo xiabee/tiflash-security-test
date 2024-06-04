@@ -15,10 +15,15 @@
 #pragma once
 
 #include <Flash/Coprocessor/CoprocessorReader.h>
-#include <Flash/Coprocessor/DAGContext.h>
 
 namespace DB
 {
+class CoprocessorReader;
+using CoprocessorReaderPtr = std::shared_ptr<CoprocessorReader>;
+class ExchangeReceiver;
+using ExchangeReceiverPtr = std::shared_ptr<ExchangeReceiver>;
+using ExchangeReceiverMap = std::unordered_map<String, ExchangeReceiverPtr>;
+
 class MPPReceiverSet
 {
 public:

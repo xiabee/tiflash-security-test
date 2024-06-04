@@ -15,7 +15,7 @@
 #pragma once
 #include <Common/MemoryTrackerSetter.h>
 #include <Storages/DeltaMerge/DMContext.h>
-#include <Storages/DeltaMerge/Filter/RSOperator.h>
+#include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/ReadThread/WorkQueue.h>
 #include <Storages/DeltaMerge/RowKeyRangeUtils.h>
 
@@ -129,6 +129,8 @@ enum class ReadMode
      * are just returned.
      */
     Raw,
+
+    Bitmap,
 };
 
 // If `enable_read_thread_` is true, `SegmentReadTasksWrapper` use `std::unordered_map` to index `SegmentReadTask` by segment id,
@@ -161,7 +163,7 @@ public:
         int64_t table_id_,
         const DMContextPtr & dm_context_,
         const ColumnDefines & columns_to_read_,
-        const RSOperatorPtr & filter_,
+        const PushDownFilterPtr & filter_,
         uint64_t max_version_,
         size_t expected_block_size_,
         ReadMode read_mode_,
@@ -191,12 +193,7 @@ public:
         // Limiting the minimum number of reading segments to 2 is to avoid, as much as possible,
         // situations where the computation may be faster and the storage layer may not be able to keep up.
         , active_segment_limit(std::max(num_streams_, 2))
-    {
-        if (tasks_wrapper.empty())
-        {
-            q.finish();
-        }
-    }
+    {}
 
     ~SegmentReadTaskPool()
     {
@@ -206,17 +203,17 @@ public:
         auto total_bytes = blk_stat.totalBytes();
         auto blk_avg_bytes = total_count > 0 ? total_bytes / total_count : 0;
         auto approximate_max_pending_block_bytes = blk_avg_bytes * max_queue_size;
-        LOG_INFO(log, "Done. pool_id={} table_id={} pop={} pop_empty={} pop_empty_ratio={} max_queue_size={} blk_avg_bytes={} approximate_max_pending_block_bytes={:.2f}MB total_count={} total_bytes={:.2f}MB", //
-                 pool_id,
-                 table_id,
-                 pop_times,
-                 pop_empty_times,
-                 pop_empty_ratio,
-                 max_queue_size,
-                 blk_avg_bytes,
-                 approximate_max_pending_block_bytes / 1024.0 / 1024.0,
-                 total_count,
-                 total_bytes / 1024.0 / 1024.0);
+        LOG_DEBUG(log, "Done. pool_id={} table_id={} pop={} pop_empty={} pop_empty_ratio={} max_queue_size={} blk_avg_bytes={} approximate_max_pending_block_bytes={:.2f}MB total_count={} total_bytes={:.2f}MB", //
+                  pool_id,
+                  table_id,
+                  pop_times,
+                  pop_empty_times,
+                  pop_empty_ratio,
+                  max_queue_size,
+                  blk_avg_bytes,
+                  approximate_max_pending_block_bytes / 1024.0 / 1024.0,
+                  total_count,
+                  total_bytes / 1024.0 / 1024.0);
     }
 
     SegmentReadTaskPtr nextTask();
@@ -231,6 +228,7 @@ public:
 
     bool readOneBlock(BlockInputStreamPtr & stream, const SegmentPtr & seg);
     void popBlock(Block & block);
+    bool tryPopBlock(Block & block);
 
     std::unordered_map<uint64_t, std::vector<uint64_t>>::const_iterator scheduleSegment(
         const std::unordered_map<uint64_t, std::vector<uint64_t>> & segments,
@@ -263,7 +261,7 @@ private:
     const int64_t table_id;
     DMContextPtr dm_context;
     ColumnDefines columns_to_read;
-    RSOperatorPtr filter;
+    PushDownFilterPtr filter;
     const uint64_t max_version;
     const size_t expected_block_size;
     const ReadMode read_mode;

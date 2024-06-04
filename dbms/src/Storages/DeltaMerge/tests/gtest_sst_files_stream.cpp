@@ -13,13 +13,14 @@
 // limitations under the License.
 
 #include <DataStreams/BlocksListBlockInputStream.h>
+#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/SSTFilesToDTFilesOutputStream.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <Storages/Transaction/TMTContext.h>
 #include <Storages/Transaction/tests/region_helper.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
 #include <TestUtils/FunctionTestUtils.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
 #include <magic_enum.hpp>
@@ -46,7 +47,7 @@ public:
     void TearDown() override
     {
         storage->drop();
-        db_context->getTMTContext().getStorages().remove(/* table id */ 100);
+        db_context->getTMTContext().getStorages().remove(NullspaceID, /* table id */ 100);
     }
 
     void setupStorage()
@@ -177,7 +178,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 0,
         /* split_after_size */ 0,
@@ -205,7 +205,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 0,
         /* split_after_size */ 0,
@@ -235,7 +234,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 1,
         /* split_after_size */ 1,
@@ -266,7 +264,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 10,
         /* split_after_size */ 0,
@@ -303,7 +300,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 10,
         /* split_after_size */ 0,
@@ -336,7 +332,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 10000,
         /* split_after_size */ 0,
@@ -370,7 +365,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 20,
         /* split_after_size */ 0,
@@ -410,7 +404,6 @@ try
         mock_stream,
         storage,
         schema_snapshot,
-        TiDB::SnapshotApplyMethod::DTFile_Directory,
         FileConvertJobType::ApplySnapshot,
         /* split_after_rows */ 20,
         /* split_after_size */ 0,

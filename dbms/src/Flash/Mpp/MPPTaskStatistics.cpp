@@ -26,7 +26,8 @@
 namespace DB
 {
 MPPTaskStatistics::MPPTaskStatistics(const MPPTaskId & id_, String address_)
-    : logger(getMPPTaskTracingLog(id_))
+    : log(getMPPTaskTracingLog(id_))
+    , executor_statistics_collector(log->identifier())
     , id(id_)
     , host(std::move(address_))
     , task_init_timestamp(Clock::now())
@@ -55,7 +56,6 @@ void MPPTaskStatistics::recordReadWaitIndex(DAGContext & dag_context)
     }
     // else keep zero timestamp
 }
-
 namespace
 {
 Int64 toNanoseconds(MPPTaskStatistics::Timestamp timestamp)
@@ -64,51 +64,51 @@ Int64 toNanoseconds(MPPTaskStatistics::Timestamp timestamp)
 }
 } // namespace
 
-void MPPTaskStatistics::initializeExecutorDAG(DAGContext * dag_context)
+void MPPTaskStatistics::initializeExecutorDAG(DAGContext * dag_context_)
 {
-    assert(dag_context);
-    assert(dag_context->isMPPTask());
-    RUNTIME_CHECK(dag_context->dag_request && dag_context->dag_request->has_root_executor());
-    const auto & root_executor = dag_context->dag_request->root_executor();
-    RUNTIME_CHECK(root_executor.has_exchange_sender());
+    assert(dag_context_);
+    assert(dag_context_->isMPPTask());
+    dag_context = dag_context_;
+    const auto & root_executor = dag_context->dag_request.rootExecutor();
+    if unlikely (!root_executor.has_exchange_sender())
+        throw TiFlashException("The root executor isn't ExchangeSender in MPP, which is unexpected.", Errors::Coprocessor::BadRequest);
 
     is_root = dag_context->isRootMPPTask();
     sender_executor_id = root_executor.executor_id();
     executor_statistics_collector.initialize(dag_context);
 }
 
-const BaseRuntimeStatistics & MPPTaskStatistics::collectRuntimeStatistics()
+void MPPTaskStatistics::collectRuntimeStatistics()
 {
-    executor_statistics_collector.collectRuntimeDetails();
-    const auto & executor_statistics_res = executor_statistics_collector.getResult();
+    const auto & executor_statistics_res = executor_statistics_collector.getProfiles();
     auto it = executor_statistics_res.find(sender_executor_id);
     RUNTIME_CHECK_MSG(it != executor_statistics_res.end(), "Can't find exchange sender statistics after `collectRuntimeStatistics`");
     const auto & return_statistics = it->second->getBaseRuntimeStatistics();
-
     // record io bytes
     output_bytes = return_statistics.bytes;
-    recordInputBytes(executor_statistics_collector.getDAGContext());
+    recordInputBytes(*dag_context);
+}
 
-    return return_statistics;
+tipb::SelectResponse MPPTaskStatistics::genExecutionSummaryResponse()
+{
+    return executor_statistics_collector.genExecutionSummaryResponse();
 }
 
 void MPPTaskStatistics::logTracingJson()
 {
-    LOG_IMPL(
-        logger,
-        /// don't use info log for initializing status since it does not contains too many information
-        status == INITIALIZING ? Poco::Message::PRIO_DEBUG : Poco::Message::PRIO_INFORMATION,
+    LOG_INFO(
+        log,
         R"({{"query_tso":{},"task_id":{},"is_root":{},"sender_executor_id":"{}","executors":{},"host":"{}")"
         R"(,"task_init_timestamp":{},"task_start_timestamp":{},"task_end_timestamp":{})"
         R"(,"compile_start_timestamp":{},"compile_end_timestamp":{})"
         R"(,"read_wait_index_start_timestamp":{},"read_wait_index_end_timestamp":{})"
         R"(,"local_input_bytes":{},"remote_input_bytes":{},"output_bytes":{})"
         R"(,"status":"{}","error_message":"{}","working_time":{},"memory_peak":{}}})",
-        id.start_ts,
+        id.query_id.start_ts,
         id.task_id,
         is_root,
         sender_executor_id,
-        executor_statistics_collector.resToJson(),
+        executor_statistics_collector.profilesToJson(),
         host,
         toNanoseconds(task_init_timestamp),
         toNanoseconds(task_start_timestamp),

@@ -48,8 +48,8 @@ public:
 
     void add(size_t start_pack_id, size_t pack_count, ColumnPtr & col_data)
     {
-        std::lock_guard lock(mtx);
         GET_METRIC(tiflash_storage_read_thread_counter, type_add_cache_succ).Increment();
+        std::lock_guard lock(mtx);
         auto & value = packs[start_pack_id];
         if (value.pack_count < pack_count)
         {
@@ -121,7 +121,7 @@ private:
 class ColumnSharingCacheMap
 {
 public:
-    ColumnSharingCacheMap(const String & dmfile_name_, const ColumnDefines & cds, LoggerPtr & log_)
+    ColumnSharingCacheMap(const std::string & dmfile_name_, const ColumnDefines & cds, LoggerPtr & log_)
         : dmfile_name(dmfile_name_)
         , stats(static_cast<int>(ColumnCacheStatus::_TOTAL_COUNT))
         , log(log_)

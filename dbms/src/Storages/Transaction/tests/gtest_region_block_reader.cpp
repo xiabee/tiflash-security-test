@@ -50,7 +50,6 @@ protected:
 
     RegionDataReadInfoList data_list_read;
     std::unordered_map<ColumnID, Field> fields_map;
-    std::unordered_set<ColumnID> invalid_null_column_ids;
 
     LoggerPtr logger;
 
@@ -174,17 +173,7 @@ protected:
                 else
                 {
                     if (fields_map.count(column_element.column_id) > 0)
-                    {
-                        if (invalid_null_column_ids.count(column_element.column_id) == 0)
-                        {
-                            ASSERT_FIELD_EQ((*column_element.column)[row], fields_map.at(column_element.column_id))
-                                << gen_error_log();
-                        }
-                        else
-                        {
-                            ASSERT_FIELD_EQ((*column_element.column)[row], UInt64(0));
-                        }
-                    }
+                        ASSERT_FIELD_EQ((*column_element.column)[row], fields_map.at(column_element.column_id)) << gen_error_log();
                     else
                         LOG_INFO(logger, "ignore value check for new added column, id={}, name={}", column_element.column_id, column_element.name);
                 }
@@ -412,12 +401,11 @@ try
     encodeColumns(table_info, fields, RowEncodeVersion::RowV2);
 
     auto new_table_info = getTableInfoFieldsForInvalidNULLTest({EXTRA_HANDLE_COLUMN_ID}, false);
-    invalid_null_column_ids.emplace(11);
     ASSERT_TRUE(new_table_info.getColumnInfo(11).hasNotNullFlag()); // col 11 is not null
 
     auto new_decoding_schema = getDecodingStorageSchemaSnapshot(new_table_info);
     ASSERT_FALSE(decodeAndCheckColumns(new_decoding_schema, false));
-    ASSERT_TRUE(decodeAndCheckColumns(new_decoding_schema, true));
+    ASSERT_ANY_THROW(decodeAndCheckColumns(new_decoding_schema, true));
 }
 CATCH
 
@@ -425,14 +413,10 @@ TEST_F(RegionBlockReaderTest, InvalidNULLRowV1)
 {
     auto [table_info, fields] = getNormalTableInfoFields({EXTRA_HANDLE_COLUMN_ID}, false);
     encodeColumns(table_info, fields, RowEncodeVersion::RowV1);
-
     auto new_table_info = getTableInfoFieldsForInvalidNULLTest({EXTRA_HANDLE_COLUMN_ID}, false);
-    invalid_null_column_ids.emplace(11);
-    ASSERT_TRUE(new_table_info.getColumnInfo(11).hasNotNullFlag()); // col 11 is not null
-
     auto new_decoding_schema = getDecodingStorageSchemaSnapshot(new_table_info);
     ASSERT_FALSE(decodeAndCheckColumns(new_decoding_schema, false));
-    ASSERT_TRUE(decodeAndCheckColumns(new_decoding_schema, true));
+    ASSERT_ANY_THROW(decodeAndCheckColumns(new_decoding_schema, true));
 }
 
 
@@ -607,7 +591,8 @@ try
         {"comment":"","default":null,"default_bit":null,"id":1,"name":{"L":"case_no","O":"case_no"},"offset":0,"origin_default":null,"state":5,"type":{"Charset":"utf8mb4","Collate":"utf8mb4_bin","Decimal":0,"Elems":null,"Flag":4099,"Flen":32,"Tp":15}},
         {"comment":"","default":null,"default_bit":null,"id":2,"name":{"L":"p","O":"p"},"offset":1,"origin_default":null,"state":5,"type":{"Charset":"utf8mb4","Collate":"utf8mb4_bin","Decimal":0,"Elems":null,"Flag":0,"Flen":12,"Tp":15}},
         {"comment":"","default":null,"default_bit":null,"id":3,"name":{"L":"source","O":"source"},"offset":2,"origin_default":"","state":5,"type":{"Charset":"utf8mb4","Collate":"utf8mb4_bin","Decimal":0,"Elems":null,"Flag":4099,"Flen":20,"Tp":15}}
-    ],"comment":"","id":77,"index_info":[],"is_common_handle":false,"name":{"L":"t_case","O":"t_case"},"partition":null,"pk_is_handle":false,"schema_version":62,"state":5,"tiflash_replica":{"Count":1},"update_timestamp":435984541435559947})");
+    ],"comment":"","id":77,"index_info":[],"is_common_handle":false,"name":{"L":"t_case","O":"t_case"},"partition":null,"pk_is_handle":false,"schema_version":62,"state":5,"tiflash_replica":{"Count":1},"update_timestamp":435984541435559947})",
+                         NullspaceID);
 
     RegionID region_id = 4;
     String region_start_key(bytesFromHexString("7480000000000000FF445F720000000000FA"));

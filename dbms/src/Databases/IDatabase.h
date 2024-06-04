@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Common/UniThreadPool.h>
 #include <Core/NamesAndTypes.h>
 #include <Core/Types.h>
 #include <Storages/ColumnsDescription.h>
@@ -22,14 +23,6 @@
 #include <ctime>
 #include <functional>
 #include <memory>
-
-namespace TiDB
-{
-struct DBInfo;
-using DBInfoPtr = std::shared_ptr<DBInfo>;
-} // namespace TiDB
-
-class ThreadPool;
 
 
 namespace DB
@@ -56,7 +49,7 @@ public:
     virtual const String & name() const = 0;
     virtual StoragePtr & table() const = 0;
 
-    virtual ~IDatabaseIterator() = default;
+    virtual ~IDatabaseIterator() {}
 };
 
 using DatabaseIteratorPtr = std::unique_ptr<IDatabaseIterator>;
@@ -143,12 +136,12 @@ public:
 
     virtual bool isTombstone() const { return false; }
     virtual Timestamp getTombstone() const { return 0; }
-    virtual void alterTombstone(const Context & /*context*/, Timestamp /*tombstone_*/, const TiDB::DBInfoPtr & /*new_db_info*/) {}
+    virtual void alterTombstone(const Context & /*context*/, Timestamp /*tombstone_*/) {}
 
     /// Delete metadata, the deletion of which differs from the recursive deletion of the directory, if any.
     virtual void drop(const Context & context) = 0;
 
-    virtual ~IDatabase() = default;
+    virtual ~IDatabase() {}
 };
 
 using DatabasePtr = std::shared_ptr<IDatabase>;

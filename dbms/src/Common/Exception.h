@@ -50,7 +50,7 @@ public:
     // Format message with fmt::format, like the logging functions.
     template <typename... Args>
     Exception(int code, const std::string & fmt, Args &&... args)
-        : Exception(FmtBuffer().fmtAppend(fmt, std::forward<Args>(args)...).toString(), code)
+        : Exception(FmtBuffer().fmtAppend(fmt::runtime(fmt), std::forward<Args>(args)...).toString(), code)
     {}
 
     Exception(const std::string & msg, const std::string & arg, int code = 0)
@@ -115,10 +115,6 @@ void tryLogCurrentException(const LoggerPtr & logger,
                             const std::string & start_of_message = "");
 void tryLogCurrentException(Poco::Logger * logger,
                             const std::string & start_of_message = "");
-
-void tryLogCurrentFatalException(const char * log_name, const std::string & start_of_message = "");
-void tryLogCurrentFatalException(const LoggerPtr & logger, const std::string & start_of_message = "");
-void tryLogCurrentFatalException(Poco::Logger * logger, const std::string & start_of_message = "");
 
 /** Prints current exception in canonical format.
  * with_stacktrace - prints stack trace for DB::Exception.
@@ -188,7 +184,7 @@ inline std::string generateFormattedMessage(const char * condition)
 template <typename... Args>
 inline std::string generateFormattedMessage(const char * condition, const char * fmt_str, Args &&... args)
 {
-    return FmtBuffer().fmtAppend("Assert {} fail! ", condition).fmtAppend(fmt_str, std::forward<Args>(args)...).toString();
+    return FmtBuffer().fmtAppend("Assert {} fail! ", condition).fmtAppend(fmt::runtime(fmt_str), std::forward<Args>(args)...).toString();
 }
 
 template <typename... Args>

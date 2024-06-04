@@ -15,8 +15,8 @@
 #include <DataTypes/DataTypesNumber.h>
 #include <Flash/Coprocessor/ArrowChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
+#include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
-#include <Interpreters/Context.h>
 #include <Storages/Transaction/TiDB.h>
 #include <TestUtils/ColumnGenerator.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -38,12 +38,10 @@ protected:
         dag_context_ptr->is_mpp_task = true;
         dag_context_ptr->is_root_mpp_task = true;
         dag_context_ptr->result_field_types = makeFields();
-        context.setDAGContext(dag_context_ptr.get());
     }
 
 public:
     TestStreamingWriter()
-        : context(TiFlashTestEnv::getContext())
     {}
 
     // Return 10 Int64 column.
@@ -86,8 +84,6 @@ public:
         return block;
     }
 
-    Context context;
-
     std::unique_ptr<DAGContext> dag_context_ptr;
 };
 
@@ -100,6 +96,7 @@ struct MockStreamWriter
     {}
 
     void write(tipb::SelectResponse & response) { checker(response); }
+    bool isReadyForWrite() const { throw Exception("Unsupport async write"); }
 
 private:
     MockStreamWriterChecker checker;

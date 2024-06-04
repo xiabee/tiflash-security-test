@@ -19,7 +19,6 @@
 #include <Common/TiFlashMetrics.h>
 #include <Encryption/ReadBufferFromFileProvider.h>
 #include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/Filter/FilterHelper.h>
@@ -63,7 +62,8 @@ public:
     }
 
     inline const std::vector<RSResult> & getHandleRes() const { return handle_res; }
-    inline const std::vector<UInt8> & getUsePacks() const { return use_packs; }
+    inline const std::vector<UInt8> & getUsePacksConst() const { return use_packs; }
+    inline std::vector<UInt8> & getUsePacks() { return use_packs; }
 
     Handle getMinHandle(size_t pack_id)
     {
@@ -236,9 +236,10 @@ private:
         const auto file_name_base = DMFile::getFileNameBase(col_id);
 
         auto load = [&]() {
-            auto index_file_size = dmfile->colIndexSize(file_name_base);
+            auto index_file_size = dmfile->colIndexSize(col_id);
             if (index_file_size == 0)
                 return std::make_shared<MinMaxIndex>(*type);
+            auto index_guard = S3::S3RandomAccessFile::setReadFileInfo(dmfile->getReadFileInfo(col_id, dmfile->colIndexFileName(file_name_base)));
             if (!dmfile->configuration)
             {
                 auto index_buf = ReadBufferFromFileProvider(
@@ -247,19 +248,17 @@ private:
                     dmfile->encryptionIndexPath(file_name_base),
                     std::min(static_cast<size_t>(DBMS_DEFAULT_BUFFER_SIZE), index_file_size),
                     read_limiter);
-                index_buf.seek(dmfile->colIndexOffset(file_name_base));
-                return MinMaxIndex::read(*type, index_buf, dmfile->colIndexSize(file_name_base));
+                return MinMaxIndex::read(*type, index_buf, index_file_size);
             }
             else
             {
                 auto index_buf = createReadBufferFromFileBaseByFileProvider(file_provider,
                                                                             dmfile->colIndexPath(file_name_base),
                                                                             dmfile->encryptionIndexPath(file_name_base),
-                                                                            dmfile->colIndexSize(file_name_base),
+                                                                            index_file_size,
                                                                             read_limiter,
                                                                             dmfile->configuration->getChecksumAlgorithm(),
                                                                             dmfile->configuration->getChecksumFrameLength());
-                index_buf->seek(dmfile->colIndexOffset(file_name_base));
                 auto header_size = dmfile->configuration->getChecksumHeaderLength();
                 auto frame_total_size = dmfile->configuration->getChecksumFrameLength() + header_size;
                 auto frame_count = index_file_size / frame_total_size + (index_file_size % frame_total_size != 0);
@@ -293,7 +292,7 @@ private:
         Stopwatch watch;
         loadIndex(param.indexes, dmfile, file_provider, index_cache, set_cache_if_miss, col_id, read_limiter);
 
-        scan_context->total_dmfile_rough_set_index_load_time_ms += watch.elapsedMilliseconds();
+        scan_context->total_dmfile_rough_set_index_load_time_ns += watch.elapsed();
     }
 
 private:

@@ -19,7 +19,7 @@ namespace DB::DM
 {
 SegmentReadTaskScheduler::SegmentReadTaskScheduler()
     : stop(false)
-    , log(&Poco::Logger::get("SegmentReadTaskScheduler"))
+    , log(Logger::get())
 {
     sched_thread = std::thread(&SegmentReadTaskScheduler::schedLoop, this);
 }
@@ -32,10 +32,6 @@ SegmentReadTaskScheduler::~SegmentReadTaskScheduler()
 
 void SegmentReadTaskScheduler::add(const SegmentReadTaskPoolPtr & pool)
 {
-    if (pool->getTasks().empty())
-    {
-        return;
-    }
     Stopwatch sw_add;
     std::lock_guard lock(mtx);
     Stopwatch sw_do_add;
@@ -48,14 +44,14 @@ void SegmentReadTaskScheduler::add(const SegmentReadTaskPoolPtr & pool)
         merging_segments[pool->tableId()][seg_id].push_back(pool->poolId());
     }
     auto block_slots = pool->getFreeBlockSlots();
-    LOG_INFO(log, "Added, pool_id={} table_id={} block_slots={} segment_count={} pool_count={} cost={:.3f}us do_add_cost={:.3f}us", //
-             pool->poolId(),
-             pool->tableId(),
-             block_slots,
-             tasks.size(),
-             read_pools.size(),
-             sw_add.elapsed() / 1000.0,
-             sw_do_add.elapsed() / 1000.0);
+    LOG_DEBUG(log, "Added, pool_id={} table_id={} block_slots={} segment_count={} pool_count={} cost={}ns do_add_cost={}ns", //
+              pool->poolId(),
+              pool->tableId(),
+              block_slots,
+              tasks.size(),
+              read_pools.size(),
+              sw_add.elapsed(),
+              sw_do_add.elapsed());
 }
 
 std::pair<MergedTaskPtr, bool> SegmentReadTaskScheduler::scheduleMergedTask()

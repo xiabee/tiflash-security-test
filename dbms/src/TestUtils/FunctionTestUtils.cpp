@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Columns/ColumnNothing.h>
-#include <Columns/ColumnNullable.h>
 #include <Columns/ColumnSet.h>
 #include <Common/FmtUtils.h>
 #include <Core/ColumnNumbers.h>
@@ -99,6 +98,7 @@ template <typename ExpectedT, typename ActualT, typename ExpectedDisplayT, typen
 ::testing::AssertionResult columnEqual(
     const ColumnPtr & expected,
     const ColumnPtr & actual,
+    const ICollator * collator,
     bool is_floating_point)
 {
     ASSERT_EQUAL(expected->getName(), actual->getName(), "Column name mismatch");
@@ -121,6 +121,14 @@ template <typename ExpectedT, typename ActualT, typename ExpectedDisplayT, typen
 
         if (!is_floating_point)
         {
+            if (collator != nullptr && !expected_field.isNull() && !actual_field.isNull())
+            {
+                auto e_string = expected_field.get<String>();
+                auto a_string = actual_field.get<String>();
+                if (collator->compare(e_string.data(), e_string.size(), a_string.data(), a_string.size()) == 0)
+                    continue;
+                /// if not equal, fallback to the original compare so we can reuse the code to get error message
+            }
             ASSERT_EQUAL_WITH_TEXT(expected_field, actual_field, fmt::format("Value at index {} mismatch", i), expected_field.toString(), actual_field.toString());
         }
         else
@@ -141,12 +149,13 @@ template <typename ExpectedT, typename ActualT, typename ExpectedDisplayT, typen
 
 ::testing::AssertionResult columnEqual(
     const ColumnWithTypeAndName & expected,
-    const ColumnWithTypeAndName & actual)
+    const ColumnWithTypeAndName & actual,
+    const ICollator * collator)
 {
     if (auto ret = dataTypeEqual(expected.type, actual.type); !ret)
         return ret;
 
-    return columnEqual(expected.column, actual.column, expected.type->isFloatingPoint());
+    return columnEqual(expected.column, actual.column, collator, expected.type->isFloatingPoint());
 }
 
 ::testing::AssertionResult blockEqual(
@@ -189,7 +198,7 @@ std::multiset<Row> columnsToRowSet(const ColumnsWithTypeAndName & cols)
         r.resize(cols_size, true);
     }
 
-    for (auto const & [col_id, col] : ext::enumerate(cols))
+    for (auto && [col_id, col] : ext::enumerate(cols))
     {
         for (size_t i = 0, size = col.column->size(); i < size; ++i)
         {
@@ -300,7 +309,7 @@ ColumnsWithTypeAndName toColumnsWithUniqueName(const ColumnsWithTypeAndName & co
 ColumnsWithTypeAndName toColumnsReordered(const ColumnsWithTypeAndName & columns, const ColumnNumbers & new_offsets)
 {
     ColumnsWithTypeAndName columns_reordered(columns.size());
-    for (const auto & [i, offset] : ext::enumerate(new_offsets))
+    for (auto && [i, offset] : ext::enumerate(new_offsets))
     {
         columns_reordered[offset] = columns[i];
     }
@@ -318,13 +327,10 @@ ColumnWithTypeAndName executeFunction(
     for (size_t i = 0; i < columns.size(); ++i)
         argument_column_numbers.push_back(i);
 
-    /// Replace `std::random_device` with `std::chrono::system_clock` here to avoid
-    /// exceptions like 'random_device failed to open /dev/urandom: Operation not permitted'.
-    /// The reason of exceptions is unknown, but the probability of its occurrence in unittests
-    /// TestDateTimeDayMonthYear.dayMonthYearTest is not low.
-    /// Since this function is just used for testing, using current timestamp as a random seed is not a problem.
-    std::mt19937 g(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
     /// shuffle input columns to assure function correctly use physical offsets instead of logical offsets
+    std::random_device rd;
+    std::mt19937 g(rd());
+
     std::shuffle(argument_column_numbers.begin(), argument_column_numbers.end(), g);
     const auto columns_reordered = toColumnsReordered(columns, argument_column_numbers);
 
@@ -470,7 +476,7 @@ String getColumnsContent(const ColumnsWithTypeAndName & cols, size_t begin, size
     assert(col_size >= end);
     assert(col_size > begin);
 
-    bool is_same = true;
+    bool is_same [[maybe_unused]] = true;
 
     for (size_t i = 1; i < col_num; ++i)
     {
@@ -508,6 +514,26 @@ String getColumnsContent(const ColumnsWithTypeAndName & cols, size_t begin, size
 ColumnsWithTypeAndName createColumns(const ColumnsWithTypeAndName & cols)
 {
     return cols;
+}
+
+FunctionTest::FunctionTest()
+    : context(TiFlashTestEnv::getContext())
+{}
+
+void FunctionTest::initializeDAGContext()
+{
+    dag_context_ptr = std::make_unique<DAGContext>(1024);
+    context->setDAGContext(dag_context_ptr.get());
+}
+
+ColumnWithTypeAndName FunctionTest::executeFunction(const String & func_name, const ColumnsWithTypeAndName & columns, TiDB::TiDBCollatorPtr const & collator, bool raw_function_test)
+{
+    return DB::tests::executeFunction(*context, func_name, columns, collator, raw_function_test);
+}
+
+ColumnWithTypeAndName FunctionTest::executeFunction(const String & func_name, const ColumnNumbers & argument_column_numbers, const ColumnsWithTypeAndName & columns, TiDB::TiDBCollatorPtr const & collator, bool raw_function_test)
+{
+    return DB::tests::executeFunction(*context, func_name, argument_column_numbers, columns, collator, raw_function_test);
 }
 
 } // namespace tests

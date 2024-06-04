@@ -13,9 +13,11 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <Common/TiFlashMetrics.h>
+#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
+
+#include <magic_enum.hpp>
 
 namespace CurrentMetrics
 {
@@ -159,7 +161,7 @@ BlockInputStreamPtr SegmentReadTaskPool::buildInputStream(SegmentReadTaskPtr & t
     BlockInputStreamPtr stream;
     auto block_size = std::max(expected_block_size, static_cast<size_t>(dm_context->db_context.getSettingsRef().dt_segment_stable_pack_rows));
     stream = t->segment->getInputStream(read_mode, *dm_context, columns_to_read, t->read_snapshot, t->ranges, filter, max_version, block_size);
-    LOG_DEBUG(log, "getInputStream succ, pool_id={} segment_id={}", pool_id, t->segment->segmentId());
+    LOG_DEBUG(log, "getInputStream succ, read_mode={}, pool_id={} segment_id={}", magic_enum::enum_name(read_mode), pool_id, t->segment->segmentId());
     return stream;
 }
 
@@ -263,11 +265,26 @@ void SegmentReadTaskPool::popBlock(Block & block)
     }
 }
 
+bool SegmentReadTaskPool::tryPopBlock(Block & block)
+{
+    if (q.tryPop(block))
+    {
+        blk_stat.pop(block);
+        global_blk_stat.pop(block);
+        if (exceptionHappened())
+            throw exception;
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
 void SegmentReadTaskPool::pushBlock(Block && block)
 {
     blk_stat.push(block);
     global_blk_stat.push(block);
-    GET_METRIC(tiflash_storage_read_thread_counter, type_push_block_bytes).Increment(block.bytes());
     q.push(std::move(block), nullptr);
 }
 

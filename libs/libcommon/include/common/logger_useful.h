@@ -29,6 +29,9 @@ namespace DB
 {
 class Logger;
 using LoggerPtr = std::shared_ptr<Logger>;
+
+/// Tracing logs are filtered by SourceFilterChannel.
+inline constexpr auto tracing_log_source = "mpp_task_tracing";
 } // namespace DB
 
 namespace LogFmtDetails

@@ -23,6 +23,7 @@
 
 #include <cassert>
 #include <fstream>
+#include <magic_enum.hpp>
 
 namespace CurrentMetrics
 {
@@ -99,48 +100,6 @@ inline CurrentMetrics::Increment pendingRequestMetrics(LimiterType type)
     }
 }
 
-void metricPendingDuration(LimiterType type, double second)
-{
-    switch (type)
-    {
-    case LimiterType::FG_READ:
-        GET_METRIC(tiflash_storage_io_limiter_pending_seconds, type_fg_read).Observe(second);
-        break;
-    case LimiterType::BG_READ:
-        GET_METRIC(tiflash_storage_io_limiter_pending_seconds, type_bg_read).Observe(second);
-        break;
-    case LimiterType::FG_WRITE:
-        GET_METRIC(tiflash_storage_io_limiter_pending_seconds, type_fg_write).Observe(second);
-        break;
-    case LimiterType::BG_WRITE:
-        GET_METRIC(tiflash_storage_io_limiter_pending_seconds, type_bg_write).Observe(second);
-        break;
-    default:
-        break;
-    }
-}
-
-void metricPendingCount(LimiterType type)
-{
-    switch (type)
-    {
-    case LimiterType::FG_READ:
-        GET_METRIC(tiflash_storage_io_limiter_pending_count, type_fg_read).Increment();
-        break;
-    case LimiterType::BG_READ:
-        GET_METRIC(tiflash_storage_io_limiter_pending_count, type_bg_read).Increment();
-        break;
-    case LimiterType::FG_WRITE:
-        GET_METRIC(tiflash_storage_io_limiter_pending_count, type_fg_write).Increment();
-        break;
-    case LimiterType::BG_WRITE:
-        GET_METRIC(tiflash_storage_io_limiter_pending_count, type_bg_write).Increment();
-        break;
-    default:
-        break;
-    }
-}
-
 WriteLimiter::WriteLimiter(Int64 rate_limit_per_sec_, LimiterType type_, UInt64 refill_period_ms_)
     : refill_period_ms{refill_period_ms_}
     , refill_balance_per_period{calculateRefillBalancePerPeriod(rate_limit_per_sec_)}
@@ -161,11 +120,11 @@ void WriteLimiter::request(Int64 bytes)
 {
     std::unique_lock lock(request_mutex);
 
-    if (unlikely(stop))
+    if (stop)
         return;
 
     // 0 means no limit
-    if (unlikely(!refill_balance_per_period))
+    if (!refill_balance_per_period)
         return;
 
     metricRequestBytes(type, bytes);
@@ -177,8 +136,7 @@ void WriteLimiter::request(Int64 bytes)
     Stopwatch sw_pending;
     Int64 wait_times = 0;
     auto pending_request = pendingRequestMetrics(type);
-    metricPendingCount(type);
-    SCOPE_EXIT({ metricPendingDuration(type, sw_pending.elapsedSeconds()); });
+
     // request cannot be satisfied at this moment, enqueue
     Request r(bytes);
     req_queue.push_back(&r);
@@ -746,15 +704,18 @@ IOLimitTuner::IOLimitTuner(
     , bg_read_stat(std::move(bg_read_stat_))
     , fg_read_stat(std::move(fg_read_stat_))
     , io_config(io_config_)
-    , log(Logger::get("IOLimitTuner"))
+    , log(Logger::get())
 {}
 
 IOLimitTuner::TuneResult IOLimitTuner::tune() const
 {
+    auto msg = fmt::format("limiter {} write {} read {}", limiterCount(), writeLimiterCount(), readLimiterCount());
     if (limiterCount() < 2)
     {
+        // LOG_DEBUG(log, "{} NOT need to tune.", msg);
         return {0, 0, false, 0, 0, false};
     }
+    LOG_INFO(log, "{} need to tune.", msg);
     if (bg_write_stat)
     {
         LOG_DEBUG(log, "bg_write_stat => {}", bg_write_stat->toString());

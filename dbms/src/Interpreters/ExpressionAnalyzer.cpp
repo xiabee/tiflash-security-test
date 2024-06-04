@@ -32,6 +32,7 @@
 #include <Functions/FunctionHelpers.h>
 #include <Functions/FunctionsMiscellaneous.h>
 #include <Functions/IFunction.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/ExpressionAnalyzer.h>
 #include <Interpreters/InterpreterSelectWithUnionQuery.h>
@@ -53,7 +54,6 @@
 #include <Poco/String.h>
 #include <Poco/Util/Application.h>
 #include <Storages/MutableSupport.h>
-#include <Storages/StorageJoin.h>
 #include <Storages/StorageMemory.h>
 #include <Storages/StorageSet.h>
 
@@ -485,7 +485,7 @@ void ExpressionAnalyzer::analyzeAggregation()
     if (select_query && (select_query->group_expression_list || select_query->having_expression))
         has_aggregation = true;
 
-    ExpressionActionsPtr temp_actions = std::make_shared<ExpressionActions>(source_columns, settings);
+    ExpressionActionsPtr temp_actions = std::make_shared<ExpressionActions>(source_columns);
 
     if (select_query)
     {
@@ -659,8 +659,6 @@ static std::shared_ptr<InterpreterSelectWithUnionQuery> interpretSubquery(
       */
     Context subquery_context = context;
     Settings subquery_settings = context.getSettings();
-    subquery_settings.max_result_rows = 0;
-    subquery_settings.max_result_bytes = 0;
     /// The calculation of `extremes` does not make sense and is not necessary (if you do it, then the `extremes` of the subquery can be taken instead of the whole query).
     subquery_settings.extremes = false;
     subquery_context.setSettings(subquery_settings);
@@ -1196,7 +1194,6 @@ void ExpressionAnalyzer::executeScalarSubqueriesImpl(ASTPtr & ast)
     {
         Context subquery_context = context;
         Settings subquery_settings = context.getSettings();
-        subquery_settings.max_result_rows = 1;
         subquery_settings.extremes = false;
         subquery_context.setSettings(subquery_settings);
 
@@ -1480,7 +1477,7 @@ void ExpressionAnalyzer::makeSetsForIndexImpl(const ASTPtr & node, const Block &
                 {
                     NamesAndTypesList temp_columns = source_columns;
                     temp_columns.insert(temp_columns.end(), columns_added_by_join.begin(), columns_added_by_join.end());
-                    ExpressionActionsPtr temp_actions = std::make_shared<ExpressionActions>(temp_columns, settings);
+                    ExpressionActionsPtr temp_actions = std::make_shared<ExpressionActions>(temp_columns);
                     getRootActions(func->arguments->children.at(0), true, false, temp_actions);
 
                     Block sample_block_with_calculated_columns = temp_actions->getSampleBlock();
@@ -1742,7 +1739,7 @@ struct ExpressionAnalyzer::ScopeStack
                 all_columns.push_back(col);
         }
 
-        stack.back().actions = std::make_shared<ExpressionActions>(all_columns, settings);
+        stack.back().actions = std::make_shared<ExpressionActions>(all_columns);
     }
 
     size_t getColumnLevel(const std::string & name)
@@ -2129,12 +2126,11 @@ void ExpressionAnalyzer::assertAggregation() const
         throw Exception("No aggregation", ErrorCodes::LOGICAL_ERROR);
 }
 
-void ExpressionAnalyzer::initChain(ExpressionActionsChain & chain, const NamesAndTypesList & columns) const
+void ExpressionAnalyzer::initChain(ExpressionActionsChain & chain, const NamesAndTypesList & columns)
 {
     if (chain.steps.empty())
     {
-        chain.settings = settings;
-        chain.steps.emplace_back(std::make_shared<ExpressionActions>(columns, settings));
+        chain.steps.emplace_back(std::make_shared<ExpressionActions>(columns));
     }
 }
 
@@ -2148,93 +2144,18 @@ void ExpressionAnalyzer::addJoinAction(ExpressionActionsPtr & actions, bool only
                 actions->add(ExpressionAction::ordinaryJoin(subquery_for_set.second.join, columns_added_by_join));
 }
 
-bool ExpressionAnalyzer::appendJoin(ExpressionActionsChain & chain, bool only_types)
+bool ExpressionAnalyzer::appendJoin(ExpressionActionsChain &, bool)
 {
     assertSelect();
 
     if (!select_query->join())
         return false;
 
-    initChain(chain, source_columns);
-    ExpressionActionsChain::Step & step = chain.steps.back();
-
-    const auto & join_element = static_cast<const ASTTablesInSelectQueryElement &>(*select_query->join());
-    const auto & join_params = static_cast<const ASTTableJoin &>(*join_element.table_join);
-    const auto & table_to_join = static_cast<const ASTTableExpression &>(*join_element.table_expression);
-
-    if (join_params.using_expression_list)
-        getRootActions(join_params.using_expression_list, only_types, false, step.actions);
-
-    /// Two JOINs are not supported with the same subquery, but different USINGs.
-    auto join_hash = join_element.getTreeHash();
-
-    SubqueryForSet & subquery_for_set = subqueries_for_sets[toString(join_hash.first) + "_" + toString(join_hash.second)];
-
-    /// Special case - if table name is specified on the right of JOIN, then the table has the type Join (the previously prepared mapping).
-    /// TODO This syntax does not support specifying a database name.
-    if (table_to_join.database_and_table_name)
-    {
-        auto database_table = getDatabaseAndTableNameFromIdentifier(static_cast<const ASTIdentifier &>(*table_to_join.database_and_table_name));
-        StoragePtr table = context.tryGetTable(database_table.first, database_table.second);
-
-        if (table)
-        {
-            auto * storage_join = dynamic_cast<StorageJoin *>(table.get());
-
-            if (storage_join)
-            {
-                storage_join->assertCompatible(join_params.kind, join_params.strictness);
-                /// TODO Check the set of keys.
-
-                JoinPtr & join = storage_join->getJoin();
-                subquery_for_set.join = join;
-            }
-        }
-    }
-
-    if (!subquery_for_set.join)
-    {
-        JoinPtr join = std::make_shared<Join>(
-            join_key_names_left,
-            join_key_names_right,
-            settings.join_use_nulls,
-            join_params.kind,
-            join_params.strictness,
-            "" /*req_id=*/,
-            false /*enable_fine_grained_shuffle_*/,
-            0 /*fine_grained_shuffle_count_*/);
-
-        Names required_joined_columns(join_key_names_right.begin(), join_key_names_right.end());
-        for (const auto & name_type : columns_added_by_join)
-            required_joined_columns.push_back(name_type.name);
-
-        /** For GLOBAL JOINs (in the case, for example, of the push method for executing GLOBAL subqueries), the following occurs
-          * - in the addExternalStorage function, the JOIN (SELECT ...) subquery is replaced with JOIN _data1,
-          *   in the subquery_for_set object this subquery is exposed as source and the temporary table _data1 as the `table`.
-          * - this function shows the expression JOIN _data1.
-          */
-        if (!subquery_for_set.source)
-        {
-            ASTPtr table;
-            if (table_to_join.database_and_table_name)
-                table = table_to_join.database_and_table_name;
-            else
-                table = table_to_join.subquery;
-
-            auto interpreter = interpretSubquery(table, context, subquery_depth, required_joined_columns);
-            subquery_for_set.source = std::make_shared<LazyBlockInputStream>(
-                interpreter->getSampleBlock(),
-                [interpreter]() mutable { return interpreter->execute().in; });
-        }
-
-        /// TODO You do not need to set this up when JOIN is only needed on remote servers.
-        subquery_for_set.join = join;
-        subquery_for_set.join->init(subquery_for_set.source->getHeader());
-    }
-
-    addJoinAction(step.actions, false);
-
-    return true;
+    /// after https://github.com/pingcap/tiflash/pull/6650, join from TiFlash client
+    /// is no longer supported because the "waiting build finish" step has been moved
+    /// from Join::joinBlock() to HashJoinProbeInputStream::readImpl, so before support
+    /// HashJoinProbeInputStream in `ExpressionAnalyzer::appendJoin`, join is disabled.
+    throw Exception("Join is not supported");
 }
 
 
@@ -2405,7 +2326,7 @@ void ExpressionAnalyzer::getActionsBeforeAggregation(const ASTPtr & ast, Express
 
 ExpressionActionsPtr ExpressionAnalyzer::getActions(bool project_result)
 {
-    ExpressionActionsPtr actions = std::make_shared<ExpressionActions>(source_columns, settings);
+    ExpressionActionsPtr actions = std::make_shared<ExpressionActions>(source_columns);
     NamesWithAliases result_columns;
     Names result_names;
 
@@ -2448,7 +2369,7 @@ ExpressionActionsPtr ExpressionAnalyzer::getActions(bool project_result)
 
 ExpressionActionsPtr ExpressionAnalyzer::getConstActions()
 {
-    ExpressionActionsPtr actions = std::make_shared<ExpressionActions>(NamesAndTypesList(), settings);
+    ExpressionActionsPtr actions = std::make_shared<ExpressionActions>(NamesAndTypesList());
 
     getRootActions(ast, true, true, actions);
 
@@ -2581,7 +2502,7 @@ void ExpressionAnalyzer::collectJoinedColumns(NameSet & joined_columns, NamesAnd
         {
             joined_columns.insert(col.name);
 
-            bool make_nullable = settings.join_use_nulls && (table_join.kind == ASTTableJoin::Kind::Left || table_join.kind == ASTTableJoin::Kind::Cross_Left || table_join.kind == ASTTableJoin::Kind::Full);
+            bool make_nullable = table_join.kind == ASTTableJoin::Kind::LeftOuter || table_join.kind == ASTTableJoin::Kind::Cross_LeftOuter || table_join.kind == ASTTableJoin::Kind::Full;
             joined_columns_name_type.emplace_back(col.name, make_nullable ? makeNullable(col.type) : col.type);
         }
     }

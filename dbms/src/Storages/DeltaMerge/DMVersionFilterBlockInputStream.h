@@ -18,9 +18,9 @@
 #include <Common/Exception.h>
 #include <Common/Logger.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <DataStreams/SelectionByColumnIdTransformAction.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <common/logger_useful.h>
 
 namespace DB
@@ -48,12 +48,11 @@ public:
                                     const ColumnDefines & read_columns,
                                     UInt64 version_limit_,
                                     bool is_common_handle_,
-                                    const String & tracing_id = "",
-                                    const ScanContextPtr & scan_context_ = nullptr)
+                                    const String & tracing_id = "")
         : version_limit(version_limit_)
         , is_common_handle(is_common_handle_)
         , header(toEmptyBlock(read_columns))
-        , scan_context(scan_context_)
+        , select_by_colid_action(input->getHeader(), header)
         , log(Logger::get((MODE == DM_VERSION_FILTER_MODE_MVCC ? MVCC_FILTER_NAME : COMPACT_FILTER_NAME),
                           tracing_id))
     {
@@ -66,13 +65,13 @@ public:
         delete_col_pos = input_header.getPositionByName(TAG_COLUMN_NAME);
     }
 
-    ~DMVersionFilterBlockInputStream()
+    ~DMVersionFilterBlockInputStream() override
     {
         LOG_DEBUG(log,
                   "Total rows: {}, pass: {:.2f}%"
                   ", complete pass: {:.2f}%, complete not pass: {:.2f}%"
                   ", not clean: {:.2f}%, is deleted: {:.2f}%, effective: {:.2f}%"
-                  ", start_ts: {}",
+                  ", read tso: {}",
                   total_rows,
                   passed_rows * 100.0 / total_rows,
                   complete_passed * 100.0 / total_blocks,
@@ -202,9 +201,26 @@ private:
         return matched ? cur_version : std::numeric_limits<UInt64>::max();
     }
 
+    Block getNewBlock(const Block & block)
+    {
+        if (block.segmentRowIdCol() == nullptr)
+        {
+            return select_by_colid_action.transform(block);
+        }
+        else
+        {
+            // `DMVersionFilterBlockInputStream` is the last stage for generating segment row id.
+            // In the way we use it, the other columns are not used subsequently.
+            Block res;
+            res.setSegmentRowIdCol(block.segmentRowIdCol());
+            return res;
+        }
+    }
+
 private:
     const UInt64 version_limit;
     const bool is_common_handle;
+    // A sample block of `read` get
     const Block header;
 
     size_t handle_col_pos;
@@ -223,7 +239,7 @@ private:
     // First calculate the gc_hint_version of every pk according to the following rules,
     //     see the comments in `calculateRowGcHintVersion` to see how to calculate it for every pk
     // Then the block's gc_hint_version is the minimum value of all pk's gc_hint_version
-    UInt64 gc_hint_version;
+    UInt64 gc_hint_version = std::numeric_limits<UInt64>::max();
 
     // auxiliary variable for the calculation of gc_hint_version
     bool is_first_oldest_version = true;
@@ -246,7 +262,7 @@ private:
     size_t effective_num_rows = 0;
     size_t deleted_rows = 0;
 
-    const ScanContextPtr scan_context;
+    SelectionByColumnIdTransformAction select_by_colid_action;
 
     const LoggerPtr log;
 };

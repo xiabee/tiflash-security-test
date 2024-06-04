@@ -54,12 +54,6 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
 
     bool enable_read_thread = SegmentReaderPoolManager::instance().isSegmentReader();
 
-    if (!enable_read_thread || max_sharing_column_bytes_for_all <= 0)
-    {
-        // Disable data sharing.
-        max_sharing_column_bytes_for_all = 0;
-    }
-
     DMFileReader reader(
         dmfile,
         read_columns,
@@ -79,9 +73,9 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(const DMFilePtr &
         rows_threshold_per_read,
         read_one_pack_every_time,
         tracing_id,
-        max_sharing_column_bytes_for_all,
+        enable_read_thread,
         scan_context);
 
-    return std::make_shared<DMFileBlockInputStream>(std::move(reader), max_sharing_column_bytes_for_all > 0);
+    return std::make_shared<DMFileBlockInputStream>(std::move(reader), enable_read_thread);
 }
 } // namespace DB::DM

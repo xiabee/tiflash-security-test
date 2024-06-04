@@ -19,8 +19,10 @@
 #include <Flash/Coprocessor/ExchangeSenderInterpreterHelper.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Flash/Mpp/newMPPExchangeWriter.h>
-#include <Flash/Planner/plans/PhysicalExchangeSender.h>
+#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
+#include <Flash/Planner/Plans/PhysicalExchangeSender.h>
 #include <Interpreters/Context.h>
+#include <Operators/ExchangeSenderSinkOp.h>
 
 namespace DB
 {
@@ -39,40 +41,35 @@ PhysicalPlanNodePtr PhysicalExchangeSender::build(
     auto physical_exchange_sender = std::make_shared<PhysicalExchangeSender>(
         executor_id,
         child->getSchema(),
+        fine_grained_shuffle,
         log->identifier(),
         child,
         partition_col_ids,
         partition_col_collators,
         exchange_sender.tp(),
-        fine_grained_shuffle);
+        exchange_sender.compression());
     // executeUnion will be call after sender.transform, so don't need to restore concurrency.
     physical_exchange_sender->disableRestoreConcurrency();
     return physical_exchange_sender;
 }
 
-void PhysicalExchangeSender::transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
+void PhysicalExchangeSender::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams)
 {
-    child->transform(pipeline, context, max_streams);
+    child->buildBlockInputStream(pipeline, context, max_streams);
 
     auto & dag_context = *context.getDAGContext();
-
-    RUNTIME_ASSERT(dag_context.isMPPTask() && dag_context.tunnel_set != nullptr, log, "exchange_sender only run in MPP");
+    restoreConcurrency(pipeline, dag_context.final_concurrency, log);
 
     String extra_info;
     if (fine_grained_shuffle.enable())
     {
         extra_info = String(enableFineGrainedShuffleExtraInfo);
         RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Hash, ExchangeType_Name(exchange_type));
-        RUNTIME_CHECK(fine_grained_shuffle.stream_count <= 1024, fine_grained_shuffle.stream_count);
-    }
-    else
-    {
-        restoreConcurrency(pipeline, dag_context.final_concurrency, log);
+        RUNTIME_CHECK(fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount, fine_grained_shuffle.stream_count);
     }
     pipeline.transform([&](auto & stream) {
         // construct writer
         std::unique_ptr<DAGResponseWriter> response_writer = newMPPExchangeWriter(
-            dag_context.tunnel_set,
             partition_col_ids,
             partition_col_collators,
             exchange_type,
@@ -81,9 +78,44 @@ void PhysicalExchangeSender::transformImpl(DAGPipeline & pipeline, Context & con
             dag_context,
             fine_grained_shuffle.enable(),
             fine_grained_shuffle.stream_count,
-            fine_grained_shuffle.batch_size);
+            fine_grained_shuffle.batch_size,
+            compression_mode,
+            context.getSettingsRef().batch_send_min_limit_compression,
+            log->identifier());
         stream = std::make_shared<ExchangeSenderBlockInputStream>(stream, std::move(response_writer), log->identifier());
         stream->setExtraInfo(extra_info);
+    });
+}
+
+void PhysicalExchangeSender::buildPipelineExecGroup(
+    PipelineExecutorStatus & exec_status,
+    PipelineExecGroupBuilder & group_builder,
+    Context & context,
+    size_t /*concurrency*/)
+{
+    if (fine_grained_shuffle.enable())
+    {
+        RUNTIME_CHECK(exchange_type == tipb::ExchangeType::Hash, ExchangeType_Name(exchange_type));
+        RUNTIME_CHECK(fine_grained_shuffle.stream_count <= maxFineGrainedStreamCount, fine_grained_shuffle.stream_count);
+    }
+
+    group_builder.transform([&](auto & builder) {
+        // construct writer
+        std::unique_ptr<DAGResponseWriter> response_writer = newMPPExchangeWriter(
+            partition_col_ids,
+            partition_col_collators,
+            exchange_type,
+            context.getSettingsRef().dag_records_per_chunk,
+            context.getSettingsRef().batch_send_min_limit,
+            *context.getDAGContext(),
+            fine_grained_shuffle.enable(),
+            fine_grained_shuffle.stream_count,
+            fine_grained_shuffle.batch_size,
+            compression_mode,
+            context.getSettingsRef().batch_send_min_limit_compression,
+            log->identifier(),
+            /*is_async=*/true);
+        builder.setSinkOp(std::make_unique<ExchangeSenderSinkOp>(exec_status, log->identifier(), std::move(response_writer)));
     });
 }
 
@@ -96,4 +128,5 @@ const Block & PhysicalExchangeSender::getSampleBlock() const
 {
     return child->getSampleBlock();
 }
+
 } // namespace DB

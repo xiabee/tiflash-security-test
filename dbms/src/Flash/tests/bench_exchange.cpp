@@ -28,7 +28,6 @@ namespace DB
 {
 namespace tests
 {
-
 std::random_device rd;
 
 MockBlockInputStream::MockBlockInputStream(const std::vector<Block> & blocks_, StopFlag & stop_flag_)
@@ -72,7 +71,7 @@ Block makeBlock(int row_num, bool skew)
         std::mt19937 mt(rd());
         std::uniform_int_distribution<Int64> int64_dist;
         std::uniform_int_distribution<int> len_dist(10, 20);
-        std::uniform_int_distribution<std::int8_t> char_dist;
+        std::uniform_int_distribution<char> char_dist;
 
         for (int i = 0; i < row_num; ++i)
         {
@@ -167,6 +166,9 @@ ReceiverHelper::ReceiverHelper(int concurrency_, int source_num_, uint32_t fine_
     {
         mpp::TaskMeta task;
         task.set_start_ts(0);
+        task.set_query_ts(i);
+        task.set_server_id(i);
+        task.set_local_query_id(i);
         task.set_task_id(i);
         task.set_partition_id(i);
         task.set_address("");

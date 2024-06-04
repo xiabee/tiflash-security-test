@@ -16,8 +16,7 @@
 
 #include <Common/Exception.h>
 #include <Common/Logger.h>
-#include <Flash/Coprocessor/DAGContext.h>
-#include <Flash/Executor/QueryExecutorHolder.h>
+#include <Flash/Executor/QueryExecutor.h>
 #include <Flash/Mpp/MPPReceiverSet.h>
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/MPPTaskScheduleEntry.h>
@@ -25,7 +24,7 @@
 #include <Flash/Mpp/MPPTunnel.h>
 #include <Flash/Mpp/MPPTunnelSet.h>
 #include <Flash/Mpp/TaskStatus.h>
-#include <Interpreters/Context.h>
+#include <Interpreters/Context_fwd.h>
 #include <common/logger_useful.h>
 #include <common/types.h>
 #include <kvproto/mpp.pb.h>
@@ -38,6 +37,8 @@
 namespace DB
 {
 class MPPTaskManager;
+class DAGContext;
+class ProcessListEntry;
 
 enum class AbortType
 {
@@ -61,7 +62,7 @@ public:
 
     const MPPTaskId & getId() const { return id; }
 
-    bool isRootMPPTask() const { return dag_context->isRootMPPTask(); }
+    bool isRootMPPTask() const;
 
     TaskStatus getStatus() const { return status.load(); }
 
@@ -92,7 +93,7 @@ private:
 
     void abortTunnels(const String & message, bool wait_sender_finish);
     void abortReceivers();
-    void abortDataStreams(AbortType abort_type);
+    void abortQueryExecutor();
 
     void finishWrite();
 
@@ -108,10 +109,6 @@ private:
 
     void initExchangeReceivers();
 
-    String getErrString() const;
-    void setErrString(const String & message);
-
-private:
     // To make sure dag_req is not destroyed before the mpp task ends.
     tipb::DAGRequest dag_req;
     mpp::TaskMeta meta;
@@ -133,11 +130,9 @@ private:
     QueryExecutorHolder query_executor_holder;
 
     std::atomic<TaskStatus> status{INITIALIZING};
-
-    /// Used to protect concurrent access to `err_string`, `tunnel_set`, and `receiver_set`.
-    mutable std::mutex mtx;
-
     String err_string;
+
+    std::mutex tunnel_and_receiver_mu;
 
     MPPTunnelSetPtr tunnel_set;
 

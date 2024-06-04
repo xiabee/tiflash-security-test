@@ -422,62 +422,25 @@ template <char not_case_lower_bound,
           char flip_case_mask,
           int to_case(int)>
 __attribute__((always_inline)) inline void toCaseImplTiDB(
-    const UInt8 *& src,
-    const UInt8 * src_end,
-    size_t offsets_pos,
-    ColumnString::Chars_t & dst_data,
-    IColumn::Offsets & dst_offsets,
-    bool & is_diff_offsets)
+    ConstPtr<UInt8> & src,
+    const ConstPtr<UInt8> src_end,
+    Ptr<UInt8> & dst)
 {
-    if (*src <= ascii_upper_bound)
+    if (src[0] <= ascii_upper_bound)
     {
-        size_t dst_size = dst_data.size();
-        dst_data.resize(dst_size + 1);
         if (*src >= not_case_lower_bound && *src <= not_case_upper_bound)
-            dst_data[dst_size] = *src++ ^ flip_case_mask;
+            *dst++ = *src++ ^ flip_case_mask;
         else
-            dst_data[dst_size] = *src++;
+            *dst++ = *src++;
     }
     else
     {
         static const Poco::UTF8Encoding utf8;
 
-        int src_sequence_length = utf8.sequenceLength(src, 1);
-        assert(src_sequence_length > 0);
-        if unlikely (src + src_sequence_length > src_end)
-        {
-            /// If this row has invalid utf-8 characters, just copy it to dst string and do not influence others
-            size_t dst_size = dst_data.size();
-            dst_data.resize(src_end - src + dst_size);
-            memcpy(&dst_data[dst_size], src, src_end - src);
-            src = src_end;
-            return;
-        }
-
-        int src_ch = utf8.convert(src);
-        if unlikely (src_ch == -1)
-        {
-            /// If this row has invalid utf-8 characters, just copy it to dst string and do not influence others
-            size_t dst_size = dst_data.size();
-            dst_data.resize(dst_size + src_sequence_length);
-            memcpy(&dst_data[dst_size], src, src_sequence_length);
-            src += src_sequence_length;
-            return;
-        }
-        int dst_ch = to_case(src_ch);
-        int dst_sequence_length = utf8.convert(dst_ch, nullptr, 0);
-        size_t dst_size = dst_data.size();
-        dst_data.resize(dst_size + dst_sequence_length);
-        utf8.convert(dst_ch, &dst_data[dst_size], dst_sequence_length);
-
-        if (dst_sequence_length != src_sequence_length)
-        {
-            assert((Int64)dst_offsets[offsets_pos] + dst_sequence_length - src_sequence_length >= 0);
-            dst_offsets[offsets_pos] += dst_sequence_length - src_sequence_length;
-            is_diff_offsets = true;
-        }
-
-        src += src_sequence_length;
+        if (const auto chars = utf8.convert(to_case(utf8.convert(src)), dst, src_end - src))
+            src += chars, dst += chars;
+        else
+            ++src, ++dst;
     }
 }
 
@@ -580,19 +543,12 @@ TIFLASH_DECLARE_MULTITARGET_FUNCTION_TP(
      to_case),
     void,
     lowerUpperUTF8ArrayImplTiDB,
-    (src_data, src_offsets, dst_data, dst_offsets),
-    (const ColumnString::Chars_t & src_data,
-     const IColumn::Offsets & src_offsets,
-     ColumnString::Chars_t & dst_data,
-     IColumn::Offsets & dst_offsets),
+    (src, src_end, dst),
+    (ConstPtr<UInt8> & src,
+     const ConstPtr<UInt8> src_end,
+     Ptr<UInt8> & dst),
     {
-        dst_data.reserve(src_data.size());
-        dst_offsets.assign(src_offsets);
         static const auto flip_mask = SimdWord::template fromSingle<int8_t>(flip_case_mask);
-        const UInt8 *src = src_data.data(), *src_end = src_data.data() + src_data.size();
-        auto * begin = src;
-        bool is_diff_offsets = false;
-        size_t offsets_pos = 0;
         while (src + WORD_SIZE < src_end)
         {
             auto word = SimdWord::fromUnaligned(src);
@@ -607,71 +563,31 @@ TIFLASH_DECLARE_MULTITARGET_FUNCTION_TP(
                 range_check.as_int8 = (word.as_int8 >= lower_bounds.as_int8) & (word.as_int8 <= upper_bounds.as_int8);
                 selected.as_int8 = range_check.as_int8 & flip_mask.as_int8;
                 word.as_int8 ^= selected.as_int8;
-                size_t dst_size = dst_data.size();
-                dst_data.resize(dst_size + WORD_SIZE);
-                word.toUnaligned(&dst_data[dst_size]);
+                word.toUnaligned(dst);
                 src += WORD_SIZE;
+                dst += WORD_SIZE;
             }
             else
             {
-                size_t offset_from_begin = src - begin;
-                while (offset_from_begin >= src_offsets[offsets_pos])
-                    ++offsets_pos;
                 auto expected_end = src + WORD_SIZE;
-                while (true)
-                {
-                    const UInt8 * row_end = begin + src_offsets[offsets_pos];
-                    assert(row_end >= src);
-                    auto end = std::min(expected_end, row_end);
-                    while (src < end)
-                    {
-                        toCaseImplTiDB<
-                            not_case_lower_bound,
-                            not_case_upper_bound,
-                            ascii_upper_bound,
-                            flip_case_mask,
-                            to_case>(src, row_end, offsets_pos, dst_data, dst_offsets, is_diff_offsets);
-                    }
-                    if (src >= expected_end)
-                        break;
-                    ++offsets_pos;
-                }
-            }
-        }
-
-        if (src < src_end)
-        {
-            size_t offset_from_begin = src - begin;
-            while (offset_from_begin >= src_offsets[offsets_pos])
-                ++offsets_pos;
-
-            while (src < src_end)
-            {
-                const UInt8 * row_end = begin + src_offsets[offsets_pos];
-                assert(row_end >= src);
-                while (src < row_end)
+                while (src < expected_end)
                 {
                     toCaseImplTiDB<
                         not_case_lower_bound,
                         not_case_upper_bound,
                         ascii_upper_bound,
                         flip_case_mask,
-                        to_case>(src, row_end, offsets_pos, dst_data, dst_offsets, is_diff_offsets);
+                        to_case>(src, src_end, dst);
                 }
-                ++offsets_pos;
             }
         }
-
-        if unlikely (is_diff_offsets)
-        {
-            Int64 diff = 0;
-            for (size_t i = 0; i < dst_offsets.size(); ++i)
-            {
-                /// diff is the cumulative offset difference from 0 to the i position
-                diff += (Int64)dst_offsets[i] - (Int64)src_offsets[i];
-                dst_offsets[i] = src_offsets[i] + diff;
-            }
-        }
+        while (src < src_end)
+            toCaseImplTiDB<
+                not_case_lower_bound,
+                not_case_upper_bound,
+                ascii_upper_bound,
+                flip_case_mask,
+                to_case>(src, src_end, dst);
     })
 } // namespace
 
@@ -702,22 +618,66 @@ void TiDBLowerUpperUTF8Impl<not_case_lower_bound, not_case_upper_bound, to_case>
     ColumnString::Chars_t & res_data,
     IColumn::Offsets & res_offsets)
 {
-    lowerUpperUTF8ArrayImplTiDB<not_case_lower_bound, not_case_upper_bound, ascii_upper_bound, flip_case_mask, to_case>(
-        data,
-        offsets,
-        res_data,
-        res_offsets);
+    res_data.resize(data.size());
+    res_offsets.assign(offsets);
+    array(data.data(), data.data() + data.size(), res_data.data());
 }
 
 template <char not_case_lower_bound,
           char not_case_upper_bound,
           int to_case(int)>
 void TiDBLowerUpperUTF8Impl<not_case_lower_bound, not_case_upper_bound, to_case>::vectorFixed(
-    const ColumnString::Chars_t & /*data*/,
+    const ColumnString::Chars_t & data,
     size_t /*n*/,
-    ColumnString::Chars_t & /*res_data*/)
+    ColumnString::Chars_t & res_data)
 {
-    throw Exception("Cannot apply function TiDBLowerUpperUTF8 to fixed string.", ErrorCodes::ILLEGAL_COLUMN);
+    res_data.resize(data.size());
+    array(data.data(), data.data() + data.size(), res_data.data());
+}
+
+template <char not_case_lower_bound,
+          char not_case_upper_bound,
+          int to_case(int)>
+void TiDBLowerUpperUTF8Impl<not_case_lower_bound, not_case_upper_bound, to_case>::constant(
+    const std::string & data,
+    std::string & res_data)
+{
+    res_data.resize(data.size());
+    array(reinterpret_cast<const UInt8 *>(data.data()),
+          reinterpret_cast<const UInt8 *>(data.data() + data.size()),
+          reinterpret_cast<UInt8 *>(&res_data[0]));
+}
+
+template <char not_case_lower_bound,
+          char not_case_upper_bound,
+          int to_case(int)>
+void TiDBLowerUpperUTF8Impl<not_case_lower_bound, not_case_upper_bound, to_case>::toCase(
+    const UInt8 *& src,
+    const UInt8 * src_end,
+    UInt8 *& dst)
+{
+    toCaseImplTiDB<
+        not_case_lower_bound,
+        not_case_upper_bound,
+        ascii_upper_bound,
+        flip_case_mask,
+        to_case>(src, src_end, dst);
+}
+
+template <char not_case_lower_bound,
+          char not_case_upper_bound,
+          int to_case(int)>
+void TiDBLowerUpperUTF8Impl<not_case_lower_bound, not_case_upper_bound, to_case>::array(
+    const UInt8 * src,
+    const UInt8 * src_end,
+    UInt8 * dst)
+{
+    lowerUpperUTF8ArrayImplTiDB<
+        not_case_lower_bound,
+        not_case_upper_bound,
+        ascii_upper_bound,
+        flip_case_mask,
+        to_case>(src, src_end, dst);
 }
 
 /** If the string is encoded in UTF-8, then it selects a substring of code points in it.
@@ -4428,7 +4388,6 @@ public:
 
     // tidb mysql.MaxBlobWidth space max input : space(MAX_BLOB_WIDTH+1) will return NULL
     static constexpr auto MAX_BLOB_WIDTH = 16777216;
-    static const auto APPROX_STRING_SIZE = 64;
 
     FunctionSpace() = default;
 
@@ -4569,7 +4528,7 @@ private:
         ColumnString::Offsets & res_offsets)
     {
         ColumnString::Offset res_offset = 0;
-        res_data.reserve(val_num * APPROX_STRING_SIZE);
+        res_data.reserve(val_num * ColumnString::APPROX_STRING_SIZE);
         const auto & col_vector_space_num_value = col_vector_space_num->getData();
 
         for (size_t row = 0; row < val_num; ++row)
@@ -5996,6 +5955,143 @@ private:
     }
 };
 
+class FunctionTiDBUnHex : public IFunction
+{
+public:
+    static constexpr auto name = "tidbUnHex";
+    FunctionTiDBUnHex() = default;
+
+    static FunctionPtr create(const Context & /*context*/)
+    {
+        return std::make_shared<FunctionTiDBUnHex>();
+    }
+
+    std::string getName() const override { return name; }
+    size_t getNumberOfArguments() const override { return 1; }
+    bool useDefaultImplementationForConstants() const override { return true; }
+
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
+    {
+        if (!arguments[0]->isString())
+            throw Exception(
+                fmt::format("Illegal type {} of first argument of function {}", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+        return makeNullable(std::make_shared<DataTypeString>());
+    }
+
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
+    {
+        const ColumnPtr & column = block.getByPosition(arguments[0]).column;
+
+        size_t size = block.rows();
+        auto col_res = ColumnString::create();
+        auto result_null_map = ColumnUInt8::create(size, 0);
+
+        if (executeUnHexString(column, col_res->getChars(), col_res->getOffsets(), result_null_map->getData()))
+        {
+            block.getByPosition(result).column = ColumnNullable::create(std::move(col_res), std::move(result_null_map));
+        }
+        else
+        {
+            throw Exception(fmt::format("Illegal argument of function {}", getName()), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+        }
+    }
+
+private:
+    static bool executeUnHexString(const ColumnPtr & column,
+                                   ColumnString::Chars_t & res_data,
+                                   ColumnString::Offsets & res_offsets,
+                                   ColumnUInt8::Container & res_null_map)
+    {
+        const auto * const col = checkAndGetColumn<ColumnString>(column.get());
+        if (col == nullptr)
+        {
+            return false;
+        }
+        const size_t size = col->size();
+        const ColumnString::Chars_t & data = col->getChars();
+        const ColumnString::Offsets & offsets = col->getOffsets();
+        res_data.resize(data.size() / 2 + size);
+        res_offsets.resize(size);
+
+        ColumnString::Offset pos = 0;
+        ColumnString::Offset prev_offset = 0;
+        for (size_t i = 0; i < size; ++i)
+        {
+            size_t begin = prev_offset;
+            size_t length = offsets[i] - prev_offset - 1;
+            unhexOne(data, length, i, begin, pos, res_data, res_offsets, res_null_map);
+            pos = res_offsets[i];
+            prev_offset = offsets[i];
+        }
+        res_data.resize(pos);
+
+        return true;
+    }
+
+    static void unhexOne(const ColumnString::Chars_t & data,
+                         const size_t length,
+                         const size_t idx,
+                         size_t begin,
+                         size_t pos,
+                         ColumnString::Chars_t & res_data,
+                         ColumnString::Offsets & res_offsets,
+                         ColumnUInt8::Container & res_null_map)
+    {
+        char low;
+        char high;
+        size_t end = begin + length;
+        res_offsets[idx] = pos + 1;
+
+        if (length % 2 != 0)
+        {
+            const char * byte = reinterpret_cast<const char *>(&data[begin]);
+            if (!fromHexChar(byte, low))
+            {
+                res_null_map[idx] = 1;
+                return;
+            }
+            res_data[pos] = low;
+            pos++;
+            begin++;
+        }
+        for (size_t i = begin; i < end; i += 2)
+        {
+            const char * byte1 = reinterpret_cast<const char *>(&data[i]);
+            const char * byte2 = reinterpret_cast<const char *>(&data[i + 1]);
+            if (!fromHexChar(byte1, high) || !fromHexChar(byte2, low))
+            {
+                res_null_map[idx] = 1;
+                return;
+            }
+            res_data[pos] = (high << 4) | low;
+            pos++;
+        }
+        res_offsets[idx] = pos + 1;
+    }
+
+    static bool fromHexChar(const char * in, char & out)
+    {
+        if (*in >= '0' && *in <= '9')
+        {
+            out = *in - '0';
+        }
+        else if (*in >= 'a' && *in <= 'f')
+        {
+            out = *in - 'a' + 10;
+        }
+        else if (*in >= 'A' && *in <= 'F')
+        {
+            out = *in - 'A' + 10;
+        }
+        else
+        {
+            return false;
+        }
+        return true;
+    }
+};
+
 // clang-format off
 struct NameEmpty                 { static constexpr auto name = "empty"; };
 struct NameNotEmpty              { static constexpr auto name = "notEmpty"; };
@@ -6087,5 +6183,6 @@ void registerFunctionsString(FunctionFactory & factory)
     factory.registerFunction<FunctionBin>();
     factory.registerFunction<FunctionElt>();
     factory.registerFunction<FunctionFormatDecimal>();
+    factory.registerFunction<FunctionTiDBUnHex>();
 }
 } // namespace DB

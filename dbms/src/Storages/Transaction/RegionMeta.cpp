@@ -72,6 +72,12 @@ metapb::Peer RegionMeta::getPeer() const
     return peer;
 }
 
+void RegionMeta::setPeer(metapb::Peer && p)
+{
+    std::lock_guard lock(mutex);
+    peer = p;
+}
+
 raft_serverpb::RaftApplyState RegionMeta::getApplyState() const
 {
     std::lock_guard lock(mutex);
@@ -163,41 +169,38 @@ void RegionMeta::setPeerState(const raft_serverpb::PeerState peer_state_)
 WaitIndexResult RegionMeta::waitIndex(UInt64 index, const UInt64 timeout_ms, std::function<bool(void)> && check_running) const
 {
     std::unique_lock lock(mutex);
-    WaitIndexResult res;
-    res.prev_index = apply_state.applied_index();
+    WaitIndexResult status = WaitIndexResult::Finished;
     if (timeout_ms != 0)
     {
         // wait for applied index with a timeout
         auto timeout_timepoint = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         if (!cv.wait_until(lock, timeout_timepoint, [&] {
-                res.current_index = apply_state.applied_index();
                 if (!check_running())
                 {
-                    res.status = WaitIndexStatus::Terminated;
+                    status = WaitIndexResult::Terminated;
                     return true;
                 }
                 return doCheckIndex(index);
             }))
         {
             // not terminated && not reach the `index` => timeout
-            res.status = WaitIndexStatus::Timeout;
+            status = WaitIndexResult::Timeout;
         }
     }
     else
     {
         // wait infinitely
         cv.wait(lock, [&] {
-            res.current_index = apply_state.applied_index();
             if (!check_running())
             {
-                res.status = WaitIndexStatus::Terminated;
+                status = WaitIndexResult::Terminated;
                 return true;
             }
             return doCheckIndex(index);
         });
     }
 
-    return res;
+    return status;
 }
 
 bool RegionMeta::checkIndex(UInt64 index) const
@@ -445,16 +448,27 @@ RegionMeta::RegionMeta(metapb::Peer peer_, metapb::Region region, raft_serverpb:
     region_state.setRegion(std::move(region));
 }
 
-metapb::Region RegionMeta::getMetaRegion() const
+metapb::Region RegionMeta::cloneMetaRegion() const
 {
     std::lock_guard lock(mutex);
     return region_state.getRegion();
 }
 
-raft_serverpb::MergeState RegionMeta::getMergeState() const
+const metapb::Region & RegionMeta::getMetaRegion() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getRegion();
+}
+
+raft_serverpb::MergeState RegionMeta::cloneMergeState() const
 {
     std::lock_guard lock(mutex);
     return region_state.getMergeState();
 }
 
+const raft_serverpb::MergeState & RegionMeta::getMergeState() const
+{
+    std::lock_guard lock(mutex);
+    return region_state.getMergeState();
+}
 } // namespace DB

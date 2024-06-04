@@ -15,8 +15,6 @@
 #pragma once
 
 #include <Common/Logger.h>
-#include <Storages/Page/Page.h>
-#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V3/Blob/BlobConfig.h>
 #include <Storages/Page/V3/PageEntry.h>
 #include <Storages/Page/V3/spacemap/SpaceMap.h>
@@ -175,6 +173,7 @@ private:
 #endif
     void restoreByEntry(const PageEntryV3 & entry);
     void restore();
+    template <typename>
     friend class PageDirectoryFactory;
 
 #ifndef DBMS_PUBLIC_GTEST
