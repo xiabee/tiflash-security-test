@@ -28,16 +28,17 @@ namespace tests
 class TestColumnInsertFrom : public ::testing::Test
 {
 public:
-    void compareColumn(const ColumnWithTypeAndName & expected_col_with_type_name,
-                       const ColumnWithTypeAndName & actual_col_with_type_name)
+    static void compareColumn(
+        const ColumnWithTypeAndName & expected_col_with_type_name,
+        const ColumnWithTypeAndName & actual_col_with_type_name)
     {
         const ColumnPtr expected = expected_col_with_type_name.column;
         const ColumnPtr actual = actual_col_with_type_name.column;
         if unlikely (typeid_cast<const ColumnSet *>(expected.get()) || typeid_cast<const ColumnSet *>(actual.get()))
         {
             /// ColumnSet compares size only now, since the test ensures data is equal
-            const ColumnSet * expected_set = typeid_cast<const ColumnSet *>(expected.get());
-            const ColumnSet * actual_set = typeid_cast<const ColumnSet *>(actual.get());
+            const auto * expected_set = typeid_cast<const ColumnSet *>(expected.get());
+            const auto * actual_set = typeid_cast<const ColumnSet *>(actual.get());
             ASSERT_TRUE(expected_set && actual_set);
             ASSERT_TRUE(expected_set->size() == actual_set->size());
             return;
@@ -45,7 +46,7 @@ public:
         ASSERT_COLUMN_EQ(expected, actual);
     }
 
-    void doTestWork(ColumnWithTypeAndName & col_with_type_and_name)
+    void doTestWork(ColumnWithTypeAndName & col_with_type_and_name) const
     {
         auto column_ptr = col_with_type_and_name.column;
         ASSERT_TRUE(rows == column_ptr->size());
@@ -56,54 +57,82 @@ public:
         }
 
         /// Test insertManyFrom
-        for (size_t i = 0; i < 3; ++i)
-            cols[0]->insertFrom(*column_ptr, 1);
-        for (size_t i = 0; i < 3; ++i)
-            cols[0]->insertFrom(*column_ptr, 1);
-        cols[1]->insertManyFrom(*column_ptr, 1, 3);
-        cols[1]->insertManyFrom(*column_ptr, 1, 3);
         {
-            ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
-            ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
-            compareColumn(ref, result);
+            for (size_t i = 0; i < 3; ++i)
+                cols[0]->insertFrom(*column_ptr, 1);
+            for (size_t i = 0; i < 3; ++i)
+                cols[0]->insertFrom(*column_ptr, 1);
+            cols[1]->insertManyFrom(*column_ptr, 1, 3);
+            cols[1]->insertManyFrom(*column_ptr, 1, 3);
+            {
+                ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
+                ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
+                compareColumn(ref, result);
+            }
         }
 
         /// Test insertDisjunctFrom
-        for (size_t i = 0; i < 2; ++i)
         {
-            cols[i] = column_ptr->cloneEmpty();
-        }
-        std::vector<size_t> position_vec;
-        position_vec.push_back(0);
-        position_vec.push_back(2);
-        position_vec.push_back(4);
-        for (size_t position : position_vec)
-            cols[0]->insertFrom(*column_ptr, position);
-        for (size_t position : position_vec)
-            cols[0]->insertFrom(*column_ptr, position);
-        cols[1]->insertDisjunctFrom(*column_ptr, position_vec);
-        cols[1]->insertDisjunctFrom(*column_ptr, position_vec);
-        {
-            ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
-            ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
-            compareColumn(ref, result);
+            for (size_t i = 0; i < 2; ++i)
+            {
+                cols[i] = column_ptr->cloneEmpty();
+            }
+            std::vector<size_t> position_vec;
+            position_vec.push_back(0);
+            position_vec.push_back(2);
+            position_vec.push_back(4);
+            for (size_t position : position_vec)
+                cols[0]->insertFrom(*column_ptr, position);
+            for (size_t position : position_vec)
+                cols[0]->insertFrom(*column_ptr, position);
+            cols[1]->insertDisjunctFrom(*column_ptr, position_vec);
+            cols[1]->insertDisjunctFrom(*column_ptr, position_vec);
+            {
+                ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
+                ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
+                compareColumn(ref, result);
+            }
         }
 
         /// Test insertManyDefaults
-        for (size_t i = 0; i < 2; ++i)
         {
-            cols[i] = column_ptr->cloneEmpty();
+            for (size_t i = 0; i < 2; ++i)
+            {
+                cols[i] = column_ptr->cloneEmpty();
+            }
+            for (size_t i = 0; i < 3; ++i)
+                cols[0]->insertDefault();
+            for (size_t i = 0; i < 3; ++i)
+                cols[0]->insertDefault();
+            cols[1]->insertManyDefaults(3);
+            cols[1]->insertManyDefaults(3);
+            {
+                ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
+                ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
+                compareColumn(ref, result);
+            }
         }
-        for (size_t i = 0; i < 3; ++i)
-            cols[0]->insertDefault();
-        for (size_t i = 0; i < 3; ++i)
-            cols[0]->insertDefault();
-        cols[1]->insertManyDefaults(3);
-        cols[1]->insertManyDefaults(3);
+
+        /// Test insertMany
         {
-            ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
-            ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
-            compareColumn(ref, result);
+            for (size_t i = 0; i < 2; ++i)
+                cols[i] = column_ptr->cloneEmpty();
+            for (size_t i = 0; i < 6; ++i)
+                cols[0]->insertFrom(*column_ptr, 1);
+            if (unlikely(
+                    typeid_cast<const ColumnNothing *>(column_ptr.get())
+                    || typeid_cast<const ColumnSet *>(column_ptr.get())))
+            {
+                /// ColumnNothing and ColumnSet are not allowed to insertMany
+                return;
+            }
+            auto v = (*column_ptr)[1];
+            cols[1]->insertMany(v, 6);
+            {
+                ColumnWithTypeAndName ref(std::move(cols[0]), col_with_type_and_name.type, "");
+                ColumnWithTypeAndName result(std::move(cols[1]), col_with_type_and_name.type, "");
+                compareColumn(ref, result);
+            }
         }
     }
     const size_t rows = 6;
@@ -153,10 +182,8 @@ try
     col->insertData("d", 1);
     col->insertData("e", 1);
     col->insertData("f", 1);
-    auto col_with_type_and_name = ColumnWithTypeAndName{
-        std::move(col),
-        std::make_shared<DataTypeString>(),
-        String("col")};
+    auto col_with_type_and_name
+        = ColumnWithTypeAndName{std::move(col), std::make_shared<DataTypeString>(), String("col")};
     doTestWork(col_with_type_and_name);
 }
 CATCH
@@ -178,7 +205,9 @@ CATCH
 TEST_F(TestColumnInsertFrom, TestColumnConst)
 try
 {
-    auto col_with_type_and_name = createConstColumn<Nullable<DataTypeMyDateTime::FieldType>>(6, {MyDateTime(2020, 2, 10, 0, 0, 0, 0).toPackedUInt()});
+    auto col_with_type_and_name = createConstColumn<Nullable<DataTypeMyDateTime::FieldType>>(
+        6,
+        {MyDateTime(2020, 2, 10, 0, 0, 0, 0).toPackedUInt()});
     doTestWork(col_with_type_and_name);
 
     /// Const Null
@@ -191,10 +220,8 @@ TEST_F(TestColumnInsertFrom, TestColumnNothing)
 try
 {
     auto col = ColumnNothing::create(6);
-    auto col_with_type_and_name = ColumnWithTypeAndName{
-        std::move(col),
-        std::make_shared<DataTypeString>(),
-        String("col")};
+    auto col_with_type_and_name
+        = ColumnWithTypeAndName{std::move(col), std::make_shared<DataTypeString>(), String("col")};
     doTestWork(col_with_type_and_name);
 }
 CATCH
@@ -204,10 +231,8 @@ try
 {
     const SetPtr & set = nullptr;
     auto col = ColumnSet::create(6, set);
-    auto col_with_type_and_name = ColumnWithTypeAndName{
-        std::move(col),
-        std::make_shared<DataTypeString>(),
-        String("col")};
+    auto col_with_type_and_name
+        = ColumnWithTypeAndName{std::move(col), std::make_shared<DataTypeString>(), String("col")};
     doTestWork(col_with_type_and_name);
 }
 CATCH
@@ -224,10 +249,8 @@ try
     offsets->insert(10);
     offsets->insert(12);
     auto col = ColumnArray::create(nested_col, std::move(offsets));
-    auto col_with_type_and_name = ColumnWithTypeAndName{
-        std::move(col),
-        std::make_shared<DataTypeString>(),
-        String("col")};
+    auto col_with_type_and_name
+        = ColumnWithTypeAndName{std::move(col), std::make_shared<DataTypeString>(), String("col")};
     doTestWork(col_with_type_and_name);
 }
 CATCH
@@ -237,14 +260,12 @@ try
 {
     auto string_col = createColumn<String>({"1", "2", "3", "4", "5", "6"}).column;
     auto int_col = createColumn<UInt64>({1, 2, 3, 4, 5, 6}).column;
-    MutableColumns mutableColumns;
-    mutableColumns.push_back(string_col->assumeMutable());
-    mutableColumns.push_back(int_col->assumeMutable());
-    auto col = ColumnTuple::create(std::move(mutableColumns));
-    auto col_with_type_and_name = ColumnWithTypeAndName{
-        std::move(col),
-        std::make_shared<DataTypeString>(),
-        String("col")};
+    MutableColumns mutable_columns;
+    mutable_columns.push_back(string_col->assumeMutable());
+    mutable_columns.push_back(int_col->assumeMutable());
+    auto col = ColumnTuple::create(std::move(mutable_columns));
+    auto col_with_type_and_name
+        = ColumnWithTypeAndName{std::move(col), std::make_shared<DataTypeString>(), String("col")};
     doTestWork(col_with_type_and_name);
 }
 CATCH

@@ -17,6 +17,7 @@
 #include <Core/Types.h>
 #include <Poco/Event.h>
 #include <Poco/Timestamp.h>
+#include <Storages/KVStore/FFI/JointThreadAllocInfo.h>
 #include <absl/synchronization/blocking_counter.h>
 
 #include <atomic>
@@ -32,7 +33,6 @@
 
 namespace DB
 {
-class Context;
 
 /** Using a fixed number of threads, perform an arbitrary number of tasks in an infinite loop.
   * In this case, one task can run simultaneously from different threads.
@@ -54,7 +54,11 @@ public:
         /// Wake up any thread.
         void wake();
 
-        TaskInfo(BackgroundProcessingPool & pool_, const Task & function_, const bool multi_, const uint64_t interval_ms_)
+        TaskInfo(
+            BackgroundProcessingPool & pool_,
+            const Task & function_,
+            const bool multi_,
+            const uint64_t interval_ms_)
             : pool(pool_)
             , function(function_)
             , multi(multi_)
@@ -86,7 +90,10 @@ public:
     using TaskHandle = std::shared_ptr<TaskInfo>;
 
 
-    explicit BackgroundProcessingPool(int size_, std::string thread_prefix_);
+    explicit BackgroundProcessingPool(
+        int size_,
+        std::string thread_prefix_,
+        JointThreadInfoJeallocMapPtr joint_memory_allocation_map_);
 
     size_t getNumberOfThreads() const { return size; }
 
@@ -131,6 +138,8 @@ private:
 
     std::atomic<bool> shutdown{false};
     std::condition_variable wake_event;
+
+    JointThreadInfoJeallocMapPtr joint_memory_allocation_map;
 };
 
 using BackgroundProcessingPoolPtr = std::shared_ptr<BackgroundProcessingPool>;

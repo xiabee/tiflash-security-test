@@ -18,8 +18,7 @@
 #include <Core/TiFlashDisaggregatedMode.h>
 #include <Core/Types.h>
 #include <Debug/MockServerInfo.h>
-#include <Encryption/FileProvider_fwd.h>
-#include <IO/CompressionSettings.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Interpreters/ClientInfo.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/Settings.h>
@@ -34,7 +33,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
 
 namespace pingcap
 {
@@ -57,7 +55,6 @@ class QuotaForIntervals;
 class BackgroundProcessingPool;
 class MergeList;
 class MarkCache;
-class UncompressedCache;
 class DBGInvoker;
 class TMTContext;
 using TMTContextPtr = std::shared_ptr<TMTContext>;
@@ -103,6 +100,8 @@ using MockMPPServerInfo = DB::tests::MockMPPServerInfo;
 class TiFlashSecurityConfig;
 using TiFlashSecurityConfigPtr = std::shared_ptr<TiFlashSecurityConfig>;
 class MockStorage;
+class JointThreadInfoJeallocMap;
+using JointThreadInfoJeallocMapPtr = std::shared_ptr<JointThreadInfoJeallocMap>;
 
 enum class PageStorageRunMode : UInt8;
 namespace DM
@@ -112,6 +111,8 @@ class DeltaIndexManager;
 class GlobalStoragePool;
 class SharedBlockSchemas;
 using GlobalStoragePoolPtr = std::shared_ptr<GlobalStoragePool>;
+class GlobalPageIdAllocator;
+using GlobalPageIdAllocatorPtr = std::shared_ptr<GlobalPageIdAllocator>;
 } // namespace DM
 
 /// (database name, table name)
@@ -202,11 +203,12 @@ public:
     void setFlagsPath(const String & path);
     void setUserFilesPath(const String & path);
 
-    void setPathPool(const Strings & main_data_paths,
-                     const Strings & latest_data_paths,
-                     const Strings & kvstore_paths,
-                     PathCapacityMetricsPtr global_capacity_,
-                     FileProviderPtr file_provider);
+    void setPathPool(
+        const Strings & main_data_paths,
+        const Strings & latest_data_paths,
+        const Strings & kvstore_paths,
+        PathCapacityMetricsPtr global_capacity_,
+        FileProviderPtr file_provider);
 
     using ConfigurationPtr = Poco::AutoPtr<Poco::Util::AbstractConfiguration>;
 
@@ -227,14 +229,22 @@ public:
     TiFlashSecurityConfigPtr getSecurityConfig();
 
     /// Must be called before getClientInfo.
-    void setUser(const String & name, const String & password, const Poco::Net::SocketAddress & address, const String & quota_key);
+    void setUser(
+        const String & name,
+        const String & password,
+        const Poco::Net::SocketAddress & address,
+        const String & quota_key);
     /// Compute and set actual user settings, client_info.current_user should be set
     void calculateUserSettings();
 
     ClientInfo & getClientInfo() { return client_info; };
     const ClientInfo & getClientInfo() const { return client_info; };
 
-    void setQuota(const String & name, const String & quota_key, const String & user_name, const Poco::Net::IPAddress & address);
+    void setQuota(
+        const String & name,
+        const String & quota_key,
+        const String & user_name,
+        const Poco::Net::IPAddress & address);
     QuotaForIntervals & getQuota();
 
     void addDependency(const DatabaseAndTableName & from, const DatabaseAndTableName & where);
@@ -251,7 +261,10 @@ public:
       * when assertTableDoesntExist or assertDatabaseExists is called inside another function that already
       * made this check.
       */
-    void assertTableDoesntExist(const String & database_name, const String & table_name, bool check_database_access_rights = true) const;
+    void assertTableDoesntExist(
+        const String & database_name,
+        const String & table_name,
+        bool check_database_access_rights = true) const;
     void assertDatabaseExists(const String & database_name, bool check_database_access_rights = true) const;
 
     void assertDatabaseDoesntExist(const String & database_name) const;
@@ -271,9 +284,12 @@ public:
 
     /// Get an object that protects the table from concurrently executing multiple DDL operations.
     /// If such an object already exists, an exception is thrown.
-    std::unique_ptr<DDLGuard> getDDLGuard(const String & database, const String & table, const String & message) const;
+    std::unique_ptr<DDLGuard> getDDLGuard(const String & table, const String & message) const;
     /// If the table already exists, it returns nullptr, otherwise guard is created.
-    std::unique_ptr<DDLGuard> getDDLGuardIfTableDoesntExist(const String & database, const String & table, const String & message) const;
+    std::unique_ptr<DDLGuard> getDDLGuardIfTableDoesntExist(
+        const String & database,
+        const String & table,
+        const String & message) const;
 
     String getCurrentDatabase() const;
     String getCurrentQueryId() const;
@@ -296,7 +312,11 @@ public:
     void setSetting(const String & name, const std::string & value);
 
     /// I/O formats.
-    BlockInputStreamPtr getInputFormat(const String & name, ReadBuffer & buf, const Block & sample, size_t max_block_size) const;
+    BlockInputStreamPtr getInputFormat(
+        const String & name,
+        ReadBuffer & buf,
+        const Block & sample,
+        size_t max_block_size) const;
     BlockOutputStreamPtr getOutputFormat(const String & name, WriteBuffer & buf, const Block & sample) const;
 
     /// The port that the server listens for executing SQL queries.
@@ -359,11 +379,6 @@ public:
     ProcessList & getProcessList();
     const ProcessList & getProcessList() const;
 
-    /// Create a cache of uncompressed blocks of specified size. This can be done only once.
-    void setUncompressedCache(size_t max_size_in_bytes);
-    std::shared_ptr<UncompressedCache> getUncompressedCache() const;
-    void dropUncompressedCache() const;
-
     /// Execute inner functions, debug only.
     DBGInvoker & getDBGInvoker() const;
 
@@ -413,10 +428,18 @@ public:
 
     void initializeTiFlashMetrics() const;
 
-    void initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption);
+    void initializeFileProvider(
+        KeyManagerPtr key_manager,
+        bool enable_encryption,
+        bool enable_keyspace_encryption = false);
     FileProviderPtr getFileProvider() const;
+    // For test only
+    void setFileProvider(FileProviderPtr file_provider);
 
-    void initializeRateLimiter(Poco::Util::AbstractConfiguration & config, BackgroundProcessingPool & bg_pool, BackgroundProcessingPool & blockable_bg_pool) const;
+    void initializeRateLimiter(
+        Poco::Util::AbstractConfiguration & config,
+        BackgroundProcessingPool & bg_pool,
+        BackgroundProcessingPool & blockable_bg_pool) const;
     WriteLimiterPtr getWriteLimiter() const;
     ReadLimiterPtr getReadLimiter() const;
     IORateLimiter & getIORateLimiter() const;
@@ -424,14 +447,22 @@ public:
     void initializePageStorageMode(const PathPool & path_pool, UInt64 storage_page_format_version);
     void setPageStorageRunMode(PageStorageRunMode run_mode) const;
     PageStorageRunMode getPageStorageRunMode() const;
+
+    bool initializeGlobalPageIdAllocator();
+    DM::GlobalPageIdAllocatorPtr getGlobalPageIdAllocator() const;
+
     bool initializeGlobalStoragePoolIfNeed(const PathPool & path_pool);
     DM::GlobalStoragePoolPtr getGlobalStoragePool() const;
 
     void initializeWriteNodePageStorageIfNeed(const PathPool & path_pool);
     UniversalPageStoragePtr getWriteNodePageStorage() const;
     UniversalPageStoragePtr tryGetWriteNodePageStorage() const;
-    bool trySyncAllDataToRemoteStore() const;
+    bool tryUploadAllDataToRemoteStore() const;
     void tryReleaseWriteNodePageStorageForTest();
+
+    void initializeJointThreadInfoJeallocMap();
+    JointThreadInfoJeallocMapPtr getJointThreadInfoJeallocMap() const;
+    JointThreadInfoJeallocMapPtr getJointThreadInfoJeallocMap(std::unique_lock<std::recursive_mutex> &) const;
 
     SharedContextDisaggPtr getSharedContextDisagg() const;
 
@@ -505,6 +536,8 @@ public:
     const std::shared_ptr<DB::DM::SharedBlockSchemas> & getSharedBlockSchemas() const;
     void initializeSharedBlockSchemas(size_t shared_block_schemas_size);
 
+    void mockConfigLoaded() { is_config_loaded = true; }
+
 private:
     /** Check if the current client has access to the specified database.
       * If access is denied, throw an exception.
@@ -534,7 +567,12 @@ public:
     /// NOTE: using std::map here (and not std::unordered_map) to avoid iterator invalidation on insertion.
     using Map = std::map<String, String>;
 
-    DDLGuard(Map & map_, std::mutex & mutex_, std::unique_lock<std::mutex> && lock, const String & elem, const String & message);
+    DDLGuard(
+        Map & map_,
+        std::mutex & mutex_,
+        std::unique_lock<std::mutex> && lock,
+        const String & elem,
+        const String & message);
     ~DDLGuard();
 
 private:

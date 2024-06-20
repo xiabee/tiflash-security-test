@@ -21,8 +21,10 @@
 #include <Interpreters/Context.h>
 #include <Poco/Timespan.h>
 #include <Storages/BackgroundProcessingPool.h>
+#include <Storages/KVStore/FFI/ProxyFFI.h>
 #include <common/logger_useful.h>
 
+#include <ext/scope_guard.h>
 #include <pcg_random.hpp>
 #include <random>
 
@@ -82,10 +84,14 @@ void BackgroundProcessingPool::TaskInfo::wake()
 }
 
 
-BackgroundProcessingPool::BackgroundProcessingPool(int size_, std::string thread_prefix_)
+BackgroundProcessingPool::BackgroundProcessingPool(
+    int size_,
+    std::string thread_prefix_,
+    JointThreadInfoJeallocMapPtr joint_memory_allocation_map_)
     : size(size_)
     , thread_prefix(thread_prefix_)
     , thread_ids_counter(size_)
+    , joint_memory_allocation_map(joint_memory_allocation_map_)
 {
     LOG_INFO(Logger::get(), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
 
@@ -97,7 +103,10 @@ BackgroundProcessingPool::BackgroundProcessingPool(int size_, std::string thread
 }
 
 
-BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::addTask(const Task & task, const bool multi, const size_t interval_ms)
+BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::addTask(
+    const Task & task,
+    const bool multi,
+    const size_t interval_ms)
 {
     TaskHandle res = std::make_shared<TaskInfo>(*this, task, multi, interval_ms);
 
@@ -133,7 +142,10 @@ BackgroundProcessingPool::~BackgroundProcessingPool()
 {
     try
     {
-        shutdown = true;
+        {
+            std::unique_lock lock(tasks_mutex);
+            shutdown = true;
+        }
         wake_event.notify_all();
         for (std::thread & thread : threads)
             thread.join();
@@ -161,8 +173,7 @@ BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 
         {
             // find the first coming task that no thread is running
             // or can be run by multithreads
-            if (!task_handle->removed
-                && (task_handle->concurrent_executors == 0 || task_handle->multi))
+            if (!task_handle->removed && (task_handle->concurrent_executors == 0 || task_handle->multi))
             {
                 min_time = task_time;
                 task = task_handle;
@@ -175,9 +186,10 @@ BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 
         if (!task)
         {
             /// No tasks ready for execution, wait for a while and check again
-            wake_event.wait_for(lock,
-                                std::chrono::duration<double>(
-                                    sleep_seconds + std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
+            wake_event.wait_for(
+                lock,
+                std::chrono::duration<double>(
+                    sleep_seconds + std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
             continue;
         }
 
@@ -185,9 +197,11 @@ BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 
         if (min_time > current_time)
         {
             // The coming task is not ready for execution yet, wait for a while
-            wake_event.wait_for(lock,
-                                std::chrono::microseconds(
-                                    min_time - current_time + std::uniform_int_distribution<uint64_t>(0, sleep_seconds_random_part * 1000000)(rng)));
+            wake_event.wait_for(
+                lock,
+                std::chrono::microseconds(
+                    min_time - current_time
+                    + std::uniform_int_distribution<uint64_t>(0, sleep_seconds_random_part * 1000000)(rng)));
         }
         // here task != nullptr and is ready for execution
         return task;
@@ -197,21 +211,38 @@ BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 
 
 void BackgroundProcessingPool::threadFunction(size_t thread_idx) noexcept
 {
+    const auto name = thread_prefix + std::to_string(thread_idx);
     {
-        const auto name = thread_prefix + std::to_string(thread_idx);
         setThreadName(name.data());
         is_background_thread = true;
         addThreadId(getTid());
+        auto ptrs = JointThreadInfoJeallocMap::getPtrs();
+        joint_memory_allocation_map->reportThreadAllocInfoForStorage(name, ReportThreadAllocateInfoType::Reset, 0, '-');
+        joint_memory_allocation_map->reportThreadAllocInfoForStorage(
+            name,
+            ReportThreadAllocateInfoType::AllocPtr,
+            reinterpret_cast<uint64_t>(std::get<0>(ptrs)),
+            '-');
+        joint_memory_allocation_map->reportThreadAllocInfoForStorage(
+            name,
+            ReportThreadAllocateInfoType::DeallocPtr,
+            reinterpret_cast<uint64_t>(std::get<1>(ptrs)),
+            '-');
     }
 
+    SCOPE_EXIT({
+        joint_memory_allocation_map
+            ->reportThreadAllocInfoForStorage(name, ReportThreadAllocateInfoType::Remove, 0, '-');
+    });
+
     // set up the thread local memory tracker
-    auto memory_tracker = MemoryTracker::create();
-    memory_tracker->setNext(root_of_non_query_mem_trackers.get());
+    auto memory_tracker = MemoryTracker::create(0, root_of_non_query_mem_trackers.get());
     memory_tracker->setMetric(CurrentMetrics::MemoryTrackingInBackgroundProcessingPool);
     current_memory_tracker = memory_tracker.get();
 
     pcg64 rng(randomSeed());
-    std::this_thread::sleep_for(std::chrono::duration<double>(std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
+    std::this_thread::sleep_for(
+        std::chrono::duration<double>(std::uniform_real_distribution<double>(0, sleep_seconds_random_part)(rng)));
 
     while (!shutdown)
     {

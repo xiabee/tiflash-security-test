@@ -17,7 +17,6 @@
 #include <Storages/DeltaMerge/LateMaterializationBlockInputStream.h>
 #include <Storages/DeltaMerge/ReadUtil.h>
 
-#include <algorithm>
 
 namespace DB::DM
 {
@@ -31,13 +30,13 @@ LateMaterializationBlockInputStream::LateMaterializationBlockInputStream(
     const String & req_id_)
     : header(toEmptyBlock(columns_to_read))
     , filter_column_name(filter_column_name_)
-    , filter_column_stream(filter_column_stream_)
-    , rest_column_stream(rest_column_stream_)
+    , filter_column_stream(std::move(filter_column_stream_))
+    , rest_column_stream(std::move(rest_column_stream_))
     , bitmap_filter(bitmap_filter_)
     , log(Logger::get(NAME, req_id_))
 {}
 
-Block LateMaterializationBlockInputStream::readImpl()
+Block LateMaterializationBlockInputStream::read()
 {
     Block filter_column_block;
     FilterPtr filter = nullptr;
@@ -92,12 +91,11 @@ Block LateMaterializationBlockInputStream::readImpl()
                 //       but the filter_column_stream doesn't meet the end of stream
                 //       so it is an unexpected behavior.
                 rest_column_stream->read();
-                LOG_ERROR(log, "Late materialization skip block failed, at start_offset: {}, rows: {}", filter_column_block.startOffset(), filter_column_block.rows());
-            }
-            else
-            {
-                RUNTIME_CHECK(skipped_rows == rows);
-                LOG_DEBUG(log, "Late materialization skip read block at start_offset: {}, rows: {}", filter_column_block.startOffset(), filter_column_block.rows());
+                LOG_ERROR(
+                    log,
+                    "Late materialization skip block failed, at start_offset: {}, rows: {}",
+                    filter_column_block.startOffset(),
+                    filter_column_block.rows());
             }
         }
         else
@@ -142,13 +140,15 @@ Block LateMaterializationBlockInputStream::readImpl()
             }
 
             // make sure the position and size of filter_column_block and rest_column_block are the same
-            RUNTIME_CHECK_MSG(rest_column_block.startOffset() == filter_column_block.startOffset(),
-                              "Late materialization meets unexpected block unmatched, filter_column_block: [start_offset={}, rows={}], rest_column_block: [start_offset={}, rows={}], pass_count={}",
-                              filter_column_block.startOffset(),
-                              filter_column_block.rows(),
-                              rest_column_block.startOffset(),
-                              rest_column_block.rows(),
-                              passed_count);
+            RUNTIME_CHECK_MSG(
+                rest_column_block.startOffset() == filter_column_block.startOffset(),
+                "Late materialization meets unexpected block unmatched, filter_column_block: [start_offset={}, "
+                "rows={}], rest_column_block: [start_offset={}, rows={}], pass_count={}",
+                filter_column_block.startOffset(),
+                filter_column_block.rows(),
+                rest_column_block.startOffset(),
+                rest_column_block.rows(),
+                passed_count);
             // join filter_column_block and rest_column_block by columns,
             // the tmp column added by FilterBlockInputStream will be removed.
             return hstackBlocks({std::move(filter_column_block), std::move(rest_column_block)}, header);

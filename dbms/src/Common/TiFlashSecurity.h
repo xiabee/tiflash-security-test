@@ -15,10 +15,12 @@
 #pragma once
 #include <Common/Config/ConfigObject.h>
 #include <Common/FileChangesTracker.h>
+#include <Common/RedactHelpers.h>
 #include <Common/grpcpp.h>
 #include <Core/Types.h>
-#include <IO/createReadBufferFromFileBase.h>
+#include <IO/Buffer/ReadBufferFromFile.h>
 #include <Poco/Crypto/X509Certificate.h>
+#include <Poco/NumberParser.h>
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
 #include <Poco/Util/LayeredConfiguration.h>
@@ -43,8 +45,7 @@ public:
 
     explicit TiFlashSecurityConfig(const LoggerPtr & log_)
         : log(log_)
-    {
-    }
+    {}
 
     void init(Poco::Util::AbstractConfiguration & config)
     {
@@ -67,7 +68,7 @@ public:
         return has_tls_config;
     }
 
-    bool redactInfoLog()
+    RedactMode redactInfoLog()
     {
         std::unique_lock lock(mu);
         return redact_info_log;
@@ -109,13 +110,13 @@ public:
             if (config.has("security.cert_allowed_cn") && has_tls_config)
             {
                 String verify_cns = config.getString("security.cert_allowed_cn");
-                parseAllowedCN(verify_cns);
+                allowed_common_names = parseAllowedCN(verify_cns);
             }
 
             // Mostly options name are combined with "_", keep this style
             if (config.has("security.redact_info_log"))
             {
-                redact_info_log = config.getBool("security.redact_info_log");
+                redact_info_log = parseRedactLog(config.getString("security.redact_info_log"));
             }
             return cert_file_updated;
         }
@@ -133,12 +134,42 @@ public:
         return false;
     }
 
-    void parseAllowedCN(String verify_cns)
+    static RedactMode parseRedactLog(const String & config_str)
+    {
+        if (Poco::icompare(config_str, "marker") == 0)
+            return RedactMode::Marker;
+
+        int n;
+        if (Poco::NumberParser::tryParse(config_str, n))
+        {
+            return ((n == 0) ? RedactMode::Disable : RedactMode::Enable);
+        }
+        else if (
+            Poco::icompare(config_str, "true") == 0 //
+            || Poco::icompare(config_str, "yes") == 0 //
+            || Poco::icompare(config_str, "on") == 0)
+        {
+            return RedactMode::Enable;
+        }
+        else if (
+            Poco::icompare(config_str, "false") == 0 //
+            || Poco::icompare(config_str, "no") == 0 //
+            || Poco::icompare(config_str, "off") == 0)
+        {
+            return RedactMode::Disable;
+        }
+
+        throw Exception(ErrorCodes::INVALID_CONFIG_PARAMETER, "invalid redact_info_log value, value={}", config_str);
+    }
+
+    static std::set<String> parseAllowedCN(String verify_cns)
     {
         if (verify_cns.size() > 2 && verify_cns[0] == '[' && verify_cns[verify_cns.size() - 1] == ']')
         {
             verify_cns = verify_cns.substr(1, verify_cns.size() - 2);
         }
+
+        std::set<String> common_names;
         Poco::StringTokenizer string_tokens(verify_cns, ",");
         for (const auto & string_token : string_tokens)
         {
@@ -147,10 +178,13 @@ public:
             {
                 cn = cn.substr(1, cn.size() - 2);
             }
-            allowed_common_names.insert(std::move(cn));
+            common_names.insert(std::move(cn));
         }
+        return common_names;
     }
 
+    // Return whether grpc_context satisfy the `allowed_common_name` in config
+    // Mainly used for handling grpc requests
     bool checkGrpcContext(const grpc::ServerContext * grpc_context) const
     {
         std::unique_lock lock(mu);
@@ -161,12 +195,15 @@ public:
         auto auth_context = grpc_context->auth_context();
         for (auto && [property_name, common_name] : *auth_context)
         {
-            if (property_name == GRPC_X509_CN_PROPERTY_NAME && allowed_common_names.count(String(common_name.data(), common_name.size())))
+            if (property_name == GRPC_X509_CN_PROPERTY_NAME
+                && allowed_common_names.count(String(common_name.data(), common_name.size())))
                 return true;
         }
         return false;
     }
 
+    // Return whether cert satisfy the `allowed_common_name` in config
+    // Mainly used for handling http requests
     bool checkCommonName(const Poco::Crypto::X509Certificate & cert)
     {
         std::unique_lock lock(mu);
@@ -177,16 +214,23 @@ public:
         return allowed_common_names.count(cert.commonName()) > 0;
     }
 
-    grpc::SslCredentialsOptions readAndCacheSslCredentialOptions()
+    std::optional<grpc::SslCredentialsOptions> readAndCacheSslCredentialOptions()
     {
         std::unique_lock lock(mu);
+        // if ssl_cerd_options_cached = true, it means the same options has already been returned to grpc-core
+        // don't need to return it again if ssl cert is not actually changed
         if (ssl_cerd_options_cached)
-            return options;
+            return {};
         options.pem_root_certs = readFile(ca_path);
         options.pem_cert_chain = readFile(cert_path);
         options.pem_private_key = readFile(key_path);
         ssl_cerd_options_cached = true;
-        LOG_INFO(log, "read new SslCredentialOptions: ca_path: {}, cert_path: {}, key_path: {}", ca_path, cert_path, key_path);
+        LOG_INFO(
+            log,
+            "read new SslCredentialOptions: ca_path: {}, cert_path: {}, key_path: {}",
+            ca_path,
+            cert_path,
+            key_path);
         return options;
     }
 
@@ -207,7 +251,7 @@ private:
         {
             return "";
         }
-        auto buffer = createReadBufferFromFileBase(filename, 1024, 0);
+        auto buffer = std::make_unique<ReadBufferFromFile>(filename);
         String result;
         while (!buffer->eof())
         {
@@ -226,7 +270,6 @@ private:
         String new_ca_path;
         String new_cert_path;
         String new_key_path;
-        bool updated = false;
         if (config.has("security.ca_path"))
         {
             new_ca_path = config.getString("security.ca_path");
@@ -242,8 +285,10 @@ private:
             new_key_path = config.getString("security.key_path");
             miss_key_path = false;
         }
+
         if (miss_ca_path && miss_cert_path && miss_key_path)
         {
+            // all configs are not exist
             if (inited && has_tls_config)
             {
                 LOG_WARNING(log, "Can't remove tls config online");
@@ -252,58 +297,58 @@ private:
             {
                 LOG_INFO(log, "No TLS config is set.");
             }
+            return false;
         }
         else if (miss_ca_path || miss_cert_path || miss_key_path)
         {
-            throw Exception("ca_path, cert_path, key_path must be set at the same time.", ErrorCodes::INVALID_CONFIG_PARAMETER);
+            // any of these configs is not exist
+            throw Exception(
+                "ca_path, cert_path, key_path must be set at the same time.",
+                ErrorCodes::INVALID_CONFIG_PARAMETER);
         }
-        else
+
+        // all configs are exist
+        assert(!miss_ca_path && !miss_cert_path && !miss_key_path);
+        if (inited && !has_tls_config)
         {
-            if (inited && !has_tls_config)
-            {
-                LOG_WARNING(log, "Can't add TLS config online");
-                return false;
-            }
-            else
-            {
-                has_tls_config = true;
-                if (new_ca_path != ca_path || new_cert_path != cert_path || new_key_path != key_path)
-                {
-                    ca_path = new_ca_path;
-                    cert_path = new_cert_path;
-                    key_path = new_key_path;
-                    cert_files.files.clear();
-                    cert_files.addIfExists(ca_path);
-                    cert_files.addIfExists(cert_path);
-                    cert_files.addIfExists(key_path);
-                    updated = true;
-                    ssl_cerd_options_cached = false;
-                    LOG_INFO(
-                        log,
-                        "Ssl certificate config path is updated: ca path is {} cert path is {} key path is {}",
-                        ca_path,
-                        cert_path,
-                        key_path);
-                }
-                else
-                {
-                    // whether the cert file content is updated
-                    updated = fileUpdated();
-                    // update cert files
-                    if (updated)
-                    {
-                        FilesChangesTracker new_files;
-                        for (const auto & file : cert_files.files)
-                        {
-                            new_files.addIfExists(file.path);
-                        }
-                        cert_files = std::move(new_files);
-                        ssl_cerd_options_cached = false;
-                    }
-                }
-            }
+            LOG_WARNING(log, "Can't add TLS config online");
+            return false;
         }
-        return updated;
+
+        has_tls_config = true; // update this->has_tls_config
+        if (new_ca_path != ca_path || new_cert_path != cert_path || new_key_path != key_path)
+        {
+            // any path is changed
+            ca_path = new_ca_path;
+            cert_path = new_cert_path;
+            key_path = new_key_path;
+            cert_files.files.clear();
+            cert_files.addIfExists(ca_path);
+            cert_files.addIfExists(cert_path);
+            cert_files.addIfExists(key_path);
+            ssl_cerd_options_cached = false;
+            LOG_INFO(
+                log,
+                "Ssl certificate config path is updated: ca path is {} cert path is {} key path is {}",
+                ca_path,
+                cert_path,
+                key_path);
+            return true;
+        }
+
+        // whether the cert file content is updated
+        if (!fileUpdated())
+            return false;
+
+        // update cert files
+        FilesChangesTracker new_files;
+        for (const auto & file : cert_files.files)
+        {
+            new_files.addIfExists(file.path);
+        }
+        cert_files = std::move(new_files);
+        ssl_cerd_options_cached = false;
+        return true;
     }
 
 private:
@@ -313,7 +358,7 @@ private:
     String key_path;
 
     FilesChangesTracker cert_files;
-    bool redact_info_log = false;
+    RedactMode redact_info_log = RedactMode::Disable;
     std::set<String> allowed_common_names;
     bool has_tls_config = false;
     bool has_security = false;

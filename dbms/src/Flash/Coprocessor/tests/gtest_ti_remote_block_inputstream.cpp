@@ -15,21 +15,21 @@
 #include <DataStreams/SquashingTransform.h>
 #include <DataStreams/TiRemoteBlockInputStream.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Mpp/MPPTunnelSetHelper.h>
+#include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ScanContext.h>
-#include <Storages/StorageDisaggregated.h>
-#include <Storages/Transaction/TiDB.h>
 #include <TestUtils/ColumnGenerator.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <TestUtils/TiFlashTestEnv.h>
+#include <TiDB/Schema/TiDB.h>
 #include <grpcpp/support/status.h>
 #include <gtest/gtest.h>
 
 #include <Flash/Coprocessor/StreamingDAGResponseWriter.cpp>
 #include <Flash/Mpp/BroadcastOrPassThroughWriter.cpp>
 #include <Flash/Mpp/ExchangeReceiver.cpp>
+#include <memory>
 #include <utility>
 
 
@@ -52,8 +52,8 @@ bool equalSummaries(const ExecutionSummary & left, const ExecutionSummary & righ
         (left.num_iterations == right.num_iterations) && //
         (left.num_produced_rows == right.num_produced_rows) && //
         (left.time_processed_ns == right.time_processed_ns) && //
-        (left.scan_context->total_dmfile_scanned_rows == right.scan_context->total_dmfile_scanned_rows) && //
-        (left.scan_context->total_dmfile_skipped_rows == right.scan_context->total_dmfile_skipped_rows);
+        (left.scan_context->dmfile_data_scanned_rows == right.scan_context->dmfile_data_scanned_rows) && //
+        (left.scan_context->dmfile_data_skipped_rows == right.scan_context->dmfile_data_skipped_rows);
 }
 
 struct MockWriter
@@ -72,13 +72,15 @@ struct MockWriter
         summary.concurrency = 1;
         summary.scan_context = std::make_unique<DM::ScanContext>();
 
-        summary.scan_context->total_dmfile_scanned_packs = 1;
-        summary.scan_context->total_dmfile_skipped_packs = 2;
-        summary.scan_context->total_dmfile_scanned_rows = 8000;
-        summary.scan_context->total_dmfile_skipped_rows = 15000;
-        summary.scan_context->total_dmfile_rough_set_index_load_time_ns = 10;
+        summary.scan_context->dmfile_data_scanned_rows = 8000;
+        summary.scan_context->dmfile_data_skipped_rows = 15000;
+        summary.scan_context->dmfile_mvcc_scanned_rows = 8000;
+        summary.scan_context->dmfile_mvcc_skipped_rows = 15000;
+        summary.scan_context->dmfile_lm_filter_scanned_rows = 8000;
+        summary.scan_context->dmfile_lm_filter_skipped_rows = 15000;
+        summary.scan_context->total_rs_pack_filter_check_time_ns = 10;
         summary.scan_context->total_dmfile_read_time_ns = 200;
-        summary.scan_context->total_create_snapshot_time_ns = 5;
+        summary.scan_context->create_snapshot_time_ns = 5;
         summary.scan_context->total_local_region_num = 10;
         summary.scan_context->total_remote_region_num = 5;
         return summary;
@@ -95,15 +97,12 @@ struct MockWriter
         queue->push(std::move(packet));
     }
 
-    void broadcastWrite(Blocks & blocks)
-    {
-        return broadcastOrPassThroughWriteV0(blocks);
-    }
-    void passThroughWrite(Blocks & blocks)
-    {
-        return broadcastOrPassThroughWriteV0(blocks);
-    }
-    void broadcastOrPassThroughWrite(Blocks & blocks, MPPDataPacketVersion version, CompressionMethod compression_method)
+    void broadcastWrite(Blocks & blocks) { return broadcastOrPassThroughWriteV0(blocks); }
+    void passThroughWrite(Blocks & blocks) { return broadcastOrPassThroughWriteV0(blocks); }
+    void broadcastOrPassThroughWrite(
+        Blocks & blocks,
+        MPPDataPacketVersion version,
+        CompressionMethod compression_method)
     {
         if (version == MPPDataPacketV0)
             return broadcastOrPassThroughWriteV0(blocks);
@@ -148,7 +147,7 @@ struct MockWriter
         queue->push(tracked_packet);
     }
     static uint16_t getPartitionNum() { return 1; }
-    static bool isReadyForWrite() { throw Exception("Unsupport async write"); }
+    static bool isWritable() { throw Exception("Unsupport async write"); }
 
     std::vector<tipb::FieldType> result_field_types;
 
@@ -164,15 +163,17 @@ struct MockReceiverContext
     using Status = ::grpc::Status;
     struct Request
     {
-        static String debugString()
-        {
-            return "{Request}";
-        }
+        static String debugString() { return "{Request}"; }
 
         int source_index = 0;
         int send_task_id = 0;
         int recv_task_id = -1;
         bool is_local = false;
+    };
+
+    struct MockClientContext
+    {
+        static grpc_call * c_call() { return nullptr; }
     };
 
     struct Reader
@@ -181,9 +182,7 @@ struct MockReceiverContext
             : queue(queue_)
         {}
 
-        void initialize() const
-        {
-        }
+        void initialize() const {}
 
         bool read(PacketPtr & packet [[maybe_unused]]) const
         {
@@ -196,14 +195,9 @@ struct MockReceiverContext
             return false;
         }
 
-        static Status finish()
-        {
-            return ::grpc::Status();
-        }
+        static Status finish() { return ::grpc::Status(); }
 
-        void cancel(const String &)
-        {
-        }
+        void cancel(const String &) {}
 
         PacketQueuePtr queue;
     };
@@ -211,20 +205,18 @@ struct MockReceiverContext
     struct MockAsyncGrpcExchangePacketReader
     {
         // Not implement benchmark for Async GRPC for now.
-        static void init(UnaryCallback<bool> *) { assert(0); }
-        static void read(TrackedMppDataPacketPtr &, UnaryCallback<bool> *) { assert(0); }
-        static void finish(::grpc::Status &, UnaryCallback<bool> *) { assert(0); }
+        static void init(GRPCKickTag *) { assert(0); }
+        static void read(TrackedMppDataPacketPtr &, GRPCKickTag *) { assert(0); }
+        static void finish(::grpc::Status &, GRPCKickTag *) { assert(0); }
+        static std::shared_ptr<MockClientContext> getClientContext() { return std::make_shared<MockClientContext>(); }
     };
 
     using AsyncReader = MockAsyncGrpcExchangePacketReader;
 
-    MockReceiverContext(
-        PacketQueuePtr & queue_,
-        const std::vector<tipb::FieldType> & field_types_)
+    MockReceiverContext(PacketQueuePtr & queue_, const std::vector<tipb::FieldType> & field_types_)
         : queue(queue_)
         , field_types(field_types_)
-    {
-    }
+    {}
 
     void fillSchema(DAGSchema & schema) const
     {
@@ -237,51 +229,30 @@ struct MockReceiverContext
         }
     }
 
-    static Request makeRequest(int index)
-    {
-        return {index, index, -1};
-    }
+    static Request makeRequest(int index) { return {index, index, -1}; }
 
-    std::shared_ptr<Reader> makeSyncReader(const Request &)
-    {
-        return std::make_shared<Reader>(queue);
-    }
+    std::unique_ptr<Reader> makeSyncReader(const Request &) { return std::make_unique<Reader>(queue); }
 
-    static void cancelMPPTaskOnTiFlashStorageNode(LoggerPtr)
-    {
-        throw Exception("cancelMPPTaskOnTiFlashStorageNode not implemented for MockReceiverContext");
-    }
-
-    static void sendMPPTaskToTiFlashStorageNode(LoggerPtr, const std::vector<RequestAndRegionIDs> &)
-    {
-        throw Exception("sendMPPTaskToTiFlashStorageNode not implemented for MockReceiverContext");
-    }
-
-    static Status getStatusOK()
-    {
-        return ::grpc::Status();
-    }
+    static Status getStatusOK() { return ::grpc::Status(); }
 
     static bool supportAsync(const Request &) { return false; }
 
-    void makeAsyncReader(
-        const Request &,
-        std::shared_ptr<AsyncReader> &,
-        grpc::CompletionQueue *,
-        UnaryCallback<bool> *) const {}
-
-    std::shared_ptr<Reader> makeReader(const Request &)
+    static std::unique_ptr<AsyncReader> makeAsyncReader(const Request &, grpc::CompletionQueue *, GRPCKickTag *)
     {
-        return std::make_shared<Reader>(queue);
+        return nullptr;
     }
 
-    static std::tuple<MPPTunnelPtr, grpc::Status> establishMPPConnectionLocalV1(const ::mpp::EstablishMPPConnectionRequest *, const std::shared_ptr<MPPTaskManager> &)
+    std::shared_ptr<Reader> makeReader(const Request &) { return std::make_shared<Reader>(queue); }
+
+    static std::tuple<MPPTunnelPtr, grpc::Status> establishMPPConnectionLocalV1(
+        const ::mpp::EstablishMPPConnectionRequest *,
+        const std::shared_ptr<MPPTaskManager> &)
     {
         // Useless, just for compilation
         return std::make_pair(MPPTunnelPtr(), grpc::Status::CANCELLED);
     }
 
-    void establishMPPConnectionLocalV2(const Request &, size_t, LocalRequestHandler &, bool, bool) {}
+    void establishMPPConnectionLocalV2(const Request &, size_t, LocalRequestHandler &, bool) {}
 
     PacketQueuePtr queue;
     std::vector<tipb::FieldType> field_types{};
@@ -295,8 +266,9 @@ class TestTiRemoteBlockInputStream : public testing::Test
 protected:
     void SetUp() override
     {
+        context = TiFlashTestEnv::getContext();
         dag_context_ptr = std::make_unique<DAGContext>(1024);
-        dag_context_ptr->is_mpp_task = true;
+        dag_context_ptr->kind = DAGRequestKind::MPP;
         dag_context_ptr->is_root_mpp_task = true;
         dag_context_ptr->result_field_types = makeFields();
         dag_context_ptr->encode_type = tipb::EncodeType::TypeCHBlock;
@@ -348,17 +320,13 @@ public:
         {
             DataTypePtr int64_data_type = std::make_shared<DataTypeInt64>();
             auto int64_column = ColumnGenerator::instance().generate({rows, "Int64", RANDOM}).column;
-            block.insert(ColumnWithTypeAndName{
-                std::move(int64_column),
-                int64_data_type,
-                String("col") + std::to_string(i)});
+            block.insert(
+                ColumnWithTypeAndName{std::move(int64_column), int64_data_type, String("col") + std::to_string(i)});
         }
         return block;
     }
 
-    static void prepareBlocks(
-        std::vector<Block> & source_blocks,
-        bool empty_last_packet)
+    static void prepareBlocks(std::vector<Block> & source_blocks, bool empty_last_packet)
     {
         const size_t block_rows = 8192 * 3 / 8;
         /// 61 is specially chosen so that the last packet contains 3072 rows, and then end of the queue
@@ -368,10 +336,8 @@ public:
             source_blocks.emplace_back(prepareBlock(block_rows));
     }
 
-    void prepareQueue(
-        std::shared_ptr<MockWriter> & writer,
-        std::vector<Block> & source_blocks,
-        bool empty_last_packet) const
+    void prepareQueue(std::shared_ptr<MockWriter> & writer, std::vector<Block> & source_blocks, bool empty_last_packet)
+        const
     {
         prepareBlocks(source_blocks, empty_last_packet);
 
@@ -465,7 +431,8 @@ public:
     }
 
     static std::shared_ptr<MockExchangeReceiverInputStream> makeExchangeReceiverInputStream(
-        PacketQueuePtr queue_ptr)
+        PacketQueuePtr queue_ptr,
+        const ContextPtr & context)
     {
         auto receiver = std::make_shared<MockExchangeReceiver>(
             std::make_shared<MockReceiverContext>(queue_ptr, makeFields()),
@@ -474,12 +441,9 @@ public:
             "mock_req_id",
             "mock_exchange_receiver_id",
             0,
-            2);
-        auto receiver_stream = std::make_shared<MockExchangeReceiverInputStream>(
-            receiver,
-            "mock_req_id",
-            "executor_0",
-            0);
+            context->getSettingsRef());
+        auto receiver_stream
+            = std::make_shared<MockExchangeReceiverInputStream>(receiver, "mock_req_id", "executor_0", 0);
         return receiver_stream;
     }
 
@@ -491,7 +455,7 @@ public:
         prepareQueue(writer, source_blocks, empty_last_packet);
         queue_ptr->finish();
 
-        auto receiver_stream = makeExchangeReceiverInputStream(queue_ptr);
+        auto receiver_stream = makeExchangeReceiverInputStream(queue_ptr, context);
         receiver_stream->readPrefix();
         std::vector<Block> decoded_blocks;
         while (const auto & block = receiver_stream->read())
@@ -507,7 +471,7 @@ public:
         auto writer = std::make_shared<MockWriter>(*dag_context_ptr, queue_ptr);
         prepareQueueV2(writer, source_blocks, empty_last_packet);
         queue_ptr->finish();
-        auto receiver_stream = makeExchangeReceiverInputStream(queue_ptr);
+        auto receiver_stream = makeExchangeReceiverInputStream(queue_ptr, context);
         receiver_stream->readPrefix();
         std::vector<Block> decoded_blocks;
         while (const auto & block = receiver_stream->read())
@@ -517,6 +481,7 @@ public:
     }
 
     std::unique_ptr<DAGContext> dag_context_ptr{};
+    ContextPtr context;
 };
 
 TEST_F(TestTiRemoteBlockInputStream, testNoChunkInResponse)

@@ -20,6 +20,11 @@
 
 namespace DB
 {
+namespace FailPoints
+{
+extern const char force_agg_on_partial_block[];
+extern const char force_agg_two_level_hash_table_before_merge[];
+} // namespace FailPoints
 namespace tests
 {
 #define DT DecimalField<Decimal32>
@@ -42,72 +47,76 @@ public:
         ExecutorTest::initializeContext();
 
         /// Create table for tests of group by
-        context.addMockTable(/* name= */ {db_name, table_types},
-                             /* columnInfos= */
-                             {{types_col_name[0], TiDB::TP::TypeLong},
-                              {types_col_name[1], TiDB::TP::TypeDecimal},
-                              {types_col_name[2], TiDB::TP::TypeTiny},
-                              {types_col_name[3], TiDB::TP::TypeShort},
-                              {types_col_name[4], TiDB::TP::TypeLong},
-                              {types_col_name[5], TiDB::TP::TypeLongLong},
-                              {types_col_name[6], TiDB::TP::TypeFloat},
-                              {types_col_name[7], TiDB::TP::TypeDouble},
-                              {types_col_name[8], TiDB::TP::TypeDate},
-                              {types_col_name[9], TiDB::TP::TypeDatetime},
-                              {types_col_name[10], TiDB::TP::TypeString}},
-                             /* columns= */
-                             {toNullableVec<Int32>(types_col_name[0], col_id),
-                              toNullableVec<Decimal32>(types_col_name[1], col_decimal),
-                              toNullableVec<Int8>(types_col_name[2], col_tinyint),
-                              toNullableVec<Int16>(types_col_name[3], col_smallint),
-                              toNullableVec<Int32>(types_col_name[4], col_int),
-                              toNullableVec<Int64>(types_col_name[5], col_bigint),
-                              toNullableVec<Float32>(types_col_name[6], col_float),
-                              toNullableVec<Float64>(types_col_name[7], col_double),
-                              toNullableVec<MyDate>(types_col_name[8], col_mydate),
-                              toNullableVec<MyDateTime>(types_col_name[9], col_mydatetime),
-                              toNullableVec<String>(types_col_name[10], col_string)});
+        context.addMockTable(
+            /* name= */ {db_name, table_types},
+            /* columnInfos= */
+            {{types_col_name[0], TiDB::TP::TypeLong},
+             {types_col_name[1], TiDB::TP::TypeDecimal},
+             {types_col_name[2], TiDB::TP::TypeTiny},
+             {types_col_name[3], TiDB::TP::TypeShort},
+             {types_col_name[4], TiDB::TP::TypeLong},
+             {types_col_name[5], TiDB::TP::TypeLongLong},
+             {types_col_name[6], TiDB::TP::TypeFloat},
+             {types_col_name[7], TiDB::TP::TypeDouble},
+             {types_col_name[8], TiDB::TP::TypeDate},
+             {types_col_name[9], TiDB::TP::TypeDatetime},
+             {types_col_name[10], TiDB::TP::TypeString}},
+            /* columns= */
+            {toNullableVec<Int32>(types_col_name[0], col_id),
+             toNullableVec<Decimal32>(types_col_name[1], col_decimal),
+             toNullableVec<Int8>(types_col_name[2], col_tinyint),
+             toNullableVec<Int16>(types_col_name[3], col_smallint),
+             toNullableVec<Int32>(types_col_name[4], col_int),
+             toNullableVec<Int64>(types_col_name[5], col_bigint),
+             toNullableVec<Float32>(types_col_name[6], col_float),
+             toNullableVec<Float64>(types_col_name[7], col_double),
+             toNullableVec<MyDate>(types_col_name[8], col_mydate),
+             toNullableVec<MyDateTime>(types_col_name[9], col_mydatetime),
+             toNullableVec<String>(types_col_name[10], col_string)});
 
         /// Create table for tests of aggregation functions
-        context.addMockTable(/* name= */ {db_name, table_name},
-                             /* columnInfos= */
-                             {{col_name[0], TiDB::TP::TypeLong},
-                              {col_name[1], TiDB::TP::TypeString},
-                              {col_name[2], TiDB::TP::TypeString},
-                              {col_name[3], TiDB::TP::TypeDouble},
-                              {col_name[4], TiDB::TP::TypeLong}},
-                             /* columns= */
-                             {toNullableVec<Int32>(col_name[0], col_age),
-                              toNullableVec<String>(col_name[1], col_gender),
-                              toNullableVec<String>(col_name[2], col_country),
-                              toNullableVec<Float64>(col_name[3], col_salary),
-                              toVec<UInt64>(col_name[4], col_pr)});
+        context.addMockTable(
+            /* name= */ {db_name, table_name},
+            /* columnInfos= */
+            {{col_name[0], TiDB::TP::TypeLong},
+             {col_name[1], TiDB::TP::TypeString},
+             {col_name[2], TiDB::TP::TypeString},
+             {col_name[3], TiDB::TP::TypeDouble},
+             {col_name[4], TiDB::TP::TypeLong}},
+            /* columns= */
+            {toNullableVec<Int32>(col_name[0], col_age),
+             toNullableVec<String>(col_name[1], col_gender),
+             toNullableVec<String>(col_name[2], col_country),
+             toNullableVec<Float64>(col_name[3], col_salary),
+             toVec<UInt64>(col_name[4], col_pr)});
 
-        context.addMockTable({"aggnull_test", "t1"},
-                             {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
-                             {toNullableVec<String>("s1", {"banana", {}, "banana"}),
-                              toNullableVec<String>("s2", {"apple", {}, "banana"})});
+        context.addMockTable(
+            {"aggnull_test", "t1"},
+            {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
+            {toNullableVec<String>("s1", {"banana", {}, "banana"}),
+             toNullableVec<String>("s2", {"apple", {}, "banana"})});
 
-        context.addMockTable({"test_db", "test_table"},
-                             {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
-                             {toVec<Int64>("s1", {1, 2, 3}),
-                              toVec<Int64>("s2", {1, 2, 3})});
+        context.addMockTable(
+            {"test_db", "test_table"},
+            {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
+            {toVec<Int64>("s1", {1, 2, 3}), toVec<Int64>("s2", {1, 2, 3})});
 
-        context.addMockTable({"test_db", "test_table_not_null"},
-                             {
-                                 {"c1_i64", TiDB::TP::TypeLongLong},
-                                 {"c2_f64", TiDB::TP::TypeDouble},
-                                 {"c3_str", TiDB::TP::TypeString},
-                                 {"c4_str", TiDB::TP::TypeString},
-                                 {"c5_date_time", TiDB::TP::TypeDatetime},
-                             },
-                             {
-                                 toVec<Int64>("c1_i64", {1, 2, 2}),
-                                 toVec<Float64>("c2_f64", {1, 3, 3}),
-                                 toVec<String>("c3_str", {"1", "4  ", "4 "}),
-                                 toVec<String>("c4_str", {"1", "2  ", "2 "}),
-                                 toVec<MyDateTime>("c5_date_time", {2000000, 12000000, 12000000}),
-                             });
+        context.addMockTable(
+            {"test_db", "test_table_not_null"},
+            {
+                {"c1_i64", TiDB::TP::TypeLongLong},
+                {"c2_f64", TiDB::TP::TypeDouble},
+                {"c3_str", TiDB::TP::TypeString},
+                {"c4_str", TiDB::TP::TypeString},
+                {"c5_date_time", TiDB::TP::TypeDatetime},
+            },
+            {
+                toVec<Int64>("c1_i64", {1, 2, 2}),
+                toVec<Float64>("c2_f64", {1, 3, 3}),
+                toVec<String>("c3_str", {"1", "4  ", "4 "}),
+                toVec<String>("c4_str", {"1", "2  ", "2 "}),
+                toVec<MyDateTime>("c5_date_time", {2000000, 12000000, 12000000}),
+            });
 
         /// agg table with 200 rows
         {
@@ -168,7 +177,11 @@ public:
         }
     }
 
-    std::shared_ptr<tipb::DAGRequest> buildDAGRequest(std::pair<String, String> src, MockAstVec agg_funcs, MockAstVec group_by_exprs, MockColumnNameVec proj)
+    std::shared_ptr<tipb::DAGRequest> buildDAGRequest(
+        std::pair<String, String> src,
+        MockAstVec agg_funcs,
+        MockAstVec group_by_exprs,
+        MockColumnNameVec proj)
     {
         /// We can filter the group by column with project operator.
         /// project is applied to get partial aggregation output, so that we can remove redundant outputs and compare results with less handwriting codes.
@@ -179,9 +192,21 @@ public:
 
     /// Prepare some data and names for tests of group by
     const String table_types{"types"};
-    const std::vector<String> types_col_name{"id", "decimal_", "tinyint_", "smallint_", "int_", "bigint_", "float_", "double_", "date_", "datetime_", "string_"};
+    const std::vector<String> types_col_name{
+        "id",
+        "decimal_",
+        "tinyint_",
+        "smallint_",
+        "int_",
+        "bigint_",
+        "float_",
+        "double_",
+        "date_",
+        "datetime_",
+        "string_"};
     ColumnWithNullableInt32 col_id{1, 2, 3, 4, 5, 6, 7, 8, 9};
-    ColumnWithNullableDecimal col_decimal{DT(55, 1), {}, DT(-24, 1), DT(40, 1), DT(-40, 1), DT(40, 1), {}, DT(55, 1), DT(0, 1)};
+    ColumnWithNullableDecimal
+        col_decimal{DT(55, 1), {}, DT(-24, 1), DT(40, 1), DT(-40, 1), DT(40, 1), {}, DT(55, 1), DT(0, 1)};
     ColumnWithNullableInt8 col_tinyint{1, 2, 3, {}, {}, 0, 0, -1, -2};
     ColumnWithNullableInt16 col_smallint{2, 3, {}, {}, 0, -1, -2, 4, 0};
     ColumnWithNullableInt32 col_int{4, {}, {}, 0, 123, -1, -1, 123, 4};
@@ -212,6 +237,17 @@ public:
     ColumnWithUInt64 col_pr{1, 2, 0, 3290124, 968933, 3125, 31236, 4327, 80000};
 };
 
+#define WRAP_FOR_AGG_PARTIAL_BLOCK_START                                              \
+    std::vector<bool> partial_blocks{true, false};                                    \
+    for (auto partial_block : partial_blocks)                                         \
+    {                                                                                 \
+        if (partial_block)                                                            \
+            FailPointHelper::enableFailPoint(FailPoints::force_agg_on_partial_block); \
+        else                                                                          \
+            FailPointHelper::disableFailPoint(FailPoints::force_agg_on_partial_block);
+
+#define WRAP_FOR_AGG_PARTIAL_BLOCK_END }
+
 /// Guarantee the correctness of group by
 TEST_F(AggExecutorTestRunner, GroupBy)
 try
@@ -224,18 +260,95 @@ try
 
     {
         /// group by single column
-        group_by_exprs = {{col(types_col_name[2])}, {col(types_col_name[3])}, {col(types_col_name[4])}, {col(types_col_name[5])}, {col(types_col_name[6])}, {col(types_col_name[7])}, {col(types_col_name[8])}, {col(types_col_name[9])}, {col(types_col_name[10])}};
-        projections = {{types_col_name[2]}, {types_col_name[3]}, {types_col_name[4]}, {types_col_name[5]}, {types_col_name[6]}, {types_col_name[7]}, {types_col_name[8]}, {types_col_name[9]}, {types_col_name[10]}};
-        expect_cols = {
-            {toNullableVec<Int8>(types_col_name[2], ColumnWithNullableInt8{-1, 2, {}, 0, 1, 3, -2})}, /// select tinyint_ from test_db.types group by tinyint_;
-            {toNullableVec<Int16>(types_col_name[3], ColumnWithNullableInt16{-1, 2, -2, {}, 0, 4, 3})}, /// select smallint_ from test_db.types group by smallint_;
-            {toNullableVec<Int32>(types_col_name[4], ColumnWithNullableInt32{-1, {}, 4, 0, 123})}, /// select int_ from test_db.types group by int_;
-            {toNullableVec<Int64>(types_col_name[5], ColumnWithNullableInt64{2, -1, 0, 123, {}})}, /// select bigint_ from test_db.types group by bigint_;
-            {toNullableVec<Float32>(types_col_name[6], ColumnWithNullableFloat32{0, 4, 3.3, {}, 5.6, -0.1})}, /// select float_ from test_db.types group by float_;
-            {toNullableVec<Float64>(types_col_name[7], ColumnWithNullableFloat64{0, {}, -1.2, 1.1, 1.2, 0.1})}, /// select double_ from test_db.types group by double_;
-            {toNullableVec<MyDate>(types_col_name[8], ColumnWithNullableMyDate{{}, 0, 300000, 1000000, 2000000})}, /// select date_ from test_db.types group by date_;
-            {toNullableVec<MyDateTime>(types_col_name[9], ColumnWithNullableMyDateTime{{}, 0, 1000000, 2000000, 3000000})}, /// select datetime_ from test_db.types group by datetime_;
-            {toNullableVec<String>(types_col_name[10], ColumnWithNullableString{{}, "pingcap", "PingCAP", "PINGCAP", "Shanghai"})}}; /// select string_ from test_db.types group by string_;
+        group_by_exprs
+            = {{col(types_col_name[2])},
+               {col(types_col_name[3])},
+               {col(types_col_name[4])},
+               {col(types_col_name[5])},
+               {col(types_col_name[6])},
+               {col(types_col_name[7])},
+               {col(types_col_name[8])},
+               {col(types_col_name[9])},
+               {col(types_col_name[10])}};
+        projections
+            = {{types_col_name[2]},
+               {types_col_name[3]},
+               {types_col_name[4]},
+               {types_col_name[5]},
+               {types_col_name[6]},
+               {types_col_name[7]},
+               {types_col_name[8]},
+               {types_col_name[9]},
+               {types_col_name[10]}};
+        expect_cols
+            = {{toNullableVec<Int8>(
+                   types_col_name[2],
+                   ColumnWithNullableInt8{
+                       -1,
+                       2,
+                       {},
+                       0,
+                       1,
+                       3,
+                       -2})}, /// select tinyint_ from test_db.types group by tinyint_;
+               {toNullableVec<Int16>(
+                   types_col_name[3],
+                   ColumnWithNullableInt16{
+                       -1,
+                       2,
+                       -2,
+                       {},
+                       0,
+                       4,
+                       3})}, /// select smallint_ from test_db.types group by smallint_;
+               {toNullableVec<Int32>(
+                   types_col_name[4],
+                   ColumnWithNullableInt32{-1, {}, 4, 0, 123})}, /// select int_ from test_db.types group by int_;
+               {toNullableVec<Int64>(
+                   types_col_name[5],
+                   ColumnWithNullableInt64{2, -1, 0, 123, {}})}, /// select bigint_ from test_db.types group by bigint_;
+               {toNullableVec<Float32>(
+                   types_col_name[6],
+                   ColumnWithNullableFloat32{
+                       0,
+                       4,
+                       3.3,
+                       {},
+                       5.6,
+                       -0.1})}, /// select float_ from test_db.types group by float_;
+               {toNullableVec<Float64>(
+                   types_col_name[7],
+                   ColumnWithNullableFloat64{
+                       0,
+                       {},
+                       -1.2,
+                       1.1,
+                       1.2,
+                       0.1})}, /// select double_ from test_db.types group by double_;
+               {toNullableVec<MyDate>(
+                   types_col_name[8],
+                   ColumnWithNullableMyDate{
+                       {},
+                       0,
+                       300000,
+                       1000000,
+                       2000000})}, /// select date_ from test_db.types group by date_;
+               {toNullableVec<MyDateTime>(
+                   types_col_name[9],
+                   ColumnWithNullableMyDateTime{
+                       {},
+                       0,
+                       1000000,
+                       2000000,
+                       3000000})}, /// select datetime_ from test_db.types group by datetime_;
+               {toNullableVec<String>(
+                   types_col_name[10],
+                   ColumnWithNullableString{
+                       {},
+                       "pingcap",
+                       "PingCAP",
+                       "PINGCAP",
+                       "Shanghai"})}}; /// select string_ from test_db.types group by string_;
         test_num = expect_cols.size();
         ASSERT_EQ(group_by_exprs.size(), test_num);
         ASSERT_EQ(projections.size(), test_num);
@@ -243,32 +356,65 @@ try
         for (size_t i = 0; i < test_num; ++i)
         {
             request = buildDAGRequest(std::make_pair(db_name, table_types), {}, group_by_exprs[i], projections[i]);
-            executeAndAssertColumnsEqual(request, expect_cols[i]);
+            for (auto force_two_level : {false, true})
+            {
+                if (force_two_level)
+                    FailPointHelper::enableFailPoint(FailPoints::force_agg_two_level_hash_table_before_merge);
+                else
+                    FailPointHelper::disableFailPoint(FailPoints::force_agg_two_level_hash_table_before_merge);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_START
+                executeAndAssertColumnsEqual(request, expect_cols[i]);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_END
+            }
         }
     }
 
     {
         /// group by two columns
-        group_by_exprs = {COL_GROUP2(2, 6), COL_GROUP2(3, 9), COL_GROUP2(4, 7), COL_GROUP2(5, 10), COL_GROUP2(8, 9), COL_GROUP2(9, 10)};
-        projections = {COL_PROJ2(2, 6), COL_PROJ2(3, 9), COL_PROJ2(4, 7), COL_PROJ2(5, 10), COL_PROJ2(8, 9), COL_PROJ2(9, 10)};
-        expect_cols = {/// select tinyint_, float_ from test_db.types group by tinyint_, float_;
-                       {toNullableVec<Int8>(types_col_name[2], ColumnWithNullableInt8{1, 2, {}, 3, 0, 0, -1, {}, -2}),
-                        toNullableVec<Float32>(types_col_name[6], ColumnWithNullableFloat32{3.3, {}, 4, 0, -0.1, 5.6, -0.1, 3.3, {}})},
-                       /// select smallint_, datetime_ from test_db.types group by smallint_, datetime_;
-                       {toNullableVec<Int16>(types_col_name[3], ColumnWithNullableInt16{2, 3, {}, {}, 0, -1, -2, 4}),
-                        toNullableVec<MyDateTime>(types_col_name[9], ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, {}, 0, 2000000})},
-                       /// select int_, double_ from test_db.types group by int_, double_;
-                       {toNullableVec<Int32>(types_col_name[4], ColumnWithNullableInt32{{}, 123, -1, 0, {}, 4, 4, 123}),
-                        toNullableVec<Float64>(types_col_name[7], ColumnWithNullableFloat64{0, -1.2, {}, 1.1, 1.1, -1.2, 0.1, 1.2})},
-                       /// select bigint_, string_ from test_db.types group by bigint_, string_;
-                       {toNullableVec<Int64>(types_col_name[5], ColumnWithNullableInt64{-1, 0, 0, 123, 2, {}, -1, 2}),
-                        toNullableVec<String>(types_col_name[10], ColumnWithNullableString{{}, {}, "Shanghai", "Shanghai", {}, "PingCAP", "PINGCAP", "pingcap"})},
-                       /// select date_, datetime_ from test_db.types group by date_, datetime_;
-                       {toNullableVec<MyDate>(types_col_name[8], ColumnWithNullableMyDate{1000000, 2000000, {}, 300000, 1000000, 0, 2000000, {}}),
-                        toNullableVec<MyDateTime>(types_col_name[9], ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, 0, 2000000, 1000000})},
-                       /// select datetime_, string_ from test_db.types group by datetime_, string_;
-                       {toNullableVec<MyDateTime>(types_col_name[9], ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, 0, 2000000, 1000000}),
-                        toNullableVec<String>(types_col_name[10], ColumnWithNullableString{{}, "pingcap", "PingCAP", {}, "PINGCAP", {}, "Shanghai", "Shanghai"})}};
+        group_by_exprs
+            = {COL_GROUP2(2, 6),
+               COL_GROUP2(3, 9),
+               COL_GROUP2(4, 7),
+               COL_GROUP2(5, 10),
+               COL_GROUP2(8, 9),
+               COL_GROUP2(9, 10)};
+        projections
+            = {COL_PROJ2(2, 6), COL_PROJ2(3, 9), COL_PROJ2(4, 7), COL_PROJ2(5, 10), COL_PROJ2(8, 9), COL_PROJ2(9, 10)};
+        expect_cols
+            = {/// select tinyint_, float_ from test_db.types group by tinyint_, float_;
+               {toNullableVec<Int8>(types_col_name[2], ColumnWithNullableInt8{1, 2, {}, 3, 0, 0, -1, {}, -2}),
+                toNullableVec<Float32>(
+                    types_col_name[6],
+                    ColumnWithNullableFloat32{3.3, {}, 4, 0, -0.1, 5.6, -0.1, 3.3, {}})},
+               /// select smallint_, datetime_ from test_db.types group by smallint_, datetime_;
+               {toNullableVec<Int16>(types_col_name[3], ColumnWithNullableInt16{2, 3, {}, {}, 0, -1, -2, 4}),
+                toNullableVec<MyDateTime>(
+                    types_col_name[9],
+                    ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, {}, 0, 2000000})},
+               /// select int_, double_ from test_db.types group by int_, double_;
+               {toNullableVec<Int32>(types_col_name[4], ColumnWithNullableInt32{{}, 123, -1, 0, {}, 4, 4, 123}),
+                toNullableVec<Float64>(
+                    types_col_name[7],
+                    ColumnWithNullableFloat64{0, -1.2, {}, 1.1, 1.1, -1.2, 0.1, 1.2})},
+               /// select bigint_, string_ from test_db.types group by bigint_, string_;
+               {toNullableVec<Int64>(types_col_name[5], ColumnWithNullableInt64{-1, 0, 0, 123, 2, {}, -1, 2}),
+                toNullableVec<String>(
+                    types_col_name[10],
+                    ColumnWithNullableString{{}, {}, "Shanghai", "Shanghai", {}, "PingCAP", "PINGCAP", "pingcap"})},
+               /// select date_, datetime_ from test_db.types group by date_, datetime_;
+               {toNullableVec<MyDate>(
+                    types_col_name[8],
+                    ColumnWithNullableMyDate{1000000, 2000000, {}, 300000, 1000000, 0, 2000000, {}}),
+                toNullableVec<MyDateTime>(
+                    types_col_name[9],
+                    ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, 0, 2000000, 1000000})},
+               /// select datetime_, string_ from test_db.types group by datetime_, string_;
+               {toNullableVec<MyDateTime>(
+                    types_col_name[9],
+                    ColumnWithNullableMyDateTime{2000000, 0, {}, 3000000, 1000000, 0, 2000000, 1000000}),
+                toNullableVec<String>(
+                    types_col_name[10],
+                    ColumnWithNullableString{{}, "pingcap", "PingCAP", {}, "PINGCAP", {}, "Shanghai", "Shanghai"})}};
         test_num = expect_cols.size();
         ASSERT_EQ(group_by_exprs.size(), test_num);
         ASSERT_EQ(projections.size(), test_num);
@@ -276,7 +422,16 @@ try
         for (size_t i = 0; i < test_num; ++i)
         {
             request = buildDAGRequest(std::make_pair(db_name, table_types), {}, group_by_exprs[i], projections[i]);
-            executeAndAssertColumnsEqual(request, expect_cols[i]);
+            for (auto force_two_level : {false, true})
+            {
+                if (force_two_level)
+                    FailPointHelper::enableFailPoint(FailPoints::force_agg_two_level_hash_table_before_merge);
+                else
+                    FailPointHelper::disableFailPoint(FailPoints::force_agg_two_level_hash_table_before_merge);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_START
+                executeAndAssertColumnsEqual(request, expect_cols[i]);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_END
+            }
         }
     }
 
@@ -308,7 +463,9 @@ try
     for (size_t i = 0; i < test_num; ++i)
     {
         request = buildDAGRequest(std::make_pair(db_name, table_name), agg_funcs[i], group_by_exprs[i], projections[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
         executeAndAssertColumnsEqual(request, expect_cols[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
     }
 
     /// Min function tests
@@ -327,7 +484,9 @@ try
     for (size_t i = 0; i < test_num; ++i)
     {
         request = buildDAGRequest(std::make_pair(db_name, table_name), agg_funcs[i], group_by_exprs[i], projections[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
         executeAndAssertColumnsEqual(request, expect_cols[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
     }
 }
 CATCH
@@ -344,7 +503,8 @@ try
     auto agg_func4 = Count(lit(Field(static_cast<UInt64>(1)))); /// select count(1) from clerk group by country;
     auto agg_func5 = Count(lit(Field())); /// select count(NULL) from clerk group by country;
     auto agg_func6 = Count(col(col_name[4])); /// select count(pr) from clerk group by country;
-    std::vector<MockAstVec> agg_funcs = {{agg_func0}, {agg_func1}, {agg_func2}, {agg_func3}, {agg_func4}, {agg_func5}, {agg_func6}};
+    std::vector<MockAstVec> agg_funcs
+        = {{agg_func0}, {agg_func1}, {agg_func2}, {agg_func3}, {agg_func4}, {agg_func5}, {agg_func6}};
 
     auto group_by_expr0 = col(col_name[2]);
     auto group_by_expr10 = col(col_name[2]);
@@ -361,15 +521,32 @@ try
         {toVec<UInt64>("count(1)", ColumnWithUInt64{4, 3, 1, 1})},
         {toVec<UInt64>("count(NULL)", ColumnWithUInt64{0, 0, 0, 0})},
         {toVec<UInt64>("count(pr)", ColumnWithUInt64{4, 3, 1, 1})}};
-    std::vector<MockAstVec> group_by_exprs{{group_by_expr0}, {group_by_expr10, group_by_expr11}, {}, {}, {group_by_expr4}, {group_by_expr5}, {group_by_expr6}};
-    std::vector<MockColumnNameVec> projections{{"count(age)"}, {"count(gender)"}, {"count(1)"}, {"count(NULL)"}, {"count(1)"}, {"count(NULL)"}, {"count(pr)"}};
+    std::vector<MockAstVec> group_by_exprs{
+        {group_by_expr0},
+        {group_by_expr10, group_by_expr11},
+        {},
+        {},
+        {group_by_expr4},
+        {group_by_expr5},
+        {group_by_expr6}};
+    std::vector<MockColumnNameVec> projections{
+        {"count(age)"},
+        {"count(gender)"},
+        {"count(1)"},
+        {"count(NULL)"},
+        {"count(1)"},
+        {"count(NULL)"},
+        {"count(pr)"}};
     size_t test_num = expect_cols.size();
 
     /// Start to test
     for (size_t i = 0; i < test_num; ++i)
     {
-        request = buildDAGRequest(std::make_pair(db_name, table_name), {agg_funcs[i]}, group_by_exprs[i], projections[i]);
+        request
+            = buildDAGRequest(std::make_pair(db_name, table_name), {agg_funcs[i]}, group_by_exprs[i], projections[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
         executeAndAssertColumnsEqual(request, expect_cols[i]);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
     }
 }
 CATCH
@@ -381,7 +558,8 @@ try
 {
     /// Prepare some data
     std::shared_ptr<tipb::DAGRequest> request;
-    auto agg_func = Count(lit(Field(static_cast<UInt64>(1)))); /// select count(1) from `test_table_not_null` group by ``;
+    auto agg_func
+        = Count(lit(Field(static_cast<UInt64>(1)))); /// select count(1) from `test_table_not_null` group by ``;
     std::string agg_func_res_name = "count(1)";
 
     auto group_by_expr_c1_i64 = col("c1_i64");
@@ -431,16 +609,28 @@ try
         context.setCollation(TiDB::ITiDBCollator::UTF8MB4_BIN);
         for (size_t i = 0; i < test_num; ++i)
         {
-            request = buildDAGRequest(std::make_pair("test_db", "test_table_not_null"), {agg_func}, group_by_exprs[i], projections[i]);
+            request = buildDAGRequest(
+                std::make_pair("test_db", "test_table_not_null"),
+                {agg_func},
+                group_by_exprs[i],
+                projections[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_START
             executeAndAssertColumnsEqual(request, expect_cols[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_END
         }
     }
     {
         context.setCollation(TiDB::ITiDBCollator::UTF8_UNICODE_CI);
         for (size_t i = 0; i < test_num; ++i)
         {
-            request = buildDAGRequest(std::make_pair("test_db", "test_table_not_null"), {agg_func}, group_by_exprs[i], projections[i]);
+            request = buildDAGRequest(
+                std::make_pair("test_db", "test_table_not_null"),
+                {agg_func},
+                group_by_exprs[i],
+                projections[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_START
             executeAndAssertColumnsEqual(request, expect_cols[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_END
         }
     }
     for (auto collation_id : {0, static_cast<int>(TiDB::ITiDBCollator::BINARY)})
@@ -472,8 +662,14 @@ try
         ASSERT_EQ(test_num, group_by_exprs.size());
         for (size_t i = 0; i < test_num; ++i)
         {
-            request = buildDAGRequest(std::make_pair("test_db", "test_table_not_null"), {agg_func}, group_by_exprs[i], projections[i]);
+            request = buildDAGRequest(
+                std::make_pair("test_db", "test_table_not_null"),
+                {agg_func},
+                group_by_exprs[i],
+                projections[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_START
             executeAndAssertColumnsEqual(request, expect_cols[i]);
+            WRAP_FOR_AGG_PARTIAL_BLOCK_END
         }
     }
 }
@@ -482,17 +678,13 @@ CATCH
 TEST_F(AggExecutorTestRunner, AggNull)
 try
 {
-    auto request = context
-                       .scan("aggnull_test", "t1")
-                       .aggregation({Max(col("s1"))}, {})
-                       .build(context);
+    auto request = context.scan("aggnull_test", "t1").aggregation({Max(col("s1"))}, {}).build(context);
     executeAndAssertColumnsEqual(request, {{toNullableVec<String>({"banana"})}});
 
-    request = context
-                  .scan("aggnull_test", "t1")
-                  .aggregation({}, {col("s1")})
-                  .build(context);
+    request = context.scan("aggnull_test", "t1").aggregation({}, {col("s1")}).build(context);
+    WRAP_FOR_AGG_PARTIAL_BLOCK_START
     executeAndAssertColumnsEqual(request, {{toNullableVec<String>("s1", {{}, "banana"})}});
+    WRAP_FOR_AGG_PARTIAL_BLOCK_END
 }
 CATCH
 
@@ -500,13 +692,13 @@ TEST_F(AggExecutorTestRunner, RepeatedAggregateFunction)
 try
 {
     std::vector<ASTPtr> functions = {Max(col("s1")), Min(col("s1")), Sum(col("s2"))};
-    ColumnsWithTypeAndName functions_result = {toNullableVec<Int64>({3}), toNullableVec<Int64>({1}), toVec<UInt64>({6})};
+    ColumnsWithTypeAndName functions_result
+        = {toNullableVec<Int64>({3}), toNullableVec<Int64>({1}), toVec<UInt64>({6})};
     auto test_single_function = [&](size_t index) {
-        auto request = context
-                           .scan("test_db", "test_table")
-                           .aggregation({functions[index]}, {})
-                           .build(context);
+        auto request = context.scan("test_db", "test_table").aggregation({functions[index]}, {}).build(context);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
         executeAndAssertColumnsEqual(request, {functions_result[index]});
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
     };
     for (size_t i = 0; i < functions.size(); ++i)
         test_single_function(i);
@@ -526,11 +718,10 @@ try
                 funcs.push_back(functions[k]);
                 results.push_back(functions_result[k]);
 
-                auto request = context
-                                   .scan("test_db", "test_table")
-                                   .aggregation(funcs, {})
-                                   .build(context);
+                auto request = context.scan("test_db", "test_table").aggregation(funcs, {}).build(context);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_START
                 executeAndAssertColumnsEqual(request, results);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_END
 
                 funcs.pop_back();
                 results.pop_back();
@@ -563,8 +754,12 @@ try
             std::vector<UInt64> two_level_thresholds{0, 1};
             for (auto two_level_threshold : two_level_thresholds)
             {
-                context.context->setSetting("group_by_two_level_threshold", Field(static_cast<UInt64>(two_level_threshold)));
+                context.context->setSetting(
+                    "group_by_two_level_threshold",
+                    Field(static_cast<UInt64>(two_level_threshold)));
+                WRAP_FOR_AGG_PARTIAL_BLOCK_START
                 executeAndAssertColumnsEqual(request, expect);
+                WRAP_FOR_AGG_PARTIAL_BLOCK_END
             }
         }
     }
@@ -580,10 +775,7 @@ try
     std::vector<size_t> expect_rows{15, 200, 1, 1024};
     for (size_t i = 0; i < tables.size(); ++i)
     {
-        auto request = context
-                           .scan("test_db", tables[i])
-                           .aggregation({Max(col("value"))}, {col("key")})
-                           .build(context);
+        auto request = context.scan("test_db", tables[i]).aggregation({Max(col("value"))}, {col("key")}).build(context);
         context.context->setSetting("group_by_two_level_threshold_bytes", Field(static_cast<UInt64>(0)));
         // 0: use one level
         // 1: use two level
@@ -594,8 +786,11 @@ try
             {
                 for (auto concurrency : concurrences)
                 {
-                    context.context->setSetting("group_by_two_level_threshold", Field(static_cast<UInt64>(two_level_threshold)));
+                    context.context->setSetting(
+                        "group_by_two_level_threshold",
+                        Field(static_cast<UInt64>(two_level_threshold)));
                     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(block_size)));
+                    WRAP_FOR_AGG_PARTIAL_BLOCK_START
                     auto blocks = getExecuteStreamsReturnBlocks(request, concurrency);
                     size_t actual_row = 0;
                     for (auto & block : blocks)
@@ -604,6 +799,7 @@ try
                         actual_row += block.rows();
                     }
                     ASSERT_EQ(actual_row, expect_rows[i]);
+                    WRAP_FOR_AGG_PARTIAL_BLOCK_END
                 }
             }
         }
@@ -616,18 +812,30 @@ try
 {
     /// prepare data
     size_t unique_rows = 3000;
-    DB::MockColumnInfoVec table_column_infos{{"key_8", TiDB::TP::TypeTiny, false}, {"key_16", TiDB::TP::TypeShort, false}, {"key_32", TiDB::TP::TypeLong, false}, {"key_64", TiDB::TP::TypeLongLong, false}, {"key_string_1", TiDB::TP::TypeString, false}, {"key_string_2", TiDB::TP::TypeString, false}, {"value", TiDB::TP::TypeLong, false}};
+    DB::MockColumnInfoVec table_column_infos{
+        {"key_8", TiDB::TP::TypeTiny, false},
+        {"key_16", TiDB::TP::TypeShort, false},
+        {"key_32", TiDB::TP::TypeLong, false},
+        {"key_64", TiDB::TP::TypeLongLong, false},
+        {"key_string_1", TiDB::TP::TypeString, false},
+        {"key_string_2", TiDB::TP::TypeString, false},
+        {"value", TiDB::TP::TypeLong, false}};
     ColumnsWithTypeAndName table_column_data;
     for (const auto & column_info : mockColumnInfosToTiDBColumnInfos(table_column_infos))
     {
-        ColumnGeneratorOpts opts{unique_rows, getDataTypeByColumnInfoForComputingLayer(column_info)->getName(), RANDOM, column_info.name};
+        ColumnGeneratorOpts opts{
+            unique_rows,
+            getDataTypeByColumnInfoForComputingLayer(column_info)->getName(),
+            RANDOM,
+            column_info.name};
         table_column_data.push_back(ColumnGenerator::instance().generate(opts));
     }
     for (auto & table_column : table_column_data)
     {
         table_column.column->assumeMutable()->insertRangeFrom(*table_column.column, 0, unique_rows / 2);
     }
-    ColumnWithTypeAndName shuffle_column = ColumnGenerator::instance().generate({unique_rows + unique_rows / 2, "UInt64", RANDOM});
+    ColumnWithTypeAndName shuffle_column
+        = ColumnGenerator::instance().generate({unique_rows + unique_rows / 2, "UInt64", RANDOM});
     IColumn::Permutation perm;
     shuffle_column.column->getPermutation(false, 0, -1, perm);
     for (auto & column : table_column_data)
@@ -665,8 +873,7 @@ try
             MockAstVec key_vec;
             for (const auto & key : keys)
                 key_vec.push_back(col(key));
-            auto request = context
-                               .scan("test_db", "agg_table_with_special_key")
+            auto request = context.scan("test_db", "agg_table_with_special_key")
                                .aggregation({Max(col("value"))}, key_vec)
                                .build(context);
             /// use one level, no block split, no spill as the reference
@@ -702,8 +909,11 @@ try
                 {
                     for (auto concurrency : concurrences)
                     {
-                        context.context->setSetting("group_by_two_level_threshold", Field(static_cast<UInt64>(two_level_threshold)));
+                        context.context->setSetting(
+                            "group_by_two_level_threshold",
+                            Field(static_cast<UInt64>(two_level_threshold)));
                         context.context->setSetting("max_block_size", Field(static_cast<UInt64>(block_size)));
+                        WRAP_FOR_AGG_PARTIAL_BLOCK_START
                         auto blocks = getExecuteStreamsReturnBlocks(request, concurrency);
                         for (auto & block : blocks)
                         {
@@ -716,12 +926,19 @@ try
                             sortBlock(merged_block, sd);
                             auto merged_columns = merged_block.getColumnsWithTypeAndName();
                             for (size_t col_index = 0; col_index < reference.size(); col_index++)
-                                ASSERT_TRUE(columnEqual(reference[col_index].column, merged_columns[col_index].column, sd[col_index].collator));
+                                ASSERT_TRUE(columnEqual(
+                                    reference[col_index].column,
+                                    merged_columns[col_index].column,
+                                    sd[col_index].collator));
                         }
                         else
                         {
-                            ASSERT_TRUE(columnsEqual(reference, vstackBlocks(std::move(blocks)).getColumnsWithTypeAndName(), false));
+                            ASSERT_TRUE(columnsEqual(
+                                reference,
+                                vstackBlocks(std::move(blocks)).getColumnsWithTypeAndName(),
+                                false));
                         }
+                        WRAP_FOR_AGG_PARTIAL_BLOCK_END
                     }
                 }
             }
@@ -733,32 +950,212 @@ CATCH
 TEST_F(AggExecutorTestRunner, Empty)
 try
 {
-    context.addMockTable({"test_db", "empty_table"},
-                         {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
-                         {toVec<Int64>("s1", {}),
-                          toVec<Int64>("s2", {})});
-    context.addExchangeReceiver("empty_recv",
-                                {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
-                                {toVec<Int64>("s1", {}), toVec<Int64>("s2", {})},
-                                5,
-                                {{"s2", TiDB::TP::TypeLongLong}});
+    context.addMockTable(
+        {"test_db", "empty_table"},
+        {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
+        {toVec<Int64>("s1", {}), toVec<Int64>("s2", {})});
+    context.addExchangeReceiver(
+        "empty_recv",
+        {{"s1", TiDB::TP::TypeLongLong}, {"s2", TiDB::TP::TypeLongLong}},
+        {toVec<Int64>("s1", {}), toVec<Int64>("s2", {})},
+        5,
+        {{"s2", TiDB::TP::TypeLongLong}});
 
-    auto request = context
-                       .scan("test_db", "empty_table")
-                       .aggregation({Max(col("s1"))}, {col("s2")})
-                       .build(context);
+    auto request = context.scan("test_db", "empty_table").aggregation({Max(col("s1"))}, {col("s2")}).build(context);
     executeAndAssertColumnsEqual(request, {});
 
-    request = context
-                  .receive("empty_recv", 5)
-                  .aggregation({Max(col("s1"))}, {col("s2")}, 5)
-                  .build(context);
-    executeAndAssertColumnsEqual(request, {});
+    request = context.receive("empty_recv", 5).aggregation({Max(col("s1"))}, {col("s2")}, 5).build(context);
+    {
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
+        executeAndAssertColumnsEqual(request, {});
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
+    }
 
     request = context.scan("test_db", "empty_table")
                   .aggregation({Count(lit(Field(static_cast<UInt64>(1))))}, {})
                   .build(context);
-    executeAndAssertColumnsEqual(request, {toVec<UInt64>({0})});
+    {
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
+        executeAndAssertColumnsEqual(request, {toVec<UInt64>({0})});
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
+    }
+}
+CATCH
+
+TEST_F(AggExecutorTestRunner, AggKeyOptimization)
+try
+{
+    const String db_name = "test_db";
+    const String tbl_name = "agg_first_row_opt_tbl";
+    const auto rows = 1024;
+    const auto row_types = 4;
+    const auto rows_per_type = rows / row_types;
+    DB::MockColumnInfoVec table_column_infos{
+        {"col_string_with_collator", TiDB::TP::TypeString, false, Poco::Dynamic::Var("utf8_general_ci")},
+        {"col_string_no_collator", TiDB::TP::TypeString, false},
+        {"col_int", TiDB::TP::TypeLong, false},
+        {"col_tinyint", TiDB::TP::TypeTiny, false}};
+
+    std::vector<String> col_data_string_with_collator(rows);
+    std::vector<String> col_data_string_no_collator(rows);
+    std::vector<TypeTraits<Int32>::FieldType> col_data_int(rows);
+    std::vector<TypeTraits<Int8>::FieldType> col_data_tinyint(rows);
+    // rows_per_type "a" 0
+    //               "a" 0
+    //               ...
+    // rows_per_type "b" 1
+    //               "b" 1
+    //               ...
+    // rows_per_type "c" 2
+    //               "c" 2
+    //               ...
+    // rows_per_type "d" 3
+    //               "d" 3
+    //               ...
+    for (size_t i = 0; i < row_types; ++i)
+    {
+        for (size_t j = 0; j < rows_per_type; ++j)
+        {
+            char ch = 'a' + i;
+            const auto idx = i * rows_per_type + j;
+            col_data_string_with_collator[idx] = std::string{ch};
+            col_data_string_no_collator[idx] = std::string{ch};
+            col_data_int[idx] = i;
+            col_data_tinyint[idx] = static_cast<Int64>(static_cast<unsigned char>(i));
+        }
+    }
+    context.addMockTable(
+        {db_name, tbl_name},
+        table_column_infos,
+        {
+            toVec<String>("col_string_with_collator", col_data_string_with_collator),
+            toVec<String>("col_string_no_collator", col_data_string_no_collator),
+            toVec<Int32>("col_int", col_data_int),
+            toVec<Int8>("col_tinyint", col_data_tinyint),
+        });
+
+    {
+        // case-1: select count(1), col_tinyint from t group by col_int, col_tinyint
+        // agg method: keys64(AggregationMethodKeysFixed)
+        // opt: agg_func_ref_key
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_tinyint"))};
+        MockAstVec keys{col("col_int"), col("col_tinyint")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected
+            = {toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+               toNullableVec<Int8>("first_row(col_tinyint)", ColumnWithNullableInt8{0, 1, 2, 3}),
+               toVec<Int32>("col_int", ColumnWithInt32{0, 1, 2, 3}),
+               toVec<Int8>("col_tinyint", ColumnWithInt8{0, 1, 2, 3})};
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    {
+        // case-2: select count(1), col_int from t group by col_int
+        // agg method: key32(AggregationMethodOneNumber)
+        // opt: agg_func_ref_key
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_int"))};
+        MockAstVec keys{col("col_int")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected
+            = {toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+               toNullableVec<Int32>("first_row(col_int)", ColumnWithNullableInt32{0, 1, 2, 3}),
+               toVec<Int32>("col_int", ColumnWithInt32{0, 1, 2, 3})};
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    {
+        // case-3: select count(1), col_string_no_collator from t group by col_string_no_collator
+        // agg method: key_string(AggregationMethodStringNoCache)
+        // opt: agg_func_ref_key
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_string_no_collator"))};
+        MockAstVec keys{col("col_string_no_collator")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected = {
+            toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+            toNullableVec<String>("first_row(col_string_no_collator)", ColumnWithNullableString{"a", "b", "c", "d"}),
+            toVec<String>("col_string_no_collator", ColumnWithString{"a", "b", "c", "d"}),
+        };
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    {
+        // case-4: select count(1), col_string_with_collator from t group by col_string_with_collator
+        // agg method: key_strbin/key_strbinpadding(AggregationMethodOneKeyStringNoCache)
+        // opt: key_ref_agg_func
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_string_with_collator"))};
+        MockAstVec keys{col("col_string_with_collator")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected = {
+            toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+            toNullableVec<String>("first_row(col_string_with_collator)", ColumnWithNullableString{"a", "b", "c", "d"}),
+            toVec<String>("col_string_with_collator", ColumnWithString{"a", "b", "c", "d"}),
+        };
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    {
+        // case-4-1: select count(1) from t group by col_string_with_collator
+        // Use 'any' agg func instead of first_row
+        // agg method: key_strbin/key_strbinpadding(AggregationMethodOneKeyStringNoCache)
+        // opt: key_ref_agg_func
+        std::vector<ASTPtr> agg_funcs = {
+            makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+        };
+        MockAstVec keys{col("col_string_with_collator")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected = {
+            toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+            toVec<String>("first_row(col_string_with_collator)", ColumnWithString{"a", "b", "c", "d"}),
+        };
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    // case-5: none
+    // agg method: key_fixed_string(AggregationMethodFixedStringNoCache)
+
+    {
+        // case-6: select count(1), col_string_with_collator from t group by col_string_with_collator, col_int, col_string_no_collator
+        // agg method: serialized(AggregationMethodSerialized)
+        // opt: key_ref_agg_func && agg_func_ref_key
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_string_with_collator"))};
+        MockAstVec keys{col("col_string_with_collator"), col("col_int"), col("col_string_no_collator")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected = {
+            toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+            toNullableVec<String>("first_row(col_string_with_collator)", ColumnWithNullableString{"a", "b", "c", "d"}),
+            toVec<String>("col_string_with_collator", ColumnWithString{"a", "b", "c", "d"}),
+            toVec<Int32>("col_int", ColumnWithInt32{0, 1, 2, 3}),
+            toVec<String>("col_string_no_collator", ColumnWithString{"a", "b", "c", "d"}),
+        };
+        executeAndAssertColumnsEqual(request, expected);
+    }
+
+    {
+        // case-7: select count(1), col_string_with_collator, col_int from t group by col_string_with_collator, col_int
+        // agg method: two_keys_num64_strbin(AggregationMethodFastPathTwoKeyNoCache)
+        // opt: key_ref_agg_func && agg_func_ref_key
+        std::vector<ASTPtr> agg_funcs
+            = {makeASTFunction("count", lit(Field(static_cast<UInt64>(1)))),
+               makeASTFunction("first_row", col("col_string_with_collator"))};
+        MockAstVec keys{col("col_string_with_collator"), col("col_int")};
+        auto request = context.scan(db_name, tbl_name).aggregation(agg_funcs, keys).build(context);
+        auto expected = {
+            toVec<UInt64>("count(1)", ColumnWithUInt64{rows_per_type, rows_per_type, rows_per_type, rows_per_type}),
+            toNullableVec<String>("first_row(col_string_with_collator)", ColumnWithNullableString{"a", "b", "c", "d"}),
+            toVec<String>("col_string_with_collator", ColumnWithString{"a", "b", "c", "d"}),
+            toVec<Int32>("col_int", ColumnWithInt32{0, 1, 2, 3})};
+        executeAndAssertColumnsEqual(request, expected);
+    }
 }
 CATCH
 
@@ -772,7 +1169,11 @@ try
     size_t table_rows = 1024;
     for (const auto & column_info : mockColumnInfosToTiDBColumnInfos(column_infos))
     {
-        ColumnGeneratorOpts opts{table_rows, getDataTypeByColumnInfoForComputingLayer(column_info)->getName(), RANDOM, column_info.name};
+        ColumnGeneratorOpts opts{
+            table_rows,
+            getDataTypeByColumnInfoForComputingLayer(column_info)->getName(),
+            RANDOM,
+            column_info.name};
         column_data.push_back(ColumnGenerator::instance().generate(opts));
     }
     ColumnWithTypeAndName shuffle_column = ColumnGenerator::instance().generate({table_rows, "UInt64", RANDOM});
@@ -783,10 +1184,14 @@ try
         column.column = column.column->permute(perm, 0);
     }
 
-    context.addExchangeReceiver("exchange_receiver_1_concurrency", column_infos, column_data, 1, partition_column_infos);
-    context.addExchangeReceiver("exchange_receiver_3_concurrency", column_infos, column_data, 3, partition_column_infos);
-    context.addExchangeReceiver("exchange_receiver_5_concurrency", column_infos, column_data, 5, partition_column_infos);
-    context.addExchangeReceiver("exchange_receiver_10_concurrency", column_infos, column_data, 10, partition_column_infos);
+    context
+        .addExchangeReceiver("exchange_receiver_1_concurrency", column_infos, column_data, 1, partition_column_infos);
+    context
+        .addExchangeReceiver("exchange_receiver_3_concurrency", column_infos, column_data, 3, partition_column_infos);
+    context
+        .addExchangeReceiver("exchange_receiver_5_concurrency", column_infos, column_data, 5, partition_column_infos);
+    context
+        .addExchangeReceiver("exchange_receiver_10_concurrency", column_infos, column_data, 10, partition_column_infos);
     std::vector<size_t> exchange_receiver_concurrency = {1, 3, 5, 10};
 
     auto gen_request = [&](size_t exchange_concurrency) {
@@ -799,10 +1204,15 @@ try
     auto baseline = executeStreams(gen_request(1), 1);
     for (size_t exchange_concurrency : exchange_receiver_concurrency)
     {
+        WRAP_FOR_AGG_PARTIAL_BLOCK_START
         executeAndAssertColumnsEqual(gen_request(exchange_concurrency), baseline);
+        WRAP_FOR_AGG_PARTIAL_BLOCK_END
     }
 }
 CATCH
+
+#undef WRAP_FOR_AGG_PARTIAL_BLOCK_START
+#undef WRAP_FOR_AGG_PARTIAL_BLOCK_END
 
 } // namespace tests
 } // namespace DB

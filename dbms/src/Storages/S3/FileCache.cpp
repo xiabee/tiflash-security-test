@@ -18,8 +18,9 @@
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/escapeForFileName.h>
-#include <Encryption/PosixRandomAccessFile.h>
+#include <IO/BaseFile/PosixRandomAccessFile.h>
 #include <IO/IOThreadPools.h>
+#include <Interpreters/Settings.h>
 #include <Server/StorageConfigParser.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
@@ -31,7 +32,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 
 namespace ProfileEvents
 {
@@ -55,6 +55,8 @@ namespace DB
 {
 using FileType = FileSegment::FileType;
 
+std::unique_ptr<FileCache> FileCache::global_file_cache_instance;
+
 FileCache::FileCache(PathCapacityMetricsPtr capacity_metrics_, const StorageRemoteCacheConfig & config_)
     : capacity_metrics(capacity_metrics_)
     , cache_dir(config_.getDTFileCacheDir())
@@ -68,7 +70,9 @@ FileCache::FileCache(PathCapacityMetricsPtr capacity_metrics_, const StorageRemo
     restore();
 }
 
-RandomAccessFilePtr FileCache::getRandomAccessFile(const S3::S3FilenameView & s3_fname, const std::optional<UInt64> & filesize)
+RandomAccessFilePtr FileCache::getRandomAccessFile(
+    const S3::S3FilenameView & s3_fname,
+    const std::optional<UInt64> & filesize)
 {
     auto file_seg = get(s3_fname, filesize);
     if (file_seg == nullptr)
@@ -78,17 +82,22 @@ RandomAccessFilePtr FileCache::getRandomAccessFile(const S3::S3FilenameView & s3
     try
     {
         // PosixRandomAccessFile should hold the `file_seg` shared_ptr to prevent cached file from evicted.
-        return std::make_shared<PosixRandomAccessFile>(file_seg->getLocalFileName(), /*flags*/ -1, /*read_limiter*/ nullptr, file_seg);
+        return std::make_shared<PosixRandomAccessFile>(
+            file_seg->getLocalFileName(),
+            /*flags*/ -1,
+            /*read_limiter*/ nullptr,
+            file_seg);
     }
     catch (const DB::Exception & e)
     {
-        LOG_WARNING(log,
-                    "s3_fname={} local_fname={} status={} errcode={} errmsg={}",
-                    s3_fname.toFullKey(),
-                    file_seg->getLocalFileName(),
-                    magic_enum::enum_name(file_seg->getStatus()),
-                    e.code(),
-                    e.message());
+        LOG_WARNING(
+            log,
+            "s3_fname={} local_fname={} status={} errcode={} errmsg={}",
+            s3_fname.toFullKey(),
+            file_seg->getLocalFileName(),
+            magic_enum::enum_name(file_seg->getStatus()),
+            e.code(),
+            e.message());
         if (e.code() == ErrorCodes::FILE_DOESNT_EXIST)
         {
             // Normally, this would not happen. But if someone removes cache files manually, the status of memory and filesystem are inconsistent.
@@ -139,11 +148,18 @@ FileSegmentPtr FileCache::get(const S3::S3FilenameView & s3_fname, const std::op
     {
         // Space not enough.
         GET_METRIC(tiflash_storage_remote_cache, type_dtfile_full).Increment();
-        LOG_DEBUG(log, "s3_key={} space not enough(capacity={} used={} estimzted_size={}), skip cache", s3_key, cache_capacity, cache_used, estimzted_size);
+        LOG_DEBUG(
+            log,
+            "s3_key={} space not enough(capacity={} used={} estimzted_size={}), skip cache",
+            s3_key,
+            cache_capacity,
+            cache_used,
+            estimzted_size);
         return nullptr;
     }
 
-    auto file_seg = std::make_shared<FileSegment>(toLocalFilename(s3_key), FileSegment::Status::Empty, estimzted_size, file_type);
+    auto file_seg
+        = std::make_shared<FileSegment>(toLocalFilename(s3_key), FileSegment::Status::Empty, estimzted_size, file_type);
     table.set(s3_key, file_seg);
     bgDownload(s3_key, file_seg);
 
@@ -151,7 +167,7 @@ FileSegmentPtr FileCache::get(const S3::S3FilenameView & s3_fname, const std::op
 }
 
 // Remove `local_fname` from disk and remove parent directory if parent directory is empty.
-void FileCache::removeDiskFile(const String & local_fname)
+void FileCache::removeDiskFile(const String & local_fname, bool update_fsize_metrics) const
 {
     if (!std::filesystem::exists(local_fname))
     {
@@ -166,9 +182,7 @@ void FileCache::removeDiskFile(const String & local_fname)
             if (s != cache_dir && (s == local_fname || std::filesystem::is_empty(p)))
             {
                 std::filesystem::remove(p); // If p is a directory, remove success only when it is empty.
-                // Temporary files are not reported size to metrics until they are renamed.
-                // So we don't need to free its size here.
-                if (s == local_fname && !isTemporaryFilename(local_fname))
+                if (s == local_fname && update_fsize_metrics)
                 {
                     capacity_metrics->freeUsedSize(local_fname, fsize);
                 }
@@ -203,7 +217,11 @@ void FileCache::remove(const String & s3_key, bool force)
     std::ignore = removeImpl(table, s3_key, f, force);
 }
 
-std::pair<Int64, std::list<String>::iterator> FileCache::removeImpl(LRUFileTable & table, const String & s3_key, FileSegmentPtr & f, bool force)
+std::pair<Int64, std::list<String>::iterator> FileCache::removeImpl(
+    LRUFileTable & table,
+    const String & s3_key,
+    FileSegmentPtr & f,
+    bool force)
 {
     // Except currenly thread and the FileTable,
     // there are other threads hold this FileSegment object.
@@ -212,9 +230,10 @@ std::pair<Int64, std::list<String>::iterator> FileCache::removeImpl(LRUFileTable
         return {-1, {}};
     }
     const auto & local_fname = f->getLocalFileName();
-    removeDiskFile(local_fname);
+    removeDiskFile(local_fname, /*update_fsize_metrics*/ true);
     auto temp_fname = toTemporaryFilename(local_fname);
-    removeDiskFile(temp_fname);
+    // Not update fsize metrics for temporary files because they are not add to fsize metrics before.
+    removeDiskFile(temp_fname, /*update_fsize_metrics*/ false);
 
     auto release_size = f->getSize();
     GET_METRIC(tiflash_storage_remote_cache, type_dtfile_evict).Increment();
@@ -264,7 +283,12 @@ void FileCache::tryEvictFile(FileType evict_for, UInt64 size)
     for (auto evict_from : file_types)
     {
         auto evicted_size = tryEvictFrom(evict_for, size, evict_from);
-        LOG_DEBUG(log, "tryEvictFrom {} required_size={} evicted_size={}", magic_enum::enum_name(evict_from), size, evicted_size);
+        LOG_DEBUG(
+            log,
+            "tryEvictFrom {} required_size={} evicted_size={}",
+            magic_enum::enum_name(evict_from),
+            size,
+            evicted_size);
         if (size > evicted_size)
         {
             size -= evicted_size;
@@ -290,7 +314,8 @@ UInt64 FileCache::tryEvictFrom(FileType evict_for, UInt64 size, FileType evict_f
     {
         auto s3_key = *itr;
         auto f = table.get(s3_key, /*update_lru*/ false);
-        if (!check_last_access_time || !f->isRecentlyAccess(std::chrono::seconds(cache_min_age_seconds.load(std::memory_order_relaxed))))
+        if (!check_last_access_time
+            || !f->isRecentlyAccess(std::chrono::seconds(cache_min_age_seconds.load(std::memory_order_relaxed))))
         {
             auto [released_size, next_itr] = removeImpl(table, s3_key, f);
             LOG_DEBUG(log, "tryRemoveFile {} size={}", s3_key, released_size);
@@ -336,9 +361,9 @@ void FileCache::releaseSpace(UInt64 size)
 
 bool FileCache::canCache(FileType file_type) const
 {
-    return file_type != FileType::Unknow
-        && static_cast<UInt64>(file_type) <= cache_level
-        && bg_downloading_count.load(std::memory_order_relaxed) < S3FileCachePool::get().getMaxThreads() * max_downloading_count_scale.load(std::memory_order_relaxed);
+    return file_type != FileType::Unknow && static_cast<UInt64>(file_type) <= cache_level
+        && bg_downloading_count.load(std::memory_order_relaxed)
+        < S3FileCachePool::get().getMaxThreads() * max_downloading_count_scale.load(std::memory_order_relaxed);
 }
 
 FileType FileCache::getFileTypeOfColData(const std::filesystem::path & p)
@@ -374,7 +399,7 @@ FileType FileCache::getFileType(const String & fname)
     auto ext = p.extension();
     if (ext.empty())
     {
-        return p.stem() == DM::DMFile::metav2FileName() ? FileType::Meta : FileType::Unknow;
+        return p.stem() == DM::DMFileMetaV2::metaFileName() ? FileType::Meta : FileType::Unknow;
     }
     else if (ext == ".merged")
     {
@@ -448,16 +473,32 @@ void FileCache::downloadImpl(const String & s3_key, FileSegmentPtr & file_seg)
             GET_METRIC(tiflash_storage_remote_cache_bytes, type_dtfile_download_bytes).Increment(content_length);
             ostr << result.GetBody().rdbuf();
             // If content_length == 0, ostr.good() is false. Does not know the reason.
-            RUNTIME_CHECK_MSG(ostr.good(), "Write {} content_length {} failed: {}", temp_fname, content_length, strerror(errno));
+            RUNTIME_CHECK_MSG(
+                ostr.good(),
+                "Write {} content_length {} failed: {}",
+                temp_fname,
+                content_length,
+                strerror(errno));
             ostr.flush();
         }
     }
     std::filesystem::rename(temp_fname, local_fname);
     auto fsize = std::filesystem::file_size(local_fname);
     capacity_metrics->addUsedSize(local_fname, fsize);
-    RUNTIME_CHECK_MSG(fsize == static_cast<UInt64>(content_length), "local_fname={}, file_size={}, content_length={}", local_fname, fsize, content_length);
+    RUNTIME_CHECK_MSG(
+        fsize == static_cast<UInt64>(content_length),
+        "local_fname={}, file_size={}, content_length={}",
+        local_fname,
+        fsize,
+        content_length);
     file_seg->setStatus(FileSegment::Status::Complete);
-    LOG_DEBUG(log, "Download s3_key={} to local={} size={} cost={}ms", s3_key, local_fname, content_length, sw.elapsedMilliseconds());
+    LOG_DEBUG(
+        log,
+        "Download s3_key={} to local={} size={} cost={}ms",
+        s3_key,
+        local_fname,
+        content_length,
+        sw.elapsedMilliseconds());
 }
 
 void FileCache::download(const String & s3_key, FileSegmentPtr & file_seg)
@@ -484,17 +525,23 @@ void FileCache::download(const String & s3_key, FileSegmentPtr & file_seg)
         bg_download_succ_count.fetch_add(1, std::memory_order_relaxed);
     }
     bg_downloading_count.fetch_sub(1, std::memory_order_relaxed);
-    LOG_DEBUG(log, "downloading count {} => s3_key {} finished", bg_downloading_count.load(std::memory_order_relaxed), s3_key);
+    LOG_DEBUG(
+        log,
+        "downloading count {} => s3_key {} finished",
+        bg_downloading_count.load(std::memory_order_relaxed),
+        s3_key);
 }
 
 void FileCache::bgDownload(const String & s3_key, FileSegmentPtr & file_seg)
 {
     bg_downloading_count.fetch_add(1, std::memory_order_relaxed);
-    LOG_DEBUG(log, "downloading count {} => s3_key {} start", bg_downloading_count.load(std::memory_order_relaxed), s3_key);
+    LOG_DEBUG(
+        log,
+        "downloading count {} => s3_key {} start",
+        bg_downloading_count.load(std::memory_order_relaxed),
+        s3_key);
     S3FileCachePool::get().scheduleOrThrowOnError(
-        [this, s3_key = s3_key, file_seg = file_seg]() mutable {
-            download(s3_key, file_seg);
-        });
+        [this, s3_key = s3_key, file_seg = file_seg]() mutable { download(s3_key, file_seg); });
 }
 
 bool FileCache::isS3Filename(const String & fname)
@@ -507,7 +554,7 @@ String FileCache::toLocalFilename(const String & s3_key)
     return fmt::format("{}/{}", cache_dir, s3_key);
 }
 
-String FileCache::toS3Key(const String & local_fname)
+String FileCache::toS3Key(const String & local_fname) const
 {
     return local_fname.substr(cache_dir.size() + 1);
 }
@@ -534,7 +581,10 @@ bool FileCache::isTemporaryFilename(const String & fname)
 void FileCache::prepareDir(const String & dir)
 {
     std::filesystem::path p(dir);
-    RUNTIME_CHECK_MSG(!std::filesystem::exists(p) || std::filesystem::is_directory(p), "{} exists but not directory", dir);
+    RUNTIME_CHECK_MSG(
+        !std::filesystem::exists(p) || std::filesystem::is_directory(p),
+        "{} exists but not directory",
+        dir);
     if (!std::filesystem::exists(p))
     {
         std::filesystem::create_directories(p);
@@ -575,6 +625,8 @@ void FileCache::restoreWriteNode(const std::filesystem::directory_entry & write_
 {
     RUNTIME_CHECK_MSG(write_node_entry.is_directory(), "{} is not a directory", write_node_entry.path());
     auto write_node_data_path = write_node_entry.path() / "data";
+    if (!std::filesystem::exists(write_node_data_path))
+        return;
     for (const auto & table_entry : std::filesystem::directory_iterator(write_node_data_path))
     {
         restoreTable(table_entry);
@@ -599,7 +651,8 @@ void FileCache::restoreDMFile(const std::filesystem::directory_entry & dmfile_en
         auto fname = file_entry.path().string();
         if (unlikely(isTemporaryFilename(fname)))
         {
-            removeDiskFile(fname);
+            // Not update fsize metrics for temporary files because they are not add to fsize metrics before.
+            removeDiskFile(fname, /*update_fsize_metrics*/ false);
         }
         else
         {
@@ -608,14 +661,17 @@ void FileCache::restoreDMFile(const std::filesystem::directory_entry & dmfile_en
             auto size = file_entry.file_size();
             if (canCache(file_type) && cache_capacity - cache_used >= size)
             {
-                table.set(toS3Key(fname), std::make_shared<FileSegment>(fname, FileSegment::Status::Complete, size, file_type));
+                table.set(
+                    toS3Key(fname),
+                    std::make_shared<FileSegment>(fname, FileSegment::Status::Complete, size, file_type));
                 capacity_metrics->addUsedSize(fname, size);
                 cache_used += size;
                 CurrentMetrics::set(CurrentMetrics::DTFileCacheUsed, cache_used);
             }
             else
             {
-                removeDiskFile(fname);
+                // Not update fsize metrics because this file is not added to metrics yet.
+                removeDiskFile(fname, /*update_fsize_metrics*/ false);
             }
         }
     }
@@ -638,14 +694,22 @@ void FileCache::updateConfig(const Settings & settings)
     double max_downloading_scale = settings.dt_filecache_max_downloading_count_scale;
     if (std::fabs(max_downloading_scale - max_downloading_count_scale.load(std::memory_order_relaxed)) > 0.001)
     {
-        LOG_INFO(log, "max_downloading_count_scale {} => {}", max_downloading_count_scale.load(std::memory_order_relaxed), max_downloading_scale);
+        LOG_INFO(
+            log,
+            "max_downloading_count_scale {} => {}",
+            max_downloading_count_scale.load(std::memory_order_relaxed),
+            max_downloading_scale);
         max_downloading_count_scale.store(max_downloading_scale, std::memory_order_relaxed);
     }
 
     UInt64 cache_min_age = settings.dt_filecache_min_age_seconds;
     if (cache_min_age != cache_min_age_seconds.load(std::memory_order_relaxed))
     {
-        LOG_INFO(log, "cache_min_age_seconds {} => {}", cache_min_age_seconds.load(std::memory_order_relaxed), cache_min_age);
+        LOG_INFO(
+            log,
+            "cache_min_age_seconds {} => {}",
+            cache_min_age_seconds.load(std::memory_order_relaxed),
+            cache_min_age);
         cache_min_age_seconds.store(cache_min_age, std::memory_order_relaxed);
     }
 }

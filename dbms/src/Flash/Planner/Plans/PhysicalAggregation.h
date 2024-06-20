@@ -40,38 +40,44 @@ public:
         const PhysicalPlanNodePtr & child_,
         const ExpressionActionsPtr & before_agg_actions_,
         const Names & aggregation_keys_,
-        const TiDB::TiDBCollators & aggregation_collators_,
+        const std::unordered_map<String, String> & key_ref_agg_func_,
+        const std::unordered_map<String, String> & agg_func_ref_key_,
+        const std::unordered_map<String, TiDB::TiDBCollatorPtr> & aggregation_collators_,
         bool is_final_agg_,
         const AggregateDescriptions & aggregate_descriptions_,
         const ExpressionActionsPtr & expr_after_agg_)
         : PhysicalUnary(executor_id_, PlanType::Aggregation, schema_, fine_grained_shuffle_, req_id, child_)
         , before_agg_actions(before_agg_actions_)
         , aggregation_keys(aggregation_keys_)
+        , key_ref_agg_func(key_ref_agg_func_)
+        , agg_func_ref_key(agg_func_ref_key_)
         , aggregation_collators(aggregation_collators_)
         , is_final_agg(is_final_agg_)
         , aggregate_descriptions(aggregate_descriptions_)
         , expr_after_agg(expr_after_agg_)
     {}
 
-    void buildPipeline(PipelineBuilder & builder) override;
+    void buildPipeline(PipelineBuilder & builder, Context & context, PipelineExecutorContext & exec_context) override;
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
-        PipelineExecGroupBuilder & group_builder,
-        Context & context,
-        size_t /*concurrency*/) override;
-
-    void finalize(const Names & parent_require) override;
+    void finalizeImpl(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
 private:
     void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
 
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & exec_context,
+        PipelineExecGroupBuilder & group_builder,
+        Context & context,
+        size_t /*concurrency*/) override;
+
 private:
     ExpressionActionsPtr before_agg_actions;
     Names aggregation_keys;
-    TiDB::TiDBCollators aggregation_collators;
+    std::unordered_map<String, String> key_ref_agg_func;
+    std::unordered_map<String, String> agg_func_ref_key;
+    std::unordered_map<String, TiDB::TiDBCollatorPtr> aggregation_collators;
     bool is_final_agg;
     AggregateDescriptions aggregate_descriptions;
     ExpressionActionsPtr expr_after_agg;

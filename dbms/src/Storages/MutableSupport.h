@@ -39,17 +39,10 @@ public:
 
     const OrderedNameSet & hiddenColumns(const String & table_type_name)
     {
-        if (mmt_storage_name == table_type_name || txn_storage_name == table_type_name || delta_tree_storage_name == table_type_name)
+        if (mmt_storage_name == table_type_name || txn_storage_name == table_type_name
+            || delta_tree_storage_name == table_type_name)
             return mutable_hidden;
         return empty;
-    }
-
-    void eraseHiddenColumns(Block & block, const String & table_type_name)
-    {
-        const OrderedNameSet & names = hiddenColumns(table_type_name);
-        for (auto & it : names)
-            if (block.has(it))
-                block.erase(it);
     }
 
     static const String mmt_storage_name;
@@ -67,26 +60,7 @@ public:
     static const DataTypePtr delmark_column_type;
     static const DataTypePtr extra_table_id_column_type;
 
-    /// mark that ColumnId of those columns are defined in dbms/src/Storages/Transaction/Types.h
-
-    enum DeduperType
-    {
-        DeduperOriginStreams = 0,
-        DeduperOriginUnity = 1,
-        DeduperReplacingUnity = 2,
-        DeduperReplacingPartitioning = 3,
-        DeduperDedupPartitioning = 4,
-        DeduperReplacingPartitioningOpt = 5,
-    };
-
-    static DeduperType toDeduperType(UInt64 type)
-    {
-        if (type > 5)
-        {
-            throw Exception("illegal DeduperType: " + toString(type));
-        }
-        return (DeduperType)type;
-    }
+    /// mark that ColumnId of those columns are defined in dbms/src/Storages/KVStore/Types.h
 
     // TODO: detail doc about these delete marks
     struct DelMark
@@ -108,7 +82,10 @@ public:
             return (internal_del ? INTERNAL_DEL : NONE) | (definite_del ? DEFINITE_DEL : NONE) | getData(src_data);
         }
 
-        static UInt8 genDelMark(bool internal_del, bool definite_del = false) { return genDelMark(internal_del, definite_del, 0); }
+        static UInt8 genDelMark(bool internal_del, bool definite_del = false)
+        {
+            return genDelMark(internal_del, definite_del, 0);
+        }
     };
 
 private:

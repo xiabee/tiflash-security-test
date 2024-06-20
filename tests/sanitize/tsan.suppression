@@ -1,3 +1,9 @@
 race:dbms/src/Common/TiFlashMetrics.h
 race:DB::Context::setCancelTest
 race:DB::getCurrentExceptionMessage
+race:google::protobuf::Message::DebugString
+race:google::protobuf::Message::ShortDebugString
+race:fiu_fail
+race:dbms/src/DataStreams/BlockStreamProfileInfo.h
+race:StackTrace::toString
+race:DB::SyncPointCtl::sync

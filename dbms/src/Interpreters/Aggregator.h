@@ -28,11 +28,11 @@
 #include <Common/HashTable/TwoLevelHashMap.h>
 #include <Common/HashTable/TwoLevelStringHashMap.h>
 #include <Common/Logger.h>
-#include <Core/Spiller.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <Interpreters/AggSpillContext.h>
 #include <Interpreters/AggregateDescription.h>
 #include <Interpreters/AggregationCommon.h>
-#include <Storages/Transaction/Collator.h>
+#include <TiDB/Collation/Collator.h>
 #include <common/StringRef.h>
 #include <common/logger_useful.h>
 
@@ -48,6 +48,8 @@ extern const int UNKNOWN_AGGREGATED_DATA_VARIANT;
 }
 
 class IBlockOutputStream;
+template <typename Method>
+class AggHashTableToBlocksBlockInputStream;
 
 
 /** Different data structures that can be used for aggregation
@@ -127,16 +129,20 @@ struct AggregationMethodOneNumber
     {}
 
     /// To use one `Method` in different threads, use different `State`.
-    using State = ColumnsHashing::HashMethodOneNumber<typename Data::value_type,
-                                                      Mapped,
-                                                      FieldType,
-                                                      consecutive_keys_optimization>;
+    using State = ColumnsHashing::
+        HashMethodOneNumber<typename Data::value_type, Mapped, FieldType, consecutive_keys_optimization>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     /// Shuffle key columns before `insertKeyIntoColumns` call if needed.
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
     // Insert the key from the hash table into columns.
-    static void insertKeyIntoColumns(const Key & key, std::vector<IColumn *> & key_columns, const Sizes & /*key_sizes*/, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const Key & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes & /*key_sizes*/,
+        const TiDB::TiDBCollators &)
     {
         const auto * key_holder = reinterpret_cast<const char *>(&key);
         auto * column = static_cast<ColumnVectorHelper *>(key_columns[0]);
@@ -162,10 +168,16 @@ struct AggregationMethodString
     {}
 
     using State = ColumnsHashing::HashMethodString<typename Data::value_type, Mapped>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    static void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, const Sizes &, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes &,
+        const TiDB::TiDBCollators &)
     {
         static_cast<ColumnString *>(key_columns[0])->insertData(key.data, key.size);
     }
@@ -190,10 +202,16 @@ struct AggregationMethodStringNoCache
 
     // Remove last zero byte.
     using State = ColumnsHashing::HashMethodString<typename Data::value_type, Mapped, true, false>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    static void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, const Sizes &, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes &,
+        const TiDB::TiDBCollators &)
     {
         // Add last zero byte.
         static_cast<ColumnString *>(key_columns[0])->insertData(key.data, key.size);
@@ -217,10 +235,15 @@ struct AggregationMethodOneKeyStringNoCache
     {}
 
     using State = ColumnsHashing::HashMethodStringBin<typename Data::value_type, Mapped, bin_padding>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    ALWAYS_INLINE static inline void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, size_t)
+    ALWAYS_INLINE static inline void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        size_t)
     {
         /// still need to insert data to key because spill may will use this
         static_cast<ColumnString *>(key_columns[0])->insertData(key.data, key.size);
@@ -247,6 +270,7 @@ struct AggregationMethodMultiStringNoCache
     {}
 
     using State = ColumnsHashing::HashMethodMultiString<typename Data::value_type, Mapped>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
@@ -275,15 +299,18 @@ struct AggregationMethodFastPathTwoKeysNoCache
         : data(other.data)
     {}
 
-    using State = ColumnsHashing::HashMethodFastPathTwoKeysSerialized<Key1Desc, Key2Desc, typename Data::value_type, Mapped>;
+    using State
+        = ColumnsHashing::HashMethodFastPathTwoKeysSerialized<Key1Desc, Key2Desc, typename Data::value_type, Mapped>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
     template <typename KeyType>
     ALWAYS_INLINE static inline void initAggKeys(size_t rows, IColumn * key_column)
     {
         auto * column = static_cast<typename KeyType::ColumnType *>(key_column);
-        column->getData().resize_fill(rows, 0);
+        column->getData().resize_fill(rows);
     }
 
     ALWAYS_INLINE static inline const char * insertAggKeyIntoColumnString(const char * pos, IColumn * key_column)
@@ -302,30 +329,52 @@ struct AggregationMethodFastPathTwoKeysNoCache
         return initAggKeyString(rows, key_column);
     }
     template <>
-    ALWAYS_INLINE static inline void initAggKeys<ColumnsHashing::KeyDescStringBinPadding>(size_t rows, IColumn * key_column)
+    ALWAYS_INLINE static inline void initAggKeys<ColumnsHashing::KeyDescStringBinPadding>(
+        size_t rows,
+        IColumn * key_column)
     {
         return initAggKeyString(rows, key_column);
     }
 
     template <typename KeyType>
-    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn(const char * pos, IColumn * key_column, size_t index)
+    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn(
+        const char * pos,
+        IColumn * key_column,
+        size_t index)
     {
         auto * column = static_cast<typename KeyType::ColumnType *>(key_column);
         column->getElement(index) = *reinterpret_cast<const typename KeyType::ColumnType::value_type *>(pos);
         return pos + KeyType::ElementSize;
     }
     template <>
-    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn<ColumnsHashing::KeyDescStringBin>(const char * pos, IColumn * key_column, size_t)
+    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn<ColumnsHashing::KeyDescStringBin>(
+        const char * pos,
+        IColumn * key_column,
+        size_t)
     {
         return insertAggKeyIntoColumnString(pos, key_column);
     }
     template <>
-    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn<ColumnsHashing::KeyDescStringBinPadding>(const char * pos, IColumn * key_column, size_t)
+    ALWAYS_INLINE static inline const char * insertAggKeyIntoColumn<ColumnsHashing::KeyDescStringBinPadding>(
+        const char * pos,
+        IColumn * key_column,
+        size_t)
     {
         return insertAggKeyIntoColumnString(pos, key_column);
     }
 
-    ALWAYS_INLINE static inline void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, size_t index)
+    ALWAYS_INLINE static inline void insertKeyIntoColumnsOneKey(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        size_t index)
+    {
+        insertAggKeyIntoColumn<Key1Desc>(key.data, key_columns[0], index);
+    }
+
+    ALWAYS_INLINE static inline void insertKeyIntoColumnsTwoKey(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        size_t index)
     {
         const auto * pos = key.data;
         {
@@ -356,10 +405,16 @@ struct AggregationMethodFixedString
     {}
 
     using State = ColumnsHashing::HashMethodFixedString<typename Data::value_type, Mapped>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    static void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, const Sizes &, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes &,
+        const TiDB::TiDBCollators &)
     {
         static_cast<ColumnFixedString *>(key_columns[0])->insertData(key.data, key.size);
     }
@@ -383,15 +438,20 @@ struct AggregationMethodFixedStringNoCache
     {}
 
     using State = ColumnsHashing::HashMethodFixedString<typename Data::value_type, Mapped, true, false>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    static void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, const Sizes &, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes &,
+        const TiDB::TiDBCollators &)
     {
         static_cast<ColumnFixedString *>(key_columns[0])->insertData(key.data, key.size);
     }
 };
-
 
 /// For the case where all keys are of fixed length, and they fit in N (for example, 128) bits.
 template <typename TData, bool has_nullable_keys_ = false, bool use_cache = true>
@@ -411,19 +471,24 @@ struct AggregationMethodKeysFixed
         : data(other.data)
     {}
 
-    using State = ColumnsHashing::HashMethodKeysFixed<
-        typename Data::value_type,
-        Key,
-        Mapped,
-        has_nullable_keys,
-        use_cache>;
+    using State
+        = ColumnsHashing::HashMethodKeysFixed<typename Data::value_type, Key, Mapped, has_nullable_keys, use_cache>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    // Because shuffle key optimization will reorder group by key internally, which is not compatible with
+    // key_ref_agg_func optimization. Because the latter optimization also needs to reorder group by key
+    // to help skipping copy columns.
+    static bool canUseKeyRefAggFuncOptimization() { return false; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> & key_columns, const Sizes & key_sizes)
     {
         return State::shuffleKeyColumns(key_columns, key_sizes);
     }
 
-    static void insertKeyIntoColumns(const Key & key, std::vector<IColumn *> & key_columns, const Sizes & key_sizes, const TiDB::TiDBCollators &)
+    static void insertKeyIntoColumns(
+        const Key & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes & key_sizes,
+        const TiDB::TiDBCollators &)
     {
         size_t keys_size = key_columns.size();
 
@@ -477,7 +542,6 @@ struct AggregationMethodKeysFixed
     }
 };
 
-
 /** Aggregates by concatenating serialized key values.
   * The serialized value differs in that it uniquely allows to deserialize it, having only the position with which it starts.
   * That is, for example, for strings, it contains first the serialized length of the string, and then the bytes.
@@ -500,10 +564,16 @@ struct AggregationMethodSerialized
     {}
 
     using State = ColumnsHashing::HashMethodSerialized<typename Data::value_type, Mapped>;
+    using EmplaceResult = ColumnsHashing::columns_hashing_impl::EmplaceResultImpl<Mapped>;
 
+    static bool canUseKeyRefAggFuncOptimization() { return true; }
     std::optional<Sizes> shuffleKeyColumns(std::vector<IColumn *> &, const Sizes &) { return {}; }
 
-    static void insertKeyIntoColumns(const StringRef & key, std::vector<IColumn *> & key_columns, const Sizes &, const TiDB::TiDBCollators & collators)
+    static void insertKeyIntoColumns(
+        const StringRef & key,
+        std::vector<IColumn *> & key_columns,
+        const Sizes &,
+        const TiDB::TiDBCollators & collators)
     {
         const auto * pos = key.data;
         for (size_t i = 0; i < key_columns.size(); ++i)
@@ -556,8 +626,10 @@ struct AggregatedDataVariants : private boost::noncopyable
     using AggregationMethod_key64 = AggregationMethodOneNumber<UInt64, AggregatedDataWithUInt64Key>;
     using AggregationMethod_key_int256 = AggregationMethodOneNumber<Int256, AggregatedDataWithInt256Key>;
     using AggregationMethod_key_string = AggregationMethodStringNoCache<AggregatedDataWithShortStringKey>;
-    using AggregationMethod_one_key_strbin = AggregationMethodOneKeyStringNoCache<false, AggregatedDataWithShortStringKey>;
-    using AggregationMethod_one_key_strbinpadding = AggregationMethodOneKeyStringNoCache<true, AggregatedDataWithShortStringKey>;
+    using AggregationMethod_one_key_strbin
+        = AggregationMethodOneKeyStringNoCache<false, AggregatedDataWithShortStringKey>;
+    using AggregationMethod_one_key_strbinpadding
+        = AggregationMethodOneKeyStringNoCache<true, AggregatedDataWithShortStringKey>;
     using AggregationMethod_key_fixed_string = AggregationMethodFixedStringNoCache<AggregatedDataWithShortStringKey>;
     using AggregationMethod_keys16 = AggregationMethodKeysFixed<AggregatedDataWithUInt16Key, false, false>;
     using AggregationMethod_keys32 = AggregationMethodKeysFixed<AggregatedDataWithUInt32Key>;
@@ -567,11 +639,16 @@ struct AggregatedDataVariants : private boost::noncopyable
     using AggregationMethod_serialized = AggregationMethodSerialized<AggregatedDataWithStringKey>;
     using AggregationMethod_key32_two_level = AggregationMethodOneNumber<UInt32, AggregatedDataWithUInt64KeyTwoLevel>;
     using AggregationMethod_key64_two_level = AggregationMethodOneNumber<UInt64, AggregatedDataWithUInt64KeyTwoLevel>;
-    using AggregationMethod_key_int256_two_level = AggregationMethodOneNumber<Int256, AggregatedDataWithInt256KeyTwoLevel>;
-    using AggregationMethod_key_string_two_level = AggregationMethodStringNoCache<AggregatedDataWithShortStringKeyTwoLevel>;
-    using AggregationMethod_one_key_strbin_two_level = AggregationMethodOneKeyStringNoCache<false, AggregatedDataWithShortStringKeyTwoLevel>;
-    using AggregationMethod_one_key_strbinpadding_two_level = AggregationMethodOneKeyStringNoCache<true, AggregatedDataWithShortStringKeyTwoLevel>;
-    using AggregationMethod_key_fixed_string_two_level = AggregationMethodFixedStringNoCache<AggregatedDataWithShortStringKeyTwoLevel>;
+    using AggregationMethod_key_int256_two_level
+        = AggregationMethodOneNumber<Int256, AggregatedDataWithInt256KeyTwoLevel>;
+    using AggregationMethod_key_string_two_level
+        = AggregationMethodStringNoCache<AggregatedDataWithShortStringKeyTwoLevel>;
+    using AggregationMethod_one_key_strbin_two_level
+        = AggregationMethodOneKeyStringNoCache<false, AggregatedDataWithShortStringKeyTwoLevel>;
+    using AggregationMethod_one_key_strbinpadding_two_level
+        = AggregationMethodOneKeyStringNoCache<true, AggregatedDataWithShortStringKeyTwoLevel>;
+    using AggregationMethod_key_fixed_string_two_level
+        = AggregationMethodFixedStringNoCache<AggregatedDataWithShortStringKeyTwoLevel>;
     using AggregationMethod_keys32_two_level = AggregationMethodKeysFixed<AggregatedDataWithUInt32KeyTwoLevel>;
     using AggregationMethod_keys64_two_level = AggregationMethodKeysFixed<AggregatedDataWithUInt64KeyTwoLevel>;
     using AggregationMethod_keys128_two_level = AggregationMethodKeysFixed<AggregatedDataWithKeys128TwoLevel>;
@@ -587,23 +664,61 @@ struct AggregatedDataVariants : private boost::noncopyable
     /// Support for nullable keys.
     using AggregationMethod_nullable_keys128 = AggregationMethodKeysFixed<AggregatedDataWithKeys128, true>;
     using AggregationMethod_nullable_keys256 = AggregationMethodKeysFixed<AggregatedDataWithKeys256, true>;
-    using AggregationMethod_nullable_keys128_two_level = AggregationMethodKeysFixed<AggregatedDataWithKeys128TwoLevel, true>;
-    using AggregationMethod_nullable_keys256_two_level = AggregationMethodKeysFixed<AggregatedDataWithKeys256TwoLevel, true>;
+    using AggregationMethod_nullable_keys128_two_level
+        = AggregationMethodKeysFixed<AggregatedDataWithKeys128TwoLevel, true>;
+    using AggregationMethod_nullable_keys256_two_level
+        = AggregationMethodKeysFixed<AggregatedDataWithKeys256TwoLevel, true>;
 
     // 2 keys
-    using AggregationMethod_two_keys_num64_strbin = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescNumber64, ColumnsHashing::KeyDescStringBin, AggregatedDataWithStringKey>;
-    using AggregationMethod_two_keys_num64_strbinpadding = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescNumber64, ColumnsHashing::KeyDescStringBinPadding, AggregatedDataWithStringKey>;
-    using AggregationMethod_two_keys_strbin_num64 = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBin, ColumnsHashing::KeyDescNumber64, AggregatedDataWithStringKey>;
-    using AggregationMethod_two_keys_strbin_strbin = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBin, ColumnsHashing::KeyDescStringBin, AggregatedDataWithStringKey>;
-    using AggregationMethod_two_keys_strbinpadding_num64 = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBinPadding, ColumnsHashing::KeyDescNumber64, AggregatedDataWithStringKey>;
-    using AggregationMethod_two_keys_strbinpadding_strbinpadding = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBinPadding, ColumnsHashing::KeyDescStringBinPadding, AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_num64_strbin = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescNumber64,
+        ColumnsHashing::KeyDescStringBin,
+        AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_num64_strbinpadding = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescNumber64,
+        ColumnsHashing::KeyDescStringBinPadding,
+        AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_strbin_num64 = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBin,
+        ColumnsHashing::KeyDescNumber64,
+        AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_strbin_strbin = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBin,
+        ColumnsHashing::KeyDescStringBin,
+        AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_strbinpadding_num64 = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBinPadding,
+        ColumnsHashing::KeyDescNumber64,
+        AggregatedDataWithStringKey>;
+    using AggregationMethod_two_keys_strbinpadding_strbinpadding = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBinPadding,
+        ColumnsHashing::KeyDescStringBinPadding,
+        AggregatedDataWithStringKey>;
 
-    using AggregationMethod_two_keys_num64_strbin_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescNumber64, ColumnsHashing::KeyDescStringBin, AggregatedDataWithStringKeyTwoLevel>;
-    using AggregationMethod_two_keys_num64_strbinpadding_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescNumber64, ColumnsHashing::KeyDescStringBinPadding, AggregatedDataWithStringKeyTwoLevel>;
-    using AggregationMethod_two_keys_strbin_num64_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBin, ColumnsHashing::KeyDescNumber64, AggregatedDataWithStringKeyTwoLevel>;
-    using AggregationMethod_two_keys_strbin_strbin_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBin, ColumnsHashing::KeyDescStringBin, AggregatedDataWithStringKeyTwoLevel>;
-    using AggregationMethod_two_keys_strbinpadding_num64_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBinPadding, ColumnsHashing::KeyDescNumber64, AggregatedDataWithStringKeyTwoLevel>;
-    using AggregationMethod_two_keys_strbinpadding_strbinpadding_two_level = AggregationMethodFastPathTwoKeysNoCache<ColumnsHashing::KeyDescStringBinPadding, ColumnsHashing::KeyDescStringBinPadding, AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_num64_strbin_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescNumber64,
+        ColumnsHashing::KeyDescStringBin,
+        AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_num64_strbinpadding_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescNumber64,
+        ColumnsHashing::KeyDescStringBinPadding,
+        AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_strbin_num64_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBin,
+        ColumnsHashing::KeyDescNumber64,
+        AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_strbin_strbin_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBin,
+        ColumnsHashing::KeyDescStringBin,
+        AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_strbinpadding_num64_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBinPadding,
+        ColumnsHashing::KeyDescNumber64,
+        AggregatedDataWithStringKeyTwoLevel>;
+    using AggregationMethod_two_keys_strbinpadding_strbinpadding_two_level = AggregationMethodFastPathTwoKeysNoCache<
+        ColumnsHashing::KeyDescStringBinPadding,
+        ColumnsHashing::KeyDescStringBinPadding,
+        AggregatedDataWithStringKeyTwoLevel>;
 
     // 3 keys
     // TODO: use 3 keys if necessary
@@ -672,24 +787,19 @@ struct AggregatedDataVariants : private boost::noncopyable
 
     Type type{Type::EMPTY};
 
+    bool need_spill = false;
+
+    bool tryMarkNeedSpill();
+
     void destroyAggregationMethodImpl();
 
     AggregatedDataVariants()
         : aggregates_pools(1, std::make_shared<Arena>())
         , aggregates_pool(aggregates_pools.back().get())
     {}
-    bool inited() const
-    {
-        return type != Type::EMPTY;
-    }
-    bool empty() const
-    {
-        return size() == 0;
-    }
-    void invalidate()
-    {
-        type = Type::EMPTY;
-    }
+    bool inited() const { return type != Type::EMPTY; }
+    bool empty() const { return size() == 0; }
+    void invalidate() { type = Type::EMPTY; }
 
     ~AggregatedDataVariants();
 
@@ -720,6 +830,13 @@ struct AggregatedDataVariants : private boost::noncopyable
         }
     }
 
+    size_t revocableBytes() const
+    {
+        if (empty())
+            return 0;
+        return bytesCount();
+    }
+
     size_t bytesCount() const
     {
         size_t bytes_count = 0;
@@ -748,10 +865,7 @@ struct AggregatedDataVariants : private boost::noncopyable
         return bytes_count;
     }
 
-    const char * getMethodName() const
-    {
-        return getMethodName(type);
-    }
+    const char * getMethodName() const { return getMethodName(type); }
     static const char * getMethodName(Type type)
     {
         switch (type)
@@ -830,10 +944,7 @@ struct AggregatedDataVariants : private boost::noncopyable
     APPLY_FOR_VARIANTS_NOT_CONVERTIBLE_TO_TWO_LEVEL(M) \
     APPLY_FOR_VARIANTS_CONVERTIBLE_TO_TWO_LEVEL(M)
 
-    bool isConvertibleToTwoLevel() const
-    {
-        return isConvertibleToTwoLevel(type);
-    }
+    bool isConvertibleToTwoLevel() const { return isConvertibleToTwoLevel(type); }
 
     static size_t getBucketNumberForTwoLevelHashTable(Type type);
 
@@ -854,6 +965,8 @@ struct AggregatedDataVariants : private boost::noncopyable
     }
 
     void convertToTwoLevel();
+
+    void setResizeCallbackIfNeeded(size_t thread_num) const;
 
 #define APPLY_FOR_VARIANTS_TWO_LEVEL(M)               \
     M(key32_two_level)                                \
@@ -888,7 +1001,11 @@ public:
     /** The input is a set of non-empty sets of partially aggregated data,
       *  which are all either single-level, or are two-level.
       */
-    MergingBuckets(const Aggregator & aggregator_, const ManyAggregatedDataVariants & data_, bool final_, size_t concurrency_);
+    MergingBuckets(
+        const Aggregator & aggregator_,
+        const ManyAggregatedDataVariants & data_,
+        bool final_,
+        size_t concurrency_);
 
     Block getHeader() const;
 
@@ -931,11 +1048,11 @@ public:
     {
         /// Data structure of source blocks.
         Block src_header;
-        /// Data structure of intermediate blocks before merge.
-        Block intermediate_header;
 
         /// What to count.
         ColumnNumbers keys;
+        KeyRefAggFuncMap key_ref_agg_func;
+        AggFuncRefKeyMap agg_func_ref_key;
         AggregateDescriptions aggregates;
         size_t keys_size;
         size_t aggregates_size;
@@ -951,6 +1068,8 @@ public:
         Params(
             const Block & src_header_,
             const ColumnNumbers & keys_,
+            const KeyRefAggFuncMap & key_ref_agg_func_,
+            const AggFuncRefKeyMap & agg_func_ref_key_,
             const AggregateDescriptions & aggregates_,
             size_t group_by_two_level_threshold_,
             size_t group_by_two_level_threshold_bytes_,
@@ -961,6 +1080,8 @@ public:
             const TiDB::TiDBCollators & collators_ = TiDB::dummy_collators)
             : src_header(src_header_)
             , keys(keys_)
+            , key_ref_agg_func(key_ref_agg_func_)
+            , agg_func_ref_key(agg_func_ref_key_)
             , aggregates(aggregates_)
             , keys_size(keys.size())
             , aggregates_size(aggregates.size())
@@ -971,32 +1092,22 @@ public:
             , group_by_two_level_threshold(group_by_two_level_threshold_)
             , group_by_two_level_threshold_bytes(group_by_two_level_threshold_bytes_)
             , max_bytes_before_external_group_by(max_bytes_before_external_group_by_)
-        {
-        }
-
-        /// Only parameters that matter during merge.
-        Params(const Block & intermediate_header_,
-               const ColumnNumbers & keys_,
-               const AggregateDescriptions & aggregates_,
-               const SpillConfig & spill_config,
-               UInt64 max_block_size_,
-               const TiDB::TiDBCollators & collators_ = TiDB::dummy_collators)
-            : Params(Block(), keys_, aggregates_, 0, 0, 0, false, spill_config, max_block_size_, collators_)
-        {
-            intermediate_header = intermediate_header_;
-        }
+        {}
 
         static Block getHeader(
             const Block & src_header,
-            const Block & intermediate_header,
             const ColumnNumbers & keys,
             const AggregateDescriptions & aggregates,
+            const KeyRefAggFuncMap & key_ref_agg_func,
             bool final);
 
-        Block getHeader(bool final) const
-        {
-            return getHeader(src_header, intermediate_header, keys, aggregates, final);
-        }
+        Params(const Params &) = default;
+        Params & operator=(const Params &) = delete;
+
+        Params(Params &&) = default;
+        Params & operator=(Params &&) = delete;
+
+        Block getHeader(bool final) const { return getHeader(src_header, keys, aggregates, key_ref_agg_func, final); }
 
         /// Calculate the column numbers in `keys` and `aggregates`.
         void calculateColumnNumbers(const Block & block);
@@ -1004,76 +1115,32 @@ public:
         size_t getGroupByTwoLevelThreshold() const { return group_by_two_level_threshold; }
         size_t getGroupByTwoLevelThresholdBytes() const { return group_by_two_level_threshold_bytes; }
         size_t getMaxBytesBeforeExternalGroupBy() const { return max_bytes_before_external_group_by; }
+        void setMaxBytesBeforeExternalGroupBy(size_t threshold) { max_bytes_before_external_group_by = threshold; }
 
     private:
         /// Note these thresholds should not be used directly, they are only used to
         /// init the threshold in Aggregator
         const size_t group_by_two_level_threshold;
         const size_t group_by_two_level_threshold_bytes;
-        const size_t max_bytes_before_external_group_by; /// 0 - do not use external aggregation.
+        size_t max_bytes_before_external_group_by; /// 0 - do not use external aggregation.
     };
 
 
-    Aggregator(const Params & params_, const String & req_id);
+    Aggregator(
+        const Params & params_,
+        const String & req_id,
+        size_t concurrency,
+        const RegisterOperatorSpillContext & register_operator_spill_context);
 
     /// Aggregate the source. Get the result in the form of one of the data structures.
-    void execute(const BlockInputStreamPtr & stream, AggregatedDataVariants & result);
+    void execute(const BlockInputStreamPtr & stream, AggregatedDataVariants & result, size_t thread_num);
+
+    bool isCancelled() { return is_cancelled(); }
 
     using AggregateColumns = std::vector<ColumnRawPtrs>;
     using AggregateColumnsData = std::vector<ColumnAggregateFunction::Container *>;
     using AggregateColumnsConstData = std::vector<const ColumnAggregateFunction::Container *>;
     using AggregateFunctionsPlainPtrs = std::vector<IAggregateFunction *>;
-
-    /// Process one block. Return false if the processing should be aborted.
-    bool executeOnBlock(
-        const Block & block,
-        AggregatedDataVariants & result,
-        ColumnRawPtrs & key_columns,
-        AggregateColumns & aggregate_columns /// Passed to not create them anew for each block
-    );
-
-    /** Merge several aggregation data structures and output the MergingBucketsPtr used to merge.
-      * Return nullptr if there are no non empty data_variant.
-      */
-    MergingBucketsPtr mergeAndConvertToBlocks(ManyAggregatedDataVariants & data_variants, bool final, size_t max_threads) const;
-
-    /// Merge several partially aggregated blocks into one.
-    BlocksList vstackBlocks(BlocksList & blocks, bool final);
-
-    /** Split block with partially-aggregated data to many blocks, as if two-level method of aggregation was used.
-      * This is needed to simplify merging of that data with other results, that are already two-level.
-      */
-    Blocks convertBlockToTwoLevel(const Block & block);
-
-    using CancellationHook = std::function<bool()>;
-
-    /** Set a function that checks whether the current task can be aborted.
-      */
-    void setCancellationHook(CancellationHook cancellation_hook);
-
-    /// For external aggregation.
-    void spill(AggregatedDataVariants & data_variants);
-    void finishSpill();
-    BlockInputStreams restoreSpilledData();
-    bool hasSpilledData() const { return spill_triggered; }
-    void useTwoLevelHashTable() { use_two_level_hash_table = true; }
-    void initThresholdByAggregatedDataVariantsSize(size_t aggregated_data_variants_size);
-
-    /// Get data structure of the result.
-    Block getHeader(bool final) const;
-
-protected:
-    friend struct AggregatedDataVariants;
-    friend class MergingBuckets;
-
-    Params params;
-
-    AggregatedDataVariants::Type method_chosen;
-
-
-    Sizes key_sizes;
-
-    AggregateFunctionsPlainPtrs aggregate_functions;
 
     /** This array serves two purposes.
       *
@@ -1088,10 +1155,94 @@ protected:
         const IColumn ** arguments{};
         const IAggregateFunction * batch_that{};
         const IColumn ** batch_arguments{};
-        const UInt64 * offsets{};
     };
 
     using AggregateFunctionInstructions = std::vector<AggregateFunctionInstruction>;
+    struct AggProcessInfo
+    {
+        AggProcessInfo(Aggregator * aggregator_)
+            : aggregator(aggregator_)
+        {
+            assert(aggregator);
+        }
+        Block block;
+        size_t start_row = 0;
+        size_t end_row = 0;
+        bool prepare_for_agg_done = false;
+        Columns materialized_columns;
+        Columns input_columns;
+        ColumnRawPtrs key_columns;
+        AggregateColumns aggregate_columns;
+        AggregateFunctionInstructions aggregate_functions_instructions;
+        Aggregator * aggregator;
+        void prepareForAgg();
+        bool allBlockDataHandled() const
+        {
+            assert(start_row <= end_row);
+            return start_row == end_row || aggregator->isCancelled();
+        }
+        void resetBlock(const Block & block_)
+        {
+            RUNTIME_CHECK_MSG(allBlockDataHandled(), "Previous block is not processed yet");
+            block = block_;
+            start_row = 0;
+            end_row = 0;
+            materialized_columns.clear();
+            prepare_for_agg_done = false;
+        }
+    };
+
+    /// Process one block. Return false if the processing should be aborted.
+    bool executeOnBlock(AggProcessInfo & agg_process_info, AggregatedDataVariants & result, size_t thread_num);
+
+    /** Merge several aggregation data structures and output the MergingBucketsPtr used to merge.
+      * Return nullptr if there are no non empty data_variant.
+      */
+    MergingBucketsPtr mergeAndConvertToBlocks(
+        ManyAggregatedDataVariants & data_variants,
+        bool final,
+        size_t max_threads) const;
+
+    /// Merge several partially aggregated blocks into one.
+    BlocksList vstackBlocks(BlocksList & blocks, bool final);
+
+    bool isConvertibleToTwoLevel() { return AggregatedDataVariants::isConvertibleToTwoLevel(method_chosen); }
+    /** Split block with partially-aggregated data to many blocks, as if two-level method of aggregation was used.
+      * This is needed to simplify merging of that data with other results, that are already two-level.
+      */
+    Blocks convertBlockToTwoLevel(const Block & block);
+
+    using CancellationHook = std::function<bool()>;
+
+    /** Set a function that checks whether the current task can be aborted.
+      */
+    void setCancellationHook(CancellationHook cancellation_hook);
+
+    /// For external aggregation.
+    void spill(AggregatedDataVariants & data_variants, size_t thread_num);
+    void finishSpill();
+    BlockInputStreams restoreSpilledData();
+    bool hasSpilledData() const { return agg_spill_context->hasSpilledData(); }
+    void useTwoLevelHashTable() { use_two_level_hash_table = true; }
+    void initThresholdByAggregatedDataVariantsSize(size_t aggregated_data_variants_size);
+    AggSpillContextPtr & getAggSpillContext() { return agg_spill_context; }
+
+    /// Get data structure of the result.
+    Block getHeader(bool final) const;
+    Block getSourceHeader() const;
+
+protected:
+    friend struct AggregatedDataVariants;
+    friend class MergingBuckets;
+
+    Params params;
+
+    AggregatedDataVariants::Type method_chosen;
+
+
+    Sizes key_sizes;
+
+    AggregateFunctionsPlainPtrs aggregate_functions;
 
     Sizes offsets_of_aggregate_states; /// The offset to the n-th aggregate function in a row of aggregate functions.
     size_t total_size_of_aggregate_states = 0; /// The total size of the row from the aggregate functions.
@@ -1116,11 +1267,9 @@ protected:
           */
     size_t group_by_two_level_threshold = 0;
     size_t group_by_two_level_threshold_bytes = 0;
-    /// Settings to flush temporary data to the filesystem (external aggregation).
-    size_t max_bytes_before_external_group_by = 0;
 
     /// For external aggregation.
-    std::unique_ptr<Spiller> spiller;
+    AggSpillContextPtr agg_spill_context;
     std::atomic<bool> spill_triggered{false};
 
     /** Select the aggregation method based on the number and types of keys. */
@@ -1141,93 +1290,96 @@ protected:
     void executeImpl(
         Method & method,
         Arena * aggregates_pool,
-        size_t rows,
-        ColumnRawPtrs & key_columns,
-        TiDB::TiDBCollators & collators,
-        AggregateFunctionInstruction * aggregate_instructions) const;
+        AggProcessInfo & agg_process_info,
+        TiDB::TiDBCollators & collators) const;
 
     template <typename Method>
     void executeImplBatch(
         Method & method,
         typename Method::State & state,
         Arena * aggregates_pool,
-        size_t rows,
-        AggregateFunctionInstruction * aggregate_instructions) const;
-
-    /// For case when there are no keys (all aggregate into one row).
-    static void executeWithoutKeyImpl(
-        AggregatedDataWithoutKey & res,
-        size_t rows,
-        AggregateFunctionInstruction * aggregate_instructions,
-        Arena * arena);
+        AggProcessInfo & agg_process_info) const;
 
     template <typename Method>
-    void spillImpl(
-        AggregatedDataVariants & data_variants,
-        Method & method);
+    std::optional<typename Method::EmplaceResult> emplaceKey(
+        Method & method,
+        typename Method::State & state,
+        size_t index,
+        Arena & aggregates_pool,
+        std::vector<std::string> & sort_key_containers) const;
+
+    /// For case when there are no keys (all aggregate into one row).
+    static void executeWithoutKeyImpl(AggregatedDataWithoutKey & res, AggProcessInfo & agg_process_info, Arena * arena);
+
+    template <typename Method>
+    void spillImpl(AggregatedDataVariants & data_variants, Method & method, size_t thread_num);
 
 protected:
     /// Merge data from hash table `src` into `dst`.
     template <typename Method, typename Table>
-    void mergeDataImpl(
-        Table & table_dst,
-        Table & table_src,
-        Arena * arena) const;
+    void mergeDataImpl(Table & table_dst, Table & table_src, Arena * arena) const;
 
-    void mergeWithoutKeyDataImpl(
-        ManyAggregatedDataVariants & non_empty_data) const;
+    void mergeWithoutKeyDataImpl(ManyAggregatedDataVariants & non_empty_data) const;
 
     template <typename Method>
-    void mergeSingleLevelDataImpl(
-        ManyAggregatedDataVariants & non_empty_data) const;
+    void mergeSingleLevelDataImpl(ManyAggregatedDataVariants & non_empty_data) const;
 
-    template <typename Method, typename Table>
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlockImpl(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         MutableColumns & key_columns,
         AggregateColumnsData & aggregate_columns,
         MutableColumns & final_aggregate_columns,
         Arena * arena,
         bool final) const;
 
-    template <typename Method, typename Table>
+    // The template parameter skip_convert_key indicates whether we can skip deserializing the keys in the HashMap.
+    // For example, select first_row(c1) from t group by c1, where c1 is a string column with collator,
+    // only the result of first_row(c1) needs to be constructed. The key c1 only needs to reference to first_row(c1).
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlocksImpl(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         std::vector<MutableColumns> & key_columns_vec,
         std::vector<AggregateColumnsData> & aggregate_columns_vec,
         std::vector<MutableColumns> & final_aggregate_columns_vec,
         Arena * arena,
         bool final) const;
 
-    template <typename Method, typename Table>
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlockImplFinal(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         std::vector<IColumn *> key_columns,
         MutableColumns & final_aggregate_columns,
         Arena * arena) const;
 
-    template <typename Method, typename Table>
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlocksImplFinal(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         std::vector<std::vector<IColumn *>> && key_columns_vec,
         std::vector<MutableColumns> & final_aggregate_columns_vec,
         Arena * arena) const;
 
-    template <typename Method, typename Table>
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlockImplNotFinal(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         std::vector<IColumn *> key_columns,
         AggregateColumnsData & aggregate_columns) const;
 
-    template <typename Method, typename Table>
+    template <typename Method, typename Table, bool skip_convert_key>
     void convertToBlocksImplNotFinal(
         Method & method,
         Table & data,
+        const Sizes & key_sizes,
         std::vector<std::vector<IColumn *>> && key_columns_vec,
         std::vector<AggregateColumnsData> & aggregate_columns_vec) const;
 
@@ -1236,14 +1388,16 @@ protected:
         AggregatedDataVariants & data_variants,
         bool final,
         size_t rows,
-        Filler && filler) const;
+        Filler && filler,
+        size_t convert_key_size) const;
 
     template <typename Filler>
     BlocksList prepareBlocksAndFill(
         AggregatedDataVariants & data_variants,
         bool final,
         size_t rows,
-        Filler && filler) const;
+        Filler && filler,
+        size_t convert_key_size) const;
 
     template <typename Method>
     Block convertOneBucketToBlock(
@@ -1262,10 +1416,7 @@ protected:
         size_t bucket) const;
 
     template <typename Mapped>
-    void insertAggregatesIntoColumns(
-        Mapped & mapped,
-        MutableColumns & final_aggregate_columns,
-        Arena * arena) const;
+    void insertAggregatesIntoColumns(Mapped & mapped, MutableColumns & final_aggregate_columns, Arena * arena) const;
 
     void prepareAggregateInstructions(
         Columns columns,
@@ -1277,28 +1428,15 @@ protected:
     BlocksList prepareBlocksAndFillSingleLevel(AggregatedDataVariants & data_variants, bool final) const;
 
     template <typename Method, typename Table>
-    void mergeStreamsImplCase(
-        Block & block,
-        Arena * aggregates_pool,
-        Method & method,
-        Table & data) const;
+    void mergeStreamsImplCase(Block & block, Arena * aggregates_pool, Method & method, Table & data) const;
 
     template <typename Method, typename Table>
-    void mergeStreamsImpl(
-        Block & block,
-        Arena * aggregates_pool,
-        Method & method,
-        Table & data) const;
+    void mergeStreamsImpl(Block & block, Arena * aggregates_pool, Method & method, Table & data) const;
 
-    void mergeWithoutKeyStreamsImpl(
-        Block & block,
-        AggregatedDataVariants & result) const;
+    void mergeWithoutKeyStreamsImpl(Block & block, AggregatedDataVariants & result) const;
 
     template <typename Method>
-    void mergeBucketImpl(
-        ManyAggregatedDataVariants & data,
-        Int32 bucket,
-        Arena * arena) const;
+    void mergeBucketImpl(ManyAggregatedDataVariants & data, Int32 bucket, Arena * arena) const;
 
     template <typename Method>
     void convertBlockToTwoLevelImpl(
@@ -1311,8 +1449,10 @@ protected:
     template <typename Method, typename Table>
     void destroyImpl(Table & table) const;
 
-    void destroyWithoutKey(
-        AggregatedDataVariants & result) const;
+    void destroyWithoutKey(AggregatedDataVariants & result) const;
+
+    template <typename Method>
+    friend class AggHashTableToBlocksBlockInputStream;
 };
 
 /** Get the aggregation variant by its type. */

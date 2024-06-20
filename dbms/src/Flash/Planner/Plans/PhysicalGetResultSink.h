@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Executor/ResultQueue.h>
+#include <Flash/Executor/ResultQueue_fwd.h>
 #include <Flash/Planner/Plans/PhysicalUnary.h>
 
 namespace DB
@@ -40,29 +40,20 @@ public:
         assert(result_queue);
     }
 
-    void finalize(const Names &) override
-    {
-        throw Exception("Unsupport");
-    }
+    void finalizeImpl(const Names &) override { throw Exception("Unsupport"); }
 
-    const Block & getSampleBlock() const override
-    {
-        throw Exception("Unsupport");
-    }
+    const Block & getSampleBlock() const override { throw Exception("Unsupport"); }
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
+private:
+    void buildBlockInputStreamImpl(DAGPipeline &, Context &, size_t) override { throw Exception("Unsupport"); }
+
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & exec_context,
         PipelineExecGroupBuilder & group_builder,
         Context & /*context*/,
         size_t /*concurrency*/) override;
 
 private:
     ResultQueuePtr result_queue;
-
-private:
-    void buildBlockInputStreamImpl(DAGPipeline &, Context &, size_t) override
-    {
-        throw Exception("Unsupport");
-    }
 };
 } // namespace DB

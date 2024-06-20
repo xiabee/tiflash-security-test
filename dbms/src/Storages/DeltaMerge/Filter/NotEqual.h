@@ -15,27 +15,26 @@
 #pragma once
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
+#include <Storages/DeltaMerge/Index/RoughCheck.h>
 
-namespace DB
+namespace DB::DM
 {
-namespace DM
-{
+
 class NotEqual : public ColCmpVal
 {
 public:
     NotEqual(const Attr & attr_, const Field & value_)
-        : ColCmpVal(attr_, value_, 0)
+        : ColCmpVal(attr_, value_)
     {}
 
     String name() override { return "not_equal"; }
 
-    RSResult roughCheck(size_t pack_id, const RSCheckParam & param) override
+    RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
     {
-        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_SOME(param, attr, rsindex);
-        return !rsindex.minmax->checkEqual(pack_id, value, rsindex.type);
+        auto results = minMaxCheckCmp<RoughCheck::CheckEqual>(start_pack, pack_count, param, attr, value);
+        std::transform(results.begin(), results.end(), results.begin(), [](RSResult result) { return !result; });
+        return results;
     }
 };
 
-} // namespace DM
-
-} // namespace DB
+} // namespace DB::DM

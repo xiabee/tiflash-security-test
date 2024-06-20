@@ -17,9 +17,7 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/Remote/Serializer_fwd.h>
 
-namespace DB
-{
-namespace DM
+namespace DB::DM
 {
 class ColumnFileSetSnapshot;
 using ColumnFileSetSnapshotPtr = std::shared_ptr<ColumnFileSetSnapshot>;
@@ -52,7 +50,8 @@ public:
 
 using BlockOrDeletes = std::vector<BlockOrDelete>;
 
-class ColumnFileSetSnapshot : public std::enable_shared_from_this<ColumnFileSetSnapshot>
+class ColumnFileSetSnapshot
+    : public std::enable_shared_from_this<ColumnFileSetSnapshot>
     , private boost::noncopyable
 {
     friend class MemTableSet;
@@ -106,5 +105,4 @@ public:
     const auto & getDataProvider() const { return data_provider; }
 };
 
-} // namespace DM
-} // namespace DB
+} // namespace DB::DM

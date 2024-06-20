@@ -16,10 +16,9 @@
 
 #include <DataStreams/IBlockOutputStream.h>
 #include <DataStreams/MarkInCompressedFile.h>
-#include <Encryption/WriteBufferFromFileProvider.h>
-#include <Encryption/createWriteBufferFromFileBaseByFileProvider.h>
-#include <IO/CompressedWriteBuffer.h>
-#include <IO/WriteBufferFromOStream.h>
+#include <IO/Buffer/WriteBufferFromOStream.h>
+#include <IO/Compression/CompressedWriteBuffer.h>
+#include <IO/FileProvider/ChecksumWriteBufferBuilder.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/Index/MinMaxIndex.h>
@@ -43,66 +42,62 @@ class DMFileWriter
 {
 public:
     using WriteBufferFromFileBasePtr = std::unique_ptr<WriteBufferFromFileBase>;
-
     struct Stream
     {
-        Stream(const DMFilePtr & dmfile,
-               const String & file_base_name,
-               const DataTypePtr & type,
-               CompressionSettings compression_settings,
-               size_t max_compress_block_size,
-               FileProviderPtr & file_provider,
-               const WriteLimiterPtr & write_limiter_,
-               bool do_index)
-            : plain_file(
-                WriteBufferByFileProviderBuilder(
-                    dmfile->configuration.has_value(),
-                    file_provider,
-                    dmfile->colDataPath(file_base_name),
-                    dmfile->encryptionDataPath(file_base_name),
-                    false,
-                    write_limiter_)
-                    .with_buffer_size(max_compress_block_size)
-                    .with_checksum_algorithm(detail::getAlgorithmOrNone(*dmfile))
-                    .with_checksum_frame_size(detail::getFrameSizeOrDefault(*dmfile))
-                    .build())
-            , compressed_buf(dmfile->configuration
-                                 ? std::unique_ptr<WriteBuffer>(new CompressedWriteBuffer<false>(*plain_file, compression_settings))
-                                 : std::unique_ptr<WriteBuffer>(new CompressedWriteBuffer<true>(*plain_file, compression_settings)))
+        Stream(
+            const DMFilePtr & dmfile,
+            const String & file_base_name,
+            const DataTypePtr & type,
+            CompressionSettings compression_settings,
+            size_t max_compress_block_size,
+            FileProviderPtr & file_provider,
+            const WriteLimiterPtr & write_limiter_,
+            bool do_index)
+            : plain_file(ChecksumWriteBufferBuilder::build(
+                dmfile->getConfiguration().has_value(),
+                file_provider,
+                dmfile->colDataPath(file_base_name),
+                dmfile->encryptionDataPath(file_base_name),
+                false,
+                write_limiter_,
+                detail::getAlgorithmOrNone(*dmfile),
+                detail::getFrameSizeOrDefault(*dmfile),
+                /*flags*/ -1,
+                /*mode*/ 0666,
+                max_compress_block_size))
+            , compressed_buf(CompressedWriteBuffer<>::build(
+                  *plain_file,
+                  compression_settings,
+                  !dmfile->getConfiguration().has_value()))
             , minmaxes(do_index ? std::make_shared<MinMaxIndex>(*type) : nullptr)
-            , mark_file(WriteBufferByFileProviderBuilder(
-                            dmfile->configuration.has_value(),
-                            file_provider,
-                            dmfile->colMarkPath(file_base_name),
-                            dmfile->encryptionMarkPath(file_base_name),
-                            false,
-                            write_limiter_)
-                            .with_checksum_algorithm(detail::getAlgorithmOrNone(*dmfile))
-                            .with_checksum_frame_size(detail::getFrameSizeOrDefault(*dmfile))
-                            .build())
         {
+            if (!dmfile->useMetaV2())
+            {
+                // will not used in DMFileFormat::V3, could be removed when v3 is default
+                mark_file = ChecksumWriteBufferBuilder::build(
+                    dmfile->getConfiguration().has_value(),
+                    file_provider,
+                    dmfile->colMarkPath(file_base_name),
+                    dmfile->encryptionMarkPath(file_base_name),
+                    false,
+                    write_limiter_,
+                    detail::getAlgorithmOrNone(*dmfile),
+                    detail::getFrameSizeOrDefault(*dmfile));
+            }
+            else
+            {
+                marks = std::make_shared<MarksInCompressedFile>();
+            }
         }
-
-        void flush()
-        {
-            // Note that this method won't flush minmaxes.
-            compressed_buf->next();
-            plain_file->next();
-
-            plain_file->sync();
-            mark_file->sync();
-        }
-
-        // Get written bytes of `plain_file` && `mark_file`. Should be called after `flush`.
-        // Note that this class don't take responsible for serializing `minmaxes`,
-        // bytes of `minmaxes` won't be counted in this method.
-        size_t getWrittenBytes() const { return plain_file->getMaterializedBytes() + mark_file->getMaterializedBytes(); }
 
         // compressed_buf -> plain_file
         WriteBufferFromFileBasePtr plain_file;
         WriteBufferPtr compressed_buf;
 
         MinMaxIndexPtr minmaxes;
+
+        MarksInCompressedFilePtr marks;
+
         WriteBufferFromFileBasePtr mark_file;
     };
     using StreamPtr = std::unique_ptr<Stream>;
@@ -124,35 +119,39 @@ public:
 
         Options() = default;
 
-        Options(CompressionSettings compression_settings_, size_t min_compress_block_size_, size_t max_compress_block_size_)
+        Options(
+            CompressionSettings compression_settings_,
+            size_t min_compress_block_size_,
+            size_t max_compress_block_size_)
             : compression_settings(compression_settings_)
             , min_compress_block_size(min_compress_block_size_)
             , max_compress_block_size(max_compress_block_size_)
-        {
-        }
+        {}
 
         Options(const Options & from) = default;
     };
 
 
 public:
-    DMFileWriter(const DMFilePtr & dmfile_,
-                 const ColumnDefines & write_columns_,
-                 const FileProviderPtr & file_provider_,
-                 const WriteLimiterPtr & write_limiter_,
-                 const Options & options_);
+    DMFileWriter(
+        const DMFilePtr & dmfile_,
+        const ColumnDefines & write_columns_,
+        const FileProviderPtr & file_provider_,
+        const WriteLimiterPtr & write_limiter_,
+        const Options & options_);
 
     void write(const Block & block, const BlockProperty & block_property);
     void finalize();
 
-    const DMFilePtr getFile() const
-    {
-        return dmfile;
-    }
+    DMFilePtr getFile() const { return dmfile; }
 
 private:
     void finalizeColumn(ColId col_id, DataTypePtr type);
-    void writeColumn(ColId col_id, const IDataType & type, const IColumn & column, const ColumnVector<UInt8> * del_mark);
+    void writeColumn(
+        ColId col_id,
+        const IDataType & type,
+        const IColumn & column,
+        const ColumnVector<UInt8> * del_mark);
 
     /// Add streams with specified column id. Since a single column may have more than one Stream,
     /// for example Nullable column has a NullMap column, we would track them with a mapping
@@ -160,10 +159,7 @@ private:
     void addStreams(ColId col_id, DataTypePtr type, bool do_index);
 
     WriteBufferFromFileBasePtr createMetaFile();
-    WriteBufferFromFileBasePtr createMetaV2File();
-    WriteBufferFromFileBasePtr createPackStatsFile();
-    void finalizeMetaV1();
-    void finalizeMetaV2();
+    void finalizeMeta();
 
 private:
     DMFilePtr dmfile;
@@ -178,6 +174,8 @@ private:
     // If dmfile->useMetaV2() is true, `meta_file` is for metav2,
     // else `meta_file` is for pack stats.
     WriteBufferFromFileBasePtr meta_file;
+
+    DMFileMetaV2::MergedFileWriter merged_file;
 
     // use to avoid count data written in index file for empty dmfile
     bool is_empty_file = true;

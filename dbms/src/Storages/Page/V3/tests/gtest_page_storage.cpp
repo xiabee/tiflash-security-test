@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/FailPoint.h>
 #include <Common/SyncPoint/Ctl.h>
-#include <Encryption/MockKeyManager.h>
-#include <Encryption/PosixRandomAccessFile.h>
-#include <Encryption/RandomAccessFile.h>
-#include <Encryption/RateLimiter.h>
+#include <IO/BaseFile/PosixRandomAccessFile.h>
+#include <IO/BaseFile/RandomAccessFile.h>
+#include <IO/BaseFile/RateLimiter.h>
+#include <IO/Encryption/MockKeyManager.h>
 #include <Interpreters/Context.h>
 #include <Storages/Page/ConfigSettings.h>
 #include <Storages/Page/Page.h>
@@ -40,6 +41,7 @@
 
 #include <ext/scope_guard.h>
 #include <future>
+#include <random>
 
 namespace DB
 {
@@ -47,6 +49,7 @@ namespace FailPoints
 {
 extern const char exception_before_page_file_write_sync[];
 extern const char force_set_page_file_write_errno[];
+extern const char force_pick_all_blobs_to_full_gc[];
 } // namespace FailPoints
 
 namespace PS::V3::tests
@@ -111,7 +114,8 @@ try
             c_buff[j + i * buff_size] = static_cast<char>((j & 0xff) + i);
         }
 
-        ReadBufferPtr buff = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff + i * buff_size), buff_size);
+        ReadBufferPtr buff
+            = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff + i * buff_size), buff_size);
         wbs[i].putPage(page_id + i, /* tag */ 0, buff, buff_size);
     }
     WriteLimiterPtr write_limiter = std::make_shared<WriteLimiter>(rate_target, LimiterType::UNKNOW, 20);
@@ -134,9 +138,7 @@ try
     };
 
     {
-        ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat,
-                                                                        rate_target,
-                                                                        LimiterType::UNKNOW);
+        ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat, rate_target, LimiterType::UNKNOW);
 
         AtomicStopwatch read_watch;
         for (size_t i = 0; i < wb_nums; ++i)
@@ -150,9 +152,7 @@ try
     }
 
     {
-        ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat,
-                                                                        rate_target,
-                                                                        LimiterType::UNKNOW);
+        ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat, rate_target, LimiterType::UNKNOW);
 
         std::vector<PageIdU64> page_ids;
         for (size_t i = 0; i < wb_nums; ++i)
@@ -206,9 +206,7 @@ try
     auto get_stat = [&consumed]() {
         return consumed;
     };
-    ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat,
-                                                                    rate_target,
-                                                                    LimiterType::UNKNOW);
+    ReadLimiterPtr read_limiter = std::make_shared<MockReadLimiter>(get_stat, rate_target, LimiterType::UNKNOW);
 
     AtomicStopwatch read_watch;
     page_storage->gc(/*not_skip*/ false, nullptr, read_limiter);
@@ -350,9 +348,14 @@ try
 
     // Make sure in-disk data is encrypted.
 
-    RandomAccessFilePtr file_read = std::make_shared<PosixRandomAccessFile>(fmt::format("{}/{}{}", getTemporaryPath(), BlobFile::BLOB_PREFIX_NAME, 1),
-                                                                            -1,
-                                                                            nullptr);
+    RandomAccessFilePtr file_read = std::make_shared<PosixRandomAccessFile>(
+        fmt::format(
+            "{}/{}{}",
+            getTemporaryPath(),
+            BlobFile::BLOB_PREFIX_NAME,
+            PageTypeUtils::nextFileID(PageType::Normal, 1)),
+        -1,
+        nullptr);
     file_read->pread(c_buff_read, buf_sz, 0);
     ASSERT_NE(c_buff_read, c_buff);
     file_read->pread(c_buff_read, buf_sz, buf_sz);
@@ -544,7 +547,7 @@ TEST_F(PageStorageTest, MultipleWriteRead)
         std::uniform_int_distribution<> dist(0, 3000);
 
         const size_t buff_sz = 2 * DB::MB + dist(size_gen);
-        char * buff = static_cast<char *>(malloc(buff_sz));
+        char * buff = static_cast<char *>(malloc(buff_sz)); // NOLINT(cppcoreguidelines-no-malloc)
         if (buff == nullptr)
         {
             throw DB::Exception("Alloc fix memory failed.", DB::ErrorCodes::LOGICAL_ERROR);
@@ -552,7 +555,8 @@ TEST_F(PageStorageTest, MultipleWriteRead)
 
         const char buff_ch = page_id % 0xFF;
         memset(buff, buff_ch, buff_sz);
-        DB::MemHolder holder = DB::createMemHolder(buff, [&](char * p) { free(p); });
+        DB::MemHolder holder
+            = DB::createMemHolder(buff, [&](char * p) { free(p); }); // NOLINT(cppcoreguidelines-no-malloc)
 
         auto read_buff = std::make_shared<DB::ReadBufferFromMemory>(const_cast<char *>(buff), buff_sz);
 
@@ -726,7 +730,9 @@ TEST_F(PageStorageTest, IngestFile)
     callbacks.scanner = []() -> ExternalPageCallbacks::PathAndIdsVec {
         return {};
     };
-    callbacks.remover = [&times_remover_called](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> & living_page_ids) -> void {
+    callbacks.remover = [&times_remover_called](
+                            const ExternalPageCallbacks::PathAndIdsVec &,
+                            const std::set<PageIdU64> & living_page_ids) -> void {
         times_remover_called += 1;
         EXPECT_EQ(living_page_ids.size(), 1);
         EXPECT_GT(living_page_ids.count(100), 0);
@@ -754,8 +760,18 @@ try
     {
         WriteBatch batch;
         memset(buf, 0x01, buf_sz);
-        batch.putPage(1, 0, std::make_shared<ReadBufferFromMemory>(buf, buf_sz), buf_sz, PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
-        batch.putPage(2, 0, std::make_shared<ReadBufferFromMemory>(buf, buf_sz), buf_sz, PageFieldSizes{{64, 79, 128, 196, 256, 301}});
+        batch.putPage(
+            1,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz,
+            PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
+        batch.putPage(
+            2,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz,
+            PageFieldSizes{{64, 79, 128, 196, 256, 301}});
         batch.putRefPage(3, 2);
         batch.putRefPage(4, 2);
         try
@@ -783,18 +799,19 @@ try
     {
         WriteBatch batch;
         memset(buf, 0x02, buf_sz);
-        batch.putPage(1,
-                      0,
-                      std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
-                      buf_sz, //
-                      PageFieldSizes{{32, 128, 196, 256, 12, 99, 1, 300}});
+        batch.putPage(
+            1,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz, //
+            PageFieldSizes{{32, 128, 196, 256, 12, 99, 1, 300}});
         page_storage->write(std::move(batch));
 
         auto page1 = page_storage->read(1);
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            auto * p = page1.data.begin();
+            const auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -811,7 +828,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            auto * p = page1.data.begin();
+            const auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -830,13 +847,24 @@ try
     {
         WriteBatch batch;
         memset(buf, 0x01, buf_sz);
-        batch.putPage(1, 0, std::make_shared<ReadBufferFromMemory>(buf, buf_sz), buf_sz, PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
-        batch.putPage(2, 0, std::make_shared<ReadBufferFromMemory>(buf, buf_sz), buf_sz, PageFieldSizes{{64, 79, 128, 196, 256, 301}});
+        batch.putPage(
+            1,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz,
+            PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
+        batch.putPage(
+            2,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz,
+            PageFieldSizes{{64, 79, 128, 196, 256, 301}});
         batch.putRefPage(3, 2);
         batch.putRefPage(4, 2);
         try
         {
             FailPointHelper::enableFailPoint(FailPoints::force_set_page_file_write_errno);
+            SCOPE_EXIT({ FailPointHelper::disableFailPoint(FailPoints::force_set_page_file_write_errno); });
             page_storage->write(std::move(batch));
         }
         catch (DB::Exception & e)
@@ -847,7 +875,6 @@ try
         }
     }
 
-    FailPointHelper::disableFailPoint(FailPoints::force_set_page_file_write_errno);
     {
         size_t num_pages = 0;
         page_storage->traverse([&num_pages](const Page &) { num_pages += 1; });
@@ -858,18 +885,19 @@ try
     {
         WriteBatch batch;
         memset(buf, 0x02, buf_sz);
-        batch.putPage(1,
-                      0,
-                      std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
-                      buf_sz, //
-                      PageFieldSizes{{32, 128, 196, 256, 12, 99, 1, 300}});
+        batch.putPage(
+            1,
+            0,
+            std::make_shared<ReadBufferFromMemory>(buf, buf_sz),
+            buf_sz, //
+            PageFieldSizes{{32, 128, 196, 256, 12, 99, 1, 300}});
         page_storage->write(std::move(batch));
 
         auto page1 = page_storage->read(1);
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            auto * p = page1.data.begin();
+            const auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -886,7 +914,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            auto * p = page1.data.begin();
+            const auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -1093,8 +1121,8 @@ TEST_F(PageStorageWith2PagesTest, RemoveReadOnlyFile)
     cfg.blob_heavy_gc_valid_rate = 1.0;
     page_storage = reopenWithConfig(cfg);
 
-    auto blob_file1 = Poco::File(getTemporaryPath() + "/blobfile_1");
-    auto blob_file2 = Poco::File(getTemporaryPath() + "/blobfile_2");
+    auto blob_file1 = Poco::File(getTemporaryPath() + "/blobfile_10");
+    auto blob_file2 = Poco::File(getTemporaryPath() + "/blobfile_20");
     ASSERT_EQ(blob_file1.exists(), true);
     ASSERT_EQ(blob_file2.exists(), false);
 
@@ -1125,8 +1153,8 @@ TEST_F(PageStorageWith2PagesTest, ReuseEmptyFileAfterRestart)
     cfg.blob_heavy_gc_valid_rate = 1.0;
     page_storage = reopenWithConfig(cfg);
 
-    auto blob_file1 = Poco::File(getTemporaryPath() + "/blobfile_1");
-    auto blob_file2 = Poco::File(getTemporaryPath() + "/blobfile_2");
+    auto blob_file1 = Poco::File(getTemporaryPath() + "/blobfile_10");
+    auto blob_file2 = Poco::File(getTemporaryPath() + "/blobfile_20");
     ASSERT_EQ(blob_file1.exists(), true);
     ASSERT_EQ(blob_file2.exists(), false);
 
@@ -1206,7 +1234,9 @@ try
     callbacks.scanner = []() -> ExternalPageCallbacks::PathAndIdsVec {
         return {};
     };
-    callbacks.remover = [&times_remover_called, &test_stage](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> & living_page_ids) -> void {
+    callbacks.remover = [&times_remover_called, &test_stage](
+                            const ExternalPageCallbacks::PathAndIdsVec &,
+                            const std::set<PageIdU64> & living_page_ids) -> void {
         times_remover_called += 1;
         switch (test_stage)
         {
@@ -1303,7 +1333,8 @@ try
         (*ptr) += 1; // mock access the storage inside callback
         return {};
     };
-    callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(ptr)](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> &) -> void {
+    callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(
+                             ptr)](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> &) -> void {
         auto ptr = ptr_weak_ref.lock();
         if (!ptr)
             return;
@@ -1314,9 +1345,7 @@ try
 
     // Start a PageStorage gc and suspend it before clean external page
     auto sp_gc = SyncPointCtl::enableInScope("before_PageStorageImpl::cleanExternalPage_execute_callbacks");
-    auto th_gc = std::async([&]() {
-        page_storage->gcImpl(/*not_skip*/ true, nullptr, nullptr);
-    });
+    auto th_gc = std::async([&]() { page_storage->gcImpl(/*not_skip*/ true, nullptr, nullptr); });
     sp_gc.waitAndPause();
 
     // mock table created while gc is running
@@ -1331,7 +1360,9 @@ try
             (*ptr) += 1; // mock access the storage inside callback
             return {};
         };
-        new_callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(ptr)](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> &) -> void {
+        new_callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(ptr)](
+                                    const ExternalPageCallbacks::PathAndIdsVec &,
+                                    const std::set<PageIdU64> &) -> void {
             auto ptr = ptr_weak_ref.lock();
             if (!ptr)
                 return;
@@ -1362,7 +1393,8 @@ try
         (*ptr) += 1; // mock access the storage inside callback
         return {};
     };
-    callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(ptr)](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> &) -> void {
+    callbacks.remover = [ptr_weak_ref = std::weak_ptr<Int32>(
+                             ptr)](const ExternalPageCallbacks::PathAndIdsVec &, const std::set<PageIdU64> &) -> void {
         auto ptr = ptr_weak_ref.lock();
         if (!ptr)
             return;
@@ -1373,9 +1405,7 @@ try
 
     // Start a PageStorage gc and suspend it before clean external page
     auto sp_gc = SyncPointCtl::enableInScope("before_PageStorageImpl::cleanExternalPage_execute_callbacks");
-    auto th_gc = std::async([&]() {
-        page_storage->gcImpl(/*not_skip*/ true, nullptr, nullptr);
-    });
+    auto th_gc = std::async([&]() { page_storage->gcImpl(/*not_skip*/ true, nullptr, nullptr); });
     sp_gc.waitAndPause();
 
     // mock table dropped while gc is running
@@ -1442,7 +1472,12 @@ try
 
     {
         WriteBatch batch;
-        batch.putPage(1, 0, std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz), buf_sz, PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
+        batch.putPage(
+            1,
+            0,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz,
+            PageFieldSizes{{32, 64, 79, 128, 196, 256, 269}});
         batch.putRefPage(3, 1);
         batch.delPage(1);
         batch.putPage(4, 0, std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz), buf_sz, {});
@@ -1592,7 +1627,7 @@ try
         page_storage->write(std::move(batch));
     }
 
-    auto blob_file = Poco::File(getTemporaryPath() + "/blobfile_1");
+    auto blob_file = Poco::File(getTemporaryPath() + "/blobfile_10");
 
     page_storage = reopenWithConfig(config);
     EXPECT_GT(blob_file.getSize(), 0);
@@ -1710,7 +1745,7 @@ try
     auto done_full_gc = page_storage->gc();
     EXPECT_TRUE(done_full_gc);
 
-    auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, /* force */ true);
+    auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, /* force */ true);
     ASSERT_TRUE(done_snapshot);
 
     {
@@ -1784,7 +1819,7 @@ try
     auto done_full_gc = page_storage->gc();
     EXPECT_TRUE(done_full_gc);
 
-    auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, nullptr, /* force */ true);
+    auto done_snapshot = page_storage->page_directory->tryDumpSnapshot(nullptr, /* force */ true);
     ASSERT_TRUE(done_snapshot);
 
     {
@@ -1795,6 +1830,135 @@ try
     // After restored from disk, we should not see page0 again
     // or it could be an entry pointing to a non-exist BlobFile
     ASSERT_ANY_THROW(page_storage->read(page_id0));
+}
+CATCH
+
+TEST_F(PageStorageTest, WriteEmptyPage)
+try
+{
+    {
+        PageStorageConfig config;
+        config.blob_heavy_gc_valid_rate = 1.0; /// always run full gc
+        page_storage = reopenWithConfig(config);
+    }
+
+    const size_t buf_sz = 1024;
+    char c_buff[buf_sz];
+
+    for (size_t i = 0; i < buf_sz; ++i)
+    {
+        c_buff[i] = i % 0xff;
+    }
+
+    UInt64 tag = 0;
+    PageIdU64 page_id1 = 131;
+    PageIdU64 page_id2 = 132;
+    {
+        WriteBatch batch;
+        batch.putPage(page_id1, tag, "", {}); // empty page
+        page_storage->write(std::move(batch));
+    }
+    {
+        WriteBatch batch;
+        batch.putPage(page_id2, tag, std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz), buf_sz, {});
+        page_storage->write(std::move(batch));
+    }
+
+    {
+        auto page = page_storage->read(page_id1);
+        ASSERT_EQ(page.page_id, page_id1);
+        ASSERT_EQ(page.data.size(), 0);
+    }
+    {
+        auto page = page_storage->read(page_id2);
+        ASSERT_EQ(page.page_id, page_id2);
+        ASSERT_EQ(page.data.size(), buf_sz);
+    }
+
+    // delete empty page
+    {
+        WriteBatch batch;
+        batch.delPage(page_id1);
+        page_storage->write(std::move(batch));
+    }
+
+    {
+        auto page = page_storage->readImpl(TEST_NAMESPACE_ID, page_id1, nullptr, nullptr, /*throw_on_not_exist*/ false);
+        ASSERT_FALSE(page.isValid());
+    }
+    {
+        auto page = page_storage->read(page_id2);
+        ASSERT_EQ(page.page_id, page_id2);
+        ASSERT_EQ(page.data.size(), buf_sz);
+    }
+
+    {
+        PageStorageConfig config;
+        page_storage = reopenWithConfig(config);
+    }
+}
+CATCH
+
+TEST_F(PageStorageTest, RestoreWithEmptyPage)
+try
+{
+    {
+        PageStorageConfig config;
+        config.blob_heavy_gc_valid_rate = 1.0; /// always run full gc
+        page_storage = reopenWithConfig(config);
+    }
+
+    const size_t buf_sz = 1024;
+    char c_buff[buf_sz];
+
+    for (size_t i = 0; i < buf_sz; ++i)
+    {
+        c_buff[i] = i % 0xff;
+    }
+
+    UInt64 tag = 0;
+    PageIdU64 page_id0 = 120;
+    PageIdU64 page_id1 = 131;
+    PageIdU64 page_id2 = 122;
+    {
+        WriteBatch batch;
+        batch.putPage(page_id0, tag, std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz), buf_sz, {});
+        batch.putPage(page_id1, tag, "", {}); // empty page
+        page_storage->write(std::move(batch));
+    }
+    page_storage->freezeDataFiles(); // new write will be written to new BlobFile
+    {
+        WriteBatch batch;
+        batch.putPage(page_id2, tag, std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz), buf_sz, {});
+        page_storage->write(std::move(batch));
+    }
+
+    {
+        auto page = page_storage->read(page_id0);
+        ASSERT_EQ(page.page_id, page_id0);
+        ASSERT_EQ(page.data.size(), buf_sz);
+    }
+    {
+        auto page = page_storage->read(page_id1);
+        ASSERT_EQ(page.page_id, page_id1);
+        ASSERT_EQ(page.data.size(), 0);
+    }
+    {
+        auto page = page_storage->read(page_id2);
+        ASSERT_EQ(page.page_id, page_id2);
+        ASSERT_EQ(page.data.size(), buf_sz);
+    }
+
+    FailPointHelper::enableFailPoint(FailPoints::force_pick_all_blobs_to_full_gc);
+    auto done_full_gc = page_storage->gc();
+    EXPECT_TRUE(done_full_gc);
+
+    // When restoring from disk, we will first restore two non-empty page,
+    // then restore the empty page. No exception should be thrown.
+    {
+        PageStorageConfig config;
+        page_storage = reopenWithConfig(config);
+    }
 }
 CATCH
 

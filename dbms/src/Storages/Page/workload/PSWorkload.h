@@ -34,14 +34,8 @@ template <typename Child>
 class StressWorkloadFunc
 {
 public:
-    static String nameFunc()
-    {
-        return Child::name();
-    }
-    static UInt64 maskFunc()
-    {
-        return Child::mask();
-    }
+    static String nameFunc() { return Child::name(); }
+    static UInt64 maskFunc() { return Child::mask(); }
 };
 
 // Define a workload.
@@ -60,10 +54,7 @@ public:
 
     virtual String desc() { return ""; }
     virtual void run() {}
-    virtual bool verify()
-    {
-        return true;
-    }
+    virtual bool verify() { return true; }
     virtual void onFailed() {}
     virtual void onDumpResult();
 
@@ -92,7 +83,7 @@ protected:
         writers.clear();
         for (size_t i = 0; i < nums_writers; ++i)
         {
-            auto writer = std::make_shared<T>(ps, i, runtime_stat);
+            auto writer = std::make_shared<T>(ps, i, runtime_stat, options.logger);
             if (writer_configure)
             {
                 writer_configure(writer);
@@ -108,7 +99,7 @@ protected:
         readers.clear();
         for (size_t i = 0; i < nums_readers; ++i)
         {
-            auto reader = std::make_shared<T>(ps, i, runtime_stat);
+            auto reader = std::make_shared<T>(ps, i, runtime_stat, options.logger);
             if (reader_configure)
             {
                 reader_configure(reader);
@@ -159,10 +150,7 @@ public:
         return instance;
     }
 
-    void setEnv(const StressEnv & env_)
-    {
-        options = env_;
-    }
+    void setEnv(const StressEnv & env_) { options = env_; }
 
     void reg(const String & name, const UInt64 & mask, const WorkloadCreator workload_creator)
     {
@@ -185,7 +173,7 @@ public:
 
     String toWorkloadSelctedString() const
     {
-        String debug_string = "Selected Workloads : ";
+        String debug_string = "Selected Workloads: ";
         for (const auto & it : funcs)
         {
             if (options.situation_mask & it.first)
@@ -209,11 +197,7 @@ public:
 
     void runWorkload();
 
-    void stopWorkload()
-    {
-        if (running_workload)
-            running_workload->stop();
-    }
+    void stopWorkload();
 
 private:
     StressEnv options;
@@ -226,9 +210,7 @@ void work_load_register()
     PageWorkloadFactory::getInstance().reg(
         Workload::nameFunc(),
         Workload::maskFunc(),
-        [](const StressEnv & opts) -> std::shared_ptr<StressWorkload> {
-            return std::make_shared<Workload>(opts);
-        });
+        [](const StressEnv & opts) -> std::shared_ptr<StressWorkload> { return std::make_shared<Workload>(opts); });
 }
 
 } // namespace DB::PS::tests

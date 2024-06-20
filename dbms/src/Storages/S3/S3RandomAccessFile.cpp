@@ -17,17 +17,16 @@
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
-#include <Encryption/RandomAccessFile.h>
+#include <IO/BaseFile/MemoryRandomAccessFile.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/S3/FileCache.h>
-#include <Storages/S3/MemoryRandomAccessFile.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <aws/s3/model/GetObjectRequest.h>
+#include <common/likely.h>
 
-#include <chrono>
 #include <optional>
-#include <thread>
 
 namespace ProfileEvents
 {
@@ -38,16 +37,13 @@ extern const Event S3GetObjectRetry;
 
 namespace DB::S3
 {
-S3RandomAccessFile::S3RandomAccessFile(
-    std::shared_ptr<TiFlashS3Client> client_ptr_,
-    const String & remote_fname_,
-    std::optional<std::pair<UInt64, UInt64>> offset_and_size_in_object_)
+S3RandomAccessFile::S3RandomAccessFile(std::shared_ptr<TiFlashS3Client> client_ptr_, const String & remote_fname_)
     : client_ptr(std::move(client_ptr_))
     , remote_fname(remote_fname_)
-    , offset_and_size_in_object(offset_and_size_in_object_)
     , cur_offset(0)
     , log(Logger::get(remote_fname))
 {
+    RUNTIME_CHECK(client_ptr != nullptr);
     RUNTIME_CHECK(initialize(), remote_fname);
 }
 
@@ -90,9 +86,11 @@ ssize_t S3RandomAccessFile::readImpl(char * buf, size_t size)
     {
         LOG_ERROR(
             log,
-            "Cannot read from istream, gcount={}, eof={}, cur_offset={}, content_length={}, errmsg={}, cost={}ns",
+            "Cannot read from istream, size={} gcount={} state=0x{:02X} cur_offset={} content_length={} errmsg={} "
+            "cost={}ns",
+            size,
             gcount,
-            istr.eof(),
+            istr.rdstate(),
             cur_offset,
             content_length,
             strerror(errno),
@@ -173,16 +171,7 @@ off_t S3RandomAccessFile::seekImpl(off_t offset_, int whence)
 
 String S3RandomAccessFile::readRangeOfObject()
 {
-    if (offset_and_size_in_object)
-    {
-        auto start = offset_and_size_in_object->first + cur_offset;
-        auto end = offset_and_size_in_object->first + offset_and_size_in_object->second - 1;
-        return fmt::format("bytes={}-{}", start, end);
-    }
-    else
-    {
-        return fmt::format("bytes={}-", cur_offset);
-    }
+    return fmt::format("bytes={}-", cur_offset);
 }
 
 bool S3RandomAccessFile::initialize()
@@ -217,6 +206,10 @@ bool S3RandomAccessFile::initialize()
         GET_METRIC(tiflash_storage_s3_request_seconds, type_get_object).Observe(sw.elapsedSeconds());
         break;
     }
+    if (cur_retry >= max_retry && !request_succ)
+    {
+        LOG_INFO(log, "S3 GetObject timeout: {}, max_retry={}", remote_fname, max_retry);
+    }
     return request_succ;
 }
 
@@ -225,7 +218,9 @@ inline static RandomAccessFilePtr tryOpenCachedFile(const String & remote_fname,
     try
     {
         auto * file_cache = FileCache::instance();
-        return file_cache != nullptr ? file_cache->getRandomAccessFile(S3::S3FilenameView::fromKey(remote_fname), filesize) : nullptr;
+        return file_cache != nullptr
+            ? file_cache->getRandomAccessFile(S3::S3FilenameView::fromKey(remote_fname), filesize)
+            : nullptr;
     }
     catch (...)
     {
@@ -234,77 +229,33 @@ inline static RandomAccessFilePtr tryOpenCachedFile(const String & remote_fname,
     }
 }
 
-inline static RandomAccessFilePtr createFromNormalFile(const String & remote_fname, std::optional<UInt64> filesize)
+inline static RandomAccessFilePtr createFromNormalFile(
+    const String & remote_fname,
+    std::optional<UInt64> filesize,
+    std::optional<DM::ScanContextPtr> scan_context)
 {
     auto file = tryOpenCachedFile(remote_fname, filesize);
     if (file != nullptr)
     {
+        if (scan_context.has_value())
+            scan_context.value()->disagg_read_cache_hit_size += filesize.value();
         return file;
     }
+    if (scan_context.has_value())
+        scan_context.value()->disagg_read_cache_miss_size += filesize.value();
     auto & ins = S3::ClientFactory::instance();
     return std::make_shared<S3RandomAccessFile>(ins.sharedTiFlashClient(), remote_fname);
 }
 
-inline static String readMergedSubFilesFromS3(const S3RandomAccessFile::ReadFileInfo & read_file_info_)
-{
-    auto & ins = S3::ClientFactory::instance();
-    auto s3_key = S3::S3FilenameView::fromKeyWithPrefix(read_file_info_.merged_filename).toFullKey();
-    auto s3_file = std::make_shared<S3RandomAccessFile>(ins.sharedTiFlashClient(), s3_key, std::pair{read_file_info_.read_merged_offset, read_file_info_.read_merged_size});
-    String s;
-    s.resize(read_file_info_.read_merged_size);
-    auto n = s3_file->read(s.data(), read_file_info_.read_merged_size);
-    RUNTIME_CHECK(n == static_cast<Int64>(read_file_info_.read_merged_size), read_file_info_.merged_filename, read_file_info_.read_merged_offset, read_file_info_.read_merged_size, n);
-    return s;
-}
-
-inline static std::optional<String> readMergedSubFilesFromCachedFile(const S3RandomAccessFile::ReadFileInfo & read_file_info_)
-{
-    auto s3_key = S3::S3FilenameView::fromKeyWithPrefix(read_file_info_.merged_filename).toFullKey();
-    auto cached_file = tryOpenCachedFile(s3_key, read_file_info_.size);
-    if (cached_file != nullptr)
-    {
-        String data;
-        data.resize(read_file_info_.read_merged_size);
-        auto n = cached_file->pread(data.data(), read_file_info_.read_merged_size, read_file_info_.read_merged_offset);
-        RUNTIME_CHECK(n == static_cast<Int64>(read_file_info_.read_merged_size), read_file_info_.merged_filename, read_file_info_.read_merged_size, n);
-        return data;
-    }
-    else
-    {
-        return std::nullopt;
-    }
-}
-
-inline static String readMergedSubfiles(const S3RandomAccessFile::ReadFileInfo & read_file_info_)
-{
-    if (read_file_info_.read_merged_size == 0)
-    {
-        return {};
-    }
-
-    auto data_from_cache = readMergedSubFilesFromCachedFile(read_file_info_);
-    if (data_from_cache)
-    {
-        return *data_from_cache;
-    }
-    return readMergedSubFilesFromS3(read_file_info_);
-}
-
-inline static RandomAccessFilePtr createFromMergedFile(const String & remote_fname, const S3RandomAccessFile::ReadFileInfo & read_file_info_)
-{
-    return std::make_shared<MemoryRandomAccessFile>(remote_fname, readMergedSubfiles(read_file_info_));
-}
-
 RandomAccessFilePtr S3RandomAccessFile::create(const String & remote_fname)
 {
-    bool read_from_merged_file = read_file_info && !read_file_info->merged_filename.empty();
-    if (read_from_merged_file)
-    {
-        return createFromMergedFile(remote_fname, *read_file_info);
-    }
+    if (read_file_info)
+        return createFromNormalFile(
+            remote_fname,
+            std::optional<UInt64>(read_file_info->size),
+            read_file_info->scan_context != nullptr ? std::optional<DM::ScanContextPtr>(read_file_info->scan_context)
+                                                    : std::nullopt);
     else
-    {
-        return createFromNormalFile(remote_fname, read_file_info ? std::optional<UInt64>(read_file_info->size) : std::nullopt);
-    }
+        return createFromNormalFile(remote_fname, std::nullopt, std::nullopt);
 }
 } // namespace DB::S3

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/ReadBufferFromMemory.h>
+#include <IO/Buffer/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/ConsoleChannel.h>
@@ -37,7 +37,7 @@ TEST(LegacyCompactorTest, WriteMultipleBatchRead)
 try
 {
     PageStorageConfig config;
-    Poco::Logger * log = &Poco::Logger::get("LegacyCompactor_test");
+    auto log = Logger::get("LegacyCompactor_test");
 
     PageEntriesVersionSetWithDelta original_version("test", config.version_set_config, log);
 
@@ -174,7 +174,8 @@ try
     const FileProviderPtr file_provider = ctx->getFileProvider();
     StoragePathPool spool = ctx->getPathPool().withTable("test", "t", false);
     auto delegator = spool.getPSDiskDelegatorSingle("meta");
-    auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
+    auto bkg_pool
+        = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-", std::make_shared<JointThreadInfoJeallocMap>());
     PageStorage storage("compact_test", delegator, PageStorageConfig{}, file_provider, *bkg_pool);
 
     PageStorage::ListPageFilesOption opt;
@@ -190,14 +191,18 @@ try
     ASSERT_EQ(page_files_compacted.size(), 4UL);
 
     // TODO:
-    PageFile page_file
-        = PageFile::openPageFileForRead(7, 0, delegator->defaultPath(), file_provider, PageFile::Type::Checkpoint, storage.page_file_log);
+    PageFile page_file = PageFile::openPageFileForRead(
+        7,
+        0,
+        delegator->defaultPath(),
+        file_provider,
+        PageFile::Type::Checkpoint,
+        storage.page_file_log);
     ASSERT_TRUE(page_file.isExist());
 
     PageStorage::MetaMergingQueue mergine_queue;
     {
-        if (auto reader = PageFile::MetaMergingReader::createFrom(page_file, ctx->getReadLimiter());
-            reader->hasNext())
+        if (auto reader = PageFile::MetaMergingReader::createFrom(page_file, ctx->getReadLimiter()); reader->hasNext())
         {
             reader->moveNext();
             mergine_queue.push(std::move(reader));

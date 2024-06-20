@@ -13,11 +13,29 @@
 // limitations under the License.
 
 #include <Flash/Coprocessor/JoinInterpreterHelper.h>
+#include <Flash/Mpp/MPPTaskId.h>
 #include <Interpreters/Context.h>
+#include <TestUtils/FailPointUtils.h>
 #include <TestUtils/MPPTaskTestUtils.h>
 
 namespace DB
 {
+namespace FailPoints
+{
+extern const char exception_before_mpp_register_non_root_mpp_task[];
+extern const char exception_before_mpp_make_non_root_mpp_task_active[];
+extern const char exception_before_mpp_register_root_mpp_task[];
+extern const char exception_before_mpp_make_root_mpp_task_active[];
+extern const char exception_before_mpp_register_tunnel_for_non_root_mpp_task[];
+extern const char exception_before_mpp_register_tunnel_for_root_mpp_task[];
+extern const char exception_during_mpp_register_tunnel_for_non_root_mpp_task[];
+extern const char exception_before_mpp_non_root_task_run[];
+extern const char exception_before_mpp_root_task_run[];
+extern const char exception_during_mpp_non_root_task_run[];
+extern const char exception_during_mpp_root_task_run[];
+extern const char exception_during_query_run[];
+} // namespace FailPoints
+
 namespace tests
 {
 LoggerPtr MPPTaskTestUtils::log_ptr = nullptr;
@@ -34,7 +52,9 @@ public:
         context.addMockTable(
             {"test_db", "test_table_1"},
             {{"s1", TiDB::TP::TypeLong}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeString}},
-            {toNullableVec<Int32>("s1", {1, {}, 10000000, 10000000}), toNullableVec<String>("s2", {"apple", {}, "banana", "test"}), toNullableVec<String>("s3", {"apple", {}, "banana", "test"})});
+            {toNullableVec<Int32>("s1", {1, {}, 10000000, 10000000}),
+             toNullableVec<String>("s2", {"apple", {}, "banana", "test"}),
+             toNullableVec<String>("s3", {"apple", {}, "banana", "test"})});
 
         /// agg table with 200 rows
         std::vector<std::optional<TypeTraits<int>::FieldType>> agg_s1(200);
@@ -52,17 +72,21 @@ public:
         context.addMockTable(
             {"test_db", "test_table_2"},
             {{"s1", TiDB::TP::TypeLong}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeString}},
-            {toNullableVec<Int32>("s1", agg_s1), toNullableVec<String>("s2", agg_s2), toNullableVec<String>("s3", agg_s3)});
+            {toNullableVec<Int32>("s1", agg_s1),
+             toNullableVec<String>("s2", agg_s2),
+             toNullableVec<String>("s3", agg_s3)});
 
         /// for join
         context.addMockTable(
             {"test_db", "l_table"},
             {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s", {"banana", {}, "banana"}), toNullableVec<String>("join_c", {"apple", {}, "banana"})});
+            {toNullableVec<String>("s", {"banana", {}, "banana"}),
+             toNullableVec<String>("join_c", {"apple", {}, "banana"})});
         context.addMockTable(
             {"test_db", "r_table"},
             {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s", {"banana", {}, "banana"}), toNullableVec<String>("join_c", {"apple", {}, "banana"})});
+            {toNullableVec<String>("s", {"banana", {}, "banana"}),
+             toNullableVec<String>("join_c", {"apple", {}, "banana"})});
 
         /// join left table with 200 rows
         std::vector<std::optional<TypeTraits<int>::FieldType>> join_s1(200);
@@ -80,7 +104,9 @@ public:
         context.addMockTable(
             {"test_db", "l_table_2"},
             {{"s1", TiDB::TP::TypeLong}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeString}},
-            {toNullableVec<Int32>("s1", agg_s1), toNullableVec<String>("s2", agg_s2), toNullableVec<String>("s3", agg_s3)});
+            {toNullableVec<Int32>("s1", agg_s1),
+             toNullableVec<String>("s2", agg_s2),
+             toNullableVec<String>("s3", agg_s3)});
 
         /// join right table with 100 rows
         std::vector<std::optional<TypeTraits<int>::FieldType>> join_r_s1(100);
@@ -98,7 +124,49 @@ public:
         context.addMockTable(
             {"test_db", "r_table_2"},
             {{"s1", TiDB::TP::TypeLong}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeString}},
-            {toNullableVec<Int32>("s1", join_r_s1), toNullableVec<String>("s2", join_r_s2), toNullableVec<String>("s3", join_r_s3)});
+            {toNullableVec<Int32>("s1", join_r_s1),
+             toNullableVec<String>("s2", join_r_s2),
+             toNullableVec<String>("s3", join_r_s3)});
+    }
+
+    void addOneGather(
+        std::vector<std::thread> & running_queries,
+        std::vector<MPPGatherId> & gather_ids,
+        const DAGProperties & properties)
+    {
+        MPPGatherId gather_id(
+            properties.gather_id,
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        gather_ids.push_back(gather_id);
+        running_queries.emplace_back([&, properties, gather_id]() {
+            BlockInputStreamPtr stream;
+            try
+            {
+                std::function<DAGRequestBuilder()> gen_builder = [&]() {
+                    return context.scan("test_db", "l_table")
+                        .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
+                        .project({col("max(l_table.s)"), col("l_table.s")});
+                };
+                QueryTasks tasks = prepareMPPTasks(gen_builder, properties);
+                executeProblematicMPPTasks(tasks, properties, stream);
+            }
+            catch (...)
+            {
+                MockComputeServerManager::instance().cancelGather(gather_id);
+                EXPECT_TRUE(assertGatherCancelled(gather_id));
+            }
+        });
+    }
+    void addOneQuery(size_t query_ts, std::vector<std::thread> & running_queries, std::vector<MPPGatherId> & gather_ids)
+    {
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum(), 1, 1, query_ts);
+        addOneGather(running_queries, gather_ids, properties);
     }
 };
 
@@ -109,8 +177,7 @@ public:
     {                                              \
         enablePipeline(enable_pipeline);
 
-#define WRAP_FOR_SERVER_TEST_END \
-    }
+#define WRAP_FOR_SERVER_TEST_END }
 
 TEST_F(ComputeServerRunner, simpleExchange)
 try
@@ -119,10 +186,7 @@ try
     for (size_t i = 0; i < s1_col.size(); ++i)
         s1_col[i] = i;
     auto expected_cols = {toNullableVec<Int32>("s1", s1_col)};
-    context.addMockTable(
-        {"test_db", "big_table"},
-        {{"s1", TiDB::TP::TypeLong}},
-        expected_cols);
+    context.addMockTable({"test_db", "big_table"}, {{"s1", TiDB::TP::TypeLong}}, expected_cols);
 
     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(100)));
 
@@ -137,9 +201,7 @@ exchange_sender_2 | type:PassThrough, {<0, Long>}
  project_1 | {<0, Long>}
   table_scan_0 | {<0, Long>})"};
             ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-                context
-                    .scan("test_db", "big_table")
-                    .project({"s1"}),
+                context.scan("test_db", "big_table").project({"s1"}),
                 expected_strings,
                 expected_cols);
         }
@@ -153,8 +215,7 @@ exchange_sender_4 | type:PassThrough, {<0, Long>}
  project_3 | {<0, Long>}
   exchange_receiver_2 | type:PassThrough, {<0, Long>})"};
             ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-                context
-                    .scan("test_db", "big_table")
+                context.scan("test_db", "big_table")
                     .exchangeSender(tipb::ExchangeType::PassThrough)
                     .exchangeReceiver("recv", {{"s1", TiDB::TP::TypeLong}})
                     .project({"s1"}),
@@ -171,8 +232,7 @@ exchange_sender_4 | type:PassThrough, {<0, Long>}
  project_3 | {<0, Long>}
   exchange_receiver_2 | type:Broadcast, {<0, Long>})"};
             ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-                context
-                    .scan("test_db", "big_table")
+                context.scan("test_db", "big_table")
                     .exchangeSender(tipb::ExchangeType::Broadcast)
                     .exchangeReceiver("recv", {{"s1", TiDB::TP::TypeLong}})
                     .project({"s1"}),
@@ -202,8 +262,7 @@ exchange_sender_4 | type:PassThrough, {<0, Long>}
         for (uint64_t stream_count : fine_grained_shuffle_stream_count)
         {
             ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-                context
-                    .scan("test_db", "big_table")
+                context.scan("test_db", "big_table")
                     .exchangeSender(tipb::ExchangeType::Hash, {"test_db.big_table.s1"}, stream_count)
                     .exchangeReceiver("recv", {{"s1", TiDB::TP::TypeLong}}, stream_count)
                     .project({"s1"}),
@@ -262,8 +321,7 @@ exchange_sender_3 | type:PassThrough, {<0, Long>}
         auto expected_cols = {toNullableVec<Int32>({1, {}, 10000000, 10000000})};
 
         ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-            context
-                .scan("test_db", "test_table_1")
+            context.scan("test_db", "test_table_1")
                 .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
                 .project({"max(s1)"}),
             expected_strings,
@@ -272,8 +330,7 @@ exchange_sender_3 | type:PassThrough, {<0, Long>}
 
     {
         auto properties = getDAGPropertiesForTest(1);
-        auto tasks = context
-                         .scan("test_db", "test_table_1")
+        auto tasks = context.scan("test_db", "test_table_1")
                          .aggregation({Count(col("s1"))}, {})
                          .project({"count(s1)"})
                          .buildMPPTasks(context, properties);
@@ -303,11 +360,11 @@ try
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(3);
     {
-        auto expected_cols = {
-            toNullableVec<String>({{}, "banana", "banana"}),
-            toNullableVec<String>({{}, "apple", "banana"}),
-            toNullableVec<String>({{}, "banana", "banana"}),
-            toNullableVec<String>({{}, "apple", "banana"})};
+        auto expected_cols
+            = {toNullableVec<String>({{}, "banana", "banana"}),
+               toNullableVec<String>({{}, "apple", "banana"}),
+               toNullableVec<String>({{}, "banana", "banana"}),
+               toNullableVec<String>({{}, "apple", "banana"})};
 
         std::vector<String> expected_strings = {
             R"(exchange_sender_5 | type:Hash, {<0, String>, <1, String>}
@@ -335,17 +392,16 @@ try
   exchange_receiver_6 | type:PassThrough, {<0, String>, <1, String>}
   exchange_receiver_7 | type:PassThrough, {<0, String>, <1, String>})"};
 
-        ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(context
-                                                 .scan("test_db", "l_table")
-                                                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
-                                             expected_strings,
-                                             expected_cols);
+        ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
+            context.scan("test_db", "l_table")
+                .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
+            expected_strings,
+            expected_cols);
     }
 
     {
         auto properties = getDAGPropertiesForTest(1);
-        auto tasks = context
-                         .scan("test_db", "l_table")
+        auto tasks = context.scan("test_db", "l_table")
                          .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
                          .buildMPPTasks(context, properties);
 
@@ -416,13 +472,10 @@ try
   aggregation_3 | group_by: {<1, String>}, agg_func: {max(<0, String>)}
    exchange_receiver_8 | type:PassThrough, {<0, String>, <1, String>})"};
 
-        auto expected_cols = {
-            toNullableVec<String>({{}, "banana"}),
-            toNullableVec<String>({{}, "banana"})};
+        auto expected_cols = {toNullableVec<String>({{}, "banana"}), toNullableVec<String>({{}, "banana"})};
 
         ASSERT_MPPTASK_EQUAL_PLAN_AND_RESULT(
-            context
-                .scan("test_db", "l_table")
+            context.scan("test_db", "l_table")
                 .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
                 .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
                 .project({col("max(l_table.s)"), col("l_table.s")}),
@@ -432,8 +485,7 @@ try
 
     {
         auto properties = getDAGPropertiesForTest(1);
-        auto tasks = context
-                         .scan("test_db", "l_table")
+        auto tasks = context.scan("test_db", "l_table")
                          .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
                          .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
                          .project({col("max(l_table.s)"), col("l_table.s")})
@@ -473,40 +525,41 @@ try
 
     context.addMockTable(
         {"test_db", "test_table_2"},
-        {{"i1", TiDB::TP::TypeLong}, {"i2", TiDB::TP::TypeLong}, {"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeString}, {"s4", TiDB::TP::TypeString}, {"s5", TiDB::TP::TypeString}},
-        {toNullableVec<Int32>("i1", {0, 0, 0}), toNullableVec<Int32>("i2", {1, 1, 1}), toNullableVec<String>("s1", {"1", "9", "8"}), toNullableVec<String>("s2", {"1", "9", "8"}), toNullableVec<String>("s3", {"4", "9", "99"}), toNullableVec<String>("s4", {"4", "9", "999"}), toNullableVec<String>("s5", {"4", "9", "9999"})});
+        {{"i1", TiDB::TP::TypeLong},
+         {"i2", TiDB::TP::TypeLong},
+         {"s1", TiDB::TP::TypeString},
+         {"s2", TiDB::TP::TypeString},
+         {"s3", TiDB::TP::TypeString},
+         {"s4", TiDB::TP::TypeString},
+         {"s5", TiDB::TP::TypeString}},
+        {toNullableVec<Int32>("i1", {0, 0, 0}),
+         toNullableVec<Int32>("i2", {1, 1, 1}),
+         toNullableVec<String>("s1", {"1", "9", "8"}),
+         toNullableVec<String>("s2", {"1", "9", "8"}),
+         toNullableVec<String>("s3", {"4", "9", "99"}),
+         toNullableVec<String>("s4", {"4", "9", "999"}),
+         toNullableVec<String>("s5", {"4", "9", "9999"})});
     std::vector<String> res{"9", "9", "99", "999", "9999"};
     std::vector<String> max_cols{"s1", "s2", "s3", "s4", "s5"};
     for (size_t i = 0; i < 1; ++i)
     {
         {
-            auto request = context
-                               .scan("test_db", "test_table_2")
-                               .aggregation({Max(col(max_cols[i]))}, {col("i1")});
-            auto expected_cols = {
-                toNullableVec<String>({res[i]}),
-                toNullableVec<Int32>({{0}})};
+            auto request = context.scan("test_db", "test_table_2").aggregation({Max(col(max_cols[i]))}, {col("i1")});
+            auto expected_cols = {toNullableVec<String>({res[i]}), toNullableVec<Int32>({{0}})};
             ASSERT_COLUMNS_EQ_UR(expected_cols, buildAndExecuteMPPTasks(request));
         }
 
         {
-            auto request = context
-                               .scan("test_db", "test_table_2")
-                               .aggregation({Max(col(max_cols[i]))}, {col("i2")});
-            auto expected_cols = {
-                toNullableVec<String>({res[i]}),
-                toNullableVec<Int32>({{1}})};
+            auto request = context.scan("test_db", "test_table_2").aggregation({Max(col(max_cols[i]))}, {col("i2")});
+            auto expected_cols = {toNullableVec<String>({res[i]}), toNullableVec<Int32>({{1}})};
             ASSERT_COLUMNS_EQ_UR(expected_cols, buildAndExecuteMPPTasks(request));
         }
 
         {
-            auto request = context
-                               .scan("test_db", "test_table_2")
-                               .aggregation({Max(col(max_cols[i]))}, {col("i1"), col("i2")});
-            auto expected_cols = {
-                toNullableVec<String>({res[i]}),
-                toNullableVec<Int32>({{0}}),
-                toNullableVec<Int32>({{1}})};
+            auto request
+                = context.scan("test_db", "test_table_2").aggregation({Max(col(max_cols[i]))}, {col("i1"), col("i2")});
+            auto expected_cols
+                = {toNullableVec<String>({res[i]}), toNullableVec<Int32>({{0}}), toNullableVec<Int32>({{1}})};
             ASSERT_COLUMNS_EQ_UR(expected_cols, buildAndExecuteMPPTasks(request));
         }
     }
@@ -519,14 +572,54 @@ try
 {
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(4);
+    setCancelTest();
     {
-        auto [query_id, res] = prepareMPPStreams(context
-                                                     .scan("test_db", "test_table_1")
-                                                     .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
-                                                     .project({"max(s1)"}));
-        EXPECT_TRUE(assertQueryActive(query_id));
-        MockComputeServerManager::instance().cancelQuery(query_id);
-        EXPECT_TRUE(assertQueryCancelled(query_id));
+        /// case 1, cancel after dispatch MPPTasks
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id(
+            properties.gather_id,
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto res = prepareMPPStreams(
+            context.scan("test_db", "test_table_1")
+                .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
+                .project({"max(s1)"}),
+            properties);
+        EXPECT_TRUE(assertQueryActive(gather_id.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id);
+        EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
+    }
+    {
+        /// case 2, cancel before dispatch MPPTasks
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id(
+            properties.gather_id,
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto tasks = prepareMPPTasks(
+            context.scan("test_db", "test_table_1")
+                .aggregation({Max(col("s1"))}, {col("s2"), col("s3")})
+                .project({"max(s1)"}),
+            properties);
+        EXPECT_TRUE(!assertQueryActive(gather_id.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id);
+        try
+        {
+            executeMPPTasks(tasks, properties);
+        }
+        catch (...)
+        {}
+        EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
     }
     WRAP_FOR_SERVER_TEST_END
 }
@@ -538,12 +631,24 @@ try
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(4);
     {
-        auto [query_id, res] = prepareMPPStreams(context
-                                                     .scan("test_db", "l_table")
-                                                     .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}));
-        EXPECT_TRUE(assertQueryActive(query_id));
-        MockComputeServerManager::instance().cancelQuery(query_id);
-        EXPECT_TRUE(assertQueryCancelled(query_id));
+        setCancelTest();
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id(
+            properties.gather_id,
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto res = prepareMPPStreams(
+            context.scan("test_db", "l_table")
+                .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
+            properties);
+        EXPECT_TRUE(assertQueryActive(gather_id.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id);
+        EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
     }
     WRAP_FOR_SERVER_TEST_END
 }
@@ -555,14 +660,26 @@ try
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(4);
     {
-        auto [query_id, _] = prepareMPPStreams(context
-                                                   .scan("test_db", "l_table")
-                                                   .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
-                                                   .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
-                                                   .project({col("max(l_table.s)"), col("l_table.s")}));
-        EXPECT_TRUE(assertQueryActive(query_id));
-        MockComputeServerManager::instance().cancelQuery(query_id);
-        EXPECT_TRUE(assertQueryCancelled(query_id));
+        setCancelTest();
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id(
+            properties.gather_id,
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto stream = prepareMPPStreams(
+            context.scan("test_db", "l_table")
+                .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
+                .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
+                .project({col("max(l_table.s)"), col("l_table.s")}),
+            properties);
+        EXPECT_TRUE(assertQueryActive(gather_id.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id);
+        EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
     }
     WRAP_FOR_SERVER_TEST_END
 }
@@ -573,40 +690,84 @@ try
 {
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(4);
+    setCancelTest();
     {
-        auto [query_id1, res1] = prepareMPPStreams(context
-                                                       .scan("test_db", "l_table")
-                                                       .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}));
-        auto [query_id2, res2] = prepareMPPStreams(context
-                                                       .scan("test_db", "l_table")
-                                                       .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
-                                                       .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
-                                                       .project({col("max(l_table.s)"), col("l_table.s")}));
+        auto properties1 = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id1(
+            properties1.gather_id,
+            properties1.query_ts,
+            properties1.local_query_id,
+            properties1.server_id,
+            properties1.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto res1 = prepareMPPStreams(
+            context.scan("test_db", "l_table")
+                .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
+            properties1);
+        auto properties2 = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPGatherId gather_id2(
+            properties2.gather_id,
+            properties2.query_ts,
+            properties2.local_query_id,
+            properties2.server_id,
+            properties2.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        auto res2 = prepareMPPStreams(
+            context.scan("test_db", "l_table")
+                .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
+                .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
+                .project({col("max(l_table.s)"), col("l_table.s")}),
+            properties2);
 
-        EXPECT_TRUE(assertQueryActive(query_id1));
-        MockComputeServerManager::instance().cancelQuery(query_id1);
-        EXPECT_TRUE(assertQueryCancelled(query_id1));
+        EXPECT_TRUE(assertQueryActive(gather_id1.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id1);
+        EXPECT_TRUE(assertQueryCancelled(gather_id1.query_id));
 
-        EXPECT_TRUE(assertQueryActive(query_id2));
-        MockComputeServerManager::instance().cancelQuery(query_id2);
-        EXPECT_TRUE(assertQueryCancelled(query_id2));
+        EXPECT_TRUE(assertQueryActive(gather_id2.query_id));
+        MockComputeServerManager::instance().cancelGather(gather_id2);
+        EXPECT_TRUE(assertQueryCancelled(gather_id2.query_id));
     }
 
     // start 10 queries
     {
-        std::vector<std::tuple<MPPQueryId, std::vector<BlockInputStreamPtr>>> queries;
-        for (size_t i = 0; i < 10; ++i)
+        size_t query_num = 10;
+        std::vector<std::tuple<MPPGatherId, BlockInputStreamPtr>> queries;
+        for (size_t i = 0; i < query_num; ++i)
         {
-            queries.push_back(prepareMPPStreams(context
-                                                    .scan("test_db", "l_table")
-                                                    .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})));
+            auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+            MPPGatherId gather_id(
+                properties.gather_id,
+                properties.query_ts,
+                properties.local_query_id,
+                properties.server_id,
+                properties.start_ts,
+                /*resource_group_name=*/"",
+                0,
+                "");
+            queries.push_back(std::make_tuple(
+                gather_id,
+                prepareMPPStreams(
+                    context.scan("test_db", "l_table")
+                        .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")}),
+                    properties)));
         }
-        for (size_t i = 0; i < 10; ++i)
+
         {
-            auto query_id = std::get<0>(queries[i]);
-            EXPECT_TRUE(assertQueryActive(query_id));
-            MockComputeServerManager::instance().cancelQuery(query_id);
-            EXPECT_TRUE(assertQueryCancelled(query_id));
+            auto thread_mgr = newThreadManager();
+            for (size_t i = 0; i < query_num; ++i)
+            {
+                auto gather_id = std::get<0>(queries[i]);
+                thread_mgr->schedule(false, "test_cancel", [=]() {
+                    EXPECT_TRUE(assertQueryActive(gather_id.query_id));
+                    MockComputeServerManager::instance().cancelGather(gather_id);
+                    EXPECT_TRUE(assertQueryCancelled(gather_id.query_id));
+                });
+            }
+            thread_mgr->wait();
         }
     }
     WRAP_FOR_SERVER_TEST_END
@@ -620,13 +781,10 @@ try
     WRAP_FOR_SERVER_TEST_BEGIN
     startServers(1);
     {
-        auto request = context
-                           .scan("test_db", "l_table")
-                           .build(context);
+        auto request = context.scan("test_db", "l_table").build(context);
 
-        auto expected_cols = {
-            toNullableVec<String>({{"banana", {}, "banana"}}),
-            toNullableVec<String>({{"apple", {}, "banana"}})};
+        auto expected_cols
+            = {toNullableVec<String>({{"banana", {}, "banana"}}), toNullableVec<String>({{"apple", {}, "banana"}})};
         ASSERT_COLUMNS_EQ_UR(expected_cols, executeCoprocessorTask(request));
     }
     WRAP_FOR_SERVER_TEST_END
@@ -655,18 +813,16 @@ try
     for (auto join_type : join_types)
     {
         auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
-        auto request = context
-                           .scan("test_db", "l_table_2")
+        auto request = context.scan("test_db", "l_table_2")
                            .join(context.scan("test_db", "r_table_2"), join_type, {col("s1"), col("s2")}, disable)
                            .project({col("l_table_2.s1"), col("l_table_2.s2"), col("l_table_2.s3")});
         const auto expected_cols = buildAndExecuteMPPTasks(request);
 
-        auto request2 = context
-                            .scan("test_db", "l_table_2")
+        auto request2 = context.scan("test_db", "l_table_2")
                             .join(context.scan("test_db", "r_table_2"), join_type, {col("s1"), col("s2")}, enable)
                             .project({col("l_table_2.s1"), col("l_table_2.s2"), col("l_table_2.s3")});
         auto tasks = request2.buildMPPTasks(context, properties);
-        const auto actual_cols = executeMPPTasks(tasks, properties, MockComputeServerManager::instance().getServerConfigMap());
+        const auto actual_cols = executeMPPTasks(tasks, properties);
         ASSERT_COLUMNS_EQ_UR(expected_cols, actual_cols);
     }
     WRAP_FOR_SERVER_TEST_END
@@ -683,19 +839,358 @@ try
     constexpr uint64_t disable = 0;
     {
         auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
-        auto request = context
-                           .scan("test_db", "test_table_2")
-                           .aggregation({Max(col("s3"))}, {col("s1"), col("s2")}, disable);
+        auto request
+            = context.scan("test_db", "test_table_2").aggregation({Max(col("s3"))}, {col("s1"), col("s2")}, disable);
         const auto expected_cols = buildAndExecuteMPPTasks(request);
 
-        auto request2 = context
-                            .scan("test_db", "test_table_2")
-                            .aggregation({Max(col("s3"))}, {col("s1"), col("s2")}, enable);
+        auto request2
+            = context.scan("test_db", "test_table_2").aggregation({Max(col("s3"))}, {col("s1"), col("s2")}, enable);
         auto tasks = request2.buildMPPTasks(context, properties);
-        const auto actual_cols = executeMPPTasks(tasks, properties, MockComputeServerManager::instance().getServerConfigMap());
+        const auto actual_cols = executeMPPTasks(tasks, properties);
         ASSERT_COLUMNS_EQ_UR(expected_cols, actual_cols);
     }
     WRAP_FOR_SERVER_TEST_END
+}
+CATCH
+
+TEST_F(ComputeServerRunner, randomFailpointForPipeline)
+try
+{
+    enablePipeline(true);
+    startServers(3);
+    std::vector<String> failpoints{
+        "random_pipeline_model_task_run_failpoint-0.8",
+        "random_pipeline_model_task_construct_failpoint-1.0",
+        "random_pipeline_model_event_schedule_failpoint-1.0",
+        // Because the mock table scan will always output data, there will be no event triggering decActiveRefCount, so the query will not terminate.
+        // "random_pipeline_model_event_finish_failpoint-0.99",
+        "random_pipeline_model_operator_run_failpoint-0.8",
+        "random_pipeline_model_cancel_failpoint-0.8",
+        "random_pipeline_model_execute_prefix_failpoint-1.0",
+        "random_pipeline_model_execute_suffix_failpoint-1.0"};
+    for (const auto & failpoint : failpoints)
+    {
+        auto config_str = fmt::format("[flash]\nrandom_fail_points = \"{}\"", failpoint);
+        initRandomFailPoint(config_str);
+        auto properties = DB::tests::getDAGPropertiesForTest(serverNum());
+        MPPQueryId query_id(
+            properties.query_ts,
+            properties.local_query_id,
+            properties.server_id,
+            properties.start_ts,
+            /*resource_group_name=*/"",
+            0,
+            "");
+        try
+        {
+            BlockInputStreamPtr tmp = prepareMPPStreams(
+                context.scan("test_db", "l_table")
+                    .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
+                    .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
+                    .project({col("max(l_table.s)"), col("l_table.s")}),
+                properties);
+        }
+        catch (...)
+        {
+            // Only consider whether a crash occurs
+            ::DB::tryLogCurrentException(__PRETTY_FUNCTION__);
+        }
+        // Check if the query is stuck
+        EXPECT_TRUE(assertQueryCancelled(query_id)) << "fail in " << failpoint;
+        disableRandomFailPoint(config_str);
+    }
+}
+CATCH
+
+TEST_F(ComputeServerRunner, testErrorMessage)
+try
+{
+    WRAP_FOR_SERVER_TEST_BEGIN
+    startServers(3);
+    setCancelTest();
+    std::vector<String> failpoint_names{
+        FailPoints::exception_before_mpp_register_non_root_mpp_task,
+        FailPoints::exception_before_mpp_make_non_root_mpp_task_active,
+        FailPoints::exception_before_mpp_make_root_mpp_task_active,
+        FailPoints::exception_before_mpp_register_tunnel_for_non_root_mpp_task,
+        FailPoints::exception_before_mpp_register_tunnel_for_root_mpp_task,
+        FailPoints::exception_during_mpp_register_tunnel_for_non_root_mpp_task,
+        FailPoints::exception_before_mpp_non_root_task_run,
+        FailPoints::exception_before_mpp_root_task_run,
+        FailPoints::exception_during_mpp_non_root_task_run,
+        FailPoints::exception_during_mpp_root_task_run,
+        FailPoints::exception_during_query_run,
+    };
+    size_t query_index = 0;
+    for (const auto & failpoint : failpoint_names)
+    {
+        query_index++;
+        for (size_t i = 0; i < 5; ++i)
+        {
+            auto properties = DB::tests::getDAGPropertiesForTest(serverNum(), query_index, i);
+            MPPGatherId gather_id(
+                properties.gather_id,
+                properties.query_ts,
+                properties.local_query_id,
+                properties.server_id,
+                properties.start_ts,
+                /*resource_group_name=*/"",
+                0,
+                "");
+            /// currently all the failpoints are automatically disabled after triggered once, so have to enable it before every run
+            FailPointHelper::enableFailPoint(failpoint);
+            BlockInputStreamPtr stream;
+            try
+            {
+                auto tasks = prepareMPPTasks(
+                    context.scan("test_db", "l_table")
+                        .aggregation({Max(col("l_table.s"))}, {col("l_table.s")})
+                        .project({col("max(l_table.s)"), col("l_table.s")}),
+                    properties);
+                executeProblematicMPPTasks(tasks, properties, stream);
+            }
+            catch (...)
+            {
+                auto error_message = getCurrentExceptionMessage(false);
+                MockComputeServerManager::instance().cancelGather(gather_id);
+                ASSERT_TRUE(
+                    error_message.find(failpoint) != std::string::npos
+                    || error_message.find("tunnel") != std::string::npos)
+                    << " error message is " << error_message << " failpoint is " << failpoint;
+                EXPECT_TRUE(assertQueryCancelled(gather_id.query_id)) << "fail in " << failpoint;
+                FailPointHelper::disableFailPoint(failpoint);
+                continue;
+            }
+            GTEST_FAIL();
+        }
+    }
+    WRAP_FOR_SERVER_TEST_END
+}
+CATCH
+
+TEST_F(ComputeServerRunner, testMinTSOActiveSetSoftLimit)
+try
+{
+    UInt64 active_set_soft_limit = 2;
+    context.context->setSetting("task_scheduler_active_set_soft_limit", active_set_soft_limit);
+    startServers(1);
+    setCancelTest();
+    ASSERT_TRUE(
+        TiFlashMetrics::instance()
+            .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+            .Value()
+        == 0);
+    ASSERT_TRUE(
+        TiFlashMetrics::instance()
+            .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+            .Value()
+        == 0);
+    std::vector<std::thread> running_queries;
+    std::vector<MPPGatherId> gather_ids;
+    try
+    {
+        /// case 1, min tso can be added
+        for (size_t i = 0; i < active_set_soft_limit; ++i)
+        {
+            addOneQuery(i + 10, running_queries, gather_ids);
+        }
+        using namespace std::literals::chrono_literals;
+        std::this_thread::sleep_for(4s);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        addOneQuery(1, running_queries, gather_ids);
+        std::this_thread::sleep_for(4s);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 3);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        for (const auto & gather_id : gather_ids)
+            MockComputeServerManager::instance().cancelGather(gather_id);
+        for (auto & t : running_queries)
+            t.join();
+        running_queries.clear();
+        gather_ids.clear();
+        /// case 2, non-min tso can't be added
+        for (size_t i = 0; i < active_set_soft_limit; ++i)
+        {
+            addOneQuery((i + 1) * 20, running_queries, gather_ids);
+        }
+        using namespace std::literals::chrono_literals;
+        std::this_thread::sleep_for(4s);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        addOneQuery(30, running_queries, gather_ids);
+        std::this_thread::sleep_for(4s);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 1);
+        /// cancel 1 running query
+        MockComputeServerManager::instance().cancelGather(gather_ids[0]);
+        running_queries[0].join();
+        std::this_thread::sleep_for(4s);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        for (size_t i = 1; i < running_queries.size(); i++)
+            MockComputeServerManager::instance().cancelGather(gather_ids[i]);
+        for (size_t i = 1; i < running_queries.size(); i++)
+            running_queries[i].join();
+    }
+    catch (...)
+    {
+        for (const auto & gather_id : gather_ids)
+            MockComputeServerManager::instance().cancelGather(gather_id);
+        for (auto & t : running_queries)
+            if (t.joinable())
+                t.join();
+        throw;
+    }
+}
+CATCH
+
+TEST_F(ComputeServerRunner, testCancelMPPGather)
+try
+{
+    startServers(1);
+    setCancelTest();
+    ASSERT_TRUE(
+        TiFlashMetrics::instance()
+            .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+            .Value()
+        == 0);
+    ASSERT_TRUE(
+        TiFlashMetrics::instance()
+            .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+            .Value()
+        == 0);
+    std::vector<std::thread> running_queries;
+    std::vector<MPPGatherId> gather_ids;
+    auto multiple_gathers_properties = DB::tests::getDAGPropertiesForTest(serverNum(), 1, 1, 1);
+    auto single_gather_properties = DB::tests::getDAGPropertiesForTest(serverNum(), 1, 1, 2);
+    try
+    {
+        for (size_t i = 0; i < 5; ++i)
+        {
+            multiple_gathers_properties.gather_id = i + 1;
+            addOneGather(running_queries, gather_ids, multiple_gathers_properties);
+        }
+        single_gather_properties.gather_id = 1;
+        addOneGather(running_queries, gather_ids, single_gather_properties);
+        using namespace std::literals::chrono_literals;
+        std::this_thread::sleep_for(4s);
+        /// 6 gathers, but two query
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        std::vector<size_t> killed_gathers{0, 2, 4};
+        std::vector<size_t> remaining_gathers{1, 3};
+        for (const auto i : killed_gathers)
+        {
+            MockComputeServerManager::instance().cancelGather(gather_ids[i]);
+            assertGatherCancelled(gather_ids[i]);
+        }
+        for (const auto i : remaining_gathers)
+        {
+            /// these gathers should not be affected
+            assertGatherActive(gather_ids[i]);
+        }
+        /// the active query count should not change
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 2);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        /// kill single gather query
+        MockComputeServerManager::instance().cancelGather(gather_ids[5]);
+        assertGatherCancelled(gather_ids[5]);
+        /// the active query count should be 1
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 1);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        /// kill the rest gathers
+        for (const auto i : remaining_gathers)
+        {
+            MockComputeServerManager::instance().cancelGather(gather_ids[i]);
+            assertGatherCancelled(gather_ids[i]);
+        }
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_active_queries_count, "")
+                .Value()
+            == 0);
+        ASSERT_TRUE(
+            TiFlashMetrics::instance()
+                .tiflash_task_scheduler.get(tiflash_task_scheduler_metrics::type_waiting_queries_count, "")
+                .Value()
+            == 0);
+        for (auto & t : running_queries)
+            if (t.joinable())
+                t.join();
+    }
+    catch (...)
+    {
+        for (const auto & gather_id : gather_ids)
+            MockComputeServerManager::instance().cancelGather(gather_id);
+        for (auto & t : running_queries)
+            if (t.joinable())
+                t.join();
+        throw;
+    }
 }
 CATCH
 

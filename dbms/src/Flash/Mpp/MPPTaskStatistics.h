@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Common/Logger.h>
+#include <Flash/Executor/toRU.h>
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/TaskStatus.h>
 #include <Flash/Statistics/ExecutorStatisticsCollector.h>
@@ -48,11 +49,17 @@ public:
 
     void logTracingJson();
 
-    void setMemoryPeak(Int64 memory_peak);
+    void setMemoryPeak(Int64 memory_peak_);
+
+    void setRUInfo(const RUConsumption & ru_info_);
 
     void setCompileTimestamp(const Timestamp & start_timestamp, const Timestamp & end_timestamp);
 
+    void setExtraInfo(const String & extra_info_);
+
     tipb::SelectResponse genExecutionSummaryResponse();
+
+    tipb::TiFlashExecutionInfo genTiFlashExecutionInfo();
 
 private:
     void recordInputBytes(DAGContext & dag_context);
@@ -85,7 +92,10 @@ private:
     String sender_executor_id;
 
     // resource
-    Int64 working_time = 0;
+    RUConsumption ru_info{.cpu_ru = 0.0, .cpu_time_ns = 0, .read_ru = 0.0, .read_bytes = 0};
     Int64 memory_peak = 0;
+
+    // extra
+    String extra_info = "{}";
 };
 } // namespace DB

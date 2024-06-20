@@ -17,8 +17,8 @@
 #include <Common/Stopwatch.h>
 #include <Core/Block.h>
 #include <DataStreams/IRowOutputStream.h>
+#include <IO/Buffer/WriteBuffer.h>
 #include <IO/Progress.h>
-#include <IO/WriteBuffer.h>
 
 
 namespace DB
@@ -63,7 +63,8 @@ protected:
     void writeStatistics();
 
     WriteBuffer & dst_ostr;
-    std::unique_ptr<WriteBuffer> validating_ostr; /// Validates UTF-8 sequences, replaces bad sequences with replacement character.
+    std::unique_ptr<WriteBuffer>
+        validating_ostr; /// Validates UTF-8 sequences, replaces bad sequences with replacement character.
     WriteBuffer * ostr;
 
     size_t field_number = 0;

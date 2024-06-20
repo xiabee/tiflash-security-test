@@ -20,10 +20,13 @@
 #include <Interpreters/AggregateDescription.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/ExpressionActions.h>
-#include <Operators/AggregateContext.h>
+#include <Operators/OperatorProfileInfo.h>
 
 namespace DB
 {
+class AggregateContext;
+using AggregateContextPtr = std::shared_ptr<AggregateContext>;
+
 class PhysicalAggregationBuild : public PhysicalUnary
 {
 public:
@@ -34,7 +37,9 @@ public:
         const PhysicalPlanNodePtr & child_,
         const ExpressionActionsPtr & before_agg_actions_,
         const Names & aggregation_keys_,
-        const TiDB::TiDBCollators & aggregation_collators_,
+        const std::unordered_map<String, TiDB::TiDBCollatorPtr> & aggregation_collators_,
+        const KeyRefAggFuncMap & key_ref_agg_func_,
+        const AggFuncRefKeyMap & agg_func_ref_key_,
         bool is_final_agg_,
         const AggregateDescriptions & aggregate_descriptions_,
         const AggregateContextPtr & aggregate_context_)
@@ -42,26 +47,38 @@ public:
         , before_agg_actions(before_agg_actions_)
         , aggregation_keys(aggregation_keys_)
         , aggregation_collators(aggregation_collators_)
+        , key_ref_agg_func(key_ref_agg_func_)
+        , agg_func_ref_key(agg_func_ref_key_)
         , is_final_agg(is_final_agg_)
         , aggregate_descriptions(aggregate_descriptions_)
         , aggregate_context(aggregate_context_)
-    {}
+    {
+        // The profile info of Aggregation is collected by PhysicalAggregationConvergent,
+        // so calling notTiDBoPerator for PhysicalAggregationBuild to skip collecting profile info.
+        notTiDBOperator();
+    }
 
-    void buildPipelineExecGroup(
-        PipelineExecutorStatus & exec_status,
+private:
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & exec_context,
         PipelineExecGroupBuilder & group_builder,
         Context & context,
         size_t /*concurrency*/) override;
 
-private:
+    EventPtr doSinkComplete(PipelineExecutorContext & exec_context) override;
+
     DISABLE_USELESS_FUNCTION_FOR_BREAKER
 
 private:
     ExpressionActionsPtr before_agg_actions;
     Names aggregation_keys;
-    TiDB::TiDBCollators aggregation_collators;
+    std::unordered_map<String, TiDB::TiDBCollatorPtr> aggregation_collators;
+    KeyRefAggFuncMap key_ref_agg_func;
+    AggFuncRefKeyMap agg_func_ref_key;
     bool is_final_agg;
     AggregateDescriptions aggregate_descriptions;
     AggregateContextPtr aggregate_context;
+
+    OperatorProfileInfos profile_infos;
 };
 } // namespace DB

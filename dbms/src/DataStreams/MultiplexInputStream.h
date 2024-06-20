@@ -33,44 +33,49 @@ class MultiPartitionStreamPool
 public:
     MultiPartitionStreamPool() = default;
 
+    void cancel(bool kill)
+    {
+        std::deque<BlockInputStreamPtr> tmp_streams;
+        {
+            std::unique_lock lk(mu);
+            if (is_cancelled)
+                return;
+
+            is_cancelled = true;
+            tmp_streams.swap(added_streams);
+        }
+
+        for (auto & stream : tmp_streams)
+            if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream.get()))
+            {
+                p_stream->cancel(kill);
+            }
+    }
+
     void addPartitionStreams(const BlockInputStreams & cur_streams)
     {
         if (cur_streams.empty())
             return;
         std::unique_lock lk(mu);
-        streams_queue_by_partition.push_back(
-            std::make_shared<std::queue<std::shared_ptr<IBlockInputStream>>>());
-        for (const auto & stream : cur_streams)
-            streams_queue_by_partition.back()->push(stream);
         added_streams.insert(added_streams.end(), cur_streams.begin(), cur_streams.end());
     }
 
-    std::shared_ptr<IBlockInputStream> pickOne()
+    BlockInputStreamPtr pickOne()
     {
         std::unique_lock lk(mu);
-        if (streams_queue_by_partition.empty())
+        if (added_streams.empty())
             return nullptr;
-        if (streams_queue_id >= static_cast<int>(streams_queue_by_partition.size()))
-            streams_queue_id = 0;
 
-        auto & q = *streams_queue_by_partition[streams_queue_id];
-        std::shared_ptr<IBlockInputStream> ret = nullptr;
-        assert(!q.empty());
-        ret = q.front();
-        q.pop();
-        if (q.empty())
-            streams_queue_id = removeQueue(streams_queue_id);
-        else
-            streams_queue_id = nextQueueId(streams_queue_id);
+        auto ret = std::move(added_streams.front());
+        added_streams.pop_front();
         return ret;
     }
 
-    int exportAddedStreams(BlockInputStreams & ret_streams)
+    void exportAddedStreams(BlockInputStreams & ret_streams)
     {
         std::unique_lock lk(mu);
         for (auto & stream : added_streams)
             ret_streams.push_back(stream);
-        return added_streams.size();
     }
 
     int addedStreamsCnt()
@@ -80,42 +85,8 @@ public:
     }
 
 private:
-    int removeQueue(int queue_id)
-    {
-        streams_queue_by_partition[queue_id] = nullptr;
-        if (queue_id != static_cast<int>(streams_queue_by_partition.size()) - 1)
-        {
-            swap(streams_queue_by_partition[queue_id], streams_queue_by_partition.back());
-            streams_queue_by_partition.pop_back();
-            return queue_id;
-        }
-        else
-        {
-            streams_queue_by_partition.pop_back();
-            return 0;
-        }
-    }
-
-    int nextQueueId(int queue_id) const
-    {
-        if (queue_id + 1 < static_cast<int>(streams_queue_by_partition.size()))
-            return queue_id + 1;
-        else
-            return 0;
-    }
-
-    static void swap(std::shared_ptr<std::queue<std::shared_ptr<IBlockInputStream>>> & a,
-                     std::shared_ptr<std::queue<std::shared_ptr<IBlockInputStream>>> & b)
-    {
-        a.swap(b);
-    }
-
-    std::vector<
-        std::shared_ptr<std::queue<
-            std::shared_ptr<IBlockInputStream>>>>
-        streams_queue_by_partition;
-    std::vector<std::shared_ptr<IBlockInputStream>> added_streams;
-    int streams_queue_id = 0;
+    std::deque<BlockInputStreamPtr> added_streams;
+    bool is_cancelled;
     std::mutex mu;
 };
 
@@ -125,9 +96,7 @@ private:
     static constexpr auto NAME = "Multiplex";
 
 public:
-    MultiplexInputStream(
-        std::shared_ptr<MultiPartitionStreamPool> & shared_pool,
-        const String & req_id)
+    MultiplexInputStream(std::shared_ptr<MultiPartitionStreamPool> & shared_pool, const String & req_id)
         : log(Logger::get(req_id))
         , shared_pool(shared_pool)
     {
@@ -137,10 +106,7 @@ public:
         {
             Block header = children.at(0)->getHeader();
             for (size_t i = 1; i < num_children; ++i)
-                assertBlocksHaveEqualStructure(
-                    children[i]->getHeader(),
-                    header,
-                    "MULTIPLEX");
+                assertBlocksHaveEqualStructure(children[i]->getHeader(), header, "MULTIPLEX");
         }
     }
 
@@ -168,29 +134,25 @@ public:
             is_killed = true;
 
         bool old_val = false;
-        if (!is_cancelled.compare_exchange_strong(
-                old_val,
-                true,
-                std::memory_order_seq_cst,
-                std::memory_order_relaxed))
+        if (!is_cancelled.compare_exchange_strong(old_val, true, std::memory_order_seq_cst, std::memory_order_relaxed))
             return;
 
         if (cur_stream)
         {
-            if (IProfilingBlockInputStream * child = dynamic_cast<IProfilingBlockInputStream *>(&*cur_stream))
+            if (auto * child = dynamic_cast<IProfilingBlockInputStream *>(&*cur_stream))
             {
                 child->cancel(kill);
             }
         }
+
+        shared_pool->cancel(kill);
     }
 
     Block getHeader() const override { return children.at(0)->getHeader(); }
 
 protected:
     /// Do nothing, to make the preparation when underlying InputStream is picked from the pool
-    void readPrefix() override
-    {
-    }
+    void readPrefix() override {}
 
     /** The following options are possible:
       * 1. `readImpl` function is called until it returns an empty block.

@@ -16,11 +16,9 @@
 
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaTree.h>
+#include <Storages/DeltaMerge/Remote/RNDeltaIndexCache.h>
 #include <Storages/Page/PageDefinesBase.h>
-
-namespace DB
-{
-namespace DM
+namespace DB::DM
 {
 class DeltaIndex;
 using DeltaIndexPtr = std::shared_ptr<DeltaIndex>;
@@ -30,8 +28,10 @@ static std::atomic_uint64_t NEXT_DELTA_INDEX_ID{0};
 class DeltaIndex
 {
 private:
-    // This id is only used as Key in LRUCache.
+    // `id` is used as Key in LRUCache in non-disaggregated mode.
     const UInt64 id;
+    // `rn_cache_key` is used as Key in RNDeltaIndexCache in disaggregated mode.
+    const std::optional<Remote::RNDeltaIndexCache::CacheKey> rn_cache_key;
 
     DeltaTreePtr delta_tree;
 
@@ -62,7 +62,7 @@ public:
 private:
     void applyUpdates(const Updates & updates)
     {
-        for (auto & update : updates)
+        for (const auto & update : updates)
         {
             if (placed_rows <= update.rows_offset)
             {
@@ -84,17 +84,17 @@ private:
         }
     }
 
-    DeltaIndexPtr tryCloneInner(size_t placed_deletes_limit, const Updates * updates = nullptr)
+    DeltaIndexPtr tryCloneInner(size_t rows_limit, size_t placed_deletes_limit, const Updates * updates = nullptr)
     {
         DeltaTreePtr delta_tree_copy;
         size_t placed_rows_copy = 0;
         size_t placed_deletes_copy = 0;
-        // Make sure the delta index do not place more deletes than `placed_deletes_limit`.
-        // Because delete ranges can break MVCC view.
         {
             std::scoped_lock lock(mutex);
-            // Safe to reuse the copy of the existing DeltaIndex
-            if (placed_deletes <= placed_deletes_limit)
+            // Make sure the MVCC view will not be broken by the mismatch of delta index and snapshot:
+            // - First, make sure the delta index do not place more deletes than `placed_deletes_limit`.
+            // - Second, make sure the snapshot includes all duplicated tuples in the delta index.
+            if (placed_deletes <= placed_deletes_limit && delta_tree->maxDupTupleID() < static_cast<Int64>(rows_limit))
             {
                 delta_tree_copy = delta_tree;
                 placed_rows_copy = placed_rows;
@@ -105,7 +105,8 @@ private:
         if (delta_tree_copy)
         {
             auto new_delta_tree = std::make_shared<DefaultDeltaTree>(*delta_tree_copy);
-            auto new_index = std::make_shared<DeltaIndex>(new_delta_tree, placed_rows_copy, placed_deletes_copy);
+            auto new_index
+                = std::make_shared<DeltaIndex>(new_delta_tree, placed_rows_copy, placed_deletes_copy, rn_cache_key);
             // try to do some updates before return it if need
             if (updates)
                 new_index->applyUpdates(*updates);
@@ -114,25 +115,30 @@ private:
         else
         {
             // Otherwise, create an empty new DeltaIndex.
-            return std::make_shared<DeltaIndex>();
+            return std::make_shared<DeltaIndex>(rn_cache_key);
         }
     }
 
 public:
-    DeltaIndex()
+    explicit DeltaIndex(const std::optional<Remote::RNDeltaIndexCache::CacheKey> & rn_cache_key_ = std::nullopt)
         : id(++NEXT_DELTA_INDEX_ID)
+        , rn_cache_key(rn_cache_key_)
         , delta_tree(std::make_shared<DefaultDeltaTree>())
         , placed_rows(0)
         , placed_deletes(0)
     {}
 
-    DeltaIndex(const DeltaTreePtr & delta_tree_, size_t placed_rows_, size_t placed_deletes_)
+    DeltaIndex(
+        const DeltaTreePtr & delta_tree_,
+        size_t placed_rows_,
+        size_t placed_deletes_,
+        const std::optional<Remote::RNDeltaIndexCache::CacheKey> & rn_cache_key_ = std::nullopt)
         : id(++NEXT_DELTA_INDEX_ID)
+        , rn_cache_key(rn_cache_key_)
         , delta_tree(delta_tree_)
         , placed_rows(placed_rows_)
         , placed_deletes(placed_deletes_)
-    {
-    }
+    {}
 
     /// Note that we don't swap the id.
     void swap(DeltaIndex & other)
@@ -146,12 +152,13 @@ public:
     String toString()
     {
         std::scoped_lock lock(mutex);
-        return fmt::format("<placed_rows={} placed_deletes={} tree_entries={} tree_inserts={} tree_deletes={}>",
-                           placed_rows,
-                           placed_deletes,
-                           delta_tree->numEntries(),
-                           delta_tree->numInserts(),
-                           delta_tree->numDeletes());
+        return fmt::format(
+            "<placed_rows={} placed_deletes={} tree_entries={} tree_inserts={} tree_deletes={}>",
+            placed_rows,
+            placed_deletes,
+            delta_tree->numEntries(),
+            delta_tree->numInserts(),
+            delta_tree->numDeletes());
     }
 
     UInt64 getId() const { return id; }
@@ -162,6 +169,7 @@ public:
         return delta_tree->getBytes();
     }
 
+    // Return <placed_rows, placed_deletes>
     std::pair<size_t, size_t> getPlacedStatus()
     {
         std::scoped_lock lock(mutex);
@@ -186,8 +194,9 @@ public:
     {
         std::scoped_lock lock(mutex);
 
-        if ((maybe_advanced.placed_rows >= placed_rows && maybe_advanced.placed_deletes >= placed_deletes)
-            && !(maybe_advanced.placed_rows == placed_rows && maybe_advanced.placed_deletes == placed_deletes))
+        if ((maybe_advanced.placed_rows >= placed_rows && maybe_advanced.placed_deletes >= placed_deletes) // advance
+            // not excatly the same
+            && (maybe_advanced.placed_rows != placed_rows || maybe_advanced.placed_deletes != placed_deletes))
         {
             delta_tree = maybe_advanced.delta_tree;
             placed_rows = maybe_advanced.placed_rows;
@@ -197,16 +206,20 @@ public:
         return false;
     }
 
-    DeltaIndexPtr tryClone(size_t /*rows*/, size_t deletes) { return tryCloneInner(deletes); }
+    /**
+     * Try to get a clone of current instance.
+     * Return an empty DeltaIndex if `deletes < this->placed_deletes` because the advanced delta-index will break
+     * the MVCC view.
+     */
+    DeltaIndexPtr tryClone(size_t rows, size_t deletes) { return tryCloneInner(rows, deletes); }
 
     DeltaIndexPtr cloneWithUpdates(const Updates & updates)
     {
-        if (unlikely(updates.empty()))
-            throw Exception("Unexpected empty updates");
-
-        return tryCloneInner(updates.front().delete_ranges_offset, &updates);
+        RUNTIME_CHECK_MSG(!updates.empty(), "Unexpected empty updates");
+        return tryCloneInner(updates.front().rows_offset, updates.front().delete_ranges_offset, &updates);
     }
+
+    const std::optional<Remote::RNDeltaIndexCache::CacheKey> & getRNCacheKey() const { return rn_cache_key; }
 };
 
-} // namespace DM
-} // namespace DB
+} // namespace DB::DM

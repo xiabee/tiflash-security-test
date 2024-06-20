@@ -14,13 +14,14 @@
 
 #pragma once
 
-#include <Encryption/FileProvider_fwd.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Poco/Environment.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>
 #include <Storages/Page/PageConstants.h>
+#include <Storages/PathPool_fwd.h>
 #include <TestUtils/TiFlashTestException.h>
 #include <fmt/core.h>
 
@@ -46,6 +47,7 @@ enum class TestType
 class TiFlashTestEnv
 {
 public:
+    static constexpr uint64_t DEFAULT_BG_POOL_SIZE = 2;
     static String getTemporaryPath(std::string_view test_case = "", bool get_abs = true);
 
     static void tryCreatePath(const std::string & path);
@@ -63,8 +65,14 @@ public:
         return std::make_pair(result, result);
     }
 
-    static void setupLogger(const String & level = "trace", std::ostream & os = std::cerr);
-    static void setUpTestContext(Context & context, DAGContext * dag_context, MockStorage * mock_storage, const TestType & test_type);
+    static void setupLogger(const String & level = "trace", std::ostream & os = std::cerr, bool enable_colors = true);
+    static void setUpTestContext(
+        Context & context,
+        DAGContext * dag_context,
+        MockStorage * mock_storage,
+        const TestType & test_type);
+
+    static std::unique_ptr<PathPool> createCleanPathPool(const String & path);
 
     // If you want to run these tests, you should set this envrionment variablle
     // For example:
@@ -96,8 +104,15 @@ public:
 
     static FileProviderPtr getDefaultFileProvider();
 
-    static void initializeGlobalContext(Strings testdata_path = {}, PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3, uint64_t bg_thread_count = 2);
-    static void addGlobalContext(const DB::Settings & settings, Strings testdata_path = {}, PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3, uint64_t bg_thread_count = 2);
+    static void initializeGlobalContext(
+        Strings testdata_path = {},
+        PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3,
+        uint64_t bg_thread_count = DEFAULT_BG_POOL_SIZE);
+    static void addGlobalContext(
+        const DB::Settings & settings,
+        Strings testdata_path = {},
+        PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3,
+        uint64_t bg_thread_count = DEFAULT_BG_POOL_SIZE);
     static Context & getGlobalContext() { return *global_contexts[0]; }
     static Context & getGlobalContext(int idx) { return *global_contexts[idx]; }
     static int globalContextSize() { return global_contexts.size(); }
@@ -109,6 +124,9 @@ public:
     static bool isMockedS3Client() { return is_mocked_s3_client; }
     static bool createBucketIfNotExist(::DB::S3::TiFlashS3Client & s3_client);
     static void deleteBucket(::DB::S3::TiFlashS3Client & s3_client);
+
+    static void disableS3Config();
+    static void enableS3Config();
 
     TiFlashTestEnv() = delete; // no instance allow
 

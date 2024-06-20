@@ -16,7 +16,6 @@
 
 #include <Common/nocopyable.h>
 #include <Core/Block.h>
-#include <Interpreters/ExpressionActions.h>
 #include <Storages/DeltaMerge/BitmapFilter/BitmapFilter.h>
 #include <Storages/DeltaMerge/Delta/DeltaValueSpace.h>
 #include <Storages/DeltaMerge/DeltaIndex.h>
@@ -24,15 +23,15 @@
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/SegmentReadTaskPool.h>
+#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 #include <Storages/DeltaMerge/StableValueSpace.h>
+#include <Storages/KVStore/MultiRaft/Disagg/CheckpointInfo.h>
+#include <Storages/KVStore/MultiRaft/Disagg/fast_add_peer.pb.h>
 #include <Storages/Page/PageDefinesBase.h>
-#include <Storages/Transaction/CheckpointInfo.h>
 
 namespace DB::DM
 {
-class Segment;
 struct SegmentSnapshot;
 using SegmentSnapshotPtr = std::shared_ptr<SegmentSnapshot>;
 class StableValueSpace;
@@ -41,10 +40,10 @@ class DeltaValueSpace;
 using DeltaValueSpacePtr = std::shared_ptr<DeltaValueSpace>;
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
+class PushDownFilter;
+using PushDownFilterPtr = std::shared_ptr<PushDownFilter>;
 
-using SegmentPtr = std::shared_ptr<Segment>;
-using SegmentPair = std::pair<SegmentPtr, SegmentPtr>;
-using Segments = std::vector<SegmentPtr>;
+enum class ReadMode;
 
 /// A structure stores the informations to constantly read a segment instance.
 struct SegmentSnapshot : private boost::noncopyable
@@ -52,17 +51,29 @@ struct SegmentSnapshot : private boost::noncopyable
     DeltaSnapshotPtr delta;
     StableSnapshotPtr stable;
 
-    SegmentSnapshot(DeltaSnapshotPtr && delta_, StableSnapshotPtr && stable_)
+    const LoggerPtr log;
+
+    SegmentSnapshot(DeltaSnapshotPtr && delta_, StableSnapshotPtr && stable_, const LoggerPtr & log_)
         : delta(std::move(delta_))
         , stable(std::move(stable_))
+        , log(log_)
     {}
 
-    SegmentSnapshotPtr clone() const { return std::make_shared<SegmentSnapshot>(delta->clone(), stable->clone()); }
+    SegmentSnapshotPtr clone() const { return std::make_shared<SegmentSnapshot>(delta->clone(), stable->clone(), log); }
 
     UInt64 getBytes() const { return delta->getBytes() + stable->getBytes(); }
     UInt64 getRows() const { return delta->getRows() + stable->getRows(); }
 
     bool isForUpdate() const { return delta->isForUpdate(); }
+
+    UInt64 estimatedBytesOfInternalColumns() const
+    {
+        // TODO: how about cluster index?
+        // handle + version + flag
+        return (sizeof(Int64) + sizeof(UInt64) + sizeof(UInt8)) * getRows();
+    }
+
+    String detailInfo() const;
 };
 
 /// A segment contains many rows of a table. A table is split into segments by consecutive ranges.
@@ -97,11 +108,16 @@ public:
             , index_begin(index_begin_)
             , index_end(index_end_)
             , read_columns(read_columns_)
-        {
-        }
+        {}
 
-        DeltaValueReaderPtr getDeltaReader() const { return delta_reader->createNewReader(read_columns); }
-        DeltaValueReaderPtr getDeltaReader(ColumnDefinesPtr columns) const { return delta_reader->createNewReader(columns); }
+        DeltaValueReaderPtr getDeltaReader(ReadTag read_tag) const
+        {
+            return delta_reader->createNewReader(read_columns, read_tag);
+        }
+        DeltaValueReaderPtr getDeltaReader(ColumnDefinesPtr columns, ReadTag read_tag) const
+        {
+            return delta_reader->createNewReader(columns, read_tag);
+        }
     };
 
     struct SplitInfo
@@ -146,13 +162,13 @@ public:
 
     struct SegmentMetaInfo
     {
-        SegmentFormat::Version version;
-        UInt64 epoch;
+        SegmentFormat::Version version{};
+        UInt64 epoch{};
         RowKeyRange range;
-        PageIdU64 segment_id;
-        PageIdU64 next_segment_id;
-        PageIdU64 delta_id;
-        PageIdU64 stable_id;
+        PageIdU64 segment_id{};
+        PageIdU64 next_segment_id{};
+        PageIdU64 delta_id{};
+        PageIdU64 stable_id{};
     };
 
     using SegmentMetaInfos = std::vector<SegmentMetaInfo>;
@@ -172,7 +188,9 @@ public:
         UniversalPageStoragePtr temp_ps,
         WriteBatches & wbs);
 
-    void serialize(WriteBatchWrapper & wb);
+    void serializeToFAPTempSegment(DB::FastAddPeerProto::FAPTempSegmentInfo * segment_info);
+    UInt64 storeSegmentMetaInfo(WriteBuffer & buf) const;
+    void serialize(WriteBatchWrapper & wb) const;
 
     /// Attach a new ColumnFile into the Segment. The ColumnFile will be added to MemFileSet and flushed to disk later.
     /// The block data of the passed in ColumnFile should be placed on disk before calling this function.
@@ -187,7 +205,8 @@ public:
 
     bool write(DMContext & dm_context, const RowKeyRange & delete_range);
 
-    SegmentSnapshotPtr createSnapshot(const DMContext & dm_context, bool for_update, CurrentMetrics::Metric metric) const;
+    SegmentSnapshotPtr createSnapshot(const DMContext & dm_context, bool for_update, CurrentMetrics::Metric metric)
+        const;
 
     BlockInputStreamPtr getInputStream(
         const ReadMode & read_mode,
@@ -196,7 +215,7 @@ public:
         const SegmentSnapshotPtr & segment_snap,
         const RowKeyRanges & read_ranges,
         const PushDownFilterPtr & filter,
-        UInt64 max_version,
+        UInt64 start_ts,
         size_t expected_block_size);
 
     BlockInputStreamPtr getInputStreamModeNormal(
@@ -205,7 +224,7 @@ public:
         const SegmentSnapshotPtr & segment_snap,
         const RowKeyRanges & read_ranges,
         const RSOperatorPtr & filter,
-        UInt64 max_version,
+        UInt64 start_ts,
         size_t expected_block_size,
         bool need_row_id = false);
 
@@ -214,7 +233,7 @@ public:
         const ColumnDefines & columns_to_read,
         const RowKeyRanges & read_ranges,
         const RSOperatorPtr & filter = {},
-        UInt64 max_version = std::numeric_limits<UInt64>::max(),
+        UInt64 start_ts = std::numeric_limits<UInt64>::max(),
         size_t expected_block_size = DEFAULT_BLOCK_SIZE);
 
     /**
@@ -234,7 +253,7 @@ public:
         const DMContext & dm_context,
         const ColumnDefines & columns_to_read,
         const SegmentSnapshotPtr & segment_snap,
-        const RowKeyRanges & data_ranges,
+        const RowKeyRanges & read_ranges,
         const RSOperatorPtr & filter,
         size_t expected_block_size = DEFAULT_BLOCK_SIZE);
 
@@ -245,9 +264,7 @@ public:
         const RowKeyRanges & data_ranges,
         size_t expected_block_size = DEFAULT_BLOCK_SIZE);
 
-    BlockInputStreamPtr getInputStreamModeRaw(
-        const DMContext & dm_context,
-        const ColumnDefines & columns_to_read);
+    BlockInputStreamPtr getInputStreamModeRaw(const DMContext & dm_context, const ColumnDefines & columns_to_read);
 
     /// For those split, merge and mergeDelta methods, we should use prepareXXX/applyXXX combo in real production.
     /// split(), merge() and mergeDelta() are only used in test cases.
@@ -281,7 +298,11 @@ public:
      * Only used in tests as a shortcut.
      * Normally you should use `prepareSplit` and `applySplit`.
      */
-    [[nodiscard]] SegmentPair split(DMContext & dm_context, const ColumnDefinesPtr & schema_snap, std::optional<RowKeyValue> opt_split_at = std::nullopt, SplitMode opt_split_mode = SplitMode::Auto) const;
+    [[nodiscard]] SegmentPair split(
+        DMContext & dm_context,
+        const ColumnDefinesPtr & schema_snap,
+        std::optional<RowKeyValue> opt_split_at = std::nullopt,
+        SplitMode opt_split_mode = SplitMode::Auto) const;
 
     std::optional<SplitInfo> prepareSplit(
         DMContext & dm_context,
@@ -316,9 +337,7 @@ public:
         const ReadInfo & read_info,
         const SegmentSnapshotPtr & segment_snap) const;
     /// Only look up in the stable vs.
-    std::optional<RowKeyValue> getSplitPointFast(
-        DMContext & dm_context,
-        const StableSnapshotPtr & stable_snap) const;
+    std::optional<RowKeyValue> getSplitPointFast(DMContext & dm_context, const StableSnapshotPtr & stable_snap) const;
 
     enum class PrepareSplitLogicalStatus
     {
@@ -398,9 +417,8 @@ public:
 
     IngestDataInfo prepareIngestDataWithClearData() const;
 
-    IngestDataInfo prepareIngestDataWithPreserveData(
-        DMContext & dm_context,
-        const SegmentSnapshotPtr & segment_snap) const;
+    IngestDataInfo prepareIngestDataWithPreserveData(DMContext & dm_context, const SegmentSnapshotPtr & segment_snap)
+        const;
 
     /**
      * Note 1: You must ensure the DMFile is not shared in multiple segments.
@@ -428,9 +446,7 @@ public:
      *          - The same segment as this: Data is ingested into the delta layer of current segment
      *          - nullptr: when there are errors
      */
-    [[nodiscard]] SegmentPtr ingestDataForTest(DMContext & dm_context,
-                                               const DMFilePtr & data_file,
-                                               bool clear_data);
+    [[nodiscard]] SegmentPtr ingestDataForTest(DMContext & dm_context, const DMFilePtr & data_file, bool clear_data);
 
     /**
      * Use this function when the data file is small. The data file will be appended to the
@@ -465,9 +481,18 @@ public:
      * Note 3: You must ensure the DMFile has been managed by the storage pool, and has been written
      *         to the PageStorage's data.
      */
-    [[nodiscard]] SegmentPtr replaceData(const Lock &, DMContext & dm_context, const DMFilePtr & data_file, SegmentSnapshotPtr segment_snap_opt = nullptr) const;
+    [[nodiscard]] SegmentPtr replaceData(
+        const Lock &,
+        DMContext & dm_context,
+        const DMFilePtr & data_file,
+        SegmentSnapshotPtr segment_snap_opt = nullptr) const;
 
-    [[nodiscard]] SegmentPtr dangerouslyReplaceDataFromCheckpoint(const Lock &, DMContext & dm_context, const DMFilePtr & data_file, WriteBatches & wbs, const ColumnFilePersisteds & column_file_persisteds) const;
+    [[nodiscard]] SegmentPtr dangerouslyReplaceDataFromCheckpoint(
+        const Lock &,
+        DMContext & dm_context,
+        const DMFilePtr & data_file,
+        WriteBatches & wbs,
+        const ColumnFilePersisteds & column_file_persisteds) const;
 
     [[nodiscard]] SegmentPtr dropNextSegment(WriteBatches & wbs, const RowKeyRange & next_segment_range);
 
@@ -524,7 +549,9 @@ public:
     {
         auto lock_opt = getUpdateLock();
         if (lock_opt == std::nullopt)
-            throw Exception(fmt::format("Segment get update lock failed, segment={}", simpleInfo()), ErrorCodes::LOGICAL_ERROR);
+            throw Exception(
+                fmt::format("Segment get update lock failed, segment={}", simpleInfo()),
+                ErrorCodes::LOGICAL_ERROR);
         return std::exchange(lock_opt, std::nullopt).value();
     }
 
@@ -544,7 +571,13 @@ public:
     /// Returns whether this segment has been marked as abandoned.
     /// Note: Segment member functions never abandon the segment itself.
     /// The abandon state is usually triggered by the DeltaMergeStore.
-    bool hasAbandoned() const { return delta->hasAbandoned(); }
+    bool hasAbandoned() const
+    {
+        // `delta` at disagg read-node is empty
+        if (unlikely(!delta))
+            return false;
+        return delta->hasAbandoned();
+    }
 
     bool isSplitForbidden() const { return split_forbidden; }
     void forbidSplit() { split_forbidden = true; }
@@ -553,6 +586,9 @@ public:
     void setValidDataRatioChecked() { check_valid_data_ratio.store(true, std::memory_order_relaxed); }
 
     void drop(const FileProviderPtr & file_provider, WriteBatches & wbs);
+    /// Only used in FAP.
+    /// Drop a segment built with invalid id.
+    void dropAsFAPTemp(const FileProviderPtr & file_provider, WriteBatches & wbs);
 
     bool isFlushing() const { return delta->isFlushing(); }
 
@@ -564,7 +600,10 @@ public:
 
     DB::Timestamp getLastCheckGCSafePoint() { return last_check_gc_safe_point.load(std::memory_order_relaxed); }
 
-    void setLastCheckGCSafePoint(DB::Timestamp gc_safe_point) { last_check_gc_safe_point.store(gc_safe_point, std::memory_order_relaxed); }
+    void setLastCheckGCSafePoint(DB::Timestamp gc_safe_point)
+    {
+        last_check_gc_safe_point.store(gc_safe_point, std::memory_order_relaxed);
+    }
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -576,11 +615,10 @@ public:
         const ColumnDefines & read_columns,
         const SegmentSnapshotPtr & segment_snap,
         const RowKeyRanges & read_ranges,
-        UInt64 max_version = std::numeric_limits<UInt64>::max()) const;
+        ReadTag read_tag,
+        UInt64 start_ts = std::numeric_limits<UInt64>::max()) const;
 
-    static ColumnDefinesPtr arrangeReadColumns(
-        const ColumnDefine & handle,
-        const ColumnDefines & columns_to_read);
+    static ColumnDefinesPtr arrangeReadColumns(const ColumnDefine & handle, const ColumnDefines & columns_to_read);
 
     /// Create a stream which merged delta and stable streams together.
     template <bool skippable_place = false, class IndexIterator = DeltaIndexIterator>
@@ -594,7 +632,8 @@ public:
         const IndexIterator & delta_index_begin,
         const IndexIterator & delta_index_end,
         size_t expected_block_size,
-        UInt64 max_version = std::numeric_limits<UInt64>::max(),
+        ReadTag read_tag,
+        UInt64 start_ts = std::numeric_limits<UInt64>::max(),
         bool need_row_id = false);
 
     /// Make sure that all delta packs have been placed.
@@ -602,10 +641,10 @@ public:
     /// Returns <placed index, this index is fully indexed or not>
     std::pair<DeltaIndexPtr, bool> ensurePlace(
         const DMContext & dm_context,
-        const StableSnapshotPtr & stable_snap,
+        const SegmentSnapshotPtr & segment_snap,
         const DeltaValueReaderPtr & delta_reader,
         const RowKeyRanges & read_ranges,
-        UInt64 max_version) const;
+        UInt64 start_ts) const;
 
     /// Reference the inserts/updates by delta tree.
     /// Returns fully placed or not. Some rows not match relevant_range are not placed.
@@ -631,54 +670,77 @@ public:
         const RowKeyRange & relevant_range,
         bool relevant_place) const;
 
-    static bool useCleanRead(const SegmentSnapshotPtr & segment_snap,
-                             const ColumnDefines & columns_to_read);
-    RowKeyRanges shrinkRowKeyRanges(const RowKeyRanges & read_ranges);
-    BitmapFilterPtr buildBitmapFilter(const DMContext & dm_context,
-                                      const SegmentSnapshotPtr & segment_snap,
-                                      const RowKeyRanges & read_ranges,
-                                      const RSOperatorPtr & filter,
-                                      UInt64 max_version,
-                                      size_t expected_block_size);
-    BitmapFilterPtr buildBitmapFilterNormal(const DMContext & dm_context,
-                                            const SegmentSnapshotPtr & segment_snap,
-                                            const RowKeyRanges & read_ranges,
-                                            const RSOperatorPtr & filter,
-                                            UInt64 max_version,
-                                            size_t expected_block_size);
-    BitmapFilterPtr buildBitmapFilterStableOnly(const DMContext & dm_context,
-                                                const SegmentSnapshotPtr & segment_snap,
-                                                const RowKeyRanges & read_ranges,
-                                                const RSOperatorPtr & filter,
-                                                UInt64 max_version,
-                                                size_t expected_block_size);
-    BlockInputStreamPtr getBitmapFilterInputStream(BitmapFilterPtr && bitmap_filter,
-                                                   const SegmentSnapshotPtr & segment_snap,
-                                                   const DMContext & dm_context,
-                                                   const ColumnDefines & columns_to_read,
-                                                   const RowKeyRanges & read_ranges,
-                                                   const RSOperatorPtr & filter,
-                                                   UInt64 max_version,
-                                                   size_t expected_block_size);
-    BlockInputStreamPtr getBitmapFilterInputStream(const DMContext & dm_context,
-                                                   const ColumnDefines & columns_to_read,
-                                                   const SegmentSnapshotPtr & segment_snap,
-                                                   const RowKeyRanges & read_ranges,
-                                                   const PushDownFilterPtr & filter,
-                                                   UInt64 max_version,
-                                                   size_t expected_block_size);
+    static bool useCleanRead(const SegmentSnapshotPtr & segment_snap, const ColumnDefines & columns_to_read);
+    RowKeyRanges shrinkRowKeyRanges(const RowKeyRanges & read_ranges) const;
+    BitmapFilterPtr buildBitmapFilter(
+        const DMContext & dm_context,
+        const SegmentSnapshotPtr & segment_snap,
+        const RowKeyRanges & read_ranges,
+        const RSOperatorPtr & filter,
+        UInt64 start_ts,
+        size_t expected_block_size);
+    BitmapFilterPtr buildBitmapFilterNormal(
+        const DMContext & dm_context,
+        const SegmentSnapshotPtr & segment_snap,
+        const RowKeyRanges & read_ranges,
+        const RSOperatorPtr & filter,
+        UInt64 start_ts,
+        size_t expected_block_size);
+    BitmapFilterPtr buildBitmapFilterStableOnly(
+        const DMContext & dm_context,
+        const SegmentSnapshotPtr & segment_snap,
+        const RowKeyRanges & read_ranges,
+        const RSOperatorPtr & filter,
+        UInt64 start_ts,
+        size_t expected_block_size);
+    BlockInputStreamPtr getBitmapFilterInputStream(
+        BitmapFilterPtr && bitmap_filter,
+        const SegmentSnapshotPtr & segment_snap,
+        const DMContext & dm_context,
+        const ColumnDefines & columns_to_read,
+        const RowKeyRanges & read_ranges,
+        const RSOperatorPtr & filter,
+        UInt64 start_ts,
+        size_t expected_block_size);
+    BlockInputStreamPtr getBitmapFilterInputStream(
+        const DMContext & dm_context,
+        const ColumnDefines & columns_to_read,
+        const SegmentSnapshotPtr & segment_snap,
+        const RowKeyRanges & read_ranges,
+        const PushDownFilterPtr & filter,
+        UInt64 start_ts,
+        size_t build_bitmap_filter_block_rows,
+        size_t read_data_block_rows);
 
-    BlockInputStreamPtr getLateMaterializationStream(BitmapFilterPtr && bitmap_filter,
-                                                     const DMContext & dm_context,
-                                                     const ColumnDefines & columns_to_read,
-                                                     const SegmentSnapshotPtr & segment_snap,
-                                                     const RowKeyRanges & data_ranges,
-                                                     const PushDownFilterPtr & filter,
-                                                     UInt64 max_version,
-                                                     size_t expected_block_size);
+    BlockInputStreamPtr getLateMaterializationStream(
+        BitmapFilterPtr && bitmap_filter,
+        const DMContext & dm_context,
+        const ColumnDefines & columns_to_read,
+        const SegmentSnapshotPtr & segment_snap,
+        const RowKeyRanges & data_ranges,
+        const PushDownFilterPtr & filter,
+        UInt64 start_ts,
+        size_t expected_block_size);
+
+    // clipBlockRows try to limit the block size not exceed settings.max_block_bytes.
+    static size_t clipBlockRows(
+        const Context & context,
+        size_t expected_block_rows,
+        const ColumnDefines & read_columns,
+        const StableValueSpacePtr & stable);
+    static size_t clipBlockRows(
+        size_t max_block_bytes,
+        size_t pack_rows,
+        size_t expected_block_rows,
+        const ColumnDefines & read_columns,
+        const StableValueSpacePtr & stable);
 
 
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#else
+public:
+#endif
     /// The version of this segment. After split / merge / mergeDelta / replaceData, epoch got increased by 1.
     const UInt64 epoch;
 
@@ -704,4 +766,5 @@ private:
     const LoggerPtr log;
 };
 
+void readSegmentMetaInfo(ReadBuffer & buf, Segment::SegmentMetaInfo & segment_info);
 } // namespace DB::DM

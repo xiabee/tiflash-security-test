@@ -12,20 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Columns/ColumnArray.h>
 #include <Columns/ColumnNullable.h>
-#include <Columns/ColumnsNumber.h>
+#include <Columns/ColumnUtils.h>
+#include <Common/FmtUtils.h>
 #include <Common/ProfileEvents.h>
 #include <Common/typeid_cast.h>
+#include <Core/NamesAndTypes.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeNullable.h>
-#include <Functions/FunctionFactory.h>
 #include <Functions/IFunction.h>
 #include <Interpreters/ExpressionActions.h>
 #include <Interpreters/Join.h>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#include <Poco/JSON/Array.h>
+#include <Poco/JSON/Object.h>
+#pragma GCC diagnostic pop
+
 #include <optional>
 #include <set>
+#include <sstream>
 
 namespace DB
 {
@@ -61,10 +68,11 @@ Names ExpressionAction::getNeededColumns() const
 }
 
 
-ExpressionAction ExpressionAction::applyFunction(const FunctionBuilderPtr & function_,
-                                                 const std::vector<std::string> & argument_names_,
-                                                 std::string result_name_,
-                                                 const TiDB::TiDBCollatorPtr & collator_)
+ExpressionAction ExpressionAction::applyFunction(
+    const FunctionBuilderPtr & function_,
+    const std::vector<std::string> & argument_names_,
+    std::string result_name_,
+    const TiDB::TiDBCollatorPtr & collator_)
 {
     if (result_name_.empty())
     {
@@ -132,7 +140,9 @@ ExpressionAction ExpressionAction::project(const Names & projected_columns_)
     return a;
 }
 
-ExpressionAction ExpressionAction::ordinaryJoin(std::shared_ptr<const Join> join_, const NamesAndTypesList & columns_added_by_join_)
+ExpressionAction ExpressionAction::ordinaryJoin(
+    std::shared_ptr<const Join> join_,
+    const NamesAndTypesList & columns_added_by_join_)
 {
     ExpressionAction a;
     a.type = JOIN;
@@ -146,6 +156,14 @@ ExpressionAction ExpressionAction::expandSource(GroupingSets grouping_sets_)
     ExpressionAction a;
     a.type = EXPAND;
     a.expand = std::make_shared<Expand>(grouping_sets_);
+    return a;
+}
+
+ExpressionAction ExpressionAction::convertToNullable(const std::string & col_name)
+{
+    ExpressionAction a;
+    a.type = CONVERT_TO_NULLABLE;
+    a.col_need_to_nullable = col_name;
     return a;
 }
 
@@ -254,7 +272,16 @@ void ExpressionAction::prepare(Block & sample_block)
                 column_with_name.column = makeNullable(column_with_name.column);
         }
         // fill one more column: groupingID.
-        sample_block.insert({nullptr, expand->grouping_identifier_column_type, expand->grouping_identifier_column_name});
+        sample_block.insert(
+            {nullptr, expand->grouping_identifier_column_type, expand->grouping_identifier_column_name});
+        break;
+    }
+    case CONVERT_TO_NULLABLE:
+    {
+        // sample block doesn't have the real column pointer, meaning sample_block.getByName(col_need_to_nullable).column will null.
+        // so expanding column if const for sample_block.getByName(col_need_to_nullable).column is meaningless.
+        if (!sample_block.getByName(col_need_to_nullable).type->isNullable())
+            convertColumnToNullable(sample_block.getByName(col_need_to_nullable));
         break;
     }
 
@@ -294,7 +321,8 @@ void ExpressionAction::prepare(Block & sample_block)
     case COPY_COLUMN:
     {
         result_type = sample_block.getByName(source_name).type;
-        sample_block.insert(ColumnWithTypeAndName(sample_block.getByName(source_name).column, result_type, result_name));
+        sample_block.insert(
+            ColumnWithTypeAndName(sample_block.getByName(source_name).column, result_type, result_name));
         break;
     }
 
@@ -308,7 +336,9 @@ void ExpressionAction::execute(Block & block) const
 {
     if (type == REMOVE_COLUMN || type == COPY_COLUMN)
         if (!block.has(source_name))
-            throw Exception("Not found column '" + source_name + "'. There are columns: " + block.dumpNames(), ErrorCodes::NOT_FOUND_COLUMN_IN_BLOCK);
+            throw Exception(
+                "Not found column '" + source_name + "'. There are columns: " + block.dumpNames(),
+                ErrorCodes::NOT_FOUND_COLUMN_IN_BLOCK);
 
     if (type == ADD_COLUMN || type == COPY_COLUMN || type == APPLY_FUNCTION)
         if (block.has(result_name))
@@ -337,7 +367,7 @@ void ExpressionAction::execute(Block & block) const
     //TODO: Clean up all Join logic in ExpressionAction
     case JOIN:
     {
-        ProbeProcessInfo probe_process_info(0);
+        ProbeProcessInfo probe_process_info(0, 0);
         probe_process_info.block = block;
         join->joinBlock(probe_process_info);
         break;
@@ -346,6 +376,16 @@ void ExpressionAction::execute(Block & block) const
     case EXPAND:
     {
         expand->replicateAndFillNull(block);
+        break;
+    }
+
+    case CONVERT_TO_NULLABLE:
+    {
+        // for expand usage, when original col is const non-null value, the inserted null value will break its const attribute in global scope.
+        if (ColumnPtr converted = block.getByName(col_need_to_nullable).column->convertToFullColumnIfConst())
+            block.getByName(col_need_to_nullable).column = converted;
+        if (!block.getByName(col_need_to_nullable).column->isColumnNullable())
+            convertColumnToNullable(block.getByName(col_need_to_nullable));
         break;
     }
 
@@ -388,62 +428,64 @@ void ExpressionAction::execute(Block & block) const
 
 String ExpressionAction::toString() const
 {
-    std::stringstream ss;
+    FmtBuffer fmt_buf;
     switch (type)
     {
     case ADD_COLUMN:
-        ss << "ADD " << result_name << " "
-           << (result_type ? result_type->getName() : "(no type)") << " "
-           << (added_column ? added_column->getName() : "(no column)");
+        fmt_buf.fmtAppend(
+            "ADD {} {} {}",
+            result_name,
+            (result_type ? result_type->getName() : "(no type)"),
+            (added_column ? added_column->getName() : "(no column)"));
         break;
 
     case REMOVE_COLUMN:
-        ss << "REMOVE " << source_name;
+        fmt_buf.fmtAppend("REMOVE {}", source_name);
         break;
 
     case COPY_COLUMN:
-        ss << "COPY " << result_name << " = " << source_name;
+        fmt_buf.fmtAppend("COPY {} = {}", result_name, source_name);
         break;
 
     case APPLY_FUNCTION:
-        ss << "FUNCTION " << result_name << " "
-           << (result_type ? result_type->getName() : "(no type)") << " = "
-           << (function ? function->getName() : "(no function)") << "(";
-        for (size_t i = 0; i < argument_names.size(); ++i)
-        {
-            if (i)
-                ss << ", ";
-            ss << argument_names[i];
-        }
-        ss << ")";
+        fmt_buf.fmtAppend(
+            "FUNCTION {} {} = {} (",
+            result_name,
+            (result_type ? result_type->getName() : "(no type)"),
+            (function ? function->getName() : "(no function)"));
+        fmt_buf.joinStr(argument_names.begin(), argument_names.end(), ", ");
+        fmt_buf.append(")");
         break;
 
     case JOIN:
-        ss << "JOIN ";
-        for (auto it = columns_added_by_join.begin(); it != columns_added_by_join.end(); ++it)
-        {
-            if (it != columns_added_by_join.begin())
-                ss << ", ";
-            ss << it->name;
-        }
+        fmt_buf.append("JOIN ");
+        fmt_buf.joinStr(
+            columns_added_by_join.begin(),
+            columns_added_by_join.end(),
+            [](const NamesAndTypesList::value_type & col, FmtBuffer & buf) { buf.append(col.name); },
+            ", ");
         break;
 
     case PROJECT:
-        ss << "PROJECT ";
-        for (size_t i = 0; i < projections.size(); ++i)
-        {
-            if (i)
-                ss << ", ";
-            ss << projections[i].first;
-            if (!projections[i].second.empty() && projections[i].second != projections[i].first)
-                ss << " AS " << projections[i].second;
-        }
+        fmt_buf.append("PROJECT ");
+        fmt_buf.joinStr(
+            projections.begin(),
+            projections.end(),
+            [](const NamesWithAliases::value_type & proj, FmtBuffer & buf) {
+                buf.append(proj.first);
+                if (!proj.second.empty() && proj.second != proj.first)
+                    buf.fmtAppend(" AS {}", proj.second);
+            },
+            ", ");
         break;
 
+    case CONVERT_TO_NULLABLE:
+        fmt_buf.fmtAppend("CONVERT_TO_NULLABLE({})", col_need_to_nullable);
+        break;
     default:
-        throw Exception("Unexpected Action type", ErrorCodes::LOGICAL_ERROR);
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected Action type, type={}", static_cast<int32_t>(type));
     }
-    return ss.str();
+    return fmt_buf.toString();
 }
 
 void ExpressionActions::addInput(const ColumnWithTypeAndName & column)
@@ -482,7 +524,9 @@ void ExpressionActions::addImpl(ExpressionAction action, Names & new_names)
         for (size_t i = 0; i < action.argument_names.size(); ++i)
         {
             if (!sample_block.has(action.argument_names[i]))
-                throw Exception("Unknown identifier: '" + action.argument_names[i] + "'", ErrorCodes::UNKNOWN_IDENTIFIER);
+                throw Exception(
+                    "Unknown identifier: '" + action.argument_names[i] + "'",
+                    ErrorCodes::UNKNOWN_IDENTIFIER);
             arguments[i] = sample_block.getByName(action.argument_names[i]);
         }
 
@@ -505,7 +549,8 @@ void ExpressionActions::execute(Block & block) const
         action.execute(block);
 }
 
-std::string ExpressionActions::getSmallestColumn(const NamesAndTypesList & columns)
+template <class NameAndTypeContainer>
+std::string ExpressionActions::getSmallestColumn(const NameAndTypeContainer & columns)
 {
     std::optional<size_t> min_size;
     String res;
@@ -528,15 +573,15 @@ std::string ExpressionActions::getSmallestColumn(const NamesAndTypesList & colum
     return res;
 }
 
-void ExpressionActions::finalize(const Names & output_columns)
+void ExpressionActions::finalize(const Names & output_columns, bool keep_used_input_columns)
 {
     NameSet final_columns;
     for (const auto & name : output_columns)
     {
         if (!sample_block.has(name))
-            throw Exception("Unknown column: " + name + ", there are only columns "
-                                + sample_block.dumpNames(),
-                            ErrorCodes::UNKNOWN_IDENTIFIER);
+            throw Exception(
+                "Unknown column: " + name + ", there are only columns " + sample_block.dumpNames(),
+                ErrorCodes::UNKNOWN_IDENTIFIER);
         final_columns.insert(name);
     }
 
@@ -569,7 +614,9 @@ void ExpressionActions::finalize(const Names & output_columns)
             if (!out.empty())
             {
                 /// If the result is not used and there are no side effects, throw out the action.
-                if (!needed_columns.count(out) && (action.type == ExpressionAction::APPLY_FUNCTION || action.type == ExpressionAction::ADD_COLUMN || action.type == ExpressionAction::COPY_COLUMN))
+                if (!needed_columns.count(out)
+                    && (action.type == ExpressionAction::APPLY_FUNCTION || action.type == ExpressionAction::ADD_COLUMN
+                        || action.type == ExpressionAction::COPY_COLUMN))
                 {
                     actions.erase(actions.begin() + i);
 
@@ -628,15 +675,19 @@ void ExpressionActions::finalize(const Names & output_columns)
         }
     }
 
-    /*    std::cerr << "\n";
-    for (const auto & action : actions)
-        std::cerr << action.toString() << "\n";
-    std::cerr << "\n";*/
-
     /// Deletes unnecessary temporary columns.
 
     /// If the column after performing the function `refcount = 0`, it can be deleted.
     std::map<String, int> columns_refcount;
+
+    NameSet columns_should_not_be_removed;
+    if (keep_used_input_columns)
+    {
+        /// if keep_used_input_columns is true, then don't remove the input_columns
+        /// this is used in nullaware/semi join which intends to reuse the input column
+        for (const auto & column : input_columns)
+            columns_should_not_be_removed.insert(column.name);
+    }
 
     for (const auto & name : final_columns)
         ++columns_refcount[name];
@@ -660,21 +711,22 @@ void ExpressionActions::finalize(const Names & output_columns)
     {
         new_actions.push_back(action);
 
-        auto process = [&](const String & name) {
+        auto process = [&](const String & name, const ExpressionAction::Type & type) {
             auto refcount = --columns_refcount[name];
-            if (refcount <= 0)
+            if (refcount <= 0 && columns_should_not_be_removed.count(name) == 0)
             {
-                new_actions.push_back(ExpressionAction::removeColumn(name));
+                if (type != ExpressionAction::REMOVE_COLUMN)
+                    new_actions.push_back(ExpressionAction::removeColumn(name));
                 if (sample_block.has(name))
                     sample_block.erase(name);
             }
         };
 
         if (!action.source_name.empty())
-            process(action.source_name);
+            process(action.source_name, action.type);
 
         for (const auto & name : action.argument_names)
-            process(name);
+            process(name, action.type);
 
         /// For `projection`, there is no reduction in `refcount`, because the `project` action replaces the names of the columns, in effect, already deleting them under the old names.
     }
@@ -701,6 +753,30 @@ std::string ExpressionActions::dumpActions() const
         ss << output_column.name << " " << output_column.type->getName() << "\n";
 
     return ss.str();
+}
+
+std::string ExpressionActions::dumpJSONActions() const
+{
+    Poco::JSON::Object::Ptr json = new Poco::JSON::Object();
+
+    Poco::JSON::Array::Ptr inputs = new Poco::JSON::Array();
+    for (const auto & input_col : input_columns)
+        inputs->add(fmt::format("{} {}", input_col.name, input_col.type->getName()));
+    json->set("input", inputs);
+
+    Poco::JSON::Array::Ptr acts = new Poco::JSON::Array();
+    for (const auto & action : actions)
+        acts->add(action.toString());
+    json->set("actions", acts);
+
+    Poco::JSON::Array::Ptr outputs = new Poco::JSON::Array();
+    for (const auto & output_col : sample_block.getNamesAndTypesList())
+        outputs->add(fmt::format("{} {}", output_col.name, output_col.type->getName()));
+    json->set("output", outputs);
+
+    std::stringstream buf;
+    json->stringify(buf);
+    return buf.str();
 }
 
 void ExpressionActionsChain::addStep()
@@ -741,19 +817,17 @@ void ExpressionActionsChain::finalize()
 
 std::string ExpressionActionsChain::dumpChain()
 {
-    std::stringstream ss;
-
+    FmtBuffer fmt_buf;
     for (size_t i = 0; i < steps.size(); ++i)
     {
-        ss << "step " << i << "\n";
-        ss << "required output:\n";
-        for (const std::string & name : steps[i].required_output)
-            ss << name << "\n";
-        ss << "\n"
-           << steps[i].actions->dumpActions() << "\n";
+        fmt_buf.fmtAppend("step {}\nrequired output:\n", i);
+        fmt_buf.joinStr(steps[i].required_output.begin(), steps[i].required_output.end(), "\n");
+        fmt_buf.fmtAppend("\n{}\n", steps[i].actions->dumpActions());
     }
-
-    return ss.str();
+    return fmt_buf.toString();
 }
+
+template std::string ExpressionActions::getSmallestColumn(const NamesAndTypesList & columns);
+template std::string ExpressionActions::getSmallestColumn(const NamesAndTypes & columns);
 
 } // namespace DB

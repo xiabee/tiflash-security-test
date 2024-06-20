@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Executor/ResultQueue.h>
+#include <Flash/Executor/ResultQueue_fwd.h>
 #include <Operators/Operator.h>
 
 namespace DB
@@ -24,26 +24,24 @@ class GetResultSinkOp : public SinkOp
 {
 public:
     GetResultSinkOp(
-        PipelineExecutorStatus & exec_status_,
+        PipelineExecutorContext & exec_context_,
         const String & req_id,
         const ResultQueuePtr & result_queue_)
-        : SinkOp(exec_status_, req_id)
+        : SinkOp(exec_context_, req_id)
         , result_queue(result_queue_)
     {
         assert(result_queue);
     }
 
-    String getName() const override
-    {
-        return "GetResultSinkOp";
-    }
+    String getName() const override { return "GetResultSinkOp"; }
 
 protected:
     OperatorStatus writeImpl(Block && block) override;
 
     OperatorStatus prepareImpl() override;
 
-    OperatorStatus awaitImpl() override;
+private:
+    OperatorStatus tryFlush();
 
 private:
     ResultQueuePtr result_queue;

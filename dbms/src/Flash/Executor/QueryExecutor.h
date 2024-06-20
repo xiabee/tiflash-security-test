@@ -32,10 +32,7 @@ class DAGContext;
 class QueryExecutor
 {
 public:
-    QueryExecutor(
-        const MemoryTrackerPtr & memory_tracker_,
-        Context & context_,
-        const String & req_id)
+    QueryExecutor(const MemoryTrackerPtr & memory_tracker_, Context & context_, const String & req_id)
         : memory_tracker(memory_tracker_)
         , context(context_)
         , log(Logger::get(req_id))
@@ -52,11 +49,13 @@ public:
 
     virtual int estimateNewThreadCount() = 0;
 
-    virtual RU collectRequestUnit() = 0;
+    virtual UInt64 collectCPUTimeNs() = 0;
 
     virtual Block getSampleBlock() const = 0;
 
     virtual BaseRuntimeStatistics getRuntimeStatistics() const = 0;
+
+    virtual String getExtraJsonInfo() const { return "{}"; }
 
 protected:
     virtual ExecutionResult execute(ResultHandler &&) = 0;

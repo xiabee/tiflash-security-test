@@ -46,6 +46,7 @@ ConfigReloader::~ConfigReloader()
     {
         quit = true;
 
+        cv.notify_all();
         if (thread.joinable())
             thread.join();
     }
@@ -62,18 +63,16 @@ void ConfigReloader::run()
 
     while (true)
     {
-        if (quit)
+        std::unique_lock lock(reload_mutex);
+        if (cv.wait_for(lock, reload_interval, [this]() { return quit.load(); }))
             return;
 
-        std::this_thread::sleep_for(reload_interval);
         reloadIfNewer(false, /* throw_on_error = */ false);
     }
 }
 
 void ConfigReloader::reloadIfNewer(bool force, bool throw_on_error)
 {
-    std::lock_guard lock(reload_mutex);
-
     FilesChangesTracker new_files = getNewFileList();
     bool config_object_updated = false;
     for (const auto & conf : config_objects)
@@ -85,9 +84,7 @@ void ConfigReloader::reloadIfNewer(bool force, bool throw_on_error)
         }
     }
 
-    if (force
-        || (new_files.valid() && new_files.isDifferOrNewerThan(files))
-        || config_object_updated)
+    if (force || (new_files.valid() && new_files.isDifferOrNewerThan(files)) || config_object_updated)
     {
         ConfigProcessor config_processor(path);
         ConfigProcessor::LoadedConfig loaded_config;

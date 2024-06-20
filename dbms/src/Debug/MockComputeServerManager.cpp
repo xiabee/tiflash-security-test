@@ -17,7 +17,7 @@
 #include <Debug/MockStorage.h>
 #include <Flash/Mpp/MPPTaskManager.h>
 #include <Interpreters/Context.h>
-#include <Storages/Transaction/TMTContext.h>
+#include <Storages/KVStore/TMTContext.h>
 #include <TestUtils/TiFlashTestEnv.h>
 
 #include <chrono>
@@ -35,10 +35,7 @@ void MockComputeServerManager::addServer(const String & addr)
     MockServerConfig config;
     for (const auto & server : server_config_map)
     {
-        RUNTIME_CHECK_MSG(
-            server.second.addr != addr,
-            "Already register mock compute server with addr = {}",
-            addr);
+        RUNTIME_CHECK_MSG(server.second.addr != addr, "Already register mock compute server with addr = {}", addr);
     }
     config.partition_id = server_config_map.size();
     config.addr = addr;
@@ -53,7 +50,9 @@ void MockComputeServerManager::startServers(const LoggerPtr & log_ptr, Context &
         TiFlashRaftConfig raft_config;
         raft_config.flash_server_addr = server_config.second.addr;
         Poco::AutoPtr<Poco::Util::LayeredConfiguration> config = new Poco::Util::LayeredConfiguration;
-        addServer(server_config.first, std::make_unique<FlashGrpcServerHolder>(global_context, *config, raft_config, log_ptr));
+        addServer(
+            server_config.first,
+            std::make_unique<FlashGrpcServerHolder>(global_context, *config, raft_config, log_ptr));
     }
 
     prepareMockMPPServerInfo();
@@ -120,14 +119,15 @@ void MockComputeServerManager::addServer(size_t partition_id, std::unique_ptr<Fl
     server_map[partition_id] = std::move(server);
 }
 
-void MockComputeServerManager::cancelQuery(const MPPQueryId & query_id)
+void MockComputeServerManager::cancelGather(const MPPGatherId & gather_id)
 {
     mpp::CancelTaskRequest req;
     auto * meta = req.mutable_meta();
-    meta->set_query_ts(query_id.query_ts);
-    meta->set_local_query_id(query_id.local_query_id);
-    meta->set_server_id(query_id.server_id);
-    meta->set_start_ts(query_id.start_ts);
+    meta->set_query_ts(gather_id.query_id.query_ts);
+    meta->set_local_query_id(gather_id.query_id.local_query_id);
+    meta->set_server_id(gather_id.query_id.server_id);
+    meta->set_start_ts(gather_id.query_id.start_ts);
+    meta->set_gather_id(gather_id.gather_id);
     mpp::CancelTaskResponse response;
     for (const auto & server : server_map)
         server.second->flashService()->cancelMPPTaskForTest(&req, &response);
