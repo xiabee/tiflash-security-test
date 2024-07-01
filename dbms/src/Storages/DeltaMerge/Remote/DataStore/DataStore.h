@@ -32,7 +32,7 @@ public:
     /**
      * Restores into a DMFile object. This token will be kept valid when DMFile is valid.
      */
-    virtual DMFilePtr restore(DMFileMeta::ReadMode read_mode) = 0;
+    virtual DMFilePtr restore(DMFile::ReadMetaMode read_mode) = 0;
 
 protected:
     // These should be the required information for any kind of DataStore.
@@ -124,7 +124,7 @@ struct fmt::formatter<DB::DM::Remote::RemoteGCThreshold>
     template <typename FormatContext>
     auto format(const DB::DM::Remote::RemoteGCThreshold & v, FormatContext & ctx) const -> decltype(ctx.out())
     {
-        return fmt::format_to(
+        return format_to(
             ctx.out(),
             "RemoteGCThreshold{{min_age={} min_file_threshold={} valid_rate={:2.2f}%}}",
             v.min_age_seconds,

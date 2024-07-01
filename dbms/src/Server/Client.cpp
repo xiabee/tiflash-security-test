@@ -14,6 +14,7 @@
 
 #include <AggregateFunctions/registerAggregateFunctions.h>
 #include <Client/Connection.h>
+#include <Common/ClickHouseRevision.h>
 #include <Common/Config/ConfigProcessor.h>
 #include <Common/Exception.h>
 #include <Common/ExternalTable.h>
@@ -22,7 +23,6 @@
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/Throttler.h>
-#include <Common/TiFlashBuildInfo.h>
 #include <Common/UnicodeBar.h>
 #include <Common/formatReadable.h>
 #include <Common/typeid_cast.h>
@@ -30,12 +30,12 @@
 #include <Core/Types.h>
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <Functions/registerFunctions.h>
-#include <IO/Buffer/ReadBufferFromFileDescriptor.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
-#include <IO/Buffer/WriteBufferFromFileDescriptor.h>
+#include <IO/ReadBufferFromFileDescriptor.h>
+#include <IO/ReadBufferFromMemory.h>
+#include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBufferFromFile.h>
+#include <IO/WriteBufferFromFileDescriptor.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTIdentifier.h>
@@ -500,15 +500,18 @@ private:
         String server_name;
         UInt64 server_version_major = 0;
         UInt64 server_version_minor = 0;
-        UInt64 server_version_patch = 0;
+        UInt64 server_revision = 0;
+
         if (max_client_network_bandwidth)
         {
             ThrottlerPtr throttler = std::make_shared<Throttler>(max_client_network_bandwidth, 0, "");
             connection->setThrottler(throttler);
         }
 
-        connection->getServerVersion(server_name, server_version_major, server_version_minor, server_version_patch);
-        server_version = fmt::format("{}.{}.{}", server_version_major, server_version_minor, server_version_patch);
+        connection->getServerVersion(server_name, server_version_major, server_version_minor, server_revision);
+
+        server_version
+            = toString(server_version_major) + "." + toString(server_version_minor) + "." + toString(server_revision);
 
         if (server_display_name = connection->getServerDisplayName(); server_display_name.length() == 0)
         {
@@ -1301,7 +1304,8 @@ private:
 
     static void showClientVersion()
     {
-        std::cout << "TiFlash client version " << TiFlashBuildInfo::getReleaseVersion() << "." << std::endl;
+        std::cout << "ClickHouse client version " << DBMS_VERSION_MAJOR << "." << DBMS_VERSION_MINOR << "."
+                  << ClickHouseRevision::get() << "." << std::endl;
     }
 
 public:

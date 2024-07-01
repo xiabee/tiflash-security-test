@@ -267,9 +267,7 @@ ExecutorBinderPtr compileAggregation(
                 ci.tp = TiDB::TypeLongLong;
                 ci.flag = TiDB::ColumnFlagUnsigned | TiDB::ColumnFlagNotNull;
             }
-            else if (
-                func->name == "max" || func->name == "min" || func->name == "first_row" || func->name == "sum"
-                || func->name == "avg")
+            else if (func->name == "max" || func->name == "min" || func->name == "first_row" || func->name == "sum")
             {
                 ci = children_ci[0];
                 ci.flag &= ~TiDB::ColumnFlagNotNull;

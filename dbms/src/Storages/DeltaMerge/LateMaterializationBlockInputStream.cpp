@@ -36,7 +36,7 @@ LateMaterializationBlockInputStream::LateMaterializationBlockInputStream(
     , log(Logger::get(NAME, req_id_))
 {}
 
-Block LateMaterializationBlockInputStream::read()
+Block LateMaterializationBlockInputStream::readImpl()
 {
     Block filter_column_block;
     FilterPtr filter = nullptr;

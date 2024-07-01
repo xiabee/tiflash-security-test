@@ -91,17 +91,9 @@ MPPTaskManager::MPPTaskManager(MPPTaskSchedulerPtr scheduler_)
 
 MPPTaskManager::~MPPTaskManager()
 {
-    shutdown();
-}
-
-void MPPTaskManager::shutdown()
-{
-    if (monitor)
-    {
-        std::lock_guard lock(monitor->mu);
-        monitor->is_shutdown = true;
-        monitor->cv.notify_all();
-    }
+    std::lock_guard lock(monitor->mu);
+    monitor->is_shutdown = true;
+    monitor->cv.notify_all();
 }
 
 MPPQueryPtr MPPTaskManager::addMPPQuery(
@@ -155,7 +147,7 @@ std::pair<MPPTunnelPtr, String> MPPTaskManager::findAsyncTunnel(
     if (!error_msg.empty())
     {
         /// if the gather is aborted, return the error message
-        LOG_WARNING(log, "{}: Gather <{}> is aborted, all its tasks are invalid.", req_info, id.gather_id.toString());
+        LOG_WARNING(log, "{}: Gather {} is aborted, all its tasks are invalid.", req_info, id.gather_id.toString());
         /// meet error
         return {nullptr, error_msg};
     }
@@ -237,11 +229,7 @@ std::pair<MPPTunnelPtr, String> MPPTaskManager::findTunnelWithTimeout(
         if (!error_msg.empty())
         {
             /// if the gather is aborted, return true to stop waiting timeout.
-            LOG_WARNING(
-                log,
-                "{}: Gather <{}> is aborted, all its tasks are invalid.",
-                req_info,
-                id.gather_id.toString());
+            LOG_WARNING(log, "{}: Gather {} is aborted, all its tasks are invalid.", req_info, id.gather_id.toString());
             cancelled = true;
             error_message = error_msg;
             return true;

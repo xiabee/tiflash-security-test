@@ -14,8 +14,7 @@
 
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
 #include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Compression/CompressionInfo.h>
+#include <IO/ReadBufferFromString.h>
 
 namespace DB
 {

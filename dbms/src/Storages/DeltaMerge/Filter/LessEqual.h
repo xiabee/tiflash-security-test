@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
-#include <Storages/DeltaMerge/Index/RoughCheck.h>
 
 namespace DB::DM
 {
@@ -23,18 +22,22 @@ namespace DB::DM
 class LessEqual : public ColCmpVal
 {
 public:
-    LessEqual(const Attr & attr_, const Field & value_)
-        : ColCmpVal(attr_, value_)
+    LessEqual(const Attr & attr_, const Field & value_, int null_direction)
+        : ColCmpVal(attr_, value_, null_direction)
     {}
 
     String name() override { return "less_equal"; }
 
     RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
     {
-        auto results = minMaxCheckCmp<RoughCheck::CheckGreater>(start_pack, pack_count, param, attr, value);
+        RSResults results(pack_count, RSResult::Some);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
+        results = rsindex.minmax->checkGreater(start_pack, pack_count, value, rsindex.type, null_direction);
         std::transform(results.begin(), results.end(), results.begin(), [](const auto result) { return !result; });
         return results;
     }
+
+    RSOperatorPtr switchDirection() override { return createGreater(attr, value, null_direction); }
 };
 
 } // namespace DB::DM

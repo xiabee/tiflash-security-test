@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Columns/Collator.h>
 #include <Common/COWPtr.h>
 #include <Common/Exception.h>
 #include <Common/PODArray.h>
@@ -130,28 +131,17 @@ public:
 
     /// Appends n-th element from other column with the same type.
     /// Is used in merge-sort and merges. It could be implemented in inherited classes more optimally than default implementation.
-    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertFrom(ConstColumnXXX, ...)
     virtual void insertFrom(const IColumn & src, size_t n) { insert(src[n]); }
 
-    /// Appends range of elements from other column with the same type.
+    /// Appends range of elements from other column.
     /// Could be used to concatenate columns.
-    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertRangeFrom(ConstColumnXXX, ...)
     virtual void insertRangeFrom(const IColumn & src, size_t start, size_t length) = 0;
 
     /// Appends one element from other column with the same type multiple times.
-    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertManyFrom(ConstColumnXXX, ...)
     virtual void insertManyFrom(const IColumn & src, size_t position, size_t length) = 0;
 
     /// Appends disjunctive elements from other column with the same type.
-    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertDisjunctFrom(ConstColumnXXX, ...)
     virtual void insertDisjunctFrom(const IColumn & src, const std::vector<size_t> & position_vec) = 0;
-
-    /// Appends one field multiple times. Can be optimized in inherited classes.
-    virtual void insertMany(const Field & field, size_t length)
-    {
-        for (size_t i = 0; i < length; ++i)
-            insert(field);
-    }
 
     /// Appends data located in specified memory chunk if it is possible (throws an exception if it cannot be implemented).
     /// Is used to optimize some computations (in aggregation, for example).
@@ -289,7 +279,7 @@ public:
       */
     virtual int compareAt(size_t n, size_t m, const IColumn & rhs, int nan_direction_hint) const = 0;
 
-    virtual int compareAt(size_t, size_t, const IColumn &, int, const TiDB::ITiDBCollator &) const
+    virtual int compareAt(size_t, size_t, const IColumn &, int, const ICollator &) const
     {
         throw Exception(
             fmt::format("Method compareAt with collation is not supported for {}", getName()),
@@ -304,7 +294,7 @@ public:
       */
     virtual void getPermutation(bool reverse, size_t limit, int nan_direction_hint, Permutation & res) const = 0;
 
-    virtual void getPermutation(const TiDB::ITiDBCollator &, bool, size_t, int, Permutation &) const
+    virtual void getPermutation(const ICollator &, bool, size_t, int, Permutation &) const
     {
         throw Exception(
             fmt::format("Method getPermutation with collation is not supported for {}", getName()),
@@ -401,12 +391,6 @@ public:
         return res;
     }
 
-    MutablePtr cloneFullColumn() const
-    {
-        MutablePtr res = clone();
-        res->forEachSubcolumn([](Ptr & subcolumn) { subcolumn = subcolumn->clone(); });
-        return res;
-    }
 
     /** Some columns can contain another columns inside.
       * So, we have a tree of columns. But not all combinations are possible.

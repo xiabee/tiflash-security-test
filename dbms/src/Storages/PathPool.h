@@ -17,7 +17,7 @@
 #include <Common/Logger.h>
 #include <Common/nocopyable.h>
 #include <Core/Types.h>
-#include <IO/FileProvider/FileProvider_fwd.h>
+#include <Encryption/FileProvider_fwd.h>
 #include <Storages/KVStore/Types.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/PathPool_fwd.h>
@@ -488,8 +488,6 @@ public:
     void shutdown() { shutdown_called.store(true); }
 
     bool isShutdown() const { return shutdown_called.load(); }
-
-    KeyspaceID getKeyspaceID() const { return keyspace_id; }
 
     DISALLOW_COPY(StoragePathPool);
 

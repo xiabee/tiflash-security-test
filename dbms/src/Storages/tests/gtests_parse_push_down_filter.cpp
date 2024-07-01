@@ -16,7 +16,7 @@
 #include <Common/typeid_cast.h>
 #include <Debug/dbgQueryCompiler.h>
 #include <Flash/Coprocessor/DAGQueryInfo.h>
-#include <Flash/Statistics/traverseExecutors.h>
+#include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
@@ -72,21 +72,17 @@ DM::PushDownFilterPtr ParsePushDownFilterTest::generatePushDownFilter(
         [&](const String &, const String &) { return table_info; },
         getDAGProperties(""));
     auto & dag_request = *query_tasks[0].dag_request;
-    DAGContext dag_context(dag_request, {}, NullspaceID, "", DAGRequestKind::Cop, "", 0, "", log);
+    DAGContext dag_context(dag_request, {}, NullspaceID, "", DAGRequestKind::Cop, "", log);
     ctx->setDAGContext(&dag_context);
     // Don't care about regions information in this test
+    DAGQuerySource dag(*ctx);
+    auto query_block = *dag.getRootQueryBlock();
     google::protobuf::RepeatedPtrField<tipb::Expr> empty_condition;
     // Push down all filters
+    const google::protobuf::RepeatedPtrField<tipb::Expr> & pushed_down_filters
+        = query_block.children[0]->selection != nullptr ? query_block.children[0]->selection->selection().conditions()
+                                                        : empty_condition;
     const google::protobuf::RepeatedPtrField<tipb::Expr> & conditions = empty_condition;
-    google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters;
-    traverseExecutors(&dag_request, [&](const tipb::Executor & executor) {
-        if (executor.has_selection())
-        {
-            pushed_down_filters = executor.selection().conditions();
-            return false;
-        }
-        return true;
-    });
 
     std::unique_ptr<DAGQueryInfo> dag_query;
     DM::ColumnDefines columns_to_read;
@@ -118,8 +114,13 @@ DM::PushDownFilterPtr ParsePushDownFilterTest::generatePushDownFilter(
 
     auto rs_operator
         = DM::FilterParser::parseDAGQuery(*dag_query, columns_to_read, std::move(create_attr_by_column_id), log);
-    auto push_down_filter
-        = DM::PushDownFilter::build(rs_operator, table_info.columns, pushed_down_filters, columns_to_read, *ctx, log);
+    auto push_down_filter = StorageDeltaMerge::buildPushDownFilter(
+        rs_operator,
+        table_info.columns,
+        pushed_down_filters,
+        columns_to_read,
+        *ctx,
+        log);
     return push_down_filter;
 }
 
@@ -144,8 +145,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"666\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -166,8 +168,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"greater\",\"col\":\"col_2\",\"value\":\"666\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -188,8 +191,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater_equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"greater_equal\",\"col\":\"col_2\",\"value\":\"667\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -210,8 +214,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "less");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"less\",\"col\":\"col_2\",\"value\":\"777\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -232,8 +237,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "less_equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"less_equal\",\"col\":\"col_2\",\"value\":\"776\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -268,8 +274,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"667\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -290,8 +297,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "not_equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"not_equal\",\"col\":\"col_2\",\"value\":\"667\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -312,8 +320,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"greater\",\"col\":\"col_2\",\"value\":\"667\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -334,8 +343,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater_equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"greater_equal\",\"col\":\"col_2\",\"value\":\"667\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -356,8 +366,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "less");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"less\",\"col\":\"col_2\",\"value\":\"777\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -378,8 +389,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "less_equal");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(rs_operator->toDebugString(), "{\"op\":\"less_equal\",\"col\":\"col_2\",\"value\":\"777\"}");
 
         Block before_where_block = Block{toVec<Int64>("col_2", {0, 1, 0, 1, 121, 666, 667, 888439})};
@@ -416,8 +428,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "not");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             "{\"op\":\"not\",\"children\":[{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"666\"}]}");
@@ -443,8 +456,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "and");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         std::regex rx(
             R"(\{"op":"and","children":\[\{"op":"unsupported",.*\},\{"op":"equal","col":"col_2","value":"666"\}\]\})");
         EXPECT_TRUE(std::regex_search(rs_operator->toDebugString(), rx));
@@ -470,9 +484,11 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "or");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 2);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
-        EXPECT_EQ(rs_operator->getColumnIDs()[1], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 2);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_id, 2);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             "{\"op\":\"or\",\"children\":[{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"789\"},{\"op\":\"equal\","
@@ -500,8 +516,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "and");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         std::regex rx(
             R"(\{"op":"and","children":\[\{"op":"unsupported",.*\},\{"op":"not","children":\[\{"op":"equal","col":"col_2","value":"666"\}\]\}\]\})");
         EXPECT_TRUE(std::regex_search(rs_operator->toDebugString(), rx));
@@ -527,9 +544,11 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "and");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 2);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
-        EXPECT_EQ(rs_operator->getColumnIDs()[1], 3);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 2);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_name, "col_3");
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_id, 3);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             "{\"op\":\"and\",\"children\":[{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"789\"},{\"op\":\"not\","
@@ -556,10 +575,13 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "and");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 3);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
-        EXPECT_EQ(rs_operator->getColumnIDs()[1], 3);
-        EXPECT_EQ(rs_operator->getColumnIDs()[2], 3);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 3);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_name, "col_3");
+        EXPECT_EQ(rs_operator->getAttrs()[1].col_id, 3);
+        EXPECT_EQ(rs_operator->getAttrs()[2].col_name, "col_3");
+        EXPECT_EQ(rs_operator->getAttrs()[2].col_id, 3);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             "{\"op\":\"and\",\"children\":[{\"op\":\"equal\",\"col\":\"col_2\",\"value\":\"789\"},{\"op\":\"or\","
@@ -587,8 +609,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "or");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         std::regex rx(
             R"(\{"op":"or","children":\[\{"op":"unsupported",.*\},\{"op":"equal","col":"col_2","value":"666"\}\]\})");
         EXPECT_TRUE(std::regex_search(rs_operator->toDebugString(), rx));
@@ -614,8 +637,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "or");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 2);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_2");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 2);
         std::regex rx(
             R"(\{"op":"or","children":\[\{"op":"unsupported",.*\},\{"op":"not","children":\[\{"op":"equal","col":"col_2","value":"666"\}\]\}\]\})");
         EXPECT_TRUE(std::regex_search(rs_operator->toDebugString(), rx));
@@ -643,7 +667,12 @@ try
         EXPECT_EQ(rs_operator->name(), "and");
         EXPECT_EQ(
             rs_operator->toDebugString(),
-            R"raw({"op":"and","children":[{"op":"unsupported","reason":"child of logical and is not function, expr.tp=ColumnRef"},{"op":"unsupported","reason":"child of logical and is not function, expr.tp=Uint64"}]})raw");
+            "{\"op\":\"and\",\"children\":[{\"op\":\"unsupported\",\"reason\":\"child of logical and is not "
+            "function\",\"content\":\"tp: ColumnRef val: \"\\200\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: "
+            "8 flag: 4097 flen: 0 decimal: 0 collate: 0 "
+            "}\",\"is_not\":\"0\"},{\"op\":\"unsupported\",\"reason\":\"child of logical and is not "
+            "function\",\"content\":\"tp: Uint64 val: \"\\000\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 1 "
+            "flag: 4129 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"}]}");
 
         Block before_where_block = Block{
             {toVec<String>("col_1", {"a", "b", "c", "test1", "d", "test1", "pingcap", "tiflash"}),
@@ -658,6 +687,7 @@ try
         EXPECT_EQ(filter->filter_columns->size(), 1);
     }
 
+    std::cout << " do query select * from default.t_111 where col_2 or 1 " << std::endl;
     {
         // Or between col and literal (not supported since Or only support when child is ColumnExpr)
         auto filter = generatePushDownFilter(
@@ -668,7 +698,12 @@ try
         EXPECT_EQ(rs_operator->name(), "or");
         EXPECT_EQ(
             rs_operator->toDebugString(),
-            R"raw({"op":"or","children":[{"op":"unsupported","reason":"child of logical operator is not function, child_type=ColumnRef"},{"op":"unsupported","reason":"child of logical operator is not function, child_type=Uint64"}]})raw");
+            "{\"op\":\"or\",\"children\":[{\"op\":\"unsupported\",\"reason\":\"child of logical operator is not "
+            "function\",\"content\":\"tp: ColumnRef val: \"\\200\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: "
+            "8 flag: 4097 flen: 0 decimal: 0 collate: 0 "
+            "}\",\"is_not\":\"0\"},{\"op\":\"unsupported\",\"reason\":\"child of logical operator is not "
+            "function\",\"content\":\"tp: Uint64 val: \"\\000\\000\\000\\000\\000\\000\\000\\001\" field_type { tp: 1 "
+            "flag: 4129 flen: 0 decimal: 0 collate: 0 }\",\"is_not\":\"0\"}]}");
 
         Block before_where_block = Block{
             {toVec<String>("col_1", {"a", "b", "c", "test1", "d", "test1", "pingcap", "tiflash"}),
@@ -725,8 +760,9 @@ try
             timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 4);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_timestamp");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 4);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             String("{\"op\":\"greater\",\"col\":\"col_timestamp\",\"value\":\"") + toString(converted_time)
@@ -774,8 +810,9 @@ try
             timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 4);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_timestamp");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 4);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             String("{\"op\":\"greater\",\"col\":\"col_timestamp\",\"value\":\"") + toString(converted_time)
@@ -830,8 +867,9 @@ try
             timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 4);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_timestamp");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 4);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             String("{\"op\":\"greater\",\"col\":\"col_timestamp\",\"value\":\"") + toString(converted_time)
@@ -879,8 +917,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 5);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_datetime");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 5);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             String("{\"op\":\"greater\",\"col\":\"col_datetime\",\"value\":\"") + toString(origin_time_stamp)
@@ -927,8 +966,9 @@ try
             default_timezone_info);
         const auto & rs_operator = filter->rs_operator;
         EXPECT_EQ(rs_operator->name(), "greater");
-        EXPECT_EQ(rs_operator->getColumnIDs().size(), 1);
-        EXPECT_EQ(rs_operator->getColumnIDs()[0], 6);
+        EXPECT_EQ(rs_operator->getAttrs().size(), 1);
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_name, "col_date");
+        EXPECT_EQ(rs_operator->getAttrs()[0].col_id, 6);
         EXPECT_EQ(
             rs_operator->toDebugString(),
             String("{\"op\":\"greater\",\"col\":\"col_date\",\"value\":\"") + toString(origin_time_stamp)

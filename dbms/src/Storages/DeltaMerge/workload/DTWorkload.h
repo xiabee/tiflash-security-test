@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Interpreters/Context_fwd.h>
-#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
 #include <fmt/ranges.h>
 
 #include <atomic>
@@ -25,13 +24,21 @@
 
 namespace DB
 {
+class Context;
 class Block;
 } // namespace DB
 
 namespace DB::DM
 {
 class DeltaMergeStore;
+struct ColumnDefine;
+using ColumnDefines = std::vector<ColumnDefine>;
 } // namespace DB::DM
+
+namespace Poco
+{
+class Logger;
+}
 
 namespace DB::DM::tests
 {

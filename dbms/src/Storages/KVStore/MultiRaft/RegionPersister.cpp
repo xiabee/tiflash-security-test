@@ -15,7 +15,7 @@
 #include <Common/Exception.h>
 #include <Common/FailPoint.h>
 #include <Common/SyncPoint/SyncPoint.h>
-#include <IO/Buffer/MemoryReadWriteBuffer.h>
+#include <IO/MemoryReadWriteBuffer.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/KVStore/MultiRaft/RegionManager.h>
@@ -75,13 +75,6 @@ void RegionPersister::computeRegionWriteBuffer(const Region & region, RegionCach
             region.dataInfo(),
             region_size);
     }
-}
-
-size_t RegionPersister::computeRegionWriteBuffer(const Region & region, WriteBuffer & buffer)
-{
-    auto region_size = 0;
-    std::tie(region_size, std::ignore) = region.serialize(buffer);
-    return region_size;
 }
 
 void RegionPersister::persist(const Region & region, const RegionTaskLock & lock)

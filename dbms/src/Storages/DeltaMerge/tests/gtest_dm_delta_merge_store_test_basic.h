@@ -89,30 +89,6 @@ public:
         return path_delegate.listPaths();
     }
 
-    std::pair<RowKeyRange, std::vector<ExternalDTFileInfo>> genDMFile(DMContext & context, const Block & block)
-    {
-        auto input_stream = std::make_shared<OneBlockInputStream>(block);
-        auto [store_path, file_id] = store->preAllocateIngestFile();
-
-        auto dmfile = writeIntoNewDMFile(
-            context,
-            std::make_shared<ColumnDefines>(store->getTableColumns()),
-            input_stream,
-            file_id,
-            store_path);
-
-        store->preIngestFile(store_path, file_id, dmfile->getBytesOnDisk());
-
-        const auto & pk_column = block.getByPosition(0).column;
-        auto min_pk = pk_column->getInt(0);
-        auto max_pk = pk_column->getInt(block.rows() - 1);
-        HandleRange range(min_pk, max_pk + 1);
-        auto handle_range = RowKeyRange::fromHandleRange(range);
-        auto external_file = ExternalDTFileInfo{.id = file_id, .range = handle_range};
-        // There are some duplicated info. This is to minimize the change to our test code.
-        return {handle_range, {external_file}};
-    }
-
 protected:
     DeltaMergeStorePtr store;
 };
@@ -137,7 +113,6 @@ class DeltaMergeStoreRWTest
 {
 public:
     DeltaMergeStoreRWTest()
-        : current_version(STORAGE_FORMAT_CURRENT)
     {
         mode = GetParam();
 
@@ -158,8 +133,6 @@ public:
             break;
         }
     }
-
-    ~DeltaMergeStoreRWTest() override { setStorageFormat(current_version); }
 
     void SetUp() override
     {
@@ -228,7 +201,6 @@ protected:
     TestMode mode;
     DeltaMergeStorePtr store;
     DMContextPtr dm_context;
-    StorageFormatVersion current_version;
 
     constexpr static const char * TRACING_NAME = "DeltaMergeStoreRWTest";
 

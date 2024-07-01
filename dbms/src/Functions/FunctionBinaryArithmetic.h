@@ -29,7 +29,6 @@
 #include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/NumberTraits.h>
-#include <Flash/Coprocessor/DAGContext.h>
 #include <Functions/DataTypeFromFieldType.h>
 #include <Functions/FunctionFactory.h>
 #include <Functions/FunctionHelpers.h>
@@ -37,7 +36,6 @@
 #include <Functions/IsOperation.h>
 #include <Functions/castTypeToEither.h>
 #include <IO/WriteHelpers.h>
-#include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
 #include <fmt/core.h>
 
@@ -725,21 +723,21 @@ struct DateBinaryOperationTraits
                    If<IsIntegral<LeftDataType> && IsDateOrDateTime<RightDataType>,
                       Then<RightDataType>,
                       Else<InvalidType>>>>>,
-        Else<
-            If<std::is_same_v<Op, MinusImpl<T0, T1>>,
-               Then<
-                   If<IsDateOrDateTime<LeftDataType>,
-                      Then<
-                          If<std::is_same_v<LeftDataType, RightDataType>,
-                             Then<DataTypeInt32>,
-                             Else<If<IsIntegral<RightDataType>, Then<LeftDataType>, Else<InvalidType>>>>>,
-                      Else<InvalidType>>>,
-               Else<
-                   If<std::is_same_v<T0, T1>
-                          && (std::is_same_v<Op, BinaryLeastBaseImpl<T0, T1>>
-                              || std::is_same_v<Op, BinaryGreatestBaseImpl<T0, T1>>),
-                      Then<LeftDataType>,
-                      Else<InvalidType>>>>>>;
+        Else<If<
+            std::is_same_v<Op, MinusImpl<T0, T1>>,
+            Then<
+                If<IsDateOrDateTime<LeftDataType>,
+                   Then<
+                       If<std::is_same_v<LeftDataType, RightDataType>,
+                          Then<DataTypeInt32>,
+                          Else<If<IsIntegral<RightDataType>, Then<LeftDataType>, Else<InvalidType>>>>>,
+                   Else<InvalidType>>>,
+            Else<If<
+                std::is_same_v<
+                    T0,
+                    T1> && (std::is_same_v<Op, BinaryLeastBaseImpl<T0, T1>> || std::is_same_v<Op, BinaryGreatestBaseImpl<T0, T1>>),
+                Then<LeftDataType>,
+                Else<InvalidType>>>>>>;
 };
 
 
@@ -765,16 +763,12 @@ public:
 
     explicit FunctionBinaryArithmetic(const Context & context)
         : context(context)
-        , div_prec_incr(
-              context.getDAGContext() ? context.getDAGContext()->getDivPrecisionIncrement()
-                                      : DEFAULT_DIV_PRECISION_INCREMENT)
     {}
 
     bool useDefaultImplementationForNulls() const override { return default_impl_for_nulls; }
 
 private:
     const Context & context;
-    const Int32 div_prec_incr;
 
     template <typename ResultDataType>
     bool checkRightTypeImpl(DataTypePtr & type_res) const
@@ -832,24 +826,20 @@ private:
             {
                 PrecType left_prec = IntPrec<LeftFieldType>::prec;
                 auto [right_prec, right_scale] = getPrecAndScale(arguments[1].get());
+
                 auto [result_prec, result_scale] = Op<LeftFieldType, RightFieldType>::ResultPrecInferer::infer(
                     left_prec,
                     0,
                     right_prec,
-                    right_scale,
-                    div_prec_incr);
+                    right_scale);
                 return createDecimal(result_prec, result_scale);
             }
             else if constexpr (std::is_integral_v<RightFieldType>)
             {
                 ScaleType right_prec = IntPrec<RightFieldType>::prec;
                 auto [left_prec, left_scale] = getPrecAndScale(arguments[0].get());
-                auto [result_prec, result_scale] = Op<LeftFieldType, RightFieldType>::ResultPrecInferer::infer(
-                    left_prec,
-                    left_scale,
-                    right_prec,
-                    0,
-                    div_prec_incr);
+                auto [result_prec, result_scale]
+                    = Op<LeftFieldType, RightFieldType>::ResultPrecInferer::infer(left_prec, left_scale, right_prec, 0);
                 return createDecimal(result_prec, result_scale);
             }
             auto [left_prec, left_scale] = getPrecAndScale(arguments[0].get());
@@ -858,8 +848,7 @@ private:
                 left_prec,
                 left_scale,
                 right_prec,
-                right_scale,
-                div_prec_incr);
+                right_scale);
 
             return createDecimal(result_prec, result_scale);
         }
@@ -1156,8 +1145,8 @@ public:
                 using T1 = typename RightDataType::FieldType;
                 using ResultType = typename ResultDataType::FieldType;
                 using ExpectedResultType = typename Op<T0, T1>::ResultType;
-                if constexpr ((!IsDecimal<ResultType>
-                               || !IsDecimal<ExpectedResultType>)&&!std::is_same_v<ResultType, ExpectedResultType>)
+                if constexpr ((!IsDecimal<ResultType> || !IsDecimal<ExpectedResultType>)&&!std::
+                                  is_same_v<ResultType, ExpectedResultType>)
                 {
                     return false;
                 }

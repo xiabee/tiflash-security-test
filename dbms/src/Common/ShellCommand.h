@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
+#include <IO/ReadBufferFromFile.h>
+#include <IO/WriteBufferFromFile.h>
 
 #include <memory>
 

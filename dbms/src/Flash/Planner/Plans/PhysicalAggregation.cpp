@@ -54,20 +54,9 @@ PhysicalPlanNodePtr PhysicalAggregation::build(
     NamesAndTypes aggregated_columns;
     AggregateDescriptions aggregate_descriptions;
     Names aggregation_keys;
-    // key_ref_agg_func and agg_func_ref_key are two optimizations for aggregation:
-    // 1. key_ref_agg_func: for group by key with collation, there will always be a first_row agg func
-    //    to help keep the original column. For these key columns, no need to copy it from HashMap to result column,
-    //    instead a pointer to reference to their corresponding first_row agg func is enough.
-    // 2. agg_func_ref_key: for group by key without collation and corresponding first_row exists.
-    //    We can eliminate their first_row func, a pointer to reference the group by key is enough.
-    //    So we can avoid unnecessary agg func computation, also it's good for memory usage.
-    KeyRefAggFuncMap key_ref_agg_func;
-    AggFuncRefKeyMap agg_func_ref_key;
-
-    std::unordered_map<String, TiDB::TiDBCollatorPtr> collators;
+    TiDB::TiDBCollators collators;
     {
         std::unordered_set<String> agg_key_set;
-        const bool collation_sensitive = AggregationInterpreterHelper::isGroupByCollationSensitive(context);
         analyzer.buildAggFuncs(aggregation, before_agg_actions, aggregate_descriptions, aggregated_columns);
         analyzer.buildAggGroupBy(
             aggregation.group_by(),
@@ -76,14 +65,12 @@ PhysicalPlanNodePtr PhysicalAggregation::build(
             aggregated_columns,
             aggregation_keys,
             agg_key_set,
-            key_ref_agg_func,
-            collation_sensitive,
+            AggregationInterpreterHelper::isGroupByCollationSensitive(context),
             collators);
-        analyzer.tryEliminateFirstRow(aggregation_keys, collators, agg_func_ref_key, aggregate_descriptions);
     }
 
-    auto expr_after_agg_actions
-        = analyzer.appendCopyColumnAfterAgg(aggregated_columns, key_ref_agg_func, agg_func_ref_key);
+    auto expr_after_agg_actions = PhysicalPlanHelper::newActions(aggregated_columns);
+    analyzer.reset(aggregated_columns);
     analyzer.appendCastAfterAgg(expr_after_agg_actions, aggregation);
     /// project action after aggregation to remove useless columns.
     auto schema = PhysicalPlanHelper::addSchemaProjectAction(expr_after_agg_actions, analyzer.getCurrentInputColumns());
@@ -96,8 +83,6 @@ PhysicalPlanNodePtr PhysicalAggregation::build(
         child,
         before_agg_actions,
         aggregation_keys,
-        key_ref_agg_func,
-        agg_func_ref_key,
         collators,
         AggregationInterpreterHelper::isFinalAgg(aggregation),
         aggregate_descriptions,
@@ -115,21 +100,19 @@ void PhysicalAggregation::buildBlockInputStreamImpl(DAGPipeline & pipeline, Cont
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        log->identifier(),
+        fmt::format("{}_aggregation", log->identifier()),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
         context.getFileProvider(),
         context.getSettingsRef().max_threads,
         context.getSettingsRef().max_block_size);
-    auto params = *AggregationInterpreterHelper::buildParams(
+    auto params = AggregationInterpreterHelper::buildParams(
         context,
         before_agg_header,
         pipeline.streams.size(),
         fine_grained_shuffle.enable() ? pipeline.streams.size() : 1,
         aggregation_keys,
-        key_ref_agg_func,
-        agg_func_ref_key,
         aggregation_collators,
         aggregate_descriptions,
         is_final_agg,
@@ -233,21 +216,19 @@ void PhysicalAggregation::buildPipelineExecGroupImpl(
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        log->identifier(),
+        fmt::format("{}_aggregation", log->identifier()),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
         context.getFileProvider(),
         context.getSettingsRef().max_threads,
         context.getSettingsRef().max_block_size);
-    auto params = *AggregationInterpreterHelper::buildParams(
+    auto params = AggregationInterpreterHelper::buildParams(
         context,
         before_agg_header,
         concurrency,
         concurrency,
         aggregation_keys,
-        key_ref_agg_func,
-        agg_func_ref_key,
         aggregation_collators,
         aggregate_descriptions,
         is_final_agg,
@@ -283,13 +264,11 @@ void PhysicalAggregation::buildPipeline(
         auto agg_build = std::make_shared<PhysicalAggregationBuild>(
             executor_id,
             schema,
-            req_id,
+            log->identifier(),
             child,
             before_agg_actions,
             aggregation_keys,
             aggregation_collators,
-            key_ref_agg_func,
-            agg_func_ref_key,
             is_final_agg,
             aggregate_descriptions,
             aggregate_context);
@@ -302,14 +281,14 @@ void PhysicalAggregation::buildPipeline(
         auto agg_convergent = std::make_shared<PhysicalAggregationConvergent>(
             executor_id,
             schema,
-            req_id,
+            log->identifier(),
             aggregate_context,
             expr_after_agg);
         builder.addPlanNode(agg_convergent);
     }
 }
 
-void PhysicalAggregation::finalizeImpl(const Names & parent_require)
+void PhysicalAggregation::finalize(const Names & parent_require)
 {
     // schema.size() >= parent_require.size()
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);

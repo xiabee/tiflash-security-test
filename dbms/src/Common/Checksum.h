@@ -14,10 +14,9 @@
 
 #pragma once
 #include <Common/Exception.h>
-#include <Common/ProfileEvents.h>
+#include <IO/HashingWriteBuffer.h>
 #include <Poco/Base64Decoder.h>
 #include <Poco/Base64Encoder.h>
-#include <city.h>
 #include <common/crc64.h>
 #ifdef __x86_64__
 #include <xxh_x86dispatch.h>

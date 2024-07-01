@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/Exception.h>
-#include <IO/Encryption/MockKeyManager.h>
+#include <Encryption/MockKeyManager.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/FormattingChannel.h>
 #include <Poco/Logger.h>
@@ -77,7 +77,7 @@ enum DebugMode
 void dump_all_entries(PageFileSet & page_files, int32_t mode = DebugMode::DUMP_ALL_ENTRIES);
 void list_all_capacity(const PageFileSet & page_files, PageStorage & storage, const DB::PageStorageConfig & config);
 
-DB::PageStorageConfig parse_storage_config(int argc, char ** argv, DB::LoggerPtr logger)
+DB::PageStorageConfig parse_storage_config(int argc, char ** argv, Poco::Logger * logger)
 {
     DB::PageStorageConfig config;
     if (argc > 4)
@@ -132,7 +132,7 @@ try
     DB::String mode_str = argv[2];
     int32_t mode = strtol(mode_str.c_str(), nullptr, 10);
 
-    DB::LoggerPtr logger = DB::Logger::get("root");
+    Poco::Logger * logger = &Poco::Logger::get("root");
 
     switch (mode)
     {
@@ -178,10 +178,7 @@ try
         return 0;
     }
 
-    auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(
-        4,
-        "bg-page-",
-        std::make_shared<DB::JointThreadInfoJeallocMap>());
+    auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
     DB::PageStorageConfig config = parse_storage_config(argc, argv, logger);
     PageStorage storage("PageCtl", delegator, config, file_provider, *bkg_pool);
     storage.restore();

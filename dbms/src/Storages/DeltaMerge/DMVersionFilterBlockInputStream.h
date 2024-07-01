@@ -21,7 +21,7 @@
 #include <DataStreams/SelectionByColumnIdTransformAction.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/ScanContext_fwd.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 #include <common/logger_useful.h>
 
 namespace DB
@@ -116,15 +116,15 @@ private:
         if constexpr (MODE == DM_VERSION_FILTER_MODE_MVCC)
         {
             filter[i] = !deleted && cur_version <= version_limit
-                && (cur_handle != next_handle || next_version > version_limit);
+                && (compare(cur_handle, next_handle) != 0 || next_version > version_limit);
         }
         else if constexpr (MODE == DM_VERSION_FILTER_MODE_COMPACT)
         {
             filter[i] = cur_version >= version_limit
-                || ((cur_handle != next_handle || next_version > version_limit) && !deleted);
-            not_clean[i] = filter[i] && (cur_handle == next_handle || deleted);
+                || ((compare(cur_handle, next_handle) != 0 || next_version > version_limit) && !deleted);
+            not_clean[i] = filter[i] && (compare(cur_handle, next_handle) == 0 || deleted);
             is_deleted[i] = filter[i] && deleted;
-            effective[i] = filter[i] && (cur_handle != next_handle);
+            effective[i] = filter[i] && (compare(cur_handle, next_handle) != 0);
             if (filter[i])
                 gc_hint_version = std::min(
                     gc_hint_version,
@@ -190,12 +190,12 @@ private:
         // update status variable for next row if need
         if (next_handle_valid)
         {
-            if (cur_handle != next_handle)
+            if (compare(cur_handle, next_handle) != 0)
             {
                 is_first_oldest_version = true;
                 is_second_oldest_version = false;
             }
-            else if (is_first_oldest_version && cur_handle == next_handle)
+            else if (is_first_oldest_version && (compare(cur_handle, next_handle) == 0))
             {
                 is_first_oldest_version = false;
                 is_second_oldest_version = true;

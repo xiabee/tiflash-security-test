@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Executor/ResultQueue_fwd.h>
+#include <Flash/Executor/ResultQueue.h>
 #include <Operators/Operator.h>
 
 namespace DB
@@ -40,8 +40,7 @@ protected:
 
     OperatorStatus prepareImpl() override;
 
-private:
-    OperatorStatus tryFlush();
+    OperatorStatus awaitImpl() override;
 
 private:
     ResultQueuePtr result_queue;

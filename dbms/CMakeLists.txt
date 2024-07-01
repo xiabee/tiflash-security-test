@@ -58,9 +58,6 @@ add_headers_and_sources(tiflash_common_io src/Common)
 add_headers_and_sources(tiflash_common_io src/Common/HashTable)
 add_headers_and_sources(tiflash_common_io src/Common/SyncPoint)
 add_headers_and_sources(tiflash_common_io src/IO)
-add_headers_and_sources(tiflash_common_io src/IO/BaseFile)
-add_headers_and_sources(tiflash_common_io src/IO/Buffer)
-add_headers_and_sources(tiflash_common_io src/IO/Checksum)
 
 add_headers_and_sources(dbms src/Analyzers)
 add_headers_and_sources(dbms src/Core)
@@ -70,17 +67,8 @@ add_headers_and_sources(dbms src/DataTypes)
 add_headers_and_sources(dbms src/Databases)
 add_headers_and_sources(dbms src/Debug)
 add_headers_and_sources(dbms src/Debug/MockExecutor)
-add_headers_and_sources(dbms src/Debug/MockKVStore)
-add_headers_and_sources(dbms src/Debug/dbgKVStore)
 add_headers_and_sources(dbms src/Dictionaries)
-# Encryption needs to link tiflash-proxy, but we do not want to link tiflash-proxy to tiflash_common_io.
-# So we put the encryption source files in dbms.
-add_headers_and_sources(dbms src/IO/Encryption)
-# Some source files under src/IO/Compression need to use specific cxx flags.
-# In order to enable PCH for tiflash_common_io, so we put it in dbms as well.
-add_headers_and_sources(dbms src/IO/Compression)
-# FileProvider relies on Encryption, so we put it in dbms as well.
-add_headers_and_sources(dbms src/IO/FileProvider)
+add_headers_and_sources(dbms src/Encryption)
 add_headers_and_sources(dbms src/Interpreters)
 add_headers_and_sources(dbms src/Interpreters/SharedContexts)
 add_headers_and_sources(dbms src/Columns)
@@ -104,10 +92,6 @@ check_then_add_sources_compile_flag (
     src/Columns/ColumnVector.cpp
     src/DataTypes/DataTypeString.cpp
     src/Interpreters/Join.cpp
-    src/IO/Compression/CompressionCodecFOR.cpp
-    src/IO/Compression/CompressionCodecDeltaFOR.cpp
-    src/Storages/DeltaMerge/BitmapFilter/BitmapFilter.cpp
-    src/Storages/DeltaMerge/DMVersionFilterBlockInputStream.cpp
 )
 
 list (APPEND tiflash_common_io_sources ${CONFIG_BUILD})
@@ -154,14 +138,17 @@ else ()
     install (TARGETS dbms LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT tiflash)
 endif ()
 
-target_include_directories(dbms PUBLIC ${TiFlash_SOURCE_DIR}/contrib/not_null/include)
 target_include_directories(dbms PUBLIC "${TIFLASH_PROXY_INCLUDE_DIR}")
 
 if (CMAKE_BUILD_TYPE_UC STREQUAL "RELEASE" OR CMAKE_BUILD_TYPE_UC STREQUAL "RELWITHDEBINFO" OR CMAKE_BUILD_TYPE_UC STREQUAL "MINSIZEREL")
     # Won't generate debug info for files with heavy template instantiation to achieve faster linking and lower size.
     set_source_files_properties(
+        src/Dictionaries/FlatDictionary.cpp
+        src/Dictionaries/HashedDictionary.cpp
         src/Dictionaries/CacheDictionary.cpp
         src/Dictionaries/TrieDictionary.cpp
+        src/Dictionaries/RangeHashedDictionary.cpp
+        src/Dictionaries/ComplexKeyHashedDictionary.cpp
         src/Dictionaries/ComplexKeyCacheDictionary.cpp
         src/Dictionaries/ComplexKeyCacheDictionary_generate1.cpp
         src/Dictionaries/ComplexKeyCacheDictionary_generate2.cpp
@@ -196,11 +183,9 @@ target_link_libraries (tiflash_common_io
     prometheus-cpp::pull
     cpptoml
     magic_enum
-    simdjson
     libsymbolization
     ${RE2_LIBRARY}
     ${RE2_ST_LIBRARY}
-    fastpforlib
 )
 
 target_include_directories (tiflash_common_io BEFORE PRIVATE ${kvClient_SOURCE_DIR}/include)
@@ -252,6 +237,11 @@ endif()
 
 target_link_libraries (dbms ${Poco_Foundation_LIBRARY})
 
+if (USE_ICU)
+    target_link_libraries (dbms ${ICU_LIBS})
+    target_include_directories (dbms PRIVATE ${ICU_INCLUDE_DIR})
+endif ()
+
 target_link_libraries (dbms
     Threads::Threads
 )
@@ -267,11 +257,8 @@ if (NOT USE_INTERNAL_ZSTD_LIBRARY)
 endif ()
 
 if (USE_QPL)
-    target_link_libraries (tiflash_common_io PUBLIC ${QPL_LIBRARY})
-    target_include_directories (dbms BEFORE PRIVATE ${QPL_INCLUDE_DIR})
-    set_source_files_properties (
-        src/IO/Compression/CompressionCodecDeflateQpl.cpp
-        PROPERTIES COMPILE_FLAGS "-mwaitpkg")
+    target_link_libraries (dbms ${QPL_LIBRARY})
+    target_include_directories (dbms PRIVATE ${QPL_INCLUDE_DIR})
 endif ()
 
 target_include_directories (dbms PUBLIC ${DBMS_INCLUDE_DIR})
@@ -374,7 +361,7 @@ if (ENABLE_TESTS)
         )
     target_include_directories(bench_dbms BEFORE PRIVATE ${SPARCEHASH_INCLUDE_DIR} ${benchmark_SOURCE_DIR}/include)
     target_compile_definitions(bench_dbms PUBLIC DBMS_PUBLIC_GTEST)
-    target_link_libraries(bench_dbms gtest dbms test_util_bench_main benchmark tiflash_functions server_for_test delta_merge kvstore tiflash_aggregate_functions)
+    target_link_libraries(bench_dbms gtest dbms test_util_bench_main benchmark tiflash_functions server_for_test delta_merge kvstore)
 
     add_check(bench_dbms)
 endif ()

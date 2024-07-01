@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/FailPoint.h>
 #include <Flash/Coprocessor/AggregationInterpreterHelper.h>
 #include <Flash/Coprocessor/InterpreterUtils.h>
 #include <Flash/Executor/PipelineExecutorContext.h>
-#include <Flash/Pipeline/Schedule/Events/Impls/AggregateFinalConvertEvent.h>
-#include <Flash/Pipeline/Schedule/Events/Impls/AggregateFinalSpillEvent.h>
+#include <Flash/Pipeline/Schedule/Events/AggregateFinalSpillEvent.h>
 #include <Flash/Planner/Plans/PhysicalAggregationBuild.h>
 #include <Interpreters/Context.h>
 #include <Operators/AggregateBuildSinkOp.h>
@@ -25,11 +23,6 @@
 
 namespace DB
 {
-namespace FailPoints
-{
-extern const char force_agg_two_level_hash_table_before_merge[];
-} // namespace FailPoints
-
 void PhysicalAggregationBuild::buildPipelineExecGroupImpl(
     PipelineExecutorContext & exec_context,
     PipelineExecGroupBuilder & group_builder,
@@ -47,7 +40,7 @@ void PhysicalAggregationBuild::buildPipelineExecGroupImpl(
     AggregationInterpreterHelper::fillArgColumnNumbers(aggregate_descriptions, before_agg_header);
     SpillConfig spill_config(
         context.getTemporaryPath(),
-        log->identifier(),
+        fmt::format("{}_aggregation", log->identifier()),
         context.getSettingsRef().max_cached_data_bytes_in_spiller,
         context.getSettingsRef().max_spilled_rows_per_file,
         context.getSettingsRef().max_spilled_bytes_per_file,
@@ -60,15 +53,13 @@ void PhysicalAggregationBuild::buildPipelineExecGroupImpl(
         concurrency,
         1,
         aggregation_keys,
-        key_ref_agg_func,
-        agg_func_ref_key,
         aggregation_collators,
         aggregate_descriptions,
         is_final_agg,
         spill_config);
     assert(aggregate_context);
     aggregate_context->initBuild(
-        *params,
+        params,
         concurrency,
         /*hook=*/[&]() { return exec_context.isCancelled(); },
         exec_context.getRegisterOperatorSpillContext());
@@ -86,76 +77,47 @@ void PhysicalAggregationBuild::buildPipelineExecGroupImpl(
 EventPtr PhysicalAggregationBuild::doSinkComplete(PipelineExecutorContext & exec_context)
 {
     assert(aggregate_context);
-
-    SCOPE_EXIT({ aggregate_context.reset(); });
-
     aggregate_context->getAggSpillContext()->finishSpillableStage();
-    bool need_final_spill = aggregate_context->hasSpilledData();
-    if (!need_final_spill)
+    bool need_final_spill = false;
+    for (size_t i = 0; i < aggregate_context->getBuildConcurrency(); ++i)
     {
-        for (size_t i = 0; i < aggregate_context->getBuildConcurrency(); ++i)
+        if (aggregate_context->getAggSpillContext()->isThreadMarkedForAutoSpill(i))
         {
-            if (aggregate_context->getAggSpillContext()->isThreadMarkedForAutoSpill(i))
-            {
-                need_final_spill = true;
-                break;
-            }
+            need_final_spill = true;
+            break;
         }
     }
-
-    if (aggregate_context->isConvertibleToTwoLevel())
+    if (!aggregate_context->hasSpilledData() && !need_final_spill)
     {
-        bool need_convert_to_two_level = need_final_spill || aggregate_context->hasAtLeastOneTwoLevel();
-        fiu_do_on(FailPoints::force_agg_two_level_hash_table_before_merge, { need_convert_to_two_level = true; });
-        if (need_convert_to_two_level)
-        {
-            std::vector<size_t> indexes;
-            for (size_t index = 0; index < aggregate_context->getBuildConcurrency(); ++index)
-            {
-                if (!aggregate_context->isTwoLevelOrEmpty(index))
-                    indexes.push_back(index);
-            }
-            if (!indexes.empty())
-            {
-                auto final_convert_event = std::make_shared<AggregateFinalConvertEvent>(
-                    exec_context,
-                    log->identifier(),
-                    aggregate_context,
-                    std::move(indexes),
-                    need_final_spill,
-                    std::move(profile_infos));
-                return final_convert_event;
-            }
-        }
+        aggregate_context.reset();
+        return nullptr;
     }
 
-    if (need_final_spill)
+    /// Currently, the aggregation spill algorithm requires all bucket data to be spilled,
+    /// so a new event is added here to execute the final spill.
+    /// ...──►AggregateBuildSinkOp[local spill]──┐
+    /// ...──►AggregateBuildSinkOp[local spill]──┤                                         ┌──►AggregateFinalSpillTask
+    /// ...──►AggregateBuildSinkOp[local spill]──┼──►[final spill]AggregateFinalSpillEvent─┼──►AggregateFinalSpillTask
+    /// ...──►AggregateBuildSinkOp[local spill]──┤                                         └──►AggregateFinalSpillTask
+    /// ...──►AggregateBuildSinkOp[local spill]──┘
+    std::vector<size_t> indexes;
+    for (size_t index = 0; index < aggregate_context->getBuildConcurrency(); ++index)
     {
-        /// Currently, the aggregation spill algorithm requires all bucket data to be spilled,
-        /// so a new event is added here to execute the final spill.
-        /// ...──►AggregateBuildSinkOp[local spill]──┐
-        /// ...──►AggregateBuildSinkOp[local spill]──┤                                         ┌──►AggregateFinalSpillTask
-        /// ...──►AggregateBuildSinkOp[local spill]──┼──►[final spill]AggregateFinalSpillEvent─┼──►AggregateFinalSpillTask
-        /// ...──►AggregateBuildSinkOp[local spill]──┤                                         └──►AggregateFinalSpillTask
-        /// ...──►AggregateBuildSinkOp[local spill]──┘
-        std::vector<size_t> indexes;
-        for (size_t index = 0; index < aggregate_context->getBuildConcurrency(); ++index)
-        {
-            if (aggregate_context->needSpill(index, /*try_mark_need_spill=*/true))
-                indexes.push_back(index);
-        }
-        if (!indexes.empty())
-        {
-            auto final_spill_event = std::make_shared<AggregateFinalSpillEvent>(
-                exec_context,
-                log->identifier(),
-                aggregate_context,
-                std::move(indexes),
-                std::move(profile_infos));
-            return final_spill_event;
-        }
+        if (aggregate_context->needSpill(index, /*try_mark_need_spill=*/true))
+            indexes.push_back(index);
     }
-
+    if (!indexes.empty())
+    {
+        auto final_spill_event = std::make_shared<AggregateFinalSpillEvent>(
+            exec_context,
+            log->identifier(),
+            aggregate_context,
+            std::move(indexes),
+            std::move(profile_infos));
+        aggregate_context.reset();
+        return final_spill_event;
+    }
+    aggregate_context.reset();
     return nullptr;
 }
 } // namespace DB

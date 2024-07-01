@@ -40,14 +40,13 @@ int StressWorkload::mainEntry(int argc, char ** argv)
     }
     try
     {
+        StressEnv::initGlobalLogger();
         auto env = StressEnv::parse(argc, argv);
         env.setup();
 
-        auto & factory = PageWorkloadFactory::getInstance();
-        factory.setEnv(env);
-        factory.runWorkload();
-
-        SCOPE_EXIT({ factory.stopWorkload(); });
+        auto & mamager = PageWorkloadFactory::getInstance();
+        mamager.setEnv(env);
+        mamager.runWorkload();
 
         return StressEnvStatus::getInstance().isSuccess();
     }

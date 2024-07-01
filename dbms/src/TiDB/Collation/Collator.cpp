@@ -195,6 +195,8 @@ public:
 
     std::unique_ptr<IPattern> pattern() const override { return std::make_unique<Pattern<BinCollator<T, padding>>>(); }
 
+    const std::string & getLocale() const override { return name; }
+
 private:
     const std::string name = padding ? "BinaryPadding" : "Binary";
 
@@ -274,6 +276,8 @@ public:
     }
 
     std::unique_ptr<IPattern> pattern() const override { return std::make_unique<Pattern<GeneralCICollator>>(); }
+
+    const std::string & getLocale() const override { return name; }
 
 private:
     const std::string name = "GeneralCI";
@@ -450,6 +454,8 @@ public:
     }
 
     std::unique_ptr<IPattern> pattern() const override { return std::make_unique<Pattern<UCACICollator>>(); }
+
+    const std::string & getLocale() const override { return name; }
 
 private:
     const std::string name = "UnicodeCI";

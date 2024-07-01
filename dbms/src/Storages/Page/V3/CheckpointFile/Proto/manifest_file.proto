@@ -86,3 +86,4 @@ message LockFile {
     // There could be heavy duplicates. We rely on compression to reduce file size.
     bytes name = 1;
 }
+

@@ -14,20 +14,49 @@
 
 #pragma once
 #include <Common/MemoryTrackerSetter.h>
-#include <Flash/Pipeline/Schedule/Tasks/NotifyFuture.h>
-#include <Storages/DeltaMerge/DMContext_fwd.h>
+#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/ReadMode.h>
 #include <Storages/DeltaMerge/ReadThread/WorkQueue.h>
-#include <Storages/DeltaMerge/SegmentReadTask.h>
+#include <Storages/DeltaMerge/RowKeyRangeUtils.h>
+#include <Storages/DeltaMerge/Segment.h>
+namespace DB
+{
+namespace DM
+{
+struct SegmentReadTask;
+class Segment;
+using SegmentPtr = std::shared_ptr<Segment>;
+struct SegmentSnapshot;
+using SegmentSnapshotPtr = std::shared_ptr<SegmentSnapshot>;
 
-namespace DB::DM
-{
-namespace tests
-{
-class SegmentReadTasksPoolTest;
-}
+using SegmentReadTaskPtr = std::shared_ptr<SegmentReadTask>;
+using SegmentReadTasks = std::list<SegmentReadTaskPtr>;
 using AfterSegmentRead = std::function<void(const DMContextPtr &, const SegmentPtr &)>;
+
+struct SegmentReadTask
+{
+    SegmentPtr segment;
+    SegmentSnapshotPtr read_snapshot;
+    RowKeyRanges ranges;
+
+    SegmentReadTask(
+        const SegmentPtr & segment_, //
+        const SegmentSnapshotPtr & read_snapshot_,
+        const RowKeyRanges & ranges_);
+
+    explicit SegmentReadTask(const SegmentPtr & segment_, const SegmentSnapshotPtr & read_snapshot_);
+
+    ~SegmentReadTask();
+
+    std::pair<size_t, size_t> getRowsAndBytes() const;
+
+    void addRange(const RowKeyRange & range) { ranges.push_back(range); }
+
+    void mergeRanges() { ranges = DM::tryMergeRanges(std::move(ranges), 1); }
+
+    static SegmentReadTasks trySplitReadTasks(const SegmentReadTasks & tasks, size_t expected_size);
+};
 
 class BlockStat
 {
@@ -90,27 +119,27 @@ public:
     SegmentReadTaskPtr nextTask();
 
     // `getTask` and `getTasks` are used when `enable_read_thread` is true.
-    SegmentReadTaskPtr getTask(const GlobalSegmentID & seg_id);
-    const std::unordered_map<GlobalSegmentID, SegmentReadTaskPtr> & getTasks() const;
+    SegmentReadTaskPtr getTask(UInt64 seg_id);
+    const std::unordered_map<UInt64, SegmentReadTaskPtr> & getTasks() const;
 
     bool empty() const;
 
 private:
     bool enable_read_thread;
     SegmentReadTasks ordered_tasks;
-    std::unordered_map<GlobalSegmentID, SegmentReadTaskPtr> unordered_tasks;
+    std::unordered_map<UInt64, SegmentReadTaskPtr> unordered_tasks;
 };
 
-class SegmentReadTaskPool
-    : public NotifyFuture
-    , private boost::noncopyable
+class SegmentReadTaskPool : private boost::noncopyable
 {
 public:
     SegmentReadTaskPool(
+        int64_t physical_table_id_,
         int extra_table_id_index_,
+        const DMContextPtr & dm_context_,
         const ColumnDefines & columns_to_read_,
         const PushDownFilterPtr & filter_,
-        uint64_t start_ts_,
+        uint64_t max_version_,
         size_t expected_block_size_,
         ReadMode read_mode_,
         SegmentReadTasks && tasks_,
@@ -120,7 +149,7 @@ public:
         Int64 num_streams_,
         const String & res_group_name_);
 
-    ~SegmentReadTaskPool() override
+    ~SegmentReadTaskPool()
     {
         auto [pop_times, pop_empty_times, max_queue_size] = q.getStat();
         auto pop_empty_ratio = pop_times > 0 ? pop_empty_times * 1.0 / pop_times : 0.0;
@@ -131,10 +160,11 @@ public:
         auto total_rows = blk_stat.totalRows();
         LOG_INFO(
             log,
-            "Done. pool_id={} pop={} pop_empty={} pop_empty_ratio={} "
+            "Done. pool_id={} table_id={} pop={} pop_empty={} pop_empty_ratio={} "
             "max_queue_size={} blk_avg_bytes={} approximate_max_pending_block_bytes={:.2f}MB "
             "total_count={} total_bytes={:.2f}MB total_rows={} avg_block_rows={} avg_rows_bytes={}B",
             pool_id,
+            physical_table_id,
             pop_times,
             pop_empty_times,
             pop_empty_ratio,
@@ -149,19 +179,18 @@ public:
     }
 
     SegmentReadTaskPtr nextTask();
-    const std::unordered_map<GlobalSegmentID, SegmentReadTaskPtr> & getTasks();
-    SegmentReadTaskPtr getTask(const GlobalSegmentID & seg_id);
+    const std::unordered_map<UInt64, SegmentReadTaskPtr> & getTasks();
+    SegmentReadTaskPtr getTask(UInt64 seg_id);
 
     BlockInputStreamPtr buildInputStream(SegmentReadTaskPtr & t);
 
-    bool readOneBlock(BlockInputStreamPtr & stream, const SegmentReadTaskPtr & seg);
+    bool readOneBlock(BlockInputStreamPtr & stream, const SegmentPtr & seg);
     void popBlock(Block & block);
     bool tryPopBlock(Block & block);
 
-    MergingSegments::iterator scheduleSegment(
-        MergingSegments & segments,
-        UInt64 expected_merge_count,
-        bool enable_data_sharing);
+    std::unordered_map<uint64_t, std::vector<uint64_t>>::const_iterator scheduleSegment(
+        const std::unordered_map<uint64_t, std::vector<uint64_t>> & segments,
+        uint64_t expected_merge_count);
 
     Int64 increaseUnorderedInputStreamRefCount();
     Int64 decreaseUnorderedInputStreamRefCount();
@@ -173,17 +202,16 @@ public:
 
     std::once_flag & addToSchedulerFlag() { return add_to_scheduler; }
 
-    void registerTask(TaskPtr && task) override { q.registerPipeTask(std::move(task)); }
-
 public:
     const uint64_t pool_id;
+    const int64_t physical_table_id;
 
     // The memory tracker of MPPTask.
     const MemoryTrackerPtr mem_tracker;
 
     ColumnDefines & getColumnToRead() { return columns_to_read; }
 
-    void appendRSOperator(RSOperatorPtr & new_filter) const
+    void appendRSOperator(RSOperatorPtr & new_filter)
     {
         if (filter->rs_operator == DM::EMPTY_RS_OPERATOR)
         {
@@ -202,24 +230,29 @@ public:
 
     const LoggerPtr & getLogger() const { return log; }
 
+#ifndef DBMS_PUBLIC_GTEST
 private:
+#else
+public:
+#endif
     Int64 getFreeActiveSegmentsUnlock() const;
     bool exceptionHappened() const;
-    void finishSegment(const SegmentReadTaskPtr & seg);
+    void finishSegment(const SegmentPtr & seg);
     void pushBlock(Block && block);
 
     bool isRUExhaustedImpl();
 
     const int extra_table_id_index;
+    DMContextPtr dm_context;
     ColumnDefines columns_to_read;
     PushDownFilterPtr filter;
-    const uint64_t start_ts;
+    const uint64_t max_version;
     const size_t expected_block_size;
     const ReadMode read_mode;
     SegmentReadTasksWrapper tasks_wrapper;
     AfterSegmentRead after_segment_read;
     mutable std::mutex mutex;
-    std::unordered_set<GlobalSegmentID> active_segment_ids;
+    std::unordered_set<uint64_t> active_segment_ids;
     WorkQueue<Block> q;
     BlockStat blk_stat;
     LoggerPtr log;
@@ -248,14 +281,29 @@ private:
     inline static BlockStat global_blk_stat;
     static uint64_t nextPoolId() { return pool_id_gen.fetch_add(1, std::memory_order_relaxed); }
     inline static constexpr Int64 check_ru_interval_ms = 100;
-
-    friend class tests::SegmentReadTasksPoolTest;
 };
 
 using SegmentReadTaskPoolPtr = std::shared_ptr<SegmentReadTaskPool>;
 using SegmentReadTaskPools = std::vector<SegmentReadTaskPoolPtr>;
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB
+
+
+template <>
+struct fmt::formatter<DB::DM::SegmentReadTaskPtr>
+{
+    template <typename FormatContext>
+    auto format(const DB::DM::SegmentReadTaskPtr & t, FormatContext & ctx) const -> decltype(ctx.out())
+    {
+        return format_to(
+            ctx.out(),
+            "{}_{}_{}",
+            t->segment->segmentId(),
+            t->segment->segmentEpoch(),
+            t->read_snapshot->delta->getDeltaIndexEpoch());
+    }
+};
 
 template <>
 struct fmt::formatter<DB::DM::SegmentReadTaskPoolPtr>

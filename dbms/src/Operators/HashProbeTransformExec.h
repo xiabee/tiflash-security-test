@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Flash/Executor/ResultQueue.h>
 #include <Interpreters/Join.h>
 #include <Operators/Operator.h>
 
@@ -23,9 +24,6 @@ class HashProbeTransformExec;
 using HashProbeTransformExecPtr = std::shared_ptr<HashProbeTransformExec>;
 
 class PipelineExecutorContext;
-
-class SharedQueueSourceHolder;
-using SharedQueueSourceHolderPtr = std::shared_ptr<SharedQueueSourceHolder>;
 
 class HashProbeTransformExec : public std::enable_shared_from_this<HashProbeTransformExec>
 {
@@ -78,6 +76,7 @@ public:
 
     // For restore probe stage
     void startRestoreProbe();
+    bool prepareProbeRestoredBlock();
 
     bool shouldRestore() const { return join->isSpilled() || join->isRestoreJoin(); }
 
@@ -89,9 +88,6 @@ public:
     OperatorStatus tryFillProcessInfoInProbeStage(ProbeProcessInfo & probe_process_info, Block & input);
 
 private:
-    // For restore build stage
-    bool prepareProbeRestoredBlock();
-
     // For restore probe stage
     Block popProbeRestoredBlock();
 
@@ -114,7 +110,7 @@ private:
     HashProbeTransformExecPtr parent;
 
     // For restore probe.
-    SharedQueueSourceHolderPtr probe_source_holder;
+    ResultQueuePtr probe_result_queue;
     BlockInputStreamPtr probe_restore_stream;
     Block probe_restored_block;
     bool is_probe_restore_done = false;

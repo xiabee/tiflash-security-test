@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/Buffer/ReadBufferFromMemory.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Poco/ConsoleChannel.h>
 #include <Poco/File.h>
 #include <Poco/FormattingChannel.h>
@@ -70,6 +70,7 @@ private:
 public:
     PSWriter(const PSPtr & ps_, const std::string root_)
         : ps(ps_)
+        , gen()
         , root(root_)
         , state(FILLING_UP_DISK)
     {}
@@ -83,7 +84,7 @@ public:
             }
             assert(ps != nullptr);
             std::normal_distribution<> d{MAX_PAGE_ID / 2, 150};
-            const DB::PageId page_id = static_cast<DB::PageId>(std::round(d(gen))) % MAX_PAGE_ID;
+            const DB::PageId pageId = static_cast<DB::PageId>(std::round(d(gen))) % MAX_PAGE_ID;
 
             DB::WriteBatch wb;
             // fill page with random bytes
@@ -168,14 +169,14 @@ int main(int argc, char ** argv)
     auto page_files = DB::PageStorage::listAllPageFiles(path, true, &Poco::Logger::get("root"));
     for (auto & page_file : page_files)
     {
-        DB::PS::V2::PageEntries page_entries;
+        DB::PageEntries page_entries;
         const_cast<DB::PageFile &>(page_file).readAndSetPageMetas(page_entries, false);
         printf(
             "File: page_%lu_%u with %zu entries:\n",
             page_file.getFileId(),
             page_file.getLevel(),
             page_entries.size());
-        DB::PS::V2::PageIdAndEntries id_and_caches;
+        DB::PageIdAndEntries id_and_caches;
         for (auto iter = page_entries.cbegin(); iter != page_entries.cend(); ++iter)
         {
             auto pid = iter.pageId();

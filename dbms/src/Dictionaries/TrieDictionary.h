@@ -163,6 +163,8 @@ public:
 
     void has(const Columns & key_columns, const DataTypes & key_types, PaddedPODArray<UInt8> & out) const;
 
+    BlockInputStreamPtr getBlockInputStream(const Names & column_names, size_t max_block_size) const override;
+
 private:
     template <typename Value>
     using ContainerType = std::vector<Value>;
@@ -200,7 +202,7 @@ private:
 
     void calculateBytesAllocated();
 
-    static void validateKeyTypes(const DataTypes & key_types);
+    void validateKeyTypes(const DataTypes & key_types) const;
 
     template <typename T>
     void createAttributeImpl(Attribute & attribute, const Field & null_value);
@@ -234,7 +236,7 @@ private:
     void has(const Attribute & attribute, const Columns & key_columns, PaddedPODArray<UInt8> & out) const;
 
     template <typename Getter, typename KeyType>
-    void trieTraverse(const btrie_t * tree, Getter && getter) const;
+    void trieTraverse(const btrie_t * trie, Getter && getter) const;
 
     Columns getKeyColumns() const;
 

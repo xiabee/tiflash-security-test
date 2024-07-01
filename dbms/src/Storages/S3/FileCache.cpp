@@ -18,7 +18,7 @@
 #include <Common/Stopwatch.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/escapeForFileName.h>
-#include <IO/BaseFile/PosixRandomAccessFile.h>
+#include <Encryption/PosixRandomAccessFile.h>
 #include <IO/IOThreadPools.h>
 #include <Interpreters/Settings.h>
 #include <Server/StorageConfigParser.h>
@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 namespace ProfileEvents
 {
@@ -54,8 +55,6 @@ extern const int FILE_DOESNT_EXIST;
 namespace DB
 {
 using FileType = FileSegment::FileType;
-
-std::unique_ptr<FileCache> FileCache::global_file_cache_instance;
 
 FileCache::FileCache(PathCapacityMetricsPtr capacity_metrics_, const StorageRemoteCacheConfig & config_)
     : capacity_metrics(capacity_metrics_)
@@ -399,7 +398,7 @@ FileType FileCache::getFileType(const String & fname)
     auto ext = p.extension();
     if (ext.empty())
     {
-        return p.stem() == DM::DMFileMetaV2::metaFileName() ? FileType::Meta : FileType::Unknow;
+        return p.stem() == DM::DMFile::metav2FileName() ? FileType::Meta : FileType::Unknow;
     }
     else if (ext == ".merged")
     {
@@ -554,7 +553,7 @@ String FileCache::toLocalFilename(const String & s3_key)
     return fmt::format("{}/{}", cache_dir, s3_key);
 }
 
-String FileCache::toS3Key(const String & local_fname) const
+String FileCache::toS3Key(const String & local_fname)
 {
     return local_fname.substr(cache_dir.size() + 1);
 }

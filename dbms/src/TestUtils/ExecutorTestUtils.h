@@ -31,13 +31,21 @@ TiDB::TP dataTypeToTP(const DataTypePtr & type);
 ColumnsWithTypeAndName readBlock(BlockInputStreamPtr stream);
 ColumnsWithTypeAndName readBlocks(std::vector<BlockInputStreamPtr> streams);
 
-#define WRAP_FOR_TEST_BEGIN                        \
-    std::vector<bool> pipeline_bools{false, true}; \
-    for (auto enable_pipeline : pipeline_bools)    \
-    {                                              \
-        enablePipeline(enable_pipeline);
+#define WRAP_FOR_TEST_BEGIN                         \
+    std::vector<bool> planner_bools{false, true};   \
+    for (auto enable_planner : planner_bools)       \
+    {                                               \
+        enablePlanner(enable_planner);              \
+        std::vector<bool> pipeline_bools{false};    \
+        if (enable_planner)                         \
+            pipeline_bools.push_back(true);         \
+        for (auto enable_pipeline : pipeline_bools) \
+        {                                           \
+            enablePipeline(enable_pipeline);
 
-#define WRAP_FOR_TEST_END }
+#define WRAP_FOR_TEST_END \
+    }                     \
+    }
 
 class ExecutorTest : public ::testing::Test
 {
@@ -59,13 +67,11 @@ public:
 
     DAGContext & getDAGContext();
 
+    void enablePlanner(bool is_enable) const;
+
     void enablePipeline(bool is_enable) const;
 
-    static ::testing::AssertionResult dagRequestEqual(
-        const char * lhs_expr,
-        const char * rhs_expr,
-        const String & expected_string,
-        const std::shared_ptr<tipb::DAGRequest> & actual);
+    static void dagRequestEqual(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & actual);
 
     void executeInterpreter(
         const String & expected_string,
@@ -109,7 +115,7 @@ public:
         case ExchangeReceiver:
             return "exchange_receiver_0";
         default:
-            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unknown Executor Source type {}", fmt::underlying(type));
+            throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unknown Executor Source type {}", type);
         }
     }
 
@@ -152,13 +158,12 @@ protected:
     std::unique_ptr<DAGContext> dag_context_ptr;
 };
 
-#define ASSERT_DAGREQUEST_EQAUL(str, request) ASSERT_PRED_FORMAT2(ExecutorTest::dagRequestEqual, (str), (request));
+#define ASSERT_DAGREQUEST_EQAUL(str, request) dagRequestEqual((str), (request));
 #define ASSERT_BLOCKINPUTSTREAM_EQAUL(str, request, concurrency) executeInterpreter((str), (request), (concurrency))
 
 // nullable type
 using ColStringNullableType = std::optional<typename TypeTraits<String>::FieldType>;
 using ColInt8NullableType = std::optional<typename TypeTraits<Int8>::FieldType>;
-using ColUInt8NullableType = std::optional<typename TypeTraits<UInt8>::FieldType>;
 using ColInt16NullableType = std::optional<typename TypeTraits<Int16>::FieldType>;
 using ColInt32NullableType = std::optional<typename TypeTraits<Int32>::FieldType>;
 using ColInt64NullableType = std::optional<typename TypeTraits<Int64>::FieldType>;
@@ -173,14 +178,10 @@ using ColUInt64Type = typename TypeTraits<UInt64>::FieldType;
 using ColInt64Type = typename TypeTraits<Int64>::FieldType;
 using ColFloat64Type = typename TypeTraits<Float64>::FieldType;
 using ColStringType = typename TypeTraits<String>::FieldType;
-using ColInt32Type = typename TypeTraits<Int32>::FieldType;
-using ColUInt8Type = typename TypeTraits<UInt8>::FieldType;
-using ColInt8Type = typename TypeTraits<Int8>::FieldType;
 
 // nullable column
 using ColumnWithNullableString = std::vector<ColStringNullableType>;
 using ColumnWithNullableInt8 = std::vector<ColInt8NullableType>;
-using ColumnWithNullableUInt8 = std::vector<ColUInt8NullableType>;
 using ColumnWithNullableInt16 = std::vector<ColInt16NullableType>;
 using ColumnWithNullableInt32 = std::vector<ColInt32NullableType>;
 using ColumnWithNullableInt64 = std::vector<ColInt64NullableType>;
@@ -195,7 +196,4 @@ using ColumnWithInt64 = std::vector<ColInt64Type>;
 using ColumnWithUInt64 = std::vector<ColUInt64Type>;
 using ColumnWithFloat64 = std::vector<ColFloat64Type>;
 using ColumnWithString = std::vector<ColStringType>;
-using ColumnWithUInt8 = std::vector<ColUInt8Type>;
-using ColumnWithInt8 = std::vector<ColInt8Type>;
-using ColumnWithInt32 = std::vector<ColInt32Type>;
 } // namespace DB::tests

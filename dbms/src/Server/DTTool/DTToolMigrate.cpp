@@ -13,7 +13,8 @@
 // limitations under the License.
 
 #include <Common/config.h>
-#include <IO/Checksum/ChecksumBuffer.h>
+#include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
+#include <IO/ChecksumBuffer.h>
 #include <IO/IOSWrapper.h>
 #include <Server/DTTool/DTTool.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
@@ -31,16 +32,16 @@ bool isIgnoredInMigration(const DB::DM::DMFile & file, const std::string & targe
     UNUSED(file);
     return target == "NGC"; // this is not exported
 }
-bool needFrameMigration(const DB::DM::DMFile & /*file*/, const std::string & target)
+bool needFrameMigration(const DB::DM::DMFile & file, const std::string & target)
 {
     return endsWith(target, ".mrk") || endsWith(target, ".dat") || endsWith(target, ".idx")
-        || endsWith(target, ".merged") || DB::DM::DMFileMeta::packStatFileName() == target;
+        || endsWith(target, ".merged") || file.packStatFileName() == target;
 }
 bool isRecognizable(const DB::DM::DMFile & file, const std::string & target)
 {
-    return DB::DM::DMFileMeta::metaFileName() == target || DB::DM::DMFileMeta::configurationFileName() == target
-        || DB::DM::DMFileMeta::packPropertyFileName() == target || needFrameMigration(file, target)
-        || isIgnoredInMigration(file, target) || DB::DM::DMFileMetaV2::metaFileName() == target;
+    return file.metaFileName() == target || file.configurationFileName() == target
+        || file.packPropertyFileName() == target || needFrameMigration(file, target)
+        || isIgnoredInMigration(file, target) || file.metav2FileName() == target;
 }
 
 namespace bpo = boost::program_options;
@@ -193,7 +194,7 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
             args.file_id,
             0,
             args.workdir,
-            DB::DM::DMFileMeta::ReadMode::all());
+            DB::DM::DMFile::ReadMetaMode::all());
         auto source_version = 0;
         if (src_file->useMetaV2())
         {
@@ -238,8 +239,8 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
         input_stream->readPrefix();
         if (!args.dry_mode)
             output_stream.writePrefix();
-        auto stat_iter = src_file->getPackStats().begin();
-        auto properties_iter = src_file->getPackProperties().property().begin();
+        auto stat_iter = src_file->pack_stats.begin();
+        auto properties_iter = src_file->pack_properties.property().begin();
         size_t counter = 0;
         // iterate all blocks and rewrite them to new dtfile
         while (auto block = input_stream->read())
@@ -270,7 +271,7 @@ int migrateServiceMain(DB::Context & context, const MigrateArgs & args)
                 args.file_id,
                 1,
                 keeper.migration_temp_dir.path(),
-                DB::DM::DMFileMeta::ReadMode::all());
+                DB::DM::DMFile::ReadMetaMode::all());
         }
     }
     LOG_INFO(logger, "migration finished");
@@ -372,9 +373,9 @@ int migrateEntry(const std::vector<std::string> & opts, RaftStoreFFIFunc ffi_fun
                 return -EINVAL;
             }
 
-            if (!vm.contains("level"))
+            if (vm.count("level") == 0)
             {
-                args.compression_level = DB::CompressionSetting::getDefaultLevel(args.compression_method);
+                args.compression_level = DB::CompressionSettings::getDefaultLevel(args.compression_method);
             }
             else
             {

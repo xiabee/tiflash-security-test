@@ -17,16 +17,18 @@
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
-#include <IO/BaseFile/MemoryRandomAccessFile.h>
+#include <Encryption/RandomAccessFile.h>
 #include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/S3/FileCache.h>
+#include <Storages/S3/MemoryRandomAccessFile.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <aws/s3/model/GetObjectRequest.h>
-#include <common/likely.h>
 
+#include <chrono>
 #include <optional>
+#include <thread>
 
 namespace ProfileEvents
 {
@@ -43,7 +45,6 @@ S3RandomAccessFile::S3RandomAccessFile(std::shared_ptr<TiFlashS3Client> client_p
     , cur_offset(0)
     , log(Logger::get(remote_fname))
 {
-    RUNTIME_CHECK(client_ptr != nullptr);
     RUNTIME_CHECK(initialize(), remote_fname);
 }
 
@@ -205,10 +206,6 @@ bool S3RandomAccessFile::initialize()
         RUNTIME_CHECK(read_result.GetBody(), remote_fname, strerror(errno));
         GET_METRIC(tiflash_storage_s3_request_seconds, type_get_object).Observe(sw.elapsedSeconds());
         break;
-    }
-    if (cur_retry >= max_retry && !request_succ)
-    {
-        LOG_INFO(log, "S3 GetObject timeout: {}, max_retry={}", remote_fname, max_retry);
     }
     return request_succ;
 }

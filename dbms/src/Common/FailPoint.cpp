@@ -101,6 +101,7 @@ namespace DB
     M(force_use_dmfile_format_v3)                            \
     M(force_set_mocked_s3_object_mtime)                      \
     M(force_stop_background_checkpoint_upload)               \
+    M(skip_seek_before_read_dmfile)                          \
     M(exception_after_large_write_exceed)                    \
     M(proactive_flush_force_set_type)                        \
     M(exception_when_fetch_disagg_pages)                     \
@@ -108,13 +109,7 @@ namespace DB
     M(force_set_parallel_prehandle_threshold)                \
     M(force_raise_prehandle_exception)                       \
     M(force_agg_on_partial_block)                            \
-    M(force_set_fap_candidate_store_id)                      \
-    M(force_not_clean_fap_on_destroy)                        \
-    M(force_fap_worker_throw)                                \
-    M(delta_tree_create_node_fail)                           \
-    M(disable_flush_cache)                                   \
-    M(force_agg_two_level_hash_table_before_merge)           \
-    M(force_thread_0_no_agg_spill)
+    M(delta_tree_create_node_fail)
 
 #define APPLY_FOR_PAUSEABLE_FAILPOINTS_ONCE(M) \
     M(pause_with_alter_locks_acquired)         \
@@ -136,7 +131,6 @@ namespace DB
     M(pause_after_copr_streams_acquired)  \
     M(pause_query_init)                   \
     M(pause_before_prehandle_snapshot)    \
-    M(pause_before_prehandle_subtask)     \
     M(pause_when_persist_region)          \
     M(pause_before_wn_establish_task)     \
     M(pause_passive_flush_before_persist_region)

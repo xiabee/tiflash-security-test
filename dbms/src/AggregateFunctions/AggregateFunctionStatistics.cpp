@@ -29,7 +29,6 @@ namespace
 {
 template <template <typename> class FunctionTemplate>
 AggregateFunctionPtr createAggregateFunctionStatisticsUnary(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)
@@ -49,7 +48,6 @@ AggregateFunctionPtr createAggregateFunctionStatisticsUnary(
 
 template <template <typename, typename> class FunctionTemplate>
 AggregateFunctionPtr createAggregateFunctionStatisticsBinary(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & parameters)

@@ -24,29 +24,31 @@ def main():
         return 1
 
     infile = sys.argv[1]
-    j = json.load(open(infile))
-    panels = j['panels']
-    existing_ids = {}
-
+    dashboard = json.load(open(infile))
     ok = True
 
-    if j["title"] != "Test-Cluster-TiFlash-Summary":
+    time_range_define = dashboard['time']
+    if time_range_define["from"] != "now-1h" or time_range_define["to"] != "now":
+        logging.error("Found time range changed! {}".format(time_range_define))
         ok = False
-        logging.error("key={} actual={}".format("title", j["title"]))
-    if j["uid"] != "SVbh2xUWk":
+    
+    title = dashboard["title"]
+    if title != 'Test-Cluster-TiFlash-Summary':
+        logging.error("Found title changed! {}".format(title))
         ok = False
-        logging.error("key={} actual={}".format("uid", j["uid"]))
-    if j["__inputs"][0]["name"] != "DS_TEST-CLUSTER" or j["__inputs"][0]["label"] != "Test-Cluster":
+    
+    uid = dashboard["uid"]
+    if uid != 'SVbh2xUWk':
+        logging.error("Found uid changed! {}".format(uid))
         ok = False
-        logging.error("key={} actual={}".format("__inputs", j["__inputs"]))
 
+    panels = dashboard['panels']
+    existing_ids = {}
     for panel in panels:
-        ok &= handle_panel(panel, j["title"], existing_ids)
+        ok &= handle_panel(panel, dashboard["title"], existing_ids)
     if not ok:
-        logging.error("!!!Error detected!!!")
         return 2
     else:
-        logging.info("All checks passed")
         return 0
 
 def handle_panel(panel, parent_title, existing_ids):

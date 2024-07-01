@@ -14,7 +14,7 @@
 
 #include <Core/Block.h>
 #include <DataStreams/BinaryRowInputStream.h>
-#include <IO/Buffer/ReadBuffer.h>
+#include <IO/ReadBuffer.h>
 
 
 namespace DB

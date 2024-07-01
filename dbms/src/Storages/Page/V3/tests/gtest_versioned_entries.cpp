@@ -15,7 +15,7 @@
 
 #include <Common/Exception.h>
 #include <Common/FmtUtils.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/V3/PageDefines.h>
 #include <Storages/Page/V3/PageDirectory.h>
@@ -32,14 +32,6 @@
 
 #include <iterator>
 #include <memory>
-
-#pragma GCC diagnostic push
-#ifdef __clang__
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-// include to suppress warnings on NO_THREAD_SAFETY_ANALYSIS. clang can't work without this include, don't know why
-#include <grpcpp/security/credentials.h>
-#pragma GCC diagnostic pop
 
 namespace DB
 {
@@ -75,7 +67,7 @@ class VersionedEntriesTest : public ::testing::Test
 {
 public:
     using DerefCounter = std::map<PageIdV3Internal, std::pair<PageVersion, Int64>>;
-    std::tuple<bool, PageEntriesV3, DerefCounter> runClean(UInt64 seq) NO_THREAD_SAFETY_ANALYSIS
+    std::tuple<bool, PageEntriesV3, DerefCounter> runClean(UInt64 seq)
     {
         DerefCounter deref_counter;
         PageEntriesV3 removed_entries;

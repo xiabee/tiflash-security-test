@@ -18,7 +18,9 @@
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/Remote/RNDeltaIndexCache.h>
 #include <Storages/Page/PageDefinesBase.h>
-namespace DB::DM
+namespace DB
+{
+namespace DM
 {
 class DeltaIndex;
 using DeltaIndexPtr = std::shared_ptr<DeltaIndex>;
@@ -169,7 +171,6 @@ public:
         return delta_tree->getBytes();
     }
 
-    // Return <placed_rows, placed_deletes>
     std::pair<size_t, size_t> getPlacedStatus()
     {
         std::scoped_lock lock(mutex);
@@ -222,4 +223,5 @@ public:
     const std::optional<Remote::RNDeltaIndexCache::CacheKey> & getRNCacheKey() const { return rn_cache_key; }
 };
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

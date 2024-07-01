@@ -92,7 +92,7 @@ void SimplePKTestBasic::ensureSegmentBreakpoints(const std::vector<Int64> & brea
         {
             auto [segment, is_empty] = store->getSegmentByStartKey(bp_key.toRowKeyValueRef(), true, true);
             // The segment is already break at the boundary
-            if (segment->getRowKeyRange().getStart() == bp_key.toRowKeyValueRef())
+            if (compare(segment->getRowKeyRange().getStart(), bp_key.toRowKeyValueRef()) == 0)
                 break;
             auto split_mode = use_logical_split ? DeltaMergeStore::SegmentSplitMode::Logical
                                                 : DeltaMergeStore::SegmentSplitMode::Physical;
@@ -335,7 +335,7 @@ size_t SimplePKTestBasic::getRowsN() const
         store->getTableColumns(),
         {RowKeyRange::newAll(is_common_handle, 1)},
         /* num_streams= */ 1,
-        /* start_ts= */ std::numeric_limits<UInt64>::max(),
+        /* max_version= */ std::numeric_limits<UInt64>::max(),
         EMPTY_FILTER,
         std::vector<RuntimeFilterPtr>{},
         0,
@@ -354,7 +354,7 @@ size_t SimplePKTestBasic::getRowsN(Int64 start_key, Int64 end_key) const
         store->getTableColumns(),
         {buildRowRange(start_key, end_key)},
         /* num_streams= */ 1,
-        /* start_ts= */ std::numeric_limits<UInt64>::max(),
+        /* max_version= */ std::numeric_limits<UInt64>::max(),
         EMPTY_FILTER,
         std::vector<RuntimeFilterPtr>{},
         0,

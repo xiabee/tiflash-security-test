@@ -20,8 +20,8 @@
 #include <DataStreams/OneBlockInputStream.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
+#include <Storages/DeltaMerge/Remote/RNReadTask.h>
 #include <Storages/DeltaMerge/Remote/RNWorkerPrepareStreams.h>
-#include <Storages/DeltaMerge/SegmentReadTask.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
 #include <Storages/DeltaMerge/tests/gtest_segment_test_basic.h>
 #include <Storages/DeltaMerge/tests/gtest_segment_util.h>
@@ -232,22 +232,6 @@ try
 }
 CATCH
 
-TEST_F(SegmentOperationTest, CurrentV2RestoreFromStableV1)
-try
-{
-    auto current = STORAGE_FORMAT_CURRENT;
-    STORAGE_FORMAT_CURRENT = STORAGE_FORMAT_V5;
-    writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 100);
-    flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);
-    mergeSegmentDelta(DELTA_MERGE_FIRST_SEGMENT_ID);
-
-    STORAGE_FORMAT_CURRENT = STORAGE_FORMAT_V6;
-    auto segment = Segment::restoreSegment(log, *dm_context, DELTA_MERGE_FIRST_SEGMENT_ID);
-    ASSERT_EQ(segment->stable->getRows(), 100);
-    STORAGE_FORMAT_CURRENT = current;
-}
-CATCH
-
 TEST_F(SegmentOperationTest, WriteDuringSegmentSplit)
 try
 {
@@ -403,7 +387,7 @@ CATCH
 TEST_F(SegmentOperationTest, SegmentLogicalSplit)
 try
 {
-    reloadWithOptions(
+    buildFirstSegmentWithOptions(
         {.db_settings = {
              .dt_segment_stable_pack_rows = 100,
              .dt_enable_logical_split = true,
@@ -439,7 +423,7 @@ TEST_F(SegmentOperationTest, Issue5570)
 try
 {
     // a smaller pack rows for logical split
-    reloadWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 200);
     flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);
@@ -497,7 +481,7 @@ TEST_F(SegmentOperationTest, DeltaPagesAfterDeltaMerge)
 try
 {
     // a smaller pack rows for logical split
-    reloadWithOptions(
+    buildFirstSegmentWithOptions(
         {.db_settings = {
              .dt_segment_stable_pack_rows = 100,
              .dt_enable_logical_split = true,
@@ -566,13 +550,119 @@ try
 }
 CATCH
 
+
+TEST_F(SegmentOperationTest, DeltaIndexError)
+try
+{
+    // write stable
+    writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 10000, 0);
+    mergeSegmentDelta(DELTA_MERGE_FIRST_SEGMENT_ID);
+    // split into 2 segment
+    auto segment_id = splitSegment(DELTA_MERGE_FIRST_SEGMENT_ID);
+    ASSERT_TRUE(segment_id.has_value());
+    // write delta
+    writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 1000, 0);
+    writeSegment(*segment_id, 1000, 8000);
+
+    // Init delta index
+    {
+        auto [first, first_snap] = getSegmentForRead(DELTA_MERGE_FIRST_SEGMENT_ID);
+        first->placeDeltaIndex(*dm_context, first_snap);
+    }
+    auto [first, first_snap] = getSegmentForRead(DELTA_MERGE_FIRST_SEGMENT_ID);
+    LOG_DEBUG(log, "First: {}", first_snap->delta->getSharedDeltaIndex()->toString());
+
+    {
+        auto [second, second_snap] = getSegmentForRead(*segment_id);
+        second->placeDeltaIndex(*dm_context, second_snap);
+    }
+    auto [second, second_snap] = getSegmentForRead(*segment_id);
+    LOG_DEBUG(log, "Second: {}", second_snap->delta->getSharedDeltaIndex()->toString());
+
+    // Create a wrong delta index for first segment.
+    auto [placed_rows, placed_deletes] = first_snap->delta->getSharedDeltaIndex()->getPlacedStatus();
+    auto broken_delta_index = std::make_shared<DeltaIndex>(
+        second_snap->delta->getSharedDeltaIndex()->getDeltaTree(),
+        placed_rows,
+        placed_deletes,
+        first_snap->delta->getSharedDeltaIndex()->getRNCacheKey());
+    first_snap->delta->shared_delta_index = broken_delta_index;
+
+    auto meta = DB::DM::Remote::RNReadSegmentMeta{
+        .keyspace_id = 0,
+        .physical_table_id = 0,
+        .segment_id = DELTA_MERGE_FIRST_SEGMENT_ID,
+        .store_id = 0,
+        .delta_tinycf_page_ids = {},
+        .delta_tinycf_page_sizes = {},
+        .segment = first,
+        .segment_snap = first_snap,
+        .store_address = {},
+        .read_ranges = {first->getRowKeyRange()},
+        .snapshot_id = {},
+        .dm_context = createDMContext(),
+    };
+    auto task = std::make_shared<DB::DM::Remote::RNReadSegmentTask>(meta);
+
+    auto worker = DB::DM::Remote::RNWorkerPrepareStreams::create({
+        .source_queue = nullptr,
+        .result_queue = nullptr,
+        .log = Logger::get(),
+        .concurrency = 1,
+        .columns_to_read = tableColumns(),
+        .read_tso = 0,
+        .push_down_filter = nullptr,
+        .read_mode = ReadMode::Bitmap,
+    });
+
+    ASSERT_FALSE(worker->initInputStream(task, true));
+
+    try
+    {
+        [[maybe_unused]] auto succ = worker->initInputStream(task, false);
+        FAIL() << "Should not come here.";
+    }
+    catch (const Exception & e)
+    {
+        ASSERT_EQ(e.code(), ErrorCodes::DT_DELTA_INDEX_ERROR);
+    }
+
+    try
+    {
+        db_context->getSettingsRef().set("dt_enable_delta_index_error_fallback", "false");
+        task = worker->testDoWork(task);
+        FAIL() << "Should not come here.";
+    }
+    catch (const Exception & e)
+    {
+        ASSERT_EQ(e.code(), ErrorCodes::DT_DELTA_INDEX_ERROR);
+    }
+
+    db_context->getSettingsRef().set("dt_enable_delta_index_error_fallback", "true");
+    task = worker->testDoWork(task);
+    auto stream = task->getInputStream();
+    ASSERT_NE(stream, nullptr);
+    std::vector<Block> blks;
+    for (auto blk = stream->read(); blk; blk = stream->read())
+    {
+        blks.push_back(blk);
+    }
+    auto handle_col1 = vstackBlocks(std::move(blks)).getByName(EXTRA_HANDLE_COLUMN_NAME).column;
+    auto handle_col2 = getSegmentHandle(task->meta.segment->segmentId(), {task->meta.segment->getRowKeyRange()});
+    ASSERT_TRUE(sequenceEqual(
+        toColumnVectorDataPtr<Int64>(handle_col2)->data(),
+        toColumnVectorDataPtr<Int64>(handle_col1)->data(),
+        handle_col1->size()));
+}
+CATCH
+
 class SegmentEnableLogicalSplitTest : public SegmentOperationTest
 {
 protected:
     void SetUp() override
     {
         SegmentOperationTest::SetUp();
-        reloadWithOptions(
+        buildFirstSegmentWithOptions(
             {.db_settings = {
                  .dt_segment_stable_pack_rows = 100,
                  .dt_enable_logical_split = true,
@@ -649,7 +739,7 @@ class SegmentSplitTest : public SegmentTestBasic
 TEST_F(SegmentSplitTest, AutoModePhycialSplitByDefault)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
     ASSERT_FALSE(dm_context->enable_logical_split);
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 1000);
@@ -667,7 +757,7 @@ TEST_F(SegmentSplitTest, PhysicalSplitMode)
 try
 {
     // Even if we explicitly set enable_logical_split, we will still do physical split in SplitMode::Physical.
-    reloadWithOptions(
+    buildFirstSegmentWithOptions(
         {.db_settings = {
              .dt_segment_stable_pack_rows = 100,
              .dt_enable_logical_split = true,
@@ -726,7 +816,7 @@ CATCH
 TEST_F(SegmentSplitTest, LogicalSplitModeDoesLogicalSplit)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
     // Logical split will be performed if we use logical split mode, even when enable_logical_split is false.
     ASSERT_FALSE(dm_context->enable_logical_split);
 
@@ -766,7 +856,7 @@ CATCH
 TEST_F(SegmentSplitTest, LogicalSplitModeOnePackInStable)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 50);
     flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);
@@ -784,7 +874,7 @@ CATCH
 TEST_F(SegmentSplitTest, LogicalSplitModeOnePackWithHoleInStable)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_segment_stable_pack_rows = 100}});
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 10, /* at */ 0);
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 10, /* at */ 90);
@@ -858,7 +948,7 @@ CATCH
 TEST_F(SegmentSplitAtTest, AutoModeEnableLogicalSplit)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_enable_logical_split = true}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_enable_logical_split = true}});
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 100, /* at */ 0);
     flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);
@@ -895,7 +985,7 @@ CATCH
 TEST_F(SegmentSplitAtTest, PhysicalSplitMode)
 try
 {
-    reloadWithOptions({.db_settings = {.dt_enable_logical_split = true}});
+    buildFirstSegmentWithOptions({.db_settings = {.dt_enable_logical_split = true}});
 
     writeSegment(DELTA_MERGE_FIRST_SEGMENT_ID, 100, /* at */ 0);
     flushSegmentCache(DELTA_MERGE_FIRST_SEGMENT_ID);

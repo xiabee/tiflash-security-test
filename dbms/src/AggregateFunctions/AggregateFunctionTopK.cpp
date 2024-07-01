@@ -69,7 +69,6 @@ IAggregateFunction * createWithExtraTypes(const DataTypePtr & argument_type, UIn
 }
 
 AggregateFunctionPtr createAggregateFunctionTopK(
-    const Context & /* context not used */,
     const std::string & name,
     const DataTypes & argument_types,
     const Array & params)

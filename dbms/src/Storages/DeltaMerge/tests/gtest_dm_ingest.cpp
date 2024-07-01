@@ -220,7 +220,7 @@ try
     auto pool = std::make_shared<ThreadPool>(4);
     for (const auto & op : ops)
     {
-        pool->scheduleOrThrowOnError([=, this, &log] {
+        pool->scheduleOrThrowOnError([=, &log] {
             try
             {
                 LOG_INFO(log, "{} to [{}, {})", op.use_write ? "write" : "ingest", op.start_key, op.end_key);
@@ -249,7 +249,7 @@ try
             store->getTableColumns(),
             {RowKeyRange::newAll(is_common_handle, 1)},
             /* num_streams= */ 1,
-            /* start_ts= */ std::numeric_limits<UInt64>::max(),
+            /* max_version= */ std::numeric_limits<UInt64>::max(),
             EMPTY_FILTER,
             std::vector<RuntimeFilterPtr>{},
             0,

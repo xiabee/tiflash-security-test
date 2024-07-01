@@ -17,7 +17,7 @@
 #include <Core/Types.h>
 #include <Storages/KVStore/Region.h>
 #include <Storages/KVStore/Types.h>
-#include <Storages/RegionQueryInfo_fwd.h>
+#include <Storages/RegionQueryInfo.h>
 
 #include <unordered_map>
 #include <vector>
@@ -28,15 +28,11 @@ namespace DB
 struct RegionLearnerReadSnapshot : RegionPtr
 {
     UInt64 snapshot_event_flag{0};
-    UInt64 create_time_version{0};
-    UInt64 create_time_conf_ver{0};
 
     RegionLearnerReadSnapshot() = default;
     explicit RegionLearnerReadSnapshot(const RegionPtr & region)
         : RegionPtr(region)
         , snapshot_event_flag(region->getSnapshotEventFlag())
-        , create_time_version(region->version())
-        , create_time_conf_ver(region->confVer())
     {}
     bool operator!=(const RegionPtr & rhs) const
     {
@@ -46,7 +42,7 @@ struct RegionLearnerReadSnapshot : RegionPtr
 using LearnerReadSnapshot = std::unordered_map<RegionID, RegionLearnerReadSnapshot>;
 
 [[nodiscard]] LearnerReadSnapshot doLearnerRead(
-    TableID table_id,
+    const TiDB::TableID table_id,
     MvccQueryInfo & mvcc_query_info,
     bool for_batch_cop,
     Context & context,

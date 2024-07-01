@@ -38,13 +38,11 @@ public:
 
     bool isReady(std::unique_lock<std::mutex> & lock) const;
 
-    // The caller must ensure `end_key_and_segment_id` is ordered.
-    // Called in `Segment::readAllSegmentsMetaInfoInRange`.
+    // The caller must ensure `end_key_and_segment_id` is ordered
     void build(
         std::unique_lock<std::mutex> & lock,
         std::vector<std::pair<DM::RowKeyValue, UInt64>> && end_key_and_segment_ids);
 
-    // Given a key, return the segment_id that may contain the key
     UInt64 getSegmentIdContainingKey(std::unique_lock<std::mutex> & lock, const DM::RowKeyValue & key);
 
 private:
@@ -70,13 +68,11 @@ public:
     {
         for (const auto & path : paths)
         {
-            LOG_DEBUG(DB::Logger::get(), "ParsedCheckpointDataHolder destroyed path={}", path);
             Poco::File(path).remove(true);
         }
     }
 
 private:
-    // Paths of this PS.
     std::vector<String> paths = {};
 
     UniversalPageStoragePtr temp_ps;

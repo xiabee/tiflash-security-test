@@ -17,8 +17,6 @@
 #include <Columns/IColumn.h>
 #include <DataStreams/IBlockInputStream.h>
 
-#include <span>
-
 namespace DB::DM
 {
 
@@ -27,14 +25,13 @@ class BitmapFilter
 public:
     BitmapFilter(UInt32 size_, bool default_value);
 
-    // Read blocks from `stream` and set the rows_id to be true according to the
-    // `segmentRowIdCol` in the block read from `stream`.
     void set(BlockInputStreamPtr & stream);
-    // f[start, satrt+limit) = value
-    void set(UInt32 start, UInt32 limit, bool value = true);
+    void set(const ColumnPtr & col, const FilterPtr & f);
+    void set(const UInt32 * data, UInt32 size, const FilterPtr & f);
+    void set(UInt32 start, UInt32 limit);
     // If return true, all data is match and do not fill the filter.
     bool get(IColumn::Filter & f, UInt32 start, UInt32 limit) const;
-    // filter[start, satrt+limit) & f -> f
+    // filter[start, limit] & f -> f
     void rangeAnd(IColumn::Filter & f, UInt32 start, UInt32 limit) const;
 
     void runOptimize();
@@ -43,8 +40,6 @@ public:
     size_t count() const;
 
 private:
-    void set(std::span<const UInt32> row_ids, const FilterPtr & f);
-
     std::vector<bool> filter;
     bool all_match;
 };

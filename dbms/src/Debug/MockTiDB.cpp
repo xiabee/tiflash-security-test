@@ -23,7 +23,6 @@
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Debug/MockTiDB.h>
-#include <Debug/dbgKVStore/dbgKVStore.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTLiteral.h>
@@ -113,7 +112,6 @@ TablePtr MockTiDB::dropTableByIdImpl(Context & context, const TableID table_id, 
 TablePtr MockTiDB::dropTableInternal(Context & context, const TablePtr & table, bool drop_regions)
 {
     auto & kvstore = context.getTMTContext().getKVStore();
-    auto debug_kvstore = RegionBench::DebugKVStore(*kvstore);
     auto & region_table = context.getTMTContext().getRegionTable();
 
     if (table->isPartitionTable())
@@ -124,7 +122,7 @@ TablePtr MockTiDB::dropTableInternal(Context & context, const TablePtr & table, 
             if (drop_regions)
             {
                 for (auto & e : region_table.getRegionsByTable(NullspaceID, partition.id))
-                    debug_kvstore.mockRemoveRegion(e.first, region_table);
+                    kvstore->mockRemoveRegion(e.first, region_table);
                 region_table.removeTable(NullspaceID, partition.id);
             }
         }
@@ -134,7 +132,7 @@ TablePtr MockTiDB::dropTableInternal(Context & context, const TablePtr & table, 
     if (drop_regions)
     {
         for (auto & e : region_table.getRegionsByTable(NullspaceID, table->id()))
-            debug_kvstore.mockRemoveRegion(e.first, region_table);
+            kvstore->mockRemoveRegion(e.first, region_table);
         region_table.removeTable(NullspaceID, table->id());
     }
 
@@ -771,7 +769,7 @@ TablePtr MockTiDB::getTableByNameInternal(const String & database_name, const St
     auto it = tables_by_name.find(qualified_name);
     if (it == tables_by_name.end())
     {
-        throw Exception(ErrorCodes::UNKNOWN_TABLE, "Mock TiDB table {} does not exists", qualified_name);
+        throw Exception("Mock TiDB table " + qualified_name + " does not exists", ErrorCodes::UNKNOWN_TABLE);
     }
 
     return it->second;

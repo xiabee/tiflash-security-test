@@ -54,13 +54,13 @@ private:
 
     static WriteBatch prepareCheckpointWriteBatch(
         const PageStorage::ConcreteSnapshotPtr & snapshot,
-        WriteBatch::SequenceID wb_sequence);
+        const WriteBatch::SequenceID wb_sequence);
     [[nodiscard]] static size_t writeToCheckpoint(
         const String & storage_path,
         const PageFileIdAndLevel & file_id,
         WriteBatch && wb,
         FileProviderPtr & file_provider,
-        LoggerPtr log,
+        Poco::Logger * log,
         const WriteLimiterPtr & write_limiter);
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -73,8 +73,8 @@ private:
 
     const PageStorageConfig & config;
 
-    LoggerPtr log;
-    LoggerPtr page_file_log;
+    Poco::Logger * log;
+    Poco::Logger * page_file_log;
 
     PageStorage::VersionedPageEntries version_set;
     PageStorage::StatisticsInfo info;

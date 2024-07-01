@@ -47,7 +47,6 @@ namespace StableFormat
 using Version = Int64;
 
 inline static constexpr Version V1 = 1;
-inline static constexpr Version V2 = 2; // Meta using protobuf
 } // namespace StableFormat
 
 namespace DeltaFormat
@@ -131,15 +130,6 @@ inline static const StorageFormatVersion STORAGE_FORMAT_V5 = StorageFormatVersio
     .identifier = 5,
 };
 
-inline static const StorageFormatVersion STORAGE_FORMAT_V6 = StorageFormatVersion{
-    .segment = SegmentFormat::V2,
-    .dm_file = DMFileFormat::V3,
-    .stable = StableFormat::V2, // diff
-    .delta = DeltaFormat::V3,
-    .page = PageFormat::V3,
-    .identifier = 6,
-};
-
 // STORAGE_FORMAT_V100 is used for S3 only
 inline static const StorageFormatVersion STORAGE_FORMAT_V100 = StorageFormatVersion{
     .segment = SegmentFormat::V2,
@@ -148,16 +138,6 @@ inline static const StorageFormatVersion STORAGE_FORMAT_V100 = StorageFormatVers
     .delta = DeltaFormat::V3,
     .page = PageFormat::V4, // diff
     .identifier = 100,
-};
-
-// STORAGE_FORMAT_V101 is used for S3 only
-inline static const StorageFormatVersion STORAGE_FORMAT_V101 = StorageFormatVersion{
-    .segment = SegmentFormat::V2,
-    .dm_file = DMFileFormat::V3,
-    .stable = StableFormat::V2, // diff
-    .delta = DeltaFormat::V3,
-    .page = PageFormat::V4,
-    .identifier = 101,
 };
 
 inline StorageFormatVersion STORAGE_FORMAT_CURRENT = STORAGE_FORMAT_V5;
@@ -176,14 +156,10 @@ inline const StorageFormatVersion & toStorageFormat(UInt64 setting)
         return STORAGE_FORMAT_V4;
     case 5:
         return STORAGE_FORMAT_V5;
-    case 6:
-        return STORAGE_FORMAT_V6;
     case 100:
         return STORAGE_FORMAT_V100;
-    case 101:
-        return STORAGE_FORMAT_V101;
     default:
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Illegal setting value: {}", setting);
+        throw Exception("Illegal setting value: " + DB::toString(setting));
     }
 }
 

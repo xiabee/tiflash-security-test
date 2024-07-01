@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Databases/DatabasesCommon.h>
+#include <Encryption/FileProvider.h>
 
 namespace TiDB
 {

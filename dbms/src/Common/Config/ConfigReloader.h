@@ -92,8 +92,6 @@ private:
 
     std::atomic_bool quit{false};
     std::thread thread;
-
-    std::condition_variable cv;
 };
 
 } // namespace DB

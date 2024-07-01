@@ -28,10 +28,13 @@
 #include <Databases/IDatabase.h>
 #include <Debug/DBGInvoker.h>
 #include <Debug/MockStorage.h>
+#include <Encryption/DataKeyManager.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/RateLimiter.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <IO/BaseFile/fwd.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <IO/ReadBufferFromFile.h>
+#include <IO/UncompressedCache.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/ISecurityManager.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/QueryLog.h>
@@ -59,7 +62,6 @@
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/IStorage.h>
 #include <Storages/KVStore/BackgroundService.h>
-#include <Storages/KVStore/FFI/JointThreadAllocInfo.h>
 #include <Storages/KVStore/TMTContext.h>
 #include <Storages/MarkCache.h>
 #include <Storages/Page/PageConstants.h>
@@ -145,6 +147,7 @@ struct ContextShared
     String system_profile_name; /// Profile used by system processes
     std::shared_ptr<ISecurityManager> security_manager; /// Known users.
     Quotas quotas; /// Known quotas for resource use.
+    mutable UncompressedCachePtr uncompressed_cache; /// The cache of decompressed blocks.
     mutable DBGInvoker dbg_invoker; /// Execute inner functions, debug only.
     mutable MarkCachePtr mark_cache; /// Cache of marks in compressed files.
     mutable DM::MinMaxIndexCachePtr minmax_index_cache; /// Cache of minmax index in compressed files.
@@ -179,8 +182,6 @@ struct ContextShared
     TiFlashSecurityConfigPtr security_config;
 
     /// Named sessions. The user could specify session identifier to reuse settings and temporary tables in subsequent requests.
-
-    JointThreadInfoJeallocMapPtr joint_memory_allocation_map; /// Joint thread-wise alloc/dealloc map
 
     class SessionKeyHash
     {
@@ -278,11 +279,6 @@ struct ContextShared
         if (tmt_context)
         {
             tmt_context->shutdown();
-        }
-
-        if (joint_memory_allocation_map)
-        {
-            joint_memory_allocation_map->stopThreadAllocInfo();
         }
 
         if (schema_sync_service)
@@ -1331,6 +1327,30 @@ DAGContext * Context::getDAGContext() const
     return dag_context;
 }
 
+void Context::setUncompressedCache(size_t max_size_in_bytes)
+{
+    auto lock = getLock();
+
+    if (shared->uncompressed_cache)
+        throw Exception("Uncompressed cache has been already created.", ErrorCodes::LOGICAL_ERROR);
+
+    shared->uncompressed_cache = std::make_shared<UncompressedCache>(max_size_in_bytes);
+}
+
+
+UncompressedCachePtr Context::getUncompressedCache() const
+{
+    auto lock = getLock();
+    return shared->uncompressed_cache;
+}
+
+void Context::dropUncompressedCache() const
+{
+    auto lock = getLock();
+    if (shared->uncompressed_cache)
+        shared->uncompressed_cache->reset();
+}
+
 DBGInvoker & Context::getDBGInvoker() const
 {
     auto lock = getLock();
@@ -1414,6 +1434,9 @@ void Context::dropCaches() const
 {
     auto lock = getLock();
 
+    if (shared->uncompressed_cache)
+        shared->uncompressed_cache->reset();
+
     if (shared->mark_cache)
         shared->mark_cache->reset();
 }
@@ -1422,8 +1445,7 @@ BackgroundProcessingPool & Context::initializeBackgroundPool(UInt16 pool_size)
 {
     auto lock = getLock();
     if (!shared->background_pool)
-        shared->background_pool
-            = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-", getJointThreadInfoJeallocMap(lock));
+        shared->background_pool = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-");
     return *shared->background_pool;
 }
 
@@ -1437,8 +1459,7 @@ BackgroundProcessingPool & Context::initializeBlockableBackgroundPool(UInt16 poo
 {
     auto lock = getLock();
     if (!shared->blockable_background_pool)
-        shared->blockable_background_pool
-            = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-block-", getJointThreadInfoJeallocMap(lock));
+        shared->blockable_background_pool = std::make_shared<BackgroundProcessingPool>(pool_size, "bg-block-");
     return *shared->blockable_background_pool;
 }
 
@@ -1454,10 +1475,8 @@ BackgroundProcessingPool & Context::getPSBackgroundPool()
     auto lock = getLock();
     // use the same size as `background_pool_size`
     if (!shared->ps_compact_background_pool)
-        shared->ps_compact_background_pool = std::make_shared<BackgroundProcessingPool>(
-            settings.background_pool_size,
-            "bg-page-",
-            getJointThreadInfoJeallocMap(lock));
+        shared->ps_compact_background_pool
+            = std::make_shared<BackgroundProcessingPool>(settings.background_pool_size, "bg-page-");
     return *shared->ps_compact_background_pool;
 }
 
@@ -1533,24 +1552,18 @@ void Context::initializeTiFlashMetrics() const
     (void)TiFlashMetrics::instance();
 }
 
-void Context::initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption, bool enable_keyspace_encryption)
+void Context::initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption)
 {
     auto lock = getLock();
     if (shared->file_provider)
         throw Exception("File provider has already been initialized.", ErrorCodes::LOGICAL_ERROR);
-    shared->file_provider = std::make_shared<FileProvider>(key_manager, enable_encryption, enable_keyspace_encryption);
+    shared->file_provider = std::make_shared<FileProvider>(key_manager, enable_encryption);
 }
 
 FileProviderPtr Context::getFileProvider() const
 {
     auto lock = getLock();
     return shared->file_provider;
-}
-
-void Context::setFileProvider(FileProviderPtr file_provider)
-{
-    auto lock = getLock();
-    shared->file_provider = file_provider;
 }
 
 void Context::initializeRateLimiter(
@@ -1762,35 +1775,6 @@ DM::GlobalStoragePoolPtr Context::getGlobalStoragePool() const
 {
     auto lock = getLock();
     return shared->global_storage_pool;
-}
-
-
-void Context::initializeJointThreadInfoJeallocMap()
-{
-    auto lock = getLock();
-    if (!shared->joint_memory_allocation_map)
-    {
-        shared->joint_memory_allocation_map = std::make_shared<JointThreadInfoJeallocMap>();
-    }
-}
-
-JointThreadInfoJeallocMapPtr Context::getJointThreadInfoJeallocMap() const
-{
-    auto lock = getLock();
-    if (!shared->joint_memory_allocation_map)
-    {
-        shared->joint_memory_allocation_map = std::make_shared<JointThreadInfoJeallocMap>();
-    }
-    return shared->joint_memory_allocation_map;
-}
-
-JointThreadInfoJeallocMapPtr Context::getJointThreadInfoJeallocMap(std::unique_lock<std::recursive_mutex> &) const
-{
-    if (!shared->joint_memory_allocation_map)
-    {
-        shared->joint_memory_allocation_map = std::make_shared<JointThreadInfoJeallocMap>();
-    }
-    return shared->joint_memory_allocation_map;
 }
 
 /**

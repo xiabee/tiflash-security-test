@@ -530,27 +530,19 @@ EncryptionMethod TiFlashRaftProxyHelper::getEncryptionMethod() const
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::getFile(const std::string & view) const
 {
-    return FileEncryptionInfo(fn_handle_get_file(proxy_ptr, strIntoView(&view)));
+    return fn_handle_get_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::newFile(const std::string & view) const
 {
-    return FileEncryptionInfo(fn_handle_new_file(proxy_ptr, strIntoView(&view)));
+    return fn_handle_new_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::deleteFile(const std::string & view) const
 {
-    return FileEncryptionInfo(fn_handle_delete_file(proxy_ptr, strIntoView(&view)));
+    return fn_handle_delete_file(proxy_ptr, strIntoView(&view));
 }
 FileEncryptionInfo TiFlashRaftProxyHelper::linkFile(const std::string & src, const std::string & dst) const
 {
-    return FileEncryptionInfo(fn_handle_link_file(proxy_ptr, strIntoView(&src), strIntoView(&dst)));
-}
-String TiFlashRaftProxyHelper::getMasterKey() const
-{
-    return String(*cloud_storage_engine_interfaces.fn_get_master_key(proxy_ptr));
-}
-bool TiFlashRaftProxyHelper::getKeyspaceEncryption(uint32_t keyspace_id) const
-{
-    return cloud_storage_engine_interfaces.fn_get_keyspace_encryption(proxy_ptr, keyspace_id);
+    return fn_handle_link_file(proxy_ptr, strIntoView(&src), strIntoView(&dst));
 }
 
 struct CppStrVec
@@ -676,7 +668,7 @@ RawCppPtr PreHandleSnapshot(
 #endif
 
         // Pre-decode and save as DTFiles
-        // TODO(raftstore-v2) Forward deadline_index when TiKV supports.
+        // TODO Forward deadline_index when TiKV supports.
         auto prehandle_result = kvstore->preHandleSnapshotToFiles(new_region, snaps, index, term, std::nullopt, tmt);
         auto * res = new PreHandledSnapshotWithFiles{new_region, std::move(prehandle_result)};
         return GenRawCppPtr(res, RawCppPtrTypeImpl::PreHandledSnapshotWithFiles);
@@ -701,11 +693,6 @@ void ApplyPreHandledSnapshot(EngineStoreServerWrap * server, RawVoidPtr res, Raw
             kvstore->applyPreHandledSnapshot(
                 RegionPtrWithSnapshotFiles{snap->region, std::move(snap->prehandle_result.ingest_ids)},
                 *server->tmt);
-            uint64_t end_time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::system_clock::now().time_since_epoch())
-                                    .count();
-            double elapsed = (end_time - snap->prehandle_result.stats.start_time) / 1000.0;
-            GET_METRIC(tiflash_raft_command_duration_seconds, type_apply_snapshot_total).Observe(elapsed);
         }
         catch (...)
         {
@@ -749,20 +736,6 @@ void ReleasePreHandledSnapshot(EngineStoreServerWrap * server, RawVoidPtr res, R
         auto s = RegionPtrWithSnapshotFiles{snap->region, std::move(snap->prehandle_result.ingest_ids)};
         auto & kvstore = server->tmt->getKVStore();
         kvstore->releasePreHandledSnapshot(s, *server->tmt);
-    }
-    catch (...)
-    {
-        tryLogCurrentFatalException(__PRETTY_FUNCTION__);
-        exit(-1);
-    }
-}
-
-bool KvstoreRegionExists(EngineStoreServerWrap * server, uint64_t region_id)
-{
-    try
-    {
-        auto & kvstore = server->tmt->getKVStore();
-        return kvstore->getRegion(region_id) != nullptr;
     }
     catch (...)
     {
@@ -997,79 +970,4 @@ BaseBuffView cppStringAsBuff(const std::string & s)
 {
     return BaseBuffView{.data = s.data(), .len = s.size()};
 }
-
-BaseBuffView GetLockByKey(const EngineStoreServerWrap * server, uint64_t region_id, BaseBuffView key)
-{
-    auto tikv_key = TiKVKey(key.data, key.len);
-    try
-    {
-        auto & kvstore = server->tmt->getKVStore();
-        auto region = kvstore->getRegion(region_id);
-        auto value = region->getLockByKey(tikv_key);
-        if (!value)
-        {
-            // key not exist
-            LOG_WARNING(
-                Logger::get(),
-                "Failed to get lock by key {}, region_id={}",
-                tikv_key.toDebugString(),
-                region_id);
-            return BaseBuffView{};
-        }
-
-        return BaseBuffView{value->data(), value->dataSize()};
-    }
-    catch (...)
-    {
-        LOG_WARNING( //
-            Logger::get(),
-            "Failed to get lock by key {}, region_id={}",
-            tikv_key.toDebugString(),
-            region_id);
-        return BaseBuffView{};
-    }
-}
-
-void ReportThreadAllocateInfo(
-    EngineStoreServerWrap * server,
-    uint64_t tid,
-    BaseBuffView name,
-    ReportThreadAllocateInfoType type,
-    uint64_t value)
-{
-    try
-    {
-        UNUSED(tid);
-        if (!server || !server->tmt || !server->tmt->getKVStore())
-            return;
-        server->tmt->getKVStore()->reportThreadAllocInfo(buffToStrView(name), type, value);
-    }
-    catch (...)
-    {
-        tryLogCurrentFatalException(__PRETTY_FUNCTION__);
-        exit(-1);
-    }
-}
-
-void ReportThreadAllocateBatch(
-    EngineStoreServerWrap * server,
-    uint64_t tid,
-    BaseBuffView name,
-    ReportThreadAllocateInfoBatch data)
-{
-    try
-    {
-        UNUSED(server);
-        UNUSED(tid);
-        // Note: We need to ensure the following code must be accessiable when
-        // tiflash process is shutting down
-        KVStore::reportThreadAllocBatch(buffToStrView(name), data);
-    }
-    catch (...)
-    {
-        tryLogCurrentFatalException(__PRETTY_FUNCTION__);
-        exit(-1);
-    }
-}
-
 } // namespace DB

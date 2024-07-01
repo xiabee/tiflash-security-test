@@ -14,16 +14,14 @@
 
 #pragma once
 
-#include <IO/Buffer/WriteBuffer.h>
-#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/Endian.h>
+#include <IO/WriteBuffer.h>
+#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/KVStore/TiKVHelpers/TiKVKeyspaceIDImpl.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/V3/Universal/UniversalPageId.h>
 #include <fmt/format.h>
-
-#include <magic_enum.hpp>
 
 namespace DB
 {
@@ -97,7 +95,6 @@ public:
 
     static constexpr char RAFT_PREFIX = 0x01;
     static constexpr char KV_PREFIX = 0x02;
-    static constexpr char LOCAL_KV_PREFIX = 0x03;
 
     // data is in kv engine, so it is prepended by KV_PREFIX
     // KV_PREFIX LOCAL_PREFIX REGION_RAFT_PREFIX region_id APPLY_STATE_SUFFIX
@@ -146,32 +143,6 @@ public:
         writeChar(0x02, buff);
         encodeUInt64(region_id, buff);
         writeChar(0x01, buff);
-        return buff.releaseStr();
-    }
-
-    enum class LocalKVKeyType : UInt64
-    {
-        FAPIngestInfo = 1,
-        EncryptionKey = 2,
-    };
-
-    // LOCAL_PREFIX LocalKVKeyType::FAPIngestInfo region_id
-    static String toFAPIngestInfoPageID(UInt64 region_id)
-    {
-        WriteBufferFromOwnString buff;
-        writeChar(LOCAL_KV_PREFIX, buff);
-        encodeUInt64(static_cast<UInt64>(LocalKVKeyType::FAPIngestInfo), buff);
-        encodeUInt64(region_id, buff);
-        return buff.releaseStr();
-    }
-
-    // LOCAL_PREFIX LocalKVKeyType::EncryptionKey keyspace_id(as 64bits)
-    static String toEncryptionKeyPageID(KeyspaceID keyspace_id)
-    {
-        WriteBufferFromOwnString buff;
-        writeChar(LOCAL_KV_PREFIX, buff);
-        encodeUInt64(static_cast<UInt64>(LocalKVKeyType::EncryptionKey), buff);
-        encodeUInt64(keyspace_id, buff);
         return buff.releaseStr();
     }
 
@@ -262,10 +233,6 @@ public:
         else if (page_id_str[0] == KV_PREFIX)
         {
             return StorageType::KVEngine;
-        }
-        else if (page_id_str[0] == LOCAL_KV_PREFIX)
-        {
-            return StorageType::LocalKV;
         }
         else
         {

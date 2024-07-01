@@ -12,45 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Flash/Executor/ResultQueue.h>
 #include <Operators/GetResultSinkOp.h>
 
 namespace DB
 {
 OperatorStatus GetResultSinkOp::writeImpl(Block && block)
 {
-    if unlikely (!block)
+    if (!block)
         return OperatorStatus::FINISHED;
 
     assert(!t_block);
-    t_block.emplace(std::move(block));
-    return tryFlush();
+    auto ret = result_queue->tryPush(std::move(block));
+    switch (ret)
+    {
+    case MPMCQueueResult::OK:
+        return OperatorStatus::NEED_INPUT;
+    case MPMCQueueResult::FULL:
+        // If returning Full, the block was not actually moved.
+        assert(block); // NOLINT(bugprone-use-after-move)
+        t_block.emplace(std::move(block)); // NOLINT(bugprone-use-after-move)
+        return OperatorStatus::WAITING;
+    default:
+        return OperatorStatus::FINISHED;
+    }
 }
 
 OperatorStatus GetResultSinkOp::prepareImpl()
 {
-    return t_block ? tryFlush() : OperatorStatus::NEED_INPUT;
+    return awaitImpl();
 }
 
-OperatorStatus GetResultSinkOp::tryFlush()
+OperatorStatus GetResultSinkOp::awaitImpl()
 {
-    auto queue_result = result_queue->tryPush(std::move(*t_block));
-    switch (queue_result)
+    if (!t_block)
+        return OperatorStatus::NEED_INPUT;
+
+    auto ret = result_queue->tryPush(std::move(*t_block));
+    switch (ret)
     {
-    case MPMCQueueResult::FULL:
-        setNotifyFuture(result_queue);
-        return OperatorStatus::WAIT_FOR_NOTIFY;
     case MPMCQueueResult::OK:
         t_block.reset();
         return OperatorStatus::NEED_INPUT;
-    case MPMCQueueResult::CANCELLED:
-        return OperatorStatus::CANCELLED;
+    case MPMCQueueResult::FULL:
+        return OperatorStatus::WAITING;
     default:
-        // queue result can not be finished/empty here.
-        RUNTIME_CHECK_MSG(
-            false,
-            "Unexpected queue result for GetResultSinkOp: {}",
-            magic_enum::enum_name(queue_result));
+        return OperatorStatus::FINISHED;
     }
 }
 } // namespace DB

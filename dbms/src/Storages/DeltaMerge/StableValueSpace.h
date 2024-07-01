@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
-#include <Storages/DeltaMerge/File/DMFilePackFilter_fwd.h>
-#include <Storages/DeltaMerge/File/DMFile_fwd.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
+#include <Storages/DeltaMerge/File/DMFilePackFilter.h>
+#include <Storages/DeltaMerge/File/DMFileReader.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
@@ -30,6 +30,7 @@ namespace DM
 
 struct WriteBatches;
 
+struct DMContext;
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
@@ -39,16 +40,14 @@ using StableValueSpacePtr = std::shared_ptr<StableValueSpace>;
 class StableValueSpace : public std::enable_shared_from_this<StableValueSpace>
 {
 public:
-    explicit StableValueSpace(PageIdU64 id_)
+    StableValueSpace(PageIdU64 id_)
         : id(id_)
         , log(Logger::get())
     {}
 
     static StableValueSpacePtr restore(DMContext & context, PageIdU64 id);
-    static StableValueSpacePtr restore(DMContext & context, ReadBuffer & buf, PageIdU64 id);
 
     static StableValueSpacePtr createFromCheckpoint( //
-        const LoggerPtr & parent_log,
         DMContext & context,
         UniversalPageStoragePtr temp_ps,
         PageIdU64 stable_id,
@@ -68,7 +67,6 @@ public:
 
     PageIdU64 getId() const { return id; }
     void saveMeta(WriteBatchWrapper & meta_wb);
-    std::string serializeMeta() const;
 
     size_t getRows() const;
     size_t getBytes() const;
@@ -127,7 +125,7 @@ public:
         // number of rows having at least one version(include delete)
         UInt64 num_rows;
 
-        String toDebugString() const
+        const String toDebugString() const
         {
             return "StableProperty: gc_hint_version [" + std::to_string(this->gc_hint_version) + "] num_versions ["
                 + std::to_string(this->num_versions) + "] num_puts[" + std::to_string(this->num_puts) + "] num_rows["
@@ -148,18 +146,18 @@ public:
     {
         StableValueSpacePtr stable;
 
-        PageIdU64 id{};
-        UInt64 valid_rows{};
-        UInt64 valid_bytes{};
+        PageIdU64 id;
+        UInt64 valid_rows;
+        UInt64 valid_bytes;
 
-        bool is_common_handle{};
-        size_t rowkey_column_size{};
+        bool is_common_handle;
+        size_t rowkey_column_size;
 
         /// TODO: The members below are not actually snapshots, they should not be here.
 
         ColumnCachePtrs column_caches;
 
-        explicit Snapshot(StableValueSpacePtr stable_)
+        Snapshot(StableValueSpacePtr stable_)
             : stable(stable_)
             , log(stable->log)
         {}
@@ -263,19 +261,16 @@ public:
     size_t avgRowBytes(const ColumnDefines & read_columns);
 
 private:
-    UInt64 serializeMetaToBuf(WriteBuffer & buf) const;
-
-private:
     const PageIdU64 id;
 
     // Valid rows is not always the sum of rows in file,
     // because after logical split, two segments could reference to a same file.
-    UInt64 valid_rows{}; /* At most. The actual valid rows may be lower than this value. */
-    UInt64 valid_bytes{}; /* At most. The actual valid bytes may be lower than this value. */
+    UInt64 valid_rows; /* At most. The actual valid rows may be lower than this value. */
+    UInt64 valid_bytes; /* At most. The actual valid bytes may be lower than this value. */
 
     DMFiles files;
 
-    StableProperty property{};
+    StableProperty property;
     std::atomic<bool> is_property_cached = false;
 
     LoggerPtr log;

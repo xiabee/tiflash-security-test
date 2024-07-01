@@ -14,14 +14,13 @@
 
 #pragma once
 
-#include <IO/FileProvider/FileProvider_fwd.h>
+#include <Encryption/FileProvider_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Poco/Environment.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>
 #include <Storages/Page/PageConstants.h>
-#include <Storages/PathPool_fwd.h>
 #include <TestUtils/TiFlashTestException.h>
 #include <fmt/core.h>
 
@@ -47,7 +46,6 @@ enum class TestType
 class TiFlashTestEnv
 {
 public:
-    static constexpr uint64_t DEFAULT_BG_POOL_SIZE = 2;
     static String getTemporaryPath(std::string_view test_case = "", bool get_abs = true);
 
     static void tryCreatePath(const std::string & path);
@@ -71,8 +69,6 @@ public:
         DAGContext * dag_context,
         MockStorage * mock_storage,
         const TestType & test_type);
-
-    static std::unique_ptr<PathPool> createCleanPathPool(const String & path);
 
     // If you want to run these tests, you should set this envrionment variablle
     // For example:
@@ -107,12 +103,12 @@ public:
     static void initializeGlobalContext(
         Strings testdata_path = {},
         PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3,
-        uint64_t bg_thread_count = DEFAULT_BG_POOL_SIZE);
+        uint64_t bg_thread_count = 2);
     static void addGlobalContext(
         const DB::Settings & settings,
         Strings testdata_path = {},
         PageStorageRunMode ps_run_mode = PageStorageRunMode::ONLY_V3,
-        uint64_t bg_thread_count = DEFAULT_BG_POOL_SIZE);
+        uint64_t bg_thread_count = 2);
     static Context & getGlobalContext() { return *global_contexts[0]; }
     static Context & getGlobalContext(int idx) { return *global_contexts[idx]; }
     static int globalContextSize() { return global_contexts.size(); }

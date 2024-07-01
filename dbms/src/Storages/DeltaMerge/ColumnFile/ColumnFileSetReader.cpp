@@ -19,7 +19,6 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSetReader.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/DeltaMerge/DMContext.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB
 {
@@ -80,11 +79,6 @@ std::pair<size_t, size_t> findColumnFile(const ColumnFiles & column_files, size_
 
     return {column_file_index, 0};
 }
-
-ColumnFileSetReader::ColumnFileSetReader(const DMContext & context_)
-    : context(context_)
-    , lac_bytes_collector(context_.scan_context ? context_.scan_context->resource_group_name : "")
-{}
 
 ColumnFileSetReader::ColumnFileSetReader(
     const DMContext & context_,
@@ -288,7 +282,7 @@ void ColumnFileSetReader::getPlaceItems(
 bool ColumnFileSetReader::shouldPlace(
     const DMContext & context,
     const RowKeyRange & relevant_range,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t placed_rows)
 {
     auto & column_files = snapshot->getColumnFiles();
@@ -319,7 +313,7 @@ bool ColumnFileSetReader::shouldPlace(
 
             for (auto i = rows_start_in_file; i < rows_end_in_file; ++i)
             {
-                if (version_col_data[i] <= start_ts && relevant_range.check(rkcc.getRowKeyValue(i)))
+                if (version_col_data[i] <= max_version && relevant_range.check(rkcc.getRowKeyValue(i)))
                     return true;
             }
         }
@@ -334,19 +328,18 @@ bool ColumnFileSetReader::shouldPlace(
 
             for (auto i = rows_start_in_file; i < rows_end_in_file; ++i)
             {
-                if (version_col_data[i] <= start_ts && relevant_range.check(rkcc.getRowKeyValue(i)))
+                if (version_col_data[i] <= max_version && relevant_range.check(rkcc.getRowKeyValue(i)))
                     return true;
             }
         }
         else
         {
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Unknown column file: {}", column_file->toString());
+            throw Exception("Unknown column file: " + column_file->toString(), ErrorCodes::LOGICAL_ERROR);
         }
     }
 
     return false;
 }
-
 
 } // namespace DM
 } // namespace DB

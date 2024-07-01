@@ -34,7 +34,10 @@
 #include <common/logger_useful.h>
 #include <fiu.h>
 
+#include <future>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 
 
 namespace DB
@@ -48,7 +51,6 @@ UniversalPageStoragePtr UniversalPageStorage::create(
     PageTypeAndConfig page_type_and_config{
         {PageType::Normal, PageTypeConfig{.heavy_gc_valid_rate = config.blob_heavy_gc_valid_rate}},
         {PageType::RaftData, PageTypeConfig{.heavy_gc_valid_rate = config.blob_heavy_gc_valid_rate_raft_data}},
-        {PageType::Local, PageTypeConfig{.heavy_gc_valid_rate = config.blob_heavy_gc_valid_rate}},
     };
     UniversalPageStoragePtr storage = std::make_shared<UniversalPageStorage>(name, delegator, config, file_provider);
     storage->blob_store = std::make_unique<PS::V3::universal::BlobStoreType>(
@@ -144,20 +146,6 @@ Page UniversalPageStorage::read(
         auto page = remote_reader->read(page_entry);
         UniversalWriteBatch wb;
         auto buf = std::make_shared<ReadBufferFromMemory>(page.data.begin(), page.data.size());
-        {
-            // StorageType::Log type page in local storage may needs to be encrypted.
-            auto page_id_u64 = UniversalPageIdFormat::getU64ID(page_id);
-            auto keyspace_id = UniversalPageIdFormat::getKeyspaceID(page_id);
-            if (unlikely(file_provider->isEncryptionEnabled(keyspace_id)) && !page.data.empty()
-                && UniversalPageIdFormat::isType(page_id, StorageType::Log))
-            {
-                if (const auto ep = EncryptionPath("", "", keyspace_id); unlikely(!file_provider->isFileEncrypted(ep)))
-                {
-                    file_provider->createEncryptionInfo(ep);
-                }
-                file_provider->encryptPage(keyspace_id, buf->buffer().begin(), page.data.size(), page_id_u64);
-            }
-        }
         wb.updateRemotePage(page_id, buf, page.data.size());
         tryUpdateLocalCacheForRemotePages(wb, snapshot);
         return page;
@@ -454,7 +442,7 @@ void UniversalPageStorage::tryUpdateLocalCacheForRemotePages(UniversalWriteBatch
     auto ignored_entries = page_directory->updateLocalCacheForRemotePages(std::move(edit), snapshot);
     if (!ignored_entries.empty())
     {
-        blob_store->removeEntries(ignored_entries);
+        blob_store->remove(ignored_entries);
     }
 }
 
@@ -502,13 +490,16 @@ PS::V3::CPDataDumpStats UniversalPageStorage::dumpIncrementalCheckpoint(
     if (snap->sequence == last_checkpoint_sequence && !options.full_compact)
         return {.has_new_data = false};
 
+    auto edit_from_mem = page_directory->dumpSnapshotToEdit(snap);
+    auto dump_snapshot_seconds = sw.elapsedMillisecondsFromLastTime() / 1000.0;
+
     // As a checkpoint, we write both entries (in manifest) and its data.
     // Some entries' data may be already written by a previous checkpoint. These data will not be written again.
     UInt64 sequence = snap->sequence;
     if (options.override_sequence)
         sequence = options.override_sequence.value();
 
-    auto edit_from_mem = page_directory->dumpSnapshotToEdit(snap);
+
     // The output of `PageDirectory::dumpSnapshotToEdit` may contain page ids which are logically deleted but have not been gced yet.
     // These page ids may be GC-ed when dumping snapshot, so we cannot read data of these page ids.
     // So we create a clean temp page_directory here and use it to dump edits with all visible page ids for `snap`.
@@ -520,7 +511,6 @@ PS::V3::CPDataDumpStats UniversalPageStorage::dumpIncrementalCheckpoint(
             = factory.dangerouslyCreateFromEditWithoutWAL(fmt::format("{}_{}", storage_name, sequence), edit_from_mem);
         edit_from_mem = temp_page_directory->dumpSnapshotToEdit();
     }
-    auto dump_snapshot_seconds = sw.elapsedMillisecondsFromLastTime() / 1000.0;
 
     auto manifest_file_id = fmt::format(fmt::runtime(options.manifest_file_id_pattern), fmt::arg("seq", sequence));
     auto manifest_file_path = fmt::format(fmt::runtime(options.manifest_file_path_pattern), fmt::arg("seq", sequence));
@@ -532,7 +522,7 @@ PS::V3::CPDataDumpStats UniversalPageStorage::dumpIncrementalCheckpoint(
         .data_file_id_pattern = options.data_file_id_pattern,
         .manifest_file_path = manifest_file_path,
         .manifest_file_id = manifest_file_id,
-        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(*blob_store, file_provider),
+        .data_source = PS::V3::CPWriteDataSourceBlobStore::create(*blob_store),
         .must_locked_files = options.must_locked_files,
         .sequence = sequence,
         .max_data_file_size = options.max_data_file_size,

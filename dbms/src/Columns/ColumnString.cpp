@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Columns/Collator.h>
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnsCommon.h>
 #include <Common/HashTable/Hash.h>
@@ -328,11 +329,7 @@ void ColumnString::getExtremes(Field & min, Field & max) const
 }
 
 
-int ColumnString::compareAtWithCollationImpl(
-    size_t n,
-    size_t m,
-    const IColumn & rhs_,
-    const TiDB::ITiDBCollator & collator) const
+int ColumnString::compareAtWithCollationImpl(size_t n, size_t m, const IColumn & rhs_, const ICollator & collator) const
 {
     const auto & rhs = static_cast<const ColumnString &>(rhs_);
 
@@ -430,7 +427,7 @@ struct ColumnString::LessWithCollation<false, void>
 };
 
 void ColumnString::getPermutationWithCollationImpl(
-    const TiDB::ITiDBCollator & collator,
+    const ICollator & collator,
     bool reverse,
     size_t limit,
     Permutation & res) const

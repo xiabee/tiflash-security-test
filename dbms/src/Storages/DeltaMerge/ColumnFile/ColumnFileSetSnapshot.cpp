@@ -16,7 +16,9 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSetSnapshot.h>
 #include <Storages/DeltaMerge/DMContext.h>
 
-namespace DB::DM
+namespace DB
+{
+namespace DM
 {
 RowKeyRange ColumnFileSetSnapshot::getSquashDeleteRange() const
 {
@@ -28,4 +30,5 @@ RowKeyRange ColumnFileSetSnapshot::getSquashDeleteRange() const
     }
     return squashed_delete_range;
 }
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

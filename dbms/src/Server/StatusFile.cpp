@@ -14,11 +14,11 @@
 
 #include "StatusFile.h"
 
-#include <Common/TiFlashBuildInfo.h>
-#include <IO/Buffer/LimitReadBuffer.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/Buffer/WriteBufferFromFileDescriptor.h>
+#include <Common/ClickHouseRevision.h>
+#include <IO/LimitReadBuffer.h>
 #include <IO/Operators.h>
+#include <IO/ReadBufferFromFile.h>
+#include <IO/WriteBufferFromFileDescriptor.h>
 #include <Poco/File.h>
 #include <common/LocalDateTime.h>
 #include <common/logger_useful.h>
@@ -84,7 +84,7 @@ StatusFile::StatusFile(const std::string & path_)
             WriteBufferFromFileDescriptor out(fd, 1024);
             out << "PID: " << getpid() << "\n"
                 << "Started at: " << LocalDateTime(time(nullptr)) << "\n"
-                << "Version: " << TiFlashBuildInfo::getReleaseVersion() << "\n";
+                << "Revision: " << ClickHouseRevision::get() << "\n";
         }
     }
     catch (...)

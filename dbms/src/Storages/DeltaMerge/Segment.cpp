@@ -39,15 +39,12 @@
 #include <Storages/DeltaMerge/Filter/FilterHelper.h>
 #include <Storages/DeltaMerge/LateMaterializationBlockInputStream.h>
 #include <Storages/DeltaMerge/PKSquashingBlockInputStream.h>
-#include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/DeltaMerge/Remote/ObjectId.h>
 #include <Storages/DeltaMerge/Remote/RNDeltaIndexCache.h>
 #include <Storages/DeltaMerge/RowKeyOrderedBlockInputStream.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
 #include <Storages/KVStore/KVStore.h>
@@ -122,23 +119,6 @@ extern const int UNKNOWN_FORMAT_VERSION;
 
 namespace DM
 {
-String SegmentSnapshot::detailInfo() const
-{
-    return fmt::format(
-        "{{"
-        "stable_rows={} "
-        "persisted_rows={} persisted_dels={} persisted_cfs={} "
-        "mem_rows={} mem_dels={} mem_cfs={}"
-        "}}",
-        stable->getRows(),
-        delta->getPersistedFileSetSnapshot()->getRows(),
-        delta->getPersistedFileSetSnapshot()->getDeletes(),
-        delta->getPersistedFileSetSnapshot()->getColumnFileCount(),
-        delta->getMemTableSetSnapshot()->getRows(),
-        delta->getMemTableSetSnapshot()->getDeletes(),
-        delta->getMemTableSetSnapshot()->getColumnFileCount());
-}
-
 const static size_t SEGMENT_BUFFER_SIZE = 128; // More than enough.
 
 DMFilePtr writeIntoNewDMFile(
@@ -152,10 +132,9 @@ DMFilePtr writeIntoNewDMFile(
         file_id,
         parent_path,
         dm_context.createChecksumConfig(),
-        dm_context.global_context.getSettingsRef().dt_small_file_size_threshold,
-        dm_context.global_context.getSettingsRef().dt_merged_file_max_size,
-        dm_context.keyspace_id);
-    auto output_stream = std::make_shared<DMFileBlockOutputStream>(dm_context.global_context, dmfile, *schema_snap);
+        dm_context.db_context.getSettingsRef().dt_small_file_size_threshold,
+        dm_context.db_context.getSettingsRef().dt_merged_file_max_size);
+    auto output_stream = std::make_shared<DMFileBlockOutputStream>(dm_context.db_context, dmfile, *schema_snap);
     const auto * mvcc_stream
         = typeid_cast<const DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_COMPACT> *>(input_stream.get());
 
@@ -208,36 +187,36 @@ DMFilePtr writeIntoNewDMFile(
 }
 
 StableValueSpacePtr createNewStable( //
-    DMContext & dm_context,
+    DMContext & context,
     const ColumnDefinesPtr & schema_snap,
     const BlockInputStreamPtr & input_stream,
     PageIdU64 stable_id,
     WriteBatches & wbs)
 {
-    auto delegator = dm_context.path_pool->getStableDiskDelegator();
+    auto delegator = context.path_pool->getStableDiskDelegator();
     auto store_path = delegator.choosePath();
 
-    PageIdU64 dtfile_id = dm_context.storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
+    PageIdU64 dtfile_id = context.storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
     DMFilePtr dtfile;
     try
     {
-        dtfile = writeIntoNewDMFile(dm_context, schema_snap, input_stream, dtfile_id, store_path);
+        dtfile = writeIntoNewDMFile(context, schema_snap, input_stream, dtfile_id, store_path);
 
         auto stable = std::make_shared<StableValueSpace>(stable_id);
-        stable->setFiles({dtfile}, RowKeyRange::newAll(dm_context.is_common_handle, dm_context.rowkey_column_size));
+        stable->setFiles({dtfile}, RowKeyRange::newAll(context.is_common_handle, context.rowkey_column_size));
         stable->saveMeta(wbs.meta);
-        if (auto data_store = dm_context.global_context.getSharedContextDisagg()->remote_data_store; !data_store)
+        if (auto data_store = context.db_context.getSharedContextDisagg()->remote_data_store; !data_store)
         {
             wbs.data.putExternal(dtfile_id, 0);
             delegator.addDTFile(dtfile_id, dtfile->getBytesOnDisk(), store_path);
         }
         else
         {
-            auto store_id = dm_context.global_context.getTMTContext().getKVStore()->getStoreID();
+            auto store_id = context.db_context.getTMTContext().getKVStore()->getStoreID();
             Remote::DMFileOID oid{
                 .store_id = store_id,
-                .keyspace_id = dm_context.keyspace_id,
-                .table_id = dm_context.physical_table_id,
+                .keyspace_id = context.keyspace_id,
+                .table_id = context.physical_table_id,
                 .file_id = dtfile_id,
             };
             data_store->putDMFile(dtfile, oid, /*switch_to_remote*/ true);
@@ -255,7 +234,7 @@ StableValueSpacePtr createNewStable( //
     {
         if (dtfile)
         {
-            dtfile->remove(dm_context.global_context.getFileProvider());
+            dtfile->remove(context.db_context.getFileProvider());
         }
         throw;
     }
@@ -339,7 +318,7 @@ SegmentPtr Segment::newSegment( //
         context.storage_pool->newMetaPageId());
 }
 
-void readSegmentMetaInfo(ReadBuffer & buf, Segment::SegmentMetaInfo & segment_info)
+inline void readSegmentMetaInfo(ReadBuffer & buf, Segment::SegmentMetaInfo & segment_info)
 {
     readIntBinary(segment_info.version, buf);
     readIntBinary(segment_info.epoch, buf);
@@ -416,11 +395,11 @@ Segment::SegmentMetaInfos Segment::readAllSegmentsMetaInfoInRange( //
     const RowKeyRange & target_range,
     const CheckpointInfoPtr & checkpoint_info)
 {
-    auto fap_context = context.global_context.getSharedContextDisagg()->fap_context;
+    auto fap_context = context.db_context.getSharedContextDisagg()->fap_context;
 
     // If cache is empty, we read from DELTA_MERGE_FIRST_SEGMENT_ID to the end and build the cache.
     // Otherwise, we just read the segment that cover the range.
-    PageIdU64 current_segment_id = DELTA_MERGE_FIRST_SEGMENT_ID;
+    PageIdU64 current_segment_id = 1;
     auto end_to_segment_id_cache = checkpoint_info->checkpoint_data_holder->getEndToSegmentIdCache(
         KeyspaceTableID{context.keyspace_id, context.physical_table_id});
     auto lock = end_to_segment_id_cache->lock();
@@ -439,20 +418,7 @@ Segment::SegmentMetaInfos Segment::readAllSegmentsMetaInfoInRange( //
         auto target_id = UniversalPageIdFormat::toFullPageId(
             UniversalPageIdFormat::toFullPrefix(context.keyspace_id, StorageType::Meta, context.physical_table_id),
             current_segment_id);
-        auto page = checkpoint_info->temp_ps->read(target_id, nullptr, {}, false);
-        if unlikely (!page.isValid())
-        {
-            // After #7642, DELTA_MERGE_FIRST_SEGMENT_ID may not exist, however, such checkpoint won't be selected.
-            // If it were to be selected, the FAP task could fallback to regular snapshot.
-            throw Exception(
-                ErrorCodes::LOGICAL_ERROR,
-                "Can't find page id {}, keyspace={} table_id={} current_segment_id={} range={}",
-                target_id,
-                context.keyspace_id,
-                context.physical_table_id,
-                current_segment_id,
-                target_range.toDebugString());
-        }
+        auto page = checkpoint_info->temp_ps->read(target_id);
         segment_info.segment_id = current_segment_id;
         ReadBufferFromMemory buf(page.data.begin(), page.data.size());
         readSegmentMetaInfo(buf, segment_info);
@@ -505,14 +471,9 @@ Segments Segment::createTargetSegmentsFromCheckpoint( //
             segment_info.range.toDebugString(),
             segment_info.epoch,
             segment_info.next_segment_id);
-        auto stable = StableValueSpace::createFromCheckpoint(parent_log, context, temp_ps, segment_info.stable_id, wbs);
-        auto delta = DeltaValueSpace::createFromCheckpoint(
-            parent_log,
-            context,
-            temp_ps,
-            segment_info.range,
-            segment_info.delta_id,
-            wbs);
+        auto stable = StableValueSpace::createFromCheckpoint(context, temp_ps, segment_info.stable_id, wbs);
+        auto delta
+            = DeltaValueSpace::createFromCheckpoint(context, temp_ps, segment_info.range, segment_info.delta_id, wbs);
         auto segment = std::make_shared<Segment>(
             Logger::get("Checkpoint"),
             segment_info.epoch,
@@ -534,33 +495,17 @@ Segments Segment::createTargetSegmentsFromCheckpoint( //
     return segments;
 }
 
-void Segment::serializeToFAPTempSegment(FastAddPeerProto::FAPTempSegmentInfo * segment_info)
+void Segment::serialize(WriteBatchWrapper & wb)
 {
-    {
-        WriteBufferFromOwnString wb;
-        storeSegmentMetaInfo(wb);
-        segment_info->set_segment_meta(wb.releaseStr());
-    }
-    segment_info->set_delta_meta(delta->serializeMeta());
-    segment_info->set_stable_meta(stable->serializeMeta());
-}
-
-UInt64 Segment::storeSegmentMetaInfo(WriteBuffer & buf) const
-{
+    MemoryWriteBuffer buf(0, SEGMENT_BUFFER_SIZE);
     writeIntBinary(STORAGE_FORMAT_CURRENT.segment, buf);
     writeIntBinary(epoch, buf);
     rowkey_range.serialize(buf);
     writeIntBinary(next_segment_id, buf);
     writeIntBinary(delta->getId(), buf);
     writeIntBinary(stable->getId(), buf);
-    return buf.count();
-}
 
-void Segment::serialize(WriteBatchWrapper & wb) const
-{
-    MemoryWriteBuffer buf(0, SEGMENT_BUFFER_SIZE);
-    // Must be called before tryGetReadBuffer.
-    auto data_size = storeSegmentMetaInfo(buf);
+    auto data_size = buf.count(); // Must be called before tryGetReadBuffer.
     wb.putPage(segment_id, 0, buf.tryGetReadBuffer(), data_size);
 }
 
@@ -664,7 +609,7 @@ bool Segment::isDefinitelyEmpty(DMContext & dm_context, const SegmentSnapshotPtr
         SkippableBlockInputStreams streams;
         for (const auto & file : segment_snap->stable->getDMFiles())
         {
-            DMFileBlockInputStreamBuilder builder(dm_context.global_context);
+            DMFileBlockInputStreamBuilder builder(dm_context.db_context);
             auto stream = builder
                               .setRowsThreshold(
                                   std::numeric_limits<UInt64>::max()) // TODO: May be we could have some better settings
@@ -789,7 +734,10 @@ SegmentPtr Segment::ingestDataForTest(DMContext & dm_context, const DMFilePtr & 
     auto new_segment = applyIngestData(segment_lock, dm_context, data_file, ii);
     if (new_segment.get() != this)
     {
-        RUNTIME_CHECK(getRowKeyRange().getEnd() == new_segment->getRowKeyRange().getEnd(), info(), new_segment->info());
+        RUNTIME_CHECK(
+            compare(getRowKeyRange().getEnd(), new_segment->getRowKeyRange().getEnd()) == 0,
+            info(),
+            new_segment->info());
         RUNTIME_CHECK(segmentId() == new_segment->segmentId(), info(), new_segment->info());
     }
 
@@ -821,13 +769,13 @@ BlockInputStreamPtr Segment::getInputStream(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const PushDownFilterPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     Stopwatch sw;
     SCOPE_EXIT({ dm_context.scan_context->build_inputstream_time_ns += sw.elapsed(); });
     auto clipped_block_rows = clipBlockRows( //
-        dm_context.global_context,
+        dm_context.db_context,
         expected_block_size,
         columns_to_read,
         segment_snap->stable->stable);
@@ -840,7 +788,7 @@ BlockInputStreamPtr Segment::getInputStream(
             segment_snap,
             read_ranges,
             filter ? filter->rs_operator : EMPTY_RS_OPERATOR,
-            start_ts,
+            max_version,
             clipped_block_rows);
     case ReadMode::Fast:
         return getInputStreamModeFast(
@@ -851,12 +799,7 @@ BlockInputStreamPtr Segment::getInputStream(
             filter ? filter->rs_operator : EMPTY_RS_OPERATOR,
             clipped_block_rows);
     case ReadMode::Raw:
-        return getInputStreamModeRaw( //
-            dm_context,
-            columns_to_read,
-            segment_snap,
-            read_ranges,
-            clipped_block_rows);
+        return getInputStreamModeRaw(dm_context, columns_to_read, segment_snap, read_ranges, clipped_block_rows);
     case ReadMode::Bitmap:
         return getBitmapFilterInputStream(
             dm_context,
@@ -864,7 +807,7 @@ BlockInputStreamPtr Segment::getInputStream(
             segment_snap,
             read_ranges,
             filter,
-            start_ts,
+            max_version,
             expected_block_size,
             clipped_block_rows);
     default:
@@ -887,14 +830,14 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size,
     bool need_row_id)
 {
     LOG_TRACE(segment_snap->log, "Begin segment create input stream");
 
     auto read_tag = need_row_id ? ReadTag::MVCC : ReadTag::Query;
-    auto read_info = getReadInfo(dm_context, columns_to_read, segment_snap, read_ranges, read_tag, start_ts);
+    auto read_info = getReadInfo(dm_context, columns_to_read, segment_snap, read_ranges, read_tag, max_version);
 
     auto real_ranges = shrinkRowKeyRanges(read_ranges);
     if (real_ranges.empty())
@@ -912,7 +855,7 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
             *read_info.read_columns,
             real_ranges,
             filter,
-            start_ts,
+            max_version,
             expected_block_size,
             false,
             read_tag);
@@ -926,7 +869,7 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
             *read_info.read_columns,
             real_ranges,
             filter,
-            start_ts,
+            max_version,
             expected_block_size,
             true,
             read_tag);
@@ -944,7 +887,7 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
             read_info.index_end,
             expected_block_size,
             read_tag,
-            start_ts,
+            max_version,
             need_row_id);
     }
 
@@ -952,15 +895,15 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
     stream = std::make_shared<DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_MVCC>>(
         stream,
         columns_to_read,
-        start_ts,
+        max_version,
         is_common_handle,
         dm_context.tracing_id,
         dm_context.scan_context);
 
     LOG_TRACE(
         segment_snap->log,
-        "Finish segment create input stream, start_ts={} range_size={} ranges={}",
-        start_ts,
+        "Finish segment create input stream, max_version={} range_size={} ranges={}",
+        max_version,
         real_ranges.size(),
         DB::DM::toDebugString(read_ranges));
     return stream;
@@ -971,7 +914,7 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
     const ColumnDefines & columns_to_read,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     auto segment_snap = createSnapshot(dm_context, false, CurrentMetrics::DT_SnapshotOfRead);
@@ -983,7 +926,7 @@ BlockInputStreamPtr Segment::getInputStreamModeNormal(
         segment_snap,
         read_ranges,
         filter,
-        start_ts,
+        max_version,
         expected_block_size);
 }
 
@@ -1370,12 +1313,11 @@ SegmentPtr Segment::dangerouslyReplaceDataFromCheckpoint(
     // Always create a ref to the file to allow `data_file` being shared.
     auto new_page_id = storage_pool->newDataPageIdForDTFile(delegate, __PRETTY_FUNCTION__);
     auto ref_file = DMFile::restore(
-        dm_context.global_context.getFileProvider(),
+        dm_context.db_context.getFileProvider(),
         data_file->fileId(),
         new_page_id,
         data_file->parentPath(),
-        DMFileMeta::ReadMode::all(),
-        dm_context.keyspace_id);
+        DMFile::ReadMetaMode::all());
     wbs.data.putRefPage(new_page_id, data_file->pageId());
 
     auto new_stable = std::make_shared<StableValueSpace>(stable->getId());
@@ -1401,7 +1343,7 @@ SegmentPtr Segment::dangerouslyReplaceDataFromCheckpoint(
             auto new_data_page_id = storage_pool->newDataPageIdForDTFile(delegate, __PRETTY_FUNCTION__);
             auto old_data_page_id = b->getDataPageId();
             wbs.data.putRefPage(new_data_page_id, old_data_page_id);
-            auto wn_ps = dm_context.global_context.getWriteNodePageStorage();
+            auto wn_ps = dm_context.db_context.getWriteNodePageStorage();
             auto full_page_id = UniversalPageIdFormat::toFullPageId(
                 UniversalPageIdFormat::toFullPrefix(
                     dm_context.keyspace_id,
@@ -1412,10 +1354,10 @@ SegmentPtr Segment::dangerouslyReplaceDataFromCheckpoint(
             auto data_key_view = S3::S3FilenameView::fromKey(*(remote_data_location->data_file_id)).asDataFile();
             auto file_oid = data_key_view.getDMFileOID();
             RUNTIME_CHECK(file_oid.file_id == b->getFile()->fileId(), file_oid.file_id, b->getFile()->fileId());
-            auto remote_data_store = dm_context.global_context.getSharedContextDisagg()->remote_data_store;
+            auto remote_data_store = dm_context.db_context.getSharedContextDisagg()->remote_data_store;
             RUNTIME_CHECK(remote_data_store != nullptr);
             auto prepared = remote_data_store->prepareDMFile(file_oid, new_data_page_id);
-            auto dmfile = prepared->restore(DMFileMeta::ReadMode::all());
+            auto dmfile = prepared->restore(DMFile::ReadMetaMode::all());
             auto new_column_file = b->cloneWith(dm_context, dmfile, rowkey_range);
             new_column_file_persisteds.push_back(new_column_file);
         }
@@ -1527,7 +1469,7 @@ std::optional<RowKeyValue> Segment::getSplitPointFast(DMContext & dm_context, co
     if (unlikely(!read_file))
         throw Exception("Logical error: failed to find split point");
 
-    DMFileBlockInputStreamBuilder builder(dm_context.global_context);
+    DMFileBlockInputStreamBuilder builder(dm_context.db_context);
     auto stream = builder.setColumnCache(stable_snap->getColumnCaches()[file_index])
                       .setReadPacks(read_pack)
                       .setTracingID(fmt::format("{}-getSplitPointFast", dm_context.tracing_id))
@@ -1664,7 +1606,8 @@ std::optional<RowKeyValue> Segment::getSplitPointSlow(
 
 bool isSplitPointValid(const RowKeyRange & segment_range, const RowKeyValueRef & split_point)
 {
-    return segment_range.check(split_point) && split_point != segment_range.getStart();
+    return segment_range.check(split_point) && //
+        compare(split_point, segment_range.getStart()) != 0;
 }
 
 std::optional<Segment::SplitInfo> Segment::prepareSplit(
@@ -1793,7 +1736,7 @@ Segment::prepareSplitLogical( //
         auto ori_page_id = dmfile->pageId();
         auto file_id = dmfile->fileId();
         auto file_parent_path = dmfile->parentPath();
-        if (!dm_context.global_context.getSharedContextDisagg()->remote_data_store)
+        if (!dm_context.db_context.getSharedContextDisagg()->remote_data_store)
         {
             RUNTIME_CHECK(file_parent_path == delegate.getDTFilePath(file_id));
         }
@@ -1809,19 +1752,17 @@ Segment::prepareSplitLogical( //
         wbs.removed_data.delPage(ori_page_id);
 
         auto my_dmfile = DMFile::restore(
-            dm_context.global_context.getFileProvider(),
+            dm_context.db_context.getFileProvider(),
             file_id,
             /* page_id= */ my_dmfile_page_id,
             file_parent_path,
-            DMFileMeta::ReadMode::all(),
-            dm_context.keyspace_id);
+            DMFile::ReadMetaMode::all());
         auto other_dmfile = DMFile::restore(
-            dm_context.global_context.getFileProvider(),
+            dm_context.db_context.getFileProvider(),
             file_id,
             /* page_id= */ other_dmfile_page_id,
             file_parent_path,
-            DMFileMeta::ReadMode::all(),
-            dm_context.keyspace_id);
+            DMFile::ReadMetaMode::all());
         my_stable_files.push_back(my_dmfile);
         other_stable_files.push_back(other_dmfile);
     }
@@ -2113,7 +2054,7 @@ StableValueSpacePtr Segment::prepareMerge(
     for (size_t i = 1; i < ordered_segments.size(); i++)
     {
         RUNTIME_CHECK(
-            ordered_segments[i - 1]->rowkey_range.getEnd() == ordered_segments[i]->rowkey_range.getStart(),
+            compare(ordered_segments[i - 1]->rowkey_range.getEnd(), ordered_segments[i]->rowkey_range.getStart()) == 0,
             i,
             ordered_segments[i - 1]->info(),
             ordered_segments[i]->info());
@@ -2401,25 +2342,15 @@ void Segment::drop(const FileProviderPtr & file_provider, WriteBatches & wbs)
     stable->drop(file_provider);
 }
 
-void Segment::dropAsFAPTemp(const FileProviderPtr & file_provider, WriteBatches & wbs)
-{
-    // The segment_id, delta_id, stable_id are invalid, just cleanup the persisted page_id in
-    // delta layer and stable layer
-    delta->recordRemoveColumnFilesPages(wbs);
-    stable->recordRemovePacksPages(wbs);
-    wbs.writeAll();
-    stable->drop(file_provider);
-}
-
 Segment::ReadInfo Segment::getReadInfo(
     const DMContext & dm_context,
     const ColumnDefines & read_columns,
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     ReadTag read_tag,
-    UInt64 start_ts) const
+    UInt64 max_version) const
 {
-    LOG_DEBUG(segment_snap->log, "Begin segment getReadInfo {}", simpleInfo());
+    LOG_DEBUG(segment_snap->log, "Begin segment getReadInfo");
 
     auto new_read_columns = arrangeReadColumns(getExtraHandleColumnDefine(is_common_handle), read_columns);
     auto pk_ver_col_defs = std::make_shared<ColumnDefines>(
@@ -2433,20 +2364,15 @@ Segment::ReadInfo Segment::getReadInfo(
         this->rowkey_range,
         ReadTag::MVCC);
 
-    auto [my_delta_index, fully_indexed] = ensurePlace(dm_context, segment_snap, delta_reader, read_ranges, start_ts);
+    auto [my_delta_index, fully_indexed]
+        = ensurePlace(dm_context, segment_snap, delta_reader, read_ranges, max_version);
     auto compacted_index = my_delta_index->getDeltaTree()->getCompactedEntries();
+
+
     // Hold compacted_index reference, to prevent it from deallocated.
     delta_reader->setDeltaIndex(compacted_index);
 
-    LOG_DEBUG(
-        segment_snap->log,
-        "Finish segment getReadInfo, my_delta_index={} fully_indexed={} read_ranges={} "
-        "snap={} {}",
-        my_delta_index->toString(),
-        fully_indexed,
-        DB::DM::toDebugString(read_ranges),
-        segment_snap->detailInfo(),
-        simpleInfo());
+    LOG_DEBUG(segment_snap->log, "Finish segment getReadInfo");
 
     if (fully_indexed)
     {
@@ -2454,19 +2380,15 @@ Segment::ReadInfo Segment::getReadInfo(
         bool ok = segment_snap->delta->getSharedDeltaIndex()->updateIfAdvanced(*my_delta_index);
         if (ok)
         {
-            LOG_DEBUG(
-                segment_snap->log,
-                "Segment updated delta index, my_delta_index={} {}",
-                my_delta_index->toString(),
-                simpleInfo());
+            LOG_DEBUG(segment_snap->log, "Segment updated delta index");
             // Update cache size.
-            if (auto cache = dm_context.global_context.getSharedContextDisagg()->rn_delta_index_cache; cache)
+            if (auto cache = dm_context.db_context.getSharedContextDisagg()->rn_delta_index_cache; cache)
                 cache->setDeltaIndex(segment_snap->delta->getSharedDeltaIndex());
         }
     }
 
     // Refresh the reference in DeltaIndexManager, so that the index can be properly managed.
-    if (auto manager = dm_context.global_context.getDeltaIndexManager(); manager)
+    if (auto manager = dm_context.db_context.getDeltaIndexManager(); manager)
         manager->refreshRef(segment_snap->delta->getSharedDeltaIndex());
 
     return ReadInfo(
@@ -2506,7 +2428,7 @@ SkippableBlockInputStreamPtr Segment::getPlacedStream(
     const IndexIterator & delta_index_end,
     size_t expected_block_size,
     ReadTag read_tag,
-    UInt64 start_ts,
+    UInt64 max_version,
     bool need_row_id)
 {
     if (unlikely(rowkey_ranges.empty()))
@@ -2517,7 +2439,7 @@ SkippableBlockInputStreamPtr Segment::getPlacedStream(
         read_columns,
         rowkey_ranges,
         filter,
-        start_ts,
+        max_version,
         expected_block_size,
         /* enable_handle_clean_read */ false,
         read_tag,
@@ -2559,7 +2481,7 @@ std::pair<DeltaIndexPtr, bool> Segment::ensurePlace(
     const SegmentSnapshotPtr & segment_snap,
     const DeltaValueReaderPtr & delta_reader,
     const RowKeyRanges & read_ranges,
-    UInt64 start_ts) const
+    UInt64 max_version) const
 {
     const auto & stable_snap = segment_snap->stable;
     auto delta_snap = delta_reader->getDeltaSnap();
@@ -2568,8 +2490,8 @@ std::pair<DeltaIndexPtr, bool> Segment::ensurePlace(
     auto my_delta_index = delta_snap->getSharedDeltaIndex()->tryClone(delta_snap->getRows(), delta_snap->getDeletes());
     auto my_delta_tree = my_delta_index->getDeltaTree();
 
-    const bool relevant_place = dm_context.enable_relevant_place;
-    const bool skippable_place = dm_context.enable_skippable_place;
+    bool relevant_place = dm_context.enable_relevant_place;
+    bool skippable_place = dm_context.enable_skippable_place;
 
     // Note that, when enable_relevant_place is false , we cannot use the range of this segment.
     // Because some block / delete ranges could contain some data / range that are not belong to current segment.
@@ -2586,12 +2508,11 @@ std::pair<DeltaIndexPtr, bool> Segment::ensurePlace(
             my_placed_deletes,
             rowkey_range,
             relevant_range,
-            start_ts))
+            max_version))
     {
         // We can reuse the shared-delta-index
         return {my_delta_index, false};
     }
-
     CurrentMetrics::Increment cur_dm_segments{CurrentMetrics::DT_PlaceIndexUpdate};
     GET_METRIC(tiflash_storage_subtask_count, type_place_index_update).Increment();
     Stopwatch watch;
@@ -2616,11 +2537,8 @@ std::pair<DeltaIndexPtr, bool> Segment::ensurePlace(
             auto offset = v.getBlockOffset();
             auto rows = block.rows();
 
-            RUNTIME_CHECK_MSG(
-                my_placed_rows == offset,
-                "Place block offset not match, my_placed_rows={} offset={}",
-                my_placed_rows,
-                offset);
+            if (unlikely(my_placed_rows != offset))
+                throw Exception("Place block offset not match", ErrorCodes::LOGICAL_ERROR);
 
             if (skippable_place)
                 fully_indexed &= placeUpsert<true>(
@@ -2670,24 +2588,25 @@ std::pair<DeltaIndexPtr, bool> Segment::ensurePlace(
         }
     }
 
-    RUNTIME_CHECK_MSG(
-        my_placed_rows == delta_snap->getRows() && my_placed_deletes == delta_snap->getDeletes(),
-        "Placed status not match! Expected place rows:{}, deletes:{}, but actually placed rows:{}, deletes:{}",
-        delta_snap->getRows(),
-        delta_snap->getDeletes(),
-        my_placed_rows,
-        my_placed_deletes);
+    if (unlikely(my_placed_rows != delta_snap->getRows() || my_placed_deletes != delta_snap->getDeletes()))
+    {
+        throw Exception(fmt::format(
+            "Placed status not match! Expected place rows:{}, deletes:{}, but actually placed rows:{}, deletes:{}",
+            delta_snap->getRows(),
+            delta_snap->getDeletes(),
+            my_placed_rows,
+            my_placed_deletes));
+    }
 
     my_delta_index->update(my_delta_tree, my_placed_rows, my_placed_deletes);
 
     LOG_DEBUG(
         segment_snap->log,
-        "Finish segment ensurePlace, read_ranges={} placed_items={} shared_delta_index={} my_delta_index={} {}",
+        "Finish segment ensurePlace, read_ranges={} placed_items={} shared_delta_index={} my_delta_index={}",
         DB::DM::toDebugString(read_ranges),
         items.size(),
         delta_snap->getSharedDeltaIndex()->toString(),
-        my_delta_index->toString(),
-        simpleInfo());
+        my_delta_index->toString());
 
     return {my_delta_index, fully_indexed};
 }
@@ -2714,7 +2633,7 @@ bool Segment::placeUpsert(
     RowKeyValueRef range_start = relevant_range.getStart();
 
     auto place_handle_range = skippable_place
-        ? RowKeyRange::startFrom(std::max(first_rowkey, range_start), is_common_handle, rowkey_column_size)
+        ? RowKeyRange::startFrom(max(first_rowkey, range_start), is_common_handle, rowkey_column_size)
         : RowKeyRange::newAll(is_common_handle, rowkey_column_size);
 
     auto compacted_index = update_delta_tree.getCompactedEntries();
@@ -2837,7 +2756,7 @@ BitmapFilterPtr Segment::buildBitmapFilter(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     RUNTIME_CHECK_MSG(!dm_context.read_delta_only, "Read delta only is unsupported");
@@ -2848,12 +2767,12 @@ BitmapFilterPtr Segment::buildBitmapFilter(
             segment_snap,
             read_ranges,
             filter,
-            start_ts,
+            max_version,
             expected_block_size);
     }
     else
     {
-        return buildBitmapFilterNormal(dm_context, segment_snap, read_ranges, filter, start_ts, expected_block_size);
+        return buildBitmapFilterNormal(dm_context, segment_snap, read_ranges, filter, max_version, expected_block_size);
     }
 }
 
@@ -2862,7 +2781,7 @@ BitmapFilterPtr Segment::buildBitmapFilterNormal(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     Stopwatch sw_total;
@@ -2876,7 +2795,7 @@ BitmapFilterPtr Segment::buildBitmapFilterNormal(
         segment_snap,
         read_ranges,
         filter,
-        start_ts,
+        max_version,
         expected_block_size,
         /*need_row_id*/ true);
     // `total_rows` is the rows read for building bitmap
@@ -2914,7 +2833,7 @@ std::pair<std::vector<Range>, std::vector<IdSetPtr>> parseDMFilePackInfo(
     const DMContext & dm_context,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts)
+    UInt64 max_version)
 {
     // Packs that all rows compliant with MVCC filter and RowKey filter requirements.
     // For building bitmap filter, we don't need to read these packs,
@@ -2936,16 +2855,16 @@ std::pair<std::vector<Range>, std::vector<IdSetPtr>> parseDMFilePackInfo(
     {
         DMFilePackFilter pack_filter = DMFilePackFilter::loadFrom(
             dmfile,
-            dm_context.global_context.getMinMaxIndexCache(),
+            dm_context.db_context.getMinMaxIndexCache(),
             /*set_cache_if_miss*/ true,
             read_ranges,
             filter,
             /*read_pack*/ {},
-            dm_context.global_context.getFileProvider(),
-            dm_context.global_context.getReadLimiter(),
+            dm_context.db_context.getFileProvider(),
+            dm_context.db_context.getReadLimiter(),
             dm_context.scan_context,
             dm_context.tracing_id);
-        const auto & pack_res = pack_filter.getPackResConst();
+        const auto & use_packs = pack_filter.getUsePacksConst();
         const auto & handle_res = pack_filter.getHandleRes();
         const auto & pack_stats = dmfile->getPackStats();
 
@@ -2955,13 +2874,13 @@ std::pair<std::vector<Range>, std::vector<IdSetPtr>> parseDMFilePackInfo(
         {
             const auto & pack_stat = pack_stats[pack_id];
             preceded_rows += pack_stat.rows;
-            if (!isUse(pack_res[pack_id]))
+            if (!use_packs[pack_id])
             {
                 continue;
             }
 
             if (handle_res[pack_id] == RSResult::Some || pack_stat.not_clean > 0
-                || pack_filter.getMaxVersion(pack_id) > start_ts)
+                || pack_filter.getMaxVersion(pack_id) > max_version)
             {
                 // We need to read this pack to do RowKey or MVCC filter.
                 some_packs_set->insert(pack_id);
@@ -2997,7 +2916,7 @@ BitmapFilterPtr Segment::buildBitmapFilterStableOnly(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     Stopwatch sw;
@@ -3010,7 +2929,7 @@ BitmapFilterPtr Segment::buildBitmapFilterStableOnly(
         return elapse_ns / 1'000'000.0;
     };
 
-    auto [skipped_ranges, some_packs_sets] = parseDMFilePackInfo(dmfiles, dm_context, read_ranges, filter, start_ts);
+    auto [skipped_ranges, some_packs_sets] = parseDMFilePackInfo(dmfiles, dm_context, read_ranges, filter, max_version);
 
     if (skipped_ranges.size() == 1 && skipped_ranges[0].offset == 0
         && skipped_ranges[0].rows == segment_snap->stable->getDMFilesRows())
@@ -3061,7 +2980,7 @@ BitmapFilterPtr Segment::buildBitmapFilterStableOnly(
         columns_to_read,
         read_ranges,
         filter,
-        start_ts,
+        max_version,
         expected_block_size,
         /*enable_handle_clean_read*/ false,
         ReadTag::MVCC,
@@ -3076,7 +2995,7 @@ BitmapFilterPtr Segment::buildBitmapFilterStableOnly(
     stream = std::make_shared<DMVersionFilterBlockInputStream<DM_VERSION_FILTER_MODE_MVCC>>(
         stream,
         read_columns,
-        start_ts,
+        max_version,
         is_common_handle,
         dm_context.tracing_id);
     bitmap_filter->set(stream);
@@ -3098,7 +3017,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
     const ColumnDefines & columns_to_read,
     const RowKeyRanges & read_ranges,
     const RSOperatorPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     // set `is_fast_scan` to true to try to enable clean read
@@ -3111,7 +3030,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
         columns_to_read,
         read_ranges,
         filter,
-        start_ts,
+        max_version,
         expected_block_size,
         enable_handle_clean_read,
         ReadTag::Query,
@@ -3142,7 +3061,7 @@ BlockInputStreamPtr Segment::getLateMaterializationStream(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & data_ranges,
     const PushDownFilterPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t expected_block_size)
 {
     // set `is_fast_scan` to true to try to enable clean read
@@ -3157,7 +3076,7 @@ BlockInputStreamPtr Segment::getLateMaterializationStream(
         *filter_columns,
         data_ranges,
         filter->rs_operator,
-        start_ts,
+        max_version,
         expected_block_size,
         enable_handle_clean_read,
         ReadTag::LMFilter,
@@ -3244,7 +3163,7 @@ BlockInputStreamPtr Segment::getLateMaterializationStream(
         *rest_columns_to_read,
         data_ranges,
         filter->rs_operator,
-        start_ts,
+        max_version,
         expected_block_size,
         enable_handle_clean_read,
         ReadTag::Query,
@@ -3273,7 +3192,7 @@ BlockInputStreamPtr Segment::getLateMaterializationStream(
         dm_context.tracing_id);
 }
 
-RowKeyRanges Segment::shrinkRowKeyRanges(const RowKeyRanges & read_ranges) const
+RowKeyRanges Segment::shrinkRowKeyRanges(const RowKeyRanges & read_ranges)
 {
     RowKeyRanges real_ranges;
     for (const auto & read_range : read_ranges)
@@ -3296,7 +3215,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
     const SegmentSnapshotPtr & segment_snap,
     const RowKeyRanges & read_ranges,
     const PushDownFilterPtr & filter,
-    UInt64 start_ts,
+    UInt64 max_version,
     size_t build_bitmap_filter_block_rows,
     size_t read_data_block_rows)
 {
@@ -3311,7 +3230,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
         segment_snap,
         real_ranges,
         filter ? filter->rs_operator : EMPTY_RS_OPERATOR,
-        start_ts,
+        max_version,
         build_bitmap_filter_block_rows);
 
     // If we don't need to read the cacheable columns, release column cache as soon as possible.
@@ -3330,7 +3249,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
             segment_snap,
             real_ranges,
             filter,
-            start_ts,
+            max_version,
             read_data_block_rows);
     }
 
@@ -3341,7 +3260,7 @@ BlockInputStreamPtr Segment::getBitmapFilterInputStream(
         columns_to_read,
         real_ranges,
         filter ? filter->rs_operator : EMPTY_RS_OPERATOR,
-        start_ts,
+        max_version,
         read_data_block_rows);
 }
 

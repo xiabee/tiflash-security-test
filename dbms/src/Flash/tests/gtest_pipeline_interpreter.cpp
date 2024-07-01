@@ -26,6 +26,7 @@ public:
     {
         InterpreterTestUtils::initializeContext();
 
+        enablePlanner(true);
         enablePipeline(true);
 
         // The following steps update the expected results of cases in bulk

@@ -27,11 +27,11 @@ class Context;
 class DictionaryFactory : public ext::Singleton<DictionaryFactory>
 {
 public:
-    static DictionaryPtr create(
+    DictionaryPtr create(
         const std::string & name,
         const Poco::Util::AbstractConfiguration & config,
         const std::string & config_prefix,
-        Context & context);
+        Context & context) const;
 };
 
 } // namespace DB

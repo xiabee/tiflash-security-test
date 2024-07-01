@@ -25,7 +25,6 @@
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/ASTSelectQuery.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/RegionQueryInfo.h>
 #include <Storages/StorageDeltaMerge.h>
 
@@ -208,7 +207,7 @@ BlockInputStreamPtr MockStorage::getStreamFromDeltaMerge(
             rf_max_wait_time_ms,
             context.getTimezoneInfo());
         auto [before_where, filter_column_name, project_after_where]
-            = analyzer->buildPushDownFilter(filter_conditions->conditions);
+            = ::DB::buildPushDownFilter(filter_conditions->conditions, *analyzer);
         BlockInputStreams ins = storage->read(
             column_names,
             query_info,
@@ -265,7 +264,7 @@ void MockStorage::buildExecFromDeltaMerge(
             rf_max_wait_time_ms,
             context.getTimezoneInfo());
         // Not using `auto [before_where, filter_column_name, project_after_where]` just to make the compiler happy.
-        auto build_ret = analyzer->buildPushDownFilter(filter_conditions->conditions);
+        auto build_ret = ::DB::buildPushDownFilter(filter_conditions->conditions, *analyzer);
         storage->read(
             exec_context_,
             group_builder,
@@ -586,7 +585,6 @@ ColumnInfos mockColumnInfosToTiDBColumnInfos(const MockColumnInfoVec & mock_colu
         TiDB::ColumnInfo column_info;
         column_info.name = mock_column_info.name;
         column_info.tp = mock_column_info.type;
-        column_info.collate = mock_column_info.collate;
         column_info.id = col_id++;
         // TODO: find a way to assign decimal field's flen.
         if (column_info.tp == TiDB::TP::TypeNewDecimal)

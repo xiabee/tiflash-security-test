@@ -13,8 +13,8 @@
 // limitations under the License.
 
 
-#include <IO/Encryption/MockKeyManager.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/MockKeyManager.h>
 #include <Server/StorageConfigParser.h>
 #include <Storages/Page/V3/CheckpointFile/CPManifestFileReader.h>
 #include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
@@ -98,7 +98,8 @@ struct Options
             S3::ClientFactory::instance().init(s3_config);
         }
         catch (...)
-        {}
+        {
+        }
     }
 
     void tryShutdownS3() const

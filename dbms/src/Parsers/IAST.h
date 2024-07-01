@@ -208,7 +208,7 @@ public:
             ErrorCodes::UNKNOWN_ELEMENT_IN_AST);
     }
 
-    static void writeAlias(const String & name, std::ostream & s, bool hilite);
+    void writeAlias(const String & name, std::ostream & s, bool hilite) const;
 
 public:
     /// For syntax highlighting.

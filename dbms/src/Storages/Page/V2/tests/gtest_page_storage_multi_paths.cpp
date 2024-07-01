@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/File.h>
 #include <Poco/Logger.h>
@@ -58,10 +58,7 @@ protected:
     {
         // drop dir if exists
         dropDataOnDisk(getTemporaryPath());
-        bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(
-            4,
-            "bg-page-",
-            std::make_shared<JointThreadInfoJeallocMap>());
+        bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
         // default test config
         config.file_roll_size = 4 * MB;
         config.gc_max_valid_rate = 0.5;

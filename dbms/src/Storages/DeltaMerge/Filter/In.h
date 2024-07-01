@@ -32,21 +32,18 @@ public:
 
     String name() override { return "in"; }
 
-    ColIds getColumnIDs() override { return {attr.col_id}; }
+    Attrs getAttrs() override { return {attr}; }
 
     String toDebugString() override
     {
-        FmtBuffer buf;
-        buf.fmtAppend(R"({{"op":"{}","col":"{}","value":"[)", name(), attr.col_name);
-        buf.joinStr(
-            values.cbegin(),
-            values.cend(),
-            [](const auto & v, FmtBuffer & fb) {
-                fb.fmtAppend("\"{}\"", applyVisitor(FieldVisitorToDebugString(), v));
-            },
-            ",");
-        buf.append("]}");
-        return buf.toString();
+        String s = R"({"op":")" + name() + R"(","col":")" + attr.col_name + R"(","value":"[)";
+        if (!values.empty())
+        {
+            for (auto & v : values)
+                s += "\"" + applyVisitor(FieldVisitorToDebugString(), v) + "\",";
+            s.pop_back();
+        }
+        return s + "]}";
     };
 
     RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
@@ -55,9 +52,9 @@ public:
         // So return none directly.
         if (values.empty())
             return RSResults(pack_count, RSResult::None);
-        auto rs_index = getRSIndex(param, attr);
-        return rs_index ? rs_index->minmax->checkIn(start_pack, pack_count, values, rs_index->type)
-                        : RSResults(pack_count, RSResult::Some);
+        RSResults results(pack_count, RSResult::Some);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
+        return rsindex.minmax->checkIn(start_pack, pack_count, values, rsindex.type);
     }
 };
 

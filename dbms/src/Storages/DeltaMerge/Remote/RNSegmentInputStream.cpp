@@ -15,6 +15,7 @@
 #include <Common/FailPoint.h>
 #include <Common/MPMCQueue.h>
 #include <Common/TiFlashMetrics.h>
+#include <Storages/DeltaMerge/Remote/RNReadTask.h>
 #include <Storages/DeltaMerge/Remote/RNSegmentInputStream.h>
 #include <Storages/DeltaMerge/Remote/RNWorkers.h>
 
@@ -100,7 +101,7 @@ Block RNSegmentInputStream::readImpl(FilterPtr & res_filter, bool return_filter)
         }
         else
         {
-            action.transform(res, current_seg_task->dm_context->physical_table_id);
+            action.transform(res, current_seg_task->meta.physical_table_id);
             return res;
         }
     }

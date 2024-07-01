@@ -17,6 +17,7 @@
 #include <RaftStoreProxyFFI/ColumnFamily.h>
 #include <Storages/DeltaMerge/Decode/SSTFilesToBlockInputStream.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/PKSquashingBlockInputStream.h>
 #include <Storages/KVStore/Decode/PartitionStreams.h>
 #include <Storages/KVStore/FFI/ProxyFFI.h>
@@ -26,12 +27,14 @@
 #include <Storages/StorageDeltaMerge.h>
 #include <common/logger_useful.h>
 
-namespace DB::ErrorCodes
+namespace DB
+{
+namespace ErrorCodes
 {
 extern const int ILLFORMAT_RAFT_ROW;
-} // namespace DB::ErrorCodes
+} // namespace ErrorCodes
 
-namespace DB::DM
+namespace DM
 {
 SSTFilesToBlockInputStream::SSTFilesToBlockInputStream( //
     RegionPtr region_,
@@ -145,7 +148,7 @@ void SSTFilesToBlockInputStream::checkFinishedState(SSTReaderPtr & reader, Colum
         return;
     if (!reader->remained())
         return;
-    if (prehandle_task->isAbort())
+    if (prehandle_task->abort_flag.load())
         return;
 
     // now the stream must be stopped by `soft_limit`, let's check the keys in reader
@@ -517,4 +520,5 @@ bool SSTFilesToBlockInputStream::maybeStopBySoftLimit(ColumnFamilyType cf, SSTRe
     }
     return false;
 }
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

@@ -26,7 +26,6 @@
 #include <TestUtils/ExecutorSerializer.h>
 #include <TestUtils/ExecutorTestUtils.h>
 #include <gtest/gtest.h>
-#include <gtest/internal/gtest-internal.h>
 
 #include <functional>
 
@@ -154,6 +153,7 @@ namespace
 {
 String testInfoMsg(
     const std::shared_ptr<tipb::DAGRequest> & request,
+    bool enable_planner,
     bool enable_pipeline,
     size_t concurrency,
     size_t block_size)
@@ -166,6 +166,7 @@ String testInfoMsg(
         "    line: {}\n"
         "    test_case_name: {}\n"
         "    test_func_name: {}\n"
+        "    enable_planner: {}\n"
         "    enable_pipeline: {}\n"
         "    concurrency: {}\n"
         "    block_size: {}\n"
@@ -174,6 +175,7 @@ String testInfoMsg(
         test_info->line(),
         test_info->test_case_name(),
         test_info->name(),
+        enable_planner,
         enable_pipeline,
         concurrency,
         block_size,
@@ -186,6 +188,8 @@ void ExecutorTest::executeExecutor(
     std::function<::testing::AssertionResult(const ColumnsWithTypeAndName &)> assert_func)
 {
     WRAP_FOR_TEST_BEGIN
+    if (enable_pipeline && !Pipeline::isSupported(*request, context.context->getSettingsRef()))
+        continue;
     std::vector<size_t> concurrencies{1, 2, 10};
     for (auto concurrency : concurrencies)
     {
@@ -194,7 +198,8 @@ void ExecutorTest::executeExecutor(
         {
             context.context->setSetting("max_block_size", Field(static_cast<UInt64>(block_size)));
             auto res = executeStreams(request, concurrency);
-            ASSERT_TRUE(assert_func(res)) << testInfoMsg(request, enable_pipeline, concurrency, block_size);
+            ASSERT_TRUE(assert_func(res))
+                << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, block_size);
         }
     }
     WRAP_FOR_TEST_END
@@ -207,6 +212,8 @@ void ExecutorTest::checkBlockSorted(
         assert_func)
 {
     WRAP_FOR_TEST_BEGIN
+    if (enable_pipeline && !Pipeline::isSupported(*request, context.context->getSettingsRef()))
+        continue;
     std::vector<size_t> concurrencies{2, 5, 10};
     for (auto concurrency : concurrencies)
     {
@@ -227,11 +234,11 @@ void ExecutorTest::checkBlockSorted(
 
                 for (auto & block : return_blocks)
                     ASSERT_TRUE(isAlreadySorted(block, sort_desc))
-                        << testInfoMsg(request, enable_pipeline, concurrency, block_size);
+                        << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, block_size);
 
                 auto res = vstackBlocks(std::move(return_blocks)).getColumnsWithTypeAndName();
                 ASSERT_TRUE(assert_func(expected_res, res))
-                    << testInfoMsg(request, enable_pipeline, concurrency, block_size);
+                    << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, block_size);
             }
         };
     }
@@ -302,9 +309,16 @@ DB::ColumnsWithTypeAndName readBlocks(std::vector<BlockInputStreamPtr> streams)
     return vstackBlocks(std::move(actual_blocks)).getColumnsWithTypeAndName();
 }
 
+void ExecutorTest::enablePlanner(bool is_enable) const
+{
+    context.context->setSetting("enable_planner", is_enable ? "true" : "false");
+    enablePipeline(false);
+}
+
 void ExecutorTest::enablePipeline(bool is_enable) const
 {
     context.context->setSetting("enable_resource_control", is_enable ? "true" : "false");
+    context.context->setSetting("enforce_enable_resource_control", is_enable ? "true" : "false");
 }
 
 // ywq todo rename
@@ -360,29 +374,30 @@ void ExecutorTest::testForExecutionSummary(
     ASSERT_TRUE(dag_context.collect_execution_summaries);
     ExecutorStatisticsCollector statistics_collector("test_execution_summary", true);
     statistics_collector.initialize(&dag_context);
-    statistics_collector.setLocalRUConsumption(
-        RUConsumption{.cpu_ru = 0.0, .cpu_time_ns = 0, .read_ru = 0.0, .read_bytes = 0});
     auto summaries = statistics_collector.genExecutionSummaryResponse().execution_summaries();
-    bool enable_pipeline = context.context->getSettingsRef().enable_resource_control;
+    bool enable_planner = context.context->getSettingsRef().enable_planner;
+    bool enable_pipeline = context.context->getSettingsRef().enable_resource_control
+        || context.context->getSettingsRef().enforce_enable_resource_control;
     ASSERT_EQ(summaries.size(), expect.size())
         << "\n"
-        << testInfoMsg(request, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
+        << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
     for (const auto & summary : summaries)
     {
         ASSERT_TRUE(summary.has_executor_id())
             << "\n"
-            << testInfoMsg(request, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
+            << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
         auto it = expect.find(summary.executor_id());
-        ASSERT_TRUE(it != expect.end()) << fmt::format("unknown executor_id: {}", summary.executor_id()) << "\n"
-                                        << testInfoMsg(request, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
+        ASSERT_TRUE(it != expect.end())
+            << fmt::format("unknown executor_id: {}", summary.executor_id()) << "\n"
+            << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
         if (it->second.first != not_check_rows)
             ASSERT_EQ(summary.num_produced_rows(), it->second.first)
                 << fmt::format("executor_id: {}", summary.executor_id()) << "\n"
-                << testInfoMsg(request, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
+                << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
         if (it->second.second != not_check_concurrency)
             ASSERT_EQ(summary.concurrency(), it->second.second)
                 << fmt::format("executor_id: {}", summary.executor_id()) << "\n"
-                << testInfoMsg(request, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
+                << testInfoMsg(request, enable_planner, enable_pipeline, concurrency, DEFAULT_BLOCK_SIZE);
 
         // Normally, `summary.time_processed_ns` should always be less than or equal to the execution time of the `executeStream`.
         // However, sometimes the check fails in CI.
@@ -409,18 +424,9 @@ DB::ColumnsWithTypeAndName ExecutorTest::executeRawQuery(const String & query, s
     return executeStreams(query_tasks[0].dag_request, concurrency);
 }
 
-::testing::AssertionResult ExecutorTest::dagRequestEqual(
-    const char * lhs_expr,
-    const char * rhs_expr,
-    const String & expected_string,
-    const std::shared_ptr<tipb::DAGRequest> & actual)
+void ExecutorTest::dagRequestEqual(const String & expected_string, const std::shared_ptr<tipb::DAGRequest> & actual)
 {
-    auto trim_expected = Poco::trim(expected_string);
-    auto trim_actual = Poco::trim(ExecutorSerializer().serialize(actual.get()));
-
-    if (trim_expected == trim_actual)
-        return ::testing::AssertionSuccess();
-    return ::testing::internal::EqFailure(lhs_expr, rhs_expr, trim_expected, trim_actual, false);
+    ASSERT_EQ(Poco::trim(expected_string), Poco::trim(ExecutorSerializer().serialize(actual.get())));
 }
 
 } // namespace DB::tests

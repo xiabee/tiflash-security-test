@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Operators/Operator.h>
-#include <Storages/DeltaMerge/DMContext_fwd.h>
+#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/SegmentReadTaskPool.h>
 
@@ -37,7 +37,7 @@ public:
         DM::AfterSegmentRead after_segment_read_,
         const DM::ColumnDefines & columns_to_read_,
         const DM::PushDownFilterPtr & filter_,
-        UInt64 start_ts_,
+        UInt64 max_version_,
         size_t expected_block_size_,
         DM::ReadMode read_mode_,
         const String & req_id);
@@ -59,7 +59,7 @@ private:
     DM::AfterSegmentRead after_segment_read;
     DM::ColumnDefines columns_to_read;
     DM::PushDownFilterPtr filter;
-    const UInt64 start_ts;
+    const UInt64 max_version;
     const size_t expected_block_size;
     const DM::ReadMode read_mode;
 

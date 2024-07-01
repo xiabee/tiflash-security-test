@@ -16,6 +16,7 @@
 
 #include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
 #include <Storages/KVStore/Types.h>
+#include <Storages/RegionQueryInfo.h>
 
 namespace DB
 {

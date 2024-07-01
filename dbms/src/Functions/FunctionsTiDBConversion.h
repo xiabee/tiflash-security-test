@@ -47,9 +47,9 @@
 #include <Functions/FunctionsMiscellaneous.h>
 #include <Functions/IFunction.h>
 #include <Functions/castTypeToEither.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/Buffer/WriteBufferFromVector.h>
 #include <IO/Operators.h>
+#include <IO/ReadBufferFromMemory.h>
+#include <IO/WriteBufferFromVector.h>
 #include <IO/parseDateTimeBestEffort.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/ExpressionActions.h>
@@ -77,39 +77,29 @@ namespace
 constexpr static Int64 pow10[] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
 }
 
-ALWAYS_INLINE inline size_t charLengthToByteLengthFromUTF8(const char * data, size_t length, size_t char_length)
-{
-    size_t ret = 0;
-    for (size_t char_index = 0; char_index < char_length && ret < length; ++char_index)
-    {
-        uint8_t c = data[ret];
-        if (c < 0x80)
-            ret += 1;
-        else if (c < 0xE0)
-            ret += 2;
-        else if (c < 0xF0)
-            ret += 3;
-        else
-            ret += 4;
-    }
-    if unlikely (ret > length)
-    {
-        throw Exception(
-            fmt::format(
-                "Illegal utf8 byte sequence bytes: {} result_length: {} char_length: {}",
-                length,
-                ret,
-                char_length),
-            ErrorCodes::ILLEGAL_COLUMN);
-    }
-    return ret;
-}
-
 /// cast int/real/decimal/time as string
 template <typename FromDataType, bool return_nullable>
 struct TiDBConvertToString
 {
     using FromFieldType = typename FromDataType::FieldType;
+
+    static size_t charLengthToByteLengthFromUTF8(const char * data, size_t length, size_t char_length)
+    {
+        size_t ret = 0;
+        for (size_t char_index = 0; char_index < char_length && ret < length; char_index++)
+        {
+            uint8_t c = data[ret];
+            if (c < 0x80)
+                ret += 1;
+            else if (c < 0xE0)
+                ret += 2;
+            else if (c < 0xF0)
+                ret += 3;
+            else
+                ret += 4;
+        }
+        return ret;
+    }
 
     static void execute(
         Block & block,
@@ -158,7 +148,7 @@ struct TiDBConvertToString
                 size_t next_offset = (*offsets_from)[i];
                 size_t org_length = next_offset - current_offset - 1;
                 size_t byte_length = org_length;
-                if (tp.flen() >= 0)
+                if (tp.flen() > 0)
                 {
                     byte_length = tp.flen();
                     if (tp.charset() == "utf8" || tp.charset() == "utf8mb4")
@@ -199,7 +189,7 @@ struct TiDBConvertToString
                 WriteBufferFromVector<ColumnString::Chars_t> element_write_buffer(container_per_element);
                 FormatImpl<FromDataType>::execute(vec_from[i], element_write_buffer, &type, nullptr);
                 size_t byte_length = element_write_buffer.count();
-                if (tp.flen() >= 0)
+                if (tp.flen() > 0)
                     byte_length = std::min(byte_length, tp.flen());
                 if (byte_length < element_write_buffer.count())
                     context.getDAGContext()->handleTruncateError("Data Too Long");
@@ -245,7 +235,7 @@ struct TiDBConvertToString
                 WriteBufferFromVector<ColumnString::Chars_t> element_write_buffer(container_per_element);
                 FormatImpl<FromDataType>::execute(vec_from[i], element_write_buffer, &type, nullptr);
                 size_t byte_length = element_write_buffer.count();
-                if (tp.flen() >= 0)
+                if (tp.flen() > 0)
                     byte_length = std::min(byte_length, tp.flen());
                 if (byte_length < element_write_buffer.count())
                     context.getDAGContext()->handleTruncateError("Data Too Long");
@@ -774,8 +764,7 @@ struct TiDBConvertToFloat
 
             for (size_t i = 0; i < size; ++i)
             {
-                auto raw_field = (*col_from)[i];
-                const auto & field = raw_field.template safeGet<DecimalField<FromFieldType>>();
+                auto & field = (*col_from)[i].template safeGet<DecimalField<FromFieldType>>();
                 vec_to[i] = toFloat(field);
             }
         }
@@ -2284,7 +2273,7 @@ private:
                     context_);
             };
 
-        // cast to json been implemented in FunctionsJson.h
+        // todo support convert to json type
         throw Exception{"tidb_cast to " + to_type->getName() + " is not supported", ErrorCodes::CANNOT_CONVERT_TYPE};
     }
 

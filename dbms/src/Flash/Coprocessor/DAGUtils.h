@@ -65,11 +65,7 @@ DataTypePtr inferDataType4Literal(const tipb::Expr & expr);
 SortDescription getSortDescription(
     const std::vector<NameAndTypePair> & order_columns,
     const google::protobuf::RepeatedPtrField<tipb::ByItem> & by_items);
-String genFuncString(
-    const String & func_name,
-    const Names & argument_names,
-    const TiDB::TiDBCollators & collators,
-    const std::vector<const tipb::FieldType *> & field_types = {});
+String genFuncString(const String & func_name, const Names & argument_names, const TiDB::TiDBCollators & collators);
 
 extern const Int8 VAR_SIZE;
 
@@ -78,8 +74,6 @@ bool isUnsupportedEncodeType(const std::vector<tipb::FieldType> & types, tipb::E
 TiDB::TiDBCollatorPtr getCollatorFromExpr(const tipb::Expr & expr);
 TiDB::TiDBCollatorPtr getCollatorFromFieldType(const tipb::FieldType & field_type);
 bool hasUnsignedFlag(const tipb::FieldType & tp);
-bool hasIsBooleanFlag(const tipb::FieldType & tp);
-bool hasParseToJSONFlag(const tipb::FieldType & tp);
 
 void assertBlockSchema(const DataTypes & expected_types, const Block & block, const String & context_description);
 

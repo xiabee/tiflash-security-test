@@ -27,9 +27,7 @@ DisaggTaskId::DisaggTaskId(const disaggregated::DisaggTaskMeta & task_meta)
         task_meta.gather_id(),
         task_meta.query_ts(),
         task_meta.local_query_id(),
-        /*resource_group_name=*/"",
-        task_meta.connection_id(),
-        task_meta.connection_alias())
+        /*resource_group_name=*/"")
     , executor_id(task_meta.executor_id())
 {}
 

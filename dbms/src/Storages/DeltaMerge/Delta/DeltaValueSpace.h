@@ -24,7 +24,6 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileInMemory.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
-#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
 #include <Storages/DeltaMerge/Delta/MemTableSet.h>
 #include <Storages/DeltaMerge/DeltaIndex.h>
@@ -36,13 +35,10 @@
 #include <Storages/Page/PageDefinesBase.h>
 
 
-namespace DB::DM
+namespace DB
 {
-namespace tests
+namespace DM
 {
-class SegmentReadTaskTest;
-}
-
 using GenPageId = std::function<PageIdU64()>;
 class DeltaValueSpace;
 class DeltaValueSnapshot;
@@ -57,6 +53,7 @@ using DeltaIndexCompacted = DefaultDeltaTree::CompactedEntries;
 using DeltaIndexCompactedPtr = DefaultDeltaTree::CompactedEntriesPtr;
 using DeltaIndexIterator = DeltaIndexCompacted::Iterator;
 
+struct DMContext;
 struct WriteBatches;
 class StoragePool;
 
@@ -108,9 +105,6 @@ private:
 
     LoggerPtr log;
 
-private:
-    void saveMeta(WriteBuffer & buf) const;
-
 public:
     explicit DeltaValueSpace(
         PageIdU64 id_,
@@ -122,17 +116,8 @@ public:
     /// Restore the metadata of this instance.
     /// Only called after reboot.
     static DeltaValueSpacePtr restore(DMContext & context, const RowKeyRange & segment_range, PageIdU64 id);
-    /// Restore from a checkpoint from other peer.
-    /// Only used in FAP.
-    static DeltaValueSpacePtr restore(
-        DMContext & context,
-        const RowKeyRange & segment_range,
-        ReadBuffer & buf,
-        PageIdU64 id);
-
 
     static DeltaValueSpacePtr createFromCheckpoint( //
-        const LoggerPtr & parent_log,
         DMContext & context,
         UniversalPageStoragePtr temp_ps,
         const RowKeyRange & segment_range,
@@ -151,10 +136,9 @@ public:
         persisted_file_set->resetLogger(segment_log);
     }
 
-    /// The following 3 methods are just for test purposes
+    /// The following two methods are just for test purposes
     MemTableSetPtr getMemTableSet() const { return mem_table_set; }
     ColumnFilePersistedSetPtr getPersistedFileSet() const { return persisted_file_set; }
-    UInt64 getDeltaIndexEpoch() const { return delta_index_epoch; }
 
     String simpleInfo() const { return "<delta_id=" + DB::toString(persisted_file_set->getId()) + ">"; }
     String info() const { return fmt::format("{}. {}", mem_table_set->info(), persisted_file_set->info()); }
@@ -173,7 +157,6 @@ public:
     bool hasAbandoned() const { return abandoned.load(std::memory_order_relaxed); }
 
     void saveMeta(WriteBatches & wbs) const;
-    std::string serializeMeta() const;
 
     void recordRemoveColumnFilesPages(WriteBatches & wbs) const;
 
@@ -350,7 +333,7 @@ private:
 #else
 public:
 #endif
-    const bool is_update{false};
+    bool is_update{false};
 
     // The delta index of cached.
     DeltaIndexPtr shared_delta_index;
@@ -371,7 +354,8 @@ public:
         // We only allow one for_update snapshots to exist, so it cannot be cloned.
         RUNTIME_CHECK(!is_update);
 
-        auto c = std::make_shared<DeltaValueSnapshot>(type, is_update);
+        auto c = std::make_shared<DeltaValueSnapshot>(type);
+        c->is_update = is_update;
         c->shared_delta_index = shared_delta_index;
         c->delta_index_epoch = delta_index_epoch;
         c->mem_table_snap = mem_table_snap->clone();
@@ -382,9 +366,8 @@ public:
         return c;
     }
 
-    explicit DeltaValueSnapshot(CurrentMetrics::Metric type_, bool update_)
-        : is_update(update_)
-        , type(type_)
+    explicit DeltaValueSnapshot(CurrentMetrics::Metric type_)
+        : type(type_)
     {
         CurrentMetrics::add(type);
     }
@@ -412,12 +395,10 @@ public:
 
     RowKeyRange getSquashDeleteRange() const;
 
-    const auto & getSharedDeltaIndex() const { return shared_delta_index; }
+    const auto & getSharedDeltaIndex() { return shared_delta_index; }
     size_t getDeltaIndexEpoch() const { return delta_index_epoch; }
 
     bool isForUpdate() const { return is_update; }
-
-    void setMemTableSetSnapshot(const ColumnFileSetSnapshotPtr & mem_table_snap_) { mem_table_snap = mem_table_snap_; }
 };
 
 class DeltaValueReader
@@ -477,7 +458,7 @@ public:
         size_t placed_delete_ranges,
         const RowKeyRange & segment_range,
         const RowKeyRange & relevant_range,
-        UInt64 start_ts);
+        UInt64 max_version);
 };
 
 class DeltaValueInputStream : public SkippableBlockInputStream
@@ -575,4 +556,5 @@ public:
     }
 };
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

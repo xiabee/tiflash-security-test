@@ -154,7 +154,6 @@ try
          toNullableVec<Int8>({0, 0, 0, 1, 1})},
     };
 
-    std::vector<UInt64> probe_cache_column_threshold{2, 1000};
     for (size_t i = 0; i < join_type_num; ++i)
     {
         for (size_t j = 0; j < simple_test_num; ++j)
@@ -163,21 +162,8 @@ try
             auto request = context.scan("simple_test", l)
                                .join(context.scan("simple_test", r), join_types[i], {col(k)})
                                .build(context);
-            auto request_column_prune = context.scan("simple_test", l)
-                                            .join(context.scan("simple_test", r), join_types[i], {col(k)})
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
 
-            for (auto threshold : probe_cache_column_threshold)
-            {
-                context.context->setSetting(
-                    "join_probe_cache_columns_threshold",
-                    Field(static_cast<UInt64>(threshold)));
-                executeAndAssertColumnsEqual(request, expected_cols[i * simple_test_num + j]);
-                ASSERT_COLUMNS_EQ_UR(
-                    genScalarCountResults(expected_cols[i * simple_test_num + j]),
-                    executeStreams(request_column_prune, 2));
-            }
+            executeAndAssertColumnsEqual(request, expected_cols[i * simple_test_num + j]);
         }
     }
 }
@@ -557,29 +543,14 @@ try
     {
         for (auto [j, jt2] : ext::enumerate(join_types))
         {
-            {
-                auto t1 = context.scan("multi_test", "t1");
-                auto t2 = context.scan("multi_test", "t2");
-                auto t3 = context.scan("multi_test", "t3");
-                auto t4 = context.scan("multi_test", "t4");
-                auto request
-                    = t1.join(t2, jt1, {col("a")}).join(t3.join(t4, jt1, {col("a")}), jt2, {col("b")}).build(context);
+            auto t1 = context.scan("multi_test", "t1");
+            auto t2 = context.scan("multi_test", "t2");
+            auto t3 = context.scan("multi_test", "t3");
+            auto t4 = context.scan("multi_test", "t4");
+            auto request
+                = t1.join(t2, jt1, {col("a")}).join(t3.join(t4, jt1, {col("a")}), jt2, {col("b")}).build(context);
 
-                executeAndAssertColumnsEqual(request, expected_cols[i * join_type_num + j]);
-            }
-            {
-                auto t1 = context.scan("multi_test", "t1");
-                auto t2 = context.scan("multi_test", "t2");
-                auto t3 = context.scan("multi_test", "t3");
-                auto t4 = context.scan("multi_test", "t4");
-                auto request_column_prune = t1.join(t2, jt1, {col("a")})
-                                                .join(t3.join(t4, jt1, {col("a")}), jt2, {col("b")})
-                                                .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                                .build(context);
-                ASSERT_COLUMNS_EQ_UR(
-                    genScalarCountResults(expected_cols[i * join_type_num + j]),
-                    executeStreams(request_column_prune, 2));
-            }
+            executeAndAssertColumnsEqual(request, expected_cols[i * join_type_num + j]);
         }
     }
 }
@@ -593,15 +564,6 @@ try
             .join(context.scan("cast", "t2"), tipb::JoinType::TypeInnerJoin, {col("a")})
             .build(context);
     };
-    auto cast_column_prune_request = [&]() {
-        return context.scan("cast", "t1")
-            .join(context.scan("cast", "t2"), tipb::JoinType::TypeInnerJoin, {col("a")})
-            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-            .build(context);
-    };
-
-    ColumnsWithTypeAndName column_prune_ref_columns;
-    column_prune_ref_columns.push_back(toVec<UInt64>({1}));
 
     /// int(1) == float(1.0)
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeLong}}, {toVec<Int32>("a", {1})});
@@ -609,7 +571,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeFloat}}, {toVec<Float32>("a", {1.0})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<Int32>({1}), toNullableVec<Float32>({1.0})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// int(1) == double(1.0)
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeLong}}, {toVec<Int32>("a", {1})});
@@ -617,7 +578,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeDouble}}, {toVec<Float64>("a", {1.0})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<Int32>({1}), toNullableVec<Float64>({1.0})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// float(1) == double(1.0)
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeFloat}}, {toVec<Float32>("a", {1})});
@@ -625,7 +585,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeDouble}}, {toVec<Float64>("a", {1})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<Float32>({1}), toNullableVec<Float64>({1})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// varchar('x') == char('x')
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeString}}, {toVec<String>("a", {"x"})});
@@ -633,7 +592,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeVarchar}}, {toVec<String>("a", {"x"})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<String>({"x"}), toNullableVec<String>({"x"})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// tinyblob('x') == varchar('x')
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeTinyBlob}}, {toVec<String>("a", {"x"})});
@@ -641,7 +599,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeVarchar}}, {toVec<String>("a", {"x"})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<String>({"x"}), toNullableVec<String>({"x"})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// mediumBlob('x') == varchar('x')
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeMediumBlob}}, {toVec<String>("a", {"x"})});
@@ -649,7 +606,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeVarchar}}, {toVec<String>("a", {"x"})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<String>({"x"}), toNullableVec<String>({"x"})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// blob('x') == varchar('x')
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeBlob}}, {toVec<String>("a", {"x"})});
@@ -657,7 +613,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeVarchar}}, {toVec<String>("a", {"x"})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<String>({"x"}), toNullableVec<String>({"x"})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// longBlob('x') == varchar('x')
     context.addMockTable("cast", "t1", {{"a", TiDB::TP::TypeLongBlob}}, {toVec<String>("a", {"x"})});
@@ -665,7 +620,6 @@ try
     context.addMockTable("cast", "t2", {{"a", TiDB::TP::TypeVarchar}}, {toVec<String>("a", {"x"})});
 
     executeAndAssertColumnsEqual(cast_request(), {toNullableVec<String>({"x"}), toNullableVec<String>({"x"})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// decimal with different scale
     context.addMockTable(
@@ -684,7 +638,6 @@ try
         cast_request(),
         {createNullableColumn<Decimal256>(std::make_tuple(65, 0), {"0.12"}, {0}),
          createNullableColumn<Decimal256>(std::make_tuple(65, 0), {"0.12"}, {0})});
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request(), 2));
 
     /// datetime(1970-01-01 00:00:01) == timestamp(1970-01-01 00:00:01)
     context.addMockTable(
@@ -704,17 +657,9 @@ try
             .join(context.scan("cast", "t2"), tipb::JoinType::TypeInnerJoin, {col("datetime")})
             .build(context);
     };
-    auto cast_column_prune_request_1 = [&]() {
-        return context.scan("cast", "t1")
-            .join(context.scan("cast", "t2"), tipb::JoinType::TypeInnerJoin, {col("datetime")})
-            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-            .build(context);
-    };
     executeAndAssertColumnsEqual(
         cast_request_1(),
         {createDateTimeColumn({{{1970, 1, 1, 0, 0, 1, 0}}}, 0), createDateTimeColumn({{{1970, 1, 1, 0, 0, 1, 0}}}, 0)});
-
-    ASSERT_COLUMNS_EQ_UR(column_prune_ref_columns, executeStreams(cast_column_prune_request_1(), 2));
 }
 CATCH
 
@@ -1235,72 +1180,34 @@ try
         for (const auto & join_type : join_types)
         {
             auto join_inputs = gen_join_inputs();
-            auto join_inputs_column_prune = gen_join_inputs();
-            for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+            for (auto & join_input : join_inputs)
             {
-                auto request = join_inputs[input_index]
-                                   .first.join(join_inputs[input_index].second, join_type, {}, {}, {}, {cond_other}, {})
-                                   .build(context);
-                const auto & expected_results = expected_cols[i];
-                executeAndAssertColumnsEqual(request, expected_results);
-                auto request_column_prune
-                    = join_inputs_column_prune[input_index]
-                          .first
-                          .join(join_inputs_column_prune[input_index].second, join_type, {}, {}, {}, {cond_other}, {})
-                          .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                          .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(expected_results), executeStreams(request_column_prune, 2));
-                ++i;
+                auto request
+                    = join_input.first.join(join_input.second, join_type, {}, {}, {}, {cond_other}, {}).build(context);
+                executeAndAssertColumnsEqual(request, expected_cols[i++]);
             }
             /// extra tests for outer join
             if (join_type == tipb::TypeLeftOuterJoin)
             {
                 /// left out join with left condition
                 join_inputs = gen_join_inputs();
-                join_inputs_column_prune = gen_join_inputs();
                 size_t left_join_index = 0;
-                for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+                for (auto & join_input : join_inputs)
                 {
-                    auto request = join_inputs[input_index]
-                                       .first
-                                       .join(
-                                           join_inputs[input_index].second,
-                                           tipb::JoinType::TypeLeftOuterJoin,
-                                           {},
-                                           {cond_left},
-                                           {},
-                                           {},
-                                           {})
-                                       .build(context);
-                    const auto & expected_results = left_join_expected_cols[left_join_index];
-                    executeAndAssertColumnsEqual(request, expected_results);
-                    auto request_column_prune = join_inputs_column_prune[input_index]
-                                                    .first
-                                                    .join(
-                                                        join_inputs_column_prune[input_index].second,
-                                                        tipb::JoinType::TypeLeftOuterJoin,
-                                                        {},
-                                                        {cond_left},
-                                                        {},
-                                                        {},
-                                                        {})
-                                                    .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                                    .build(context);
-                    ASSERT_COLUMNS_EQ_UR(
-                        genScalarCountResults(expected_results),
-                        executeStreams(request_column_prune, 2));
-                    ++left_join_index;
+                    auto request
+                        = join_input.first
+                              .join(join_input.second, tipb::JoinType::TypeLeftOuterJoin, {}, {cond_left}, {}, {}, {})
+                              .build(context);
+                    executeAndAssertColumnsEqual(request, left_join_expected_cols[left_join_index++]);
                 }
                 /// left out join with left condition and other condition
                 join_inputs = gen_join_inputs();
-                join_inputs_column_prune = gen_join_inputs();
                 i -= join_inputs.size();
-                for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+                for (auto & join_input : join_inputs)
                 {
-                    auto request = join_inputs[input_index]
-                                       .first
+                    auto request = join_input.first
                                        .join(
-                                           join_inputs[input_index].second,
+                                           join_input.second,
                                            tipb::JoinType::TypeLeftOuterJoin,
                                            {},
                                            {cond_left},
@@ -1308,38 +1215,19 @@ try
                                            {cond_other},
                                            {})
                                        .build(context);
-                    const auto & expected_results = expected_cols[i];
-                    executeAndAssertColumnsEqual(request, expected_results);
-                    auto request_column_prune = join_inputs_column_prune[input_index]
-                                                    .first
-                                                    .join(
-                                                        join_inputs_column_prune[input_index].second,
-                                                        tipb::JoinType::TypeLeftOuterJoin,
-                                                        {},
-                                                        {cond_left},
-                                                        {},
-                                                        {cond_other},
-                                                        {})
-                                                    .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                                    .build(context);
-                    ASSERT_COLUMNS_EQ_UR(
-                        genScalarCountResults(expected_results),
-                        executeStreams(request_column_prune, 2));
-                    ++i;
+                    executeAndAssertColumnsEqual(request, expected_cols[i++]);
                 }
             }
             else if (join_type == tipb::TypeRightOuterJoin)
             {
                 /// right out join with right condition
                 join_inputs = gen_join_inputs();
-                join_inputs_column_prune = gen_join_inputs();
                 size_t right_join_index = 0;
-                for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+                for (auto & join_input : join_inputs)
                 {
-                    auto request = join_inputs[input_index]
-                                       .first
+                    auto request = join_input.first
                                        .join(
-                                           join_inputs[input_index].second,
+                                           join_input.second,
                                            tipb::JoinType::TypeRightOuterJoin,
                                            {},
                                            {},
@@ -1347,35 +1235,16 @@ try
                                            {},
                                            {})
                                        .build(context);
-                    const auto & expected_results = right_join_expected_cols[right_join_index];
-                    executeAndAssertColumnsEqual(request, expected_results);
-                    auto request_column_prune = join_inputs_column_prune[input_index]
-                                                    .first
-                                                    .join(
-                                                        join_inputs_column_prune[input_index].second,
-                                                        tipb::JoinType::TypeRightOuterJoin,
-                                                        {},
-                                                        {},
-                                                        {gt(col("c"), lit(Field("2", 1)))},
-                                                        {},
-                                                        {})
-                                                    .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                                    .build(context);
-                    ASSERT_COLUMNS_EQ_UR(
-                        genScalarCountResults(expected_results),
-                        executeStreams(request_column_prune, 2));
-                    ++right_join_index;
+                    executeAndAssertColumnsEqual(request, right_join_expected_cols[right_join_index++]);
                 }
                 /// right out join with right condition and other condition
                 join_inputs = gen_join_inputs();
-                join_inputs_column_prune = gen_join_inputs();
                 i -= join_inputs.size();
-                for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+                for (auto & join_input : join_inputs)
                 {
-                    auto request = join_inputs[input_index]
-                                       .first
+                    auto request = join_input.first
                                        .join(
-                                           join_inputs[input_index].second,
+                                           join_input.second,
                                            tipb::JoinType::TypeRightOuterJoin,
                                            {},
                                            {},
@@ -1383,24 +1252,7 @@ try
                                            {cond_other},
                                            {})
                                        .build(context);
-                    const auto & expected_results = expected_cols[i];
-                    executeAndAssertColumnsEqual(request, expected_results);
-                    auto request_column_prune = join_inputs_column_prune[input_index]
-                                                    .first
-                                                    .join(
-                                                        join_inputs_column_prune[input_index].second,
-                                                        tipb::JoinType::TypeRightOuterJoin,
-                                                        {},
-                                                        {},
-                                                        {cond_right},
-                                                        {cond_other},
-                                                        {})
-                                                    .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                                    .build(context);
-                    ASSERT_COLUMNS_EQ_UR(
-                        genScalarCountResults(expected_results),
-                        executeStreams(request_column_prune, 2));
-                    ++i;
+                    executeAndAssertColumnsEqual(request, expected_cols[i++]);
                 }
             }
         }
@@ -1830,21 +1682,10 @@ try
         for (const auto & join_type : join_types)
         {
             auto join_inputs = gen_join_inputs();
-            auto join_inputs_column_prune = gen_join_inputs();
-            for (size_t input_index = 0; input_index < join_inputs.size(); ++input_index)
+            for (auto & join_input : join_inputs)
             {
-                auto request = join_inputs[input_index]
-                                   .first.join(join_inputs[input_index].second, join_type, {}, {}, {}, {}, {})
-                                   .build(context);
-                const auto & expected_results = expected_cols[i];
-                executeAndAssertColumnsEqual(request, expected_results);
-                auto request_column_prune
-                    = join_inputs_column_prune[input_index]
-                          .first.join(join_inputs_column_prune[input_index].second, join_type, {}, {}, {}, {}, {})
-                          .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                          .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(expected_results), executeStreams(request_column_prune, 2));
-                ++i;
+                auto request = join_input.first.join(join_input.second, join_type, {}, {}, {}, {}, {}).build(context);
+                executeAndAssertColumnsEqual(request, expected_cols[i++]);
             }
         }
     }
@@ -1857,11 +1698,6 @@ try
     auto request = context.scan("test_db", "l_table")
                        .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
                        .build(context);
-    auto request_column_prune
-        = context.scan("test_db", "l_table")
-              .join(context.scan("test_db", "r_table"), tipb::JoinType::TypeLeftOuterJoin, {col("join_c")})
-              .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-              .build(context);
     {
         executeAndAssertColumnsEqual(
             request,
@@ -1869,7 +1705,6 @@ try
              toNullableVec<String>({"apple", "banana"}),
              toNullableVec<String>({"banana", "banana"}),
              toNullableVec<String>({"apple", "banana"})});
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(2), executeStreams(request_column_prune, 2));
     }
 
     request = context.scan("test_db", "l_table")
@@ -1893,25 +1728,6 @@ try
              toNullableVec<String>({"banana", "banana", "banana", {}}),
              toNullableVec<String>({"apple", "apple", "apple", {}})});
     }
-}
-CATCH
-
-TEST_F(JoinExecutorTestRunner, LeftJoinAggWithOtherCondition)
-try
-{
-    auto request_column
-        = context.scan("test_db", "l_table")
-              .join(
-                  context.scan("test_db", "r_table"),
-                  tipb::JoinType::TypeLeftOuterJoin,
-                  {col("join_c")},
-                  {},
-                  {},
-                  {And(lt(col("l_table.s"), col("r_table.s")), eq(col("l_table.join_c"), col("r_table.join_c")))},
-                  {})
-              .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-              .build(context);
-    ASSERT_COLUMNS_EQ_UR(genScalarCountResults(2), executeStreams(request_column, 2));
 }
 CATCH
 
@@ -1966,7 +1782,6 @@ try
         {toVec<Int32>("a", {}), toVec<Int32>("b", {}), toVec<Int32>("c", {})});
 
     std::shared_ptr<tipb::DAGRequest> request;
-    std::shared_ptr<tipb::DAGRequest> request_column_prune;
 
     // inner join
     {
@@ -1975,11 +1790,6 @@ try
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeInnerJoin, {col("a")})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(context.scan("null_test", "t"), tipb::JoinType::TypeInnerJoin, {col("a")})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         // non-null table join null table
         request = context.scan("null_test", "t")
@@ -1993,24 +1803,12 @@ try
              toNullableVec<Int32>({}),
              toNullableVec<Int32>({}),
              toNullableVec<Int32>({})});
-        request_column_prune
-            = context.scan("null_test", "t")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {col("a")})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         // null table join null table
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {col("a")})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {col("a")})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
     }
 
     // cross join
@@ -2029,12 +1827,6 @@ try
              toNullableVec<Int32>({}),
              toNullableVec<Int32>({}),
              toNullableVec<Int32>({})});
-        request_column_prune
-            = context.scan("null_test", "t")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "t")
                       .join(
@@ -2054,18 +1846,6 @@ try
              toNullableVec<Int32>({{}, {}, {}, {}, {}, {}, {}, {}, {}, {}}),
              toNullableVec<Int32>({{}, {}, {}, {}, {}, {}, {}, {}, {}, {}}),
              toNullableVec<Int32>({{}, {}, {}, {}, {}, {}, {}, {}, {}, {}})});
-        request_column_prune = context.scan("null_test", "t")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeLeftOuterJoin,
-                                       {},
-                                       {cond},
-                                       {},
-                                       {},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(10), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "t")
                       .join(
@@ -2078,18 +1858,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "t")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeRightOuterJoin,
-                                       {},
-                                       {},
-                                       {cond},
-                                       {},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request
             = context.scan("null_test", "t")
@@ -2098,12 +1866,6 @@ try
         executeAndAssertColumnsEqual(
             request,
             {toNullableVec<Int32>({}), toNullableVec<Int32>({}), toNullableVec<Int32>({})});
-        request_column_prune
-            = context.scan("null_test", "t")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "t")
                       .join(
@@ -2120,18 +1882,6 @@ try
             {toNullableVec<Int32>({1, 2, 3, 4, 5, 6, 7, 8, 9, 0}),
              toNullableVec<Int32>({1, 1, 1, 1, 1, 1, 1, 2, 2, 2}),
              toNullableVec<Int32>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
-        request_column_prune = context.scan("null_test", "t")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeAntiSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(10), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "t")
                       .join(
@@ -2151,19 +1901,6 @@ try
              toNullableVec<Int32>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2}),
              toNullableVec<Int8>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0})});
 
-        request_column_prune = context.scan("null_test", "t")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeLeftOuterSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(10), executeStreams(request_column_prune, 2));
-
         request = context.scan("null_test", "t")
                       .join(
                           context.scan("null_test", "null_table"),
@@ -2181,18 +1918,6 @@ try
              toNullableVec<Int32>({1, 1, 1, 1, 1, 1, 1, 2, 2, 2}),
              toNullableVec<Int32>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2}),
              toNullableVec<Int8>({1, 1, 1, 1, 1, 1, 1, 1, 1, 1})});
-        request_column_prune = context.scan("null_test", "t")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeAntiLeftOuterSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(10), executeStreams(request_column_prune, 2));
     }
 
     // null table join non-null table
@@ -2201,23 +1926,11 @@ try
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeInnerJoin, {}, {}, {}, {cond}, {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeInnerJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeLeftOuterJoin, {}, {cond}, {}, {}, {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeLeftOuterJoin, {}, {cond}, {}, {}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeRightOuterJoin, {}, {}, {cond}, {}, {})
@@ -2230,68 +1943,32 @@ try
              toNullableVec<Int32>({1, 2, 3, 4, 5, 6, 7, 8, 9, 0}),
              toNullableVec<Int32>({1, 1, 1, 1, 1, 1, 1, 2, 2, 2}),
              toNullableVec<Int32>({1, 1, 1, 1, 1, 2, 2, 2, 2, 2})});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeRightOuterJoin, {}, {}, {cond}, {}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(10), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {}, 0)
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {}, 0)
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeAntiSemiJoin, {}, {}, {}, {cond}, {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeAntiSemiJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(context.scan("null_test", "t"), tipb::JoinType::TypeAntiSemiJoin, {}, {}, {}, {cond}, {}, 0)
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeAntiSemiJoin, {}, {}, {}, {cond}, {}, 0)
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request
             = context.scan("null_test", "null_table")
                   .join(context.scan("null_test", "t"), tipb::JoinType::TypeLeftOuterSemiJoin, {}, {}, {}, {cond}, {})
                   .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "t"), tipb::JoinType::TypeLeftOuterSemiJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2304,18 +1981,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "t"),
-                                       tipb::JoinType::TypeAntiLeftOuterSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
     }
 
     // null table join null table
@@ -2325,12 +1990,6 @@ try
                   .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {}, {}, {}, {cond}, {})
                   .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeInnerJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2343,18 +2002,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeLeftOuterJoin,
-                                       {},
-                                       {cond},
-                                       {},
-                                       {},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2367,30 +2014,12 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeRightOuterJoin,
-                                       {},
-                                       {},
-                                       {cond},
-                                       {},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request
             = context.scan("null_test", "null_table")
                   .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {})
                   .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune
-            = context.scan("null_test", "null_table")
-                  .join(context.scan("null_test", "null_table"), tipb::JoinType::TypeSemiJoin, {}, {}, {}, {cond}, {})
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2403,18 +2032,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeAntiSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2427,18 +2044,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeLeftOuterSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
 
         request = context.scan("null_test", "null_table")
                       .join(
@@ -2451,18 +2056,6 @@ try
                           {})
                       .build(context);
         executeAndAssertColumnsEqual(request, {});
-        request_column_prune = context.scan("null_test", "null_table")
-                                   .join(
-                                       context.scan("null_test", "null_table"),
-                                       tipb::JoinType::TypeAntiLeftOuterSemiJoin,
-                                       {},
-                                       {},
-                                       {},
-                                       {cond},
-                                       {})
-                                   .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                   .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(0), executeStreams(request_column_prune, 2));
     }
 }
 CATCH
@@ -2497,10 +2090,6 @@ try
     auto request = context.scan("split_test", "t1")
                        .join(context.scan("split_test", "t2"), tipb::JoinType::TypeInnerJoin, {col("a")})
                        .build(context);
-    auto request_column_prune = context.scan("split_test", "t1")
-                                    .join(context.scan("split_test", "t2"), tipb::JoinType::TypeInnerJoin, {col("a")})
-                                    .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                    .build(context);
 
     std::vector<size_t> block_sizes{1, 2, 7, 25, 49, 50, 51, DEFAULT_BLOCK_SIZE};
     std::vector<std::vector<size_t>> expect{
@@ -2522,7 +2111,6 @@ try
         {
             ASSERT_EQ(expect[i][j], blocks[j].rows());
         }
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(50), executeStreams(request_column_prune, 2));
         WRAP_FOR_JOIN_TEST_END
     }
 }
@@ -2626,7 +2214,6 @@ try
     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(max_block_size)));
     /// use right_table left join left_table as the reference
     auto ref_columns = executeStreams(request, original_max_streams);
-    std::vector<UInt64> probe_cache_column_threshold{2, 1000};
 
     /// case 1.1 table scan join table scan
     for (auto & left_table_name : left_table_names)
@@ -2638,21 +2225,10 @@ try
                               context.scan("outer_join_test", right_table_name),
                               tipb::JoinType::TypeRightOuterJoin,
                               {col("a")})
-                          .project({fmt::format("{}.a", left_table_name), fmt::format("{}.b", right_table_name)})
                           .build(context);
-            ColumnsWithTypeAndName ref;
-            ref.push_back(ref_columns[0]);
-            ref.push_back(ref_columns[3]);
             WRAP_FOR_JOIN_TEST_BEGIN
-            for (auto threshold : probe_cache_column_threshold)
-            {
-                context.context->setSetting(
-                    "join_probe_cache_columns_threshold",
-                    Field(static_cast<UInt64>(threshold)));
-                ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams))
-                    << "left_table_name = " << left_table_name << ", right_table_name = " << right_table_name
-                    << "probe cache threshold = " << threshold;
-            }
+            ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams))
+                << "left_table_name = " << left_table_name << ", right_table_name = " << right_table_name;
             WRAP_FOR_JOIN_TEST_END
         }
     }
@@ -2661,10 +2237,11 @@ try
     {
         for (size_t exchange_concurrency : right_exchange_receiver_concurrency)
         {
-            auto right_name = fmt::format("right_exchange_receiver_{}_concurrency", exchange_concurrency);
             request = context.scan("outer_join_test", left_table_name)
                           .join(
-                              context.receive(right_name, exchange_concurrency),
+                              context.receive(
+                                  fmt::format("right_exchange_receiver_{}_concurrency", exchange_concurrency),
+                                  exchange_concurrency),
                               tipb::JoinType::TypeRightOuterJoin,
                               {col("a")},
                               {},
@@ -2672,25 +2249,15 @@ try
                               {},
                               {},
                               exchange_concurrency)
-                          .project({fmt::format("{}.b", left_table_name), fmt::format("{}.a", right_name)})
                           .build(context);
-            ColumnsWithTypeAndName ref;
-            ref.push_back(ref_columns[1]);
-            ref.push_back(ref_columns[2]);
             WRAP_FOR_JOIN_TEST_BEGIN
-            for (auto threshold : probe_cache_column_threshold)
-            {
-                context.context->setSetting(
-                    "join_probe_cache_columns_threshold",
-                    Field(static_cast<UInt64>(threshold)));
-                ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams))
+            ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams))
+                << "left_table_name = " << left_table_name
+                << ", right_exchange_receiver_concurrency = " << exchange_concurrency;
+            if (original_max_streams_small < exchange_concurrency)
+                ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams_small))
                     << "left_table_name = " << left_table_name
                     << ", right_exchange_receiver_concurrency = " << exchange_concurrency;
-                if (original_max_streams_small < exchange_concurrency)
-                    ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams_small))
-                        << "left_table_name = " << left_table_name
-                        << ", right_exchange_receiver_concurrency = " << exchange_concurrency;
-            }
             WRAP_FOR_JOIN_TEST_END
         }
     }
@@ -2729,20 +2296,10 @@ try
                               {},
                               {},
                               0)
-                          .project({fmt::format("{}.a", left_table_name), fmt::format("{}.b", right_table_name)})
                           .build(context);
-            ColumnsWithTypeAndName ref;
-            ref.push_back(ref_columns[0]);
-            ref.push_back(ref_columns[3]);
             WRAP_FOR_JOIN_TEST_BEGIN
-            for (auto threshold : probe_cache_column_threshold)
-            {
-                context.context->setSetting(
-                    "join_probe_cache_columns_threshold",
-                    Field(static_cast<UInt64>(threshold)));
-                ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams))
-                    << "left_table_name = " << left_table_name << ", right_table_name = " << right_table_name;
-            }
+            ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams))
+                << "left_table_name = " << left_table_name << ", right_table_name = " << right_table_name;
             WRAP_FOR_JOIN_TEST_END
         }
     }
@@ -2754,7 +2311,9 @@ try
             String exchange_name = fmt::format("right_exchange_receiver_{}_concurrency", exchange_concurrency);
             request = context.scan("outer_join_test", left_table_name)
                           .join(
-                              context.receive(exchange_name, exchange_concurrency),
+                              context.receive(
+                                  fmt::format("right_exchange_receiver_{}_concurrency", exchange_concurrency),
+                                  exchange_concurrency),
                               tipb::JoinType::TypeRightOuterJoin,
                               {col("a")},
                               {},
@@ -2762,27 +2321,15 @@ try
                               {},
                               {},
                               exchange_concurrency)
-                          .project({fmt::format("{}.b", left_table_name), fmt::format("{}.a", exchange_name)})
                           .build(context);
-            ColumnsWithTypeAndName ref;
-            ref.push_back(ref_columns[1]);
-            ref.push_back(ref_columns[2]);
             WRAP_FOR_JOIN_TEST_BEGIN
-            for (auto threshold : probe_cache_column_threshold)
-            {
-                context.context->setSetting(
-                    "join_probe_cache_columns_threshold",
-                    Field(static_cast<UInt64>(threshold)));
-                ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams))
+            ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams))
+                << "left_table_name = " << left_table_name
+                << ", right_exchange_receiver_concurrency = " << exchange_concurrency;
+            if (original_max_streams_small < exchange_concurrency)
+                ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams_small))
                     << "left_table_name = " << left_table_name
-                    << ", right_exchange_receiver_concurrency = " << exchange_concurrency
-                    << ", join_probe_cache_columns_threshold = " << threshold;
-                if (original_max_streams_small < exchange_concurrency)
-                    ASSERT_COLUMNS_EQ_UR(ref, executeStreams(request, original_max_streams_small))
-                        << "left_table_name = " << left_table_name
-                        << ", right_exchange_receiver_concurrency = " << exchange_concurrency
-                        << ", join_probe_cache_columns_threshold = " << threshold;
-            }
+                    << ", right_exchange_receiver_concurrency = " << exchange_concurrency;
             WRAP_FOR_JOIN_TEST_END
         }
     }
@@ -2821,22 +2368,6 @@ ColumnsWithTypeAndName genSemiJoinResult(
 
         res.emplace_back(anti_left_semi_ans);
     }
-    else if (type == tipb::JoinType::TypeSemiJoin)
-    {
-        IColumn::Filter filter(left_semi_res.column->size());
-        const auto * nullable_column = checkAndGetColumn<ColumnNullable>(left_semi_res.column.get());
-        const auto & nested_column_data
-            = static_cast<const ColumnVector<UInt8> *>(nullable_column->getNestedColumnPtr().get())->getData();
-        for (size_t i = 0; i < nullable_column->size(); ++i)
-        {
-            if (nullable_column->isNullAt(i) || !nested_column_data[i])
-                filter[i] = 0;
-            else
-                filter[i] = 1;
-        }
-        for (auto & r : res)
-            r.column = r.column->filter(filter, -1);
-    }
     else if (type == tipb::JoinType::TypeAntiSemiJoin)
     {
         IColumn::Filter filter(left_semi_res.column->size());
@@ -2854,7 +2385,7 @@ ColumnsWithTypeAndName genSemiJoinResult(
             r.column = r.column->filter(filter, -1);
     }
     else
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Semi join Type {} is not supported", magic_enum::enum_name(type));
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Semi join Type {} is not supported", type);
     return res;
 }
 } // namespace
@@ -2904,24 +2435,14 @@ try
         context.addMockTable("null_aware_semi", "s", {{"a", TiDB::TP::TypeLong}}, right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
-            auto request
-                = context.scan("null_aware_semi", "t")
-                      .join(context.scan("null_aware_semi", "s"), type, {col("a")}, {}, {}, {}, {}, 0, is_null_aware)
-                      .build(context);
+            /// nullaware hash join
+            auto request = context.scan("null_aware_semi", "t")
+                               .join(context.scan("null_aware_semi", "s"), type, {col("a")}, {}, {}, {}, {}, 0, true)
+                               .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune
-                = context.scan("null_aware_semi", "t")
-                      .join(context.scan("null_aware_semi", "s"), type, {col("a")}, {}, {}, {}, {}, 0, is_null_aware)
-                      .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                      .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             /// nullaware cross join
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
@@ -2941,20 +2462,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request_column_prune = context.scan("null_aware_semi", "t")
-                                           .join(
-                                               context.scan("null_aware_semi", "s"),
-                                               type,
-                                               {},
-                                               {},
-                                               {},
-                                               {},
-                                               {eq(col("t.a"), col("s.a"))},
-                                               0,
-                                               false)
-                                           .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                           .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             }
         }
     }
@@ -2999,13 +2506,9 @@ try
         context.addMockTable("null_aware_semi", "s", {{"a", TiDB::TP::TypeLong}, {"c", TiDB::TP::TypeLong}}, right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
             auto request = context.scan("null_aware_semi", "t")
                                .join(
                                    context.scan("null_aware_semi", "s"),
@@ -3016,23 +2519,9 @@ try
                                    {lt(col("t.c"), col("s.c"))},
                                    {},
                                    0,
-                                   is_null_aware)
+                                   true)
                                .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune = context.scan("null_aware_semi", "t")
-                                            .join(
-                                                context.scan("null_aware_semi", "s"),
-                                                type,
-                                                {col("a")},
-                                                {},
-                                                {},
-                                                {lt(col("t.c"), col("s.c"))},
-                                                {},
-                                                0,
-                                                is_null_aware)
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
                 context.context->setSetting(
@@ -3051,20 +2540,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request_column_prune = context.scan("null_aware_semi", "t")
-                                           .join(
-                                               context.scan("null_aware_semi", "s"),
-                                               type,
-                                               {},
-                                               {},
-                                               {},
-                                               {lt(col("t.c"), col("s.c"))},
-                                               {eq(col("t.a"), col("s.a"))},
-                                               0,
-                                               false)
-                                           .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                           .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             }
         }
     }
@@ -3111,40 +2586,14 @@ try
         context.addMockTable("null_aware_semi", "s", {{"a", TiDB::TP::TypeLong}, {"b", TiDB::TP::TypeLong}}, right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
-            auto request = context.scan("null_aware_semi", "t")
-                               .join(
-                                   context.scan("null_aware_semi", "s"),
-                                   type,
-                                   {col("a"), col("b")},
-                                   {},
-                                   {},
-                                   {},
-                                   {},
-                                   0,
-                                   is_null_aware)
-                               .build(context);
+            auto request
+                = context.scan("null_aware_semi", "t")
+                      .join(context.scan("null_aware_semi", "s"), type, {col("a"), col("b")}, {}, {}, {}, {}, 0, true)
+                      .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune = context.scan("null_aware_semi", "t")
-                                            .join(
-                                                context.scan("null_aware_semi", "s"),
-                                                type,
-                                                {col("a"), col("b")},
-                                                {},
-                                                {},
-                                                {},
-                                                {},
-                                                0,
-                                                is_null_aware)
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
                 context.context->setSetting(
@@ -3163,20 +2612,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request = context.scan("null_aware_semi", "t")
-                              .join(
-                                  context.scan("null_aware_semi", "s"),
-                                  type,
-                                  {},
-                                  {},
-                                  {},
-                                  {},
-                                  {And(eq(col("t.a"), col("s.a")), eq(col("t.b"), col("s.b")))},
-                                  0,
-                                  false)
-                              .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                              .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             }
         }
     }
@@ -3279,13 +2714,9 @@ try
             right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
             auto request = context.scan("null_aware_semi", "t")
                                .join(
                                    context.scan("null_aware_semi", "s"),
@@ -3296,23 +2727,9 @@ try
                                    {lt(col("t.c"), col("s.c"))},
                                    {},
                                    0,
-                                   is_null_aware)
+                                   true)
                                .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune = context.scan("null_aware_semi", "t")
-                                            .join(
-                                                context.scan("null_aware_semi", "s"),
-                                                type,
-                                                {col("a"), col("b")},
-                                                {},
-                                                {},
-                                                {lt(col("t.c"), col("s.c"))},
-                                                {},
-                                                0,
-                                                is_null_aware)
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
                 context.context->setSetting(
@@ -3331,20 +2748,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request = context.scan("null_aware_semi", "t")
-                              .join(
-                                  context.scan("null_aware_semi", "s"),
-                                  type,
-                                  {},
-                                  {},
-                                  {},
-                                  {lt(col("t.c"), col("s.c"))},
-                                  {eq(col("t.a"), col("s.a")), eq(col("t.b"), col("s.b"))},
-                                  0,
-                                  false)
-                              .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                              .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             }
         }
     }
@@ -3389,13 +2792,9 @@ try
             right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
             auto request = context.scan("null_aware_semi", "t")
                                .join(
                                    context.scan("null_aware_semi", "s"),
@@ -3406,23 +2805,9 @@ try
                                    {Or(lt(col("c"), col("d")), eq(col("t.a"), col("s.a")))},
                                    {},
                                    0,
-                                   is_null_aware)
+                                   true)
                                .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune = context.scan("null_aware_semi", "t")
-                                            .join(
-                                                context.scan("null_aware_semi", "s"),
-                                                type,
-                                                {col("a"), col("b")},
-                                                {},
-                                                {},
-                                                {Or(lt(col("c"), col("d")), eq(col("t.a"), col("s.a")))},
-                                                {},
-                                                0,
-                                                is_null_aware)
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
                 context.context->setSetting(
@@ -3441,20 +2826,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request_column_prune = context.scan("null_aware_semi", "t")
-                                           .join(
-                                               context.scan("null_aware_semi", "s"),
-                                               type,
-                                               {},
-                                               {},
-                                               {},
-                                               {Or(lt(col("c"), col("d")), eq(col("t.a"), col("s.a")))},
-                                               {And(eq(col("t.a"), col("s.a")), eq(col("t.b"), col("s.b")))},
-                                               0,
-                                               false)
-                                           .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                           .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             }
         }
     }
@@ -3490,40 +2861,14 @@ try
         context.addMockTable("null_aware_semi", "s", {{"a", TiDB::TP::TypeString}, {"b", TiDB::TP::TypeString}}, right);
 
         for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
+             {JoinType::TypeLeftOuterSemiJoin, JoinType::TypeAntiLeftOuterSemiJoin, JoinType::TypeAntiSemiJoin})
         {
             auto reference = genSemiJoinResult(type, left, res);
-            bool is_null_aware = type != JoinType::TypeSemiJoin;
-            auto request = context.scan("null_aware_semi", "t")
-                               .join(
-                                   context.scan("null_aware_semi", "s"),
-                                   type,
-                                   {col("a"), col("b")},
-                                   {},
-                                   {},
-                                   {},
-                                   {},
-                                   0,
-                                   is_null_aware)
-                               .build(context);
+            auto request
+                = context.scan("null_aware_semi", "t")
+                      .join(context.scan("null_aware_semi", "s"), type, {col("a"), col("b")}, {}, {}, {}, {}, 0, true)
+                      .build(context);
             executeAndAssertColumnsEqual(request, reference);
-            auto request_column_prune = context.scan("null_aware_semi", "t")
-                                            .join(
-                                                context.scan("null_aware_semi", "s"),
-                                                type,
-                                                {col("a"), col("b")},
-                                                {},
-                                                {},
-                                                {},
-                                                {},
-                                                0,
-                                                is_null_aware)
-                                            .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                            .build(context);
-            ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
             for (const auto shallow_copy_threshold : cross_join_shallow_copy_thresholds)
             {
                 context.context->setSetting(
@@ -3542,332 +2887,6 @@ try
                                   false)
                               .build(context);
                 executeAndAssertColumnsEqual(request, reference);
-                request_column_prune = context.scan("null_aware_semi", "t")
-                                           .join(
-                                               context.scan("null_aware_semi", "s"),
-                                               type,
-                                               {},
-                                               {},
-                                               {},
-                                               {},
-                                               {And(eq(col("t.a"), col("s.a")), eq(col("t.b"), col("s.b")))},
-                                               0,
-                                               false)
-                                           .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                           .build(context);
-                ASSERT_COLUMNS_EQ_UR(genScalarCountResults(reference), executeStreams(request_column_prune, 2));
-            }
-        }
-    }
-}
-CATCH
-
-TEST_F(JoinExecutorTestRunner, SemiJoin)
-try
-{
-    using tipb::JoinType;
-    /// One join key(t.a = s.a) + no other condition.
-    /// left table(t) + right table(s) + result column.
-    const std::vector<std::tuple<ColumnsWithTypeAndName, ColumnsWithTypeAndName, ColumnWithTypeAndName>> t1
-        = {{
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               toNullableVec<Int8>({1, 1, 1, 1, 1}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               {toVec<Int32>("a", {6, 7, 8, 9, 10})},
-               toNullableVec<Int8>({0, 0, 0, 0, 0}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               {toVec<Int32>("a", {})},
-               toNullableVec<Int8>({0, 0, 0, 0, 0}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               {toVec<Int32>("a", {1, 2, 3})},
-               toNullableVec<Int8>({1, 1, 1, 0, 0}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5})},
-               {toVec<Int32>("a", {1, 1, 2, 2, 5, 5})},
-               toNullableVec<Int8>({1, 1, 0, 0, 1}),
-           }};
-
-    for (const auto & [left, right, res] : t1)
-    {
-        context.addMockTable("semi", "t", {{"a", TiDB::TP::TypeLong, false}}, left);
-        context.addMockTable("semi", "s", {{"a", TiDB::TP::TypeLong, false}}, right);
-
-        for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
-        {
-            auto reference = genSemiJoinResult(type, left, res);
-            auto request = context.scan("semi", "t").join(context.scan("semi", "s"), type, {col("a")}).build(context);
-            executeAndAssertColumnsEqual(request, reference);
-        }
-    }
-
-    /// One join key(t.a = s.a) + other condition(t.c < s.c).
-    /// left table(t) + right table(s) + result column.
-    const std::vector<std::tuple<ColumnsWithTypeAndName, ColumnsWithTypeAndName, ColumnWithTypeAndName>> t2
-        = {{
-               {toVec<Int32>("a", {1, 2, 3, 4, 5}), toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-               {toVec<Int32>("a", {1, 2, 3, 4, 5}), toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-               toNullableVec<Int8>({1, 1, 1, 1, 1}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5}), toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-               {toVec<Int32>("a", {6, 7, 8, 9, 10}), toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-               toNullableVec<Int8>({0, 0, 0, 0, 0}),
-           },
-           {
-               {toVec<Int32>("a", {1, 2, 3, 4, 5}), toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-               {toVec<Int32>("a", {}), toNullableVec<Int32>("c", {})},
-               toNullableVec<Int8>({0, 0, 0, 0, 0}),
-           },
-           {
-               {toVec<Int32>("a", {1, 1, 2, 2}), toNullableVec<Int32>("c", {1, {}, 2, {}})},
-               {toVec<Int32>("a", {1, 1, 1, 2, 2, 2}), toNullableVec<Int32>("c", {{}, 1, 2, 2, {}, 3})},
-               toNullableVec<Int8>({1, 0, 1, 0}),
-           }};
-
-    for (const auto & [left, right, res] : t2)
-    {
-        context.addMockTable("semi", "t", {{"a", TiDB::TP::TypeLong, false}, {"c", TiDB::TP::TypeLong}}, left);
-        context.addMockTable("semi", "s", {{"a", TiDB::TP::TypeLong, false}, {"c", TiDB::TP::TypeLong}}, right);
-
-        for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
-        {
-            auto reference = genSemiJoinResult(type, left, res);
-            auto request
-                = context.scan("semi", "t")
-                      .join(context.scan("semi", "s"), type, {col("a")}, {}, {}, {lt(col("t.c"), col("s.c"))}, {})
-                      .build(context);
-            executeAndAssertColumnsEqual(request, reference);
-        }
-    }
-
-    /// Two join keys(t.a = s.a and t.b = s.b) + no other condition.
-    /// left table(t) + right table(s) + result column.
-    const std::vector<std::tuple<ColumnsWithTypeAndName, ColumnsWithTypeAndName, ColumnWithTypeAndName>> t3 = {
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}), toVec<Int32>("b", {1, 2, 3, 4, 5})},
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}), toVec<Int32>("b", {1, 2, 3, 4, 5})},
-            toNullableVec<Int8>({1, 1, 1, 1, 1}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}), toVec<Int32>("b", {1, 2, 3, 4, 5})},
-            {toVec<Int32>("a", {}), toVec<Int32>("b", {})},
-            toNullableVec<Int8>({0, 0, 0, 0, 0}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}), toVec<Int32>("b", {1, 2, 3, 4, 5})},
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}), toVec<Int32>("b", {6, 7, 8, 9, 10})},
-            toNullableVec<Int8>({0, 0, 0, 0, 0}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 1, 2}), toVec<Int32>("b", {1, 2, 3, 0, 3})},
-            {toVec<Int32>("a", {1, 1, 2, 2, 3, 3}), toVec<Int32>("b", {0, 2, 1, 2, 3, 3})},
-            toNullableVec<Int8>({0, 1, 1, 1, 0}),
-        },
-    };
-
-    for (const auto & [left, right, res] : t3)
-    {
-        context.addMockTable("semi", "t", {{"a", TiDB::TP::TypeLong, false}, {"b", TiDB::TP::TypeLong, false}}, left);
-        context.addMockTable("semi", "s", {{"a", TiDB::TP::TypeLong, false}, {"b", TiDB::TP::TypeLong, false}}, right);
-
-        for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
-        {
-            auto reference = genSemiJoinResult(type, left, res);
-            auto request = context.scan("semi", "t")
-                               .join(context.scan("semi", "s"), type, {col("a"), col("b")}, {})
-                               .build(context);
-            executeAndAssertColumnsEqual(request, reference);
-        }
-    }
-
-    /// Two join keys(t.a = s.a and t.b = s.b) + other condition(t.c < s.c).
-    /// left table(t) + right table(s) + result column.
-    const std::vector<std::tuple<ColumnsWithTypeAndName, ColumnsWithTypeAndName, ColumnWithTypeAndName>> t4 = {
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-            toNullableVec<Int8>({1, 1, 1, 1, 1}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-            {toVec<Int32>("a", {}), toVec<Int32>("b", {}), toNullableVec<Int32>("c", {})},
-            toNullableVec<Int8>({0, 0, 0, 0, 0}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {6, 7, 8, 9, 10}),
-             toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-            toNullableVec<Int8>({0, 0, 0, 0, 0}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {1, 1, 1, 1, 1})},
-            toNullableVec<Int8>({0, 0, 0, 0, 0}),
-        },
-        {
-            {toVec<Int32>("a", {1, 2, 3, 4, 5}),
-             toVec<Int32>("b", {1, 2, 3, 4, 5}),
-             toNullableVec<Int32>("c", {2, 2, 2, 2, 2})},
-            {toVec<Int32>("a", {1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5}),
-             toVec<Int32>("b", {1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 5, 4}),
-             toNullableVec<Int32>("c", {1, 2, 3, 1, 2, 2, 1, 2, 3, 1, 3, 3})},
-            toNullableVec<Int8>({1, 0, 1, 0, 0}),
-        },
-    };
-
-    for (const auto & [left, right, res] : t4)
-    {
-        context.addMockTable(
-            "semi",
-            "t",
-            {{"a", TiDB::TP::TypeLong, false}, {"b", TiDB::TP::TypeLong, false}, {"c", TiDB::TP::TypeLong}},
-            left);
-        context.addMockTable(
-            "semi",
-            "s",
-            {{"a", TiDB::TP::TypeLong, false}, {"b", TiDB::TP::TypeLong, false}, {"c", TiDB::TP::TypeLong}},
-            right);
-
-        for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
-        {
-            auto reference = genSemiJoinResult(type, left, res);
-            auto request = context.scan("semi", "t")
-                               .join(
-                                   context.scan("semi", "s"),
-                                   type,
-                                   {col("a"), col("b")},
-                                   {},
-                                   {},
-                                   {lt(col("t.c"), col("s.c"))},
-                                   {})
-                               .build(context);
-            executeAndAssertColumnsEqual(request, reference);
-        }
-    }
-
-    /// Two join keys(t.a = s.a and t.b = s.b) + no other condition + collation(UTF8MB4_UNICODE_CI).
-    /// left table(t) + right table(s) + result column.
-    context.setCollation(TiDB::ITiDBCollator::UTF8MB4_UNICODE_CI);
-    const std::vector<std::tuple<ColumnsWithTypeAndName, ColumnsWithTypeAndName, ColumnWithTypeAndName>> t6 = {
-        {
-            {toVec<String>("a", {"a", "b", "c", "d", "e"}), toVec<String>("b", {"A", "b", "c", "dd", "e"})},
-            {toVec<String>("a", {"a", "b", "c", "D", "E"}), toVec<String>("b", {"a", "bb", "c", "DD", "d"})},
-            toNullableVec<Int8>({1, 0, 1, 1, 0}),
-        },
-    };
-
-    for (const auto & [left, right, res] : t6)
-    {
-        context
-            .addMockTable("semi", "t", {{"a", TiDB::TP::TypeString, false}, {"b", TiDB::TP::TypeString, false}}, left);
-        context
-            .addMockTable("semi", "s", {{"a", TiDB::TP::TypeString, false}, {"b", TiDB::TP::TypeString, false}}, right);
-
-        for (const auto type :
-             {JoinType::TypeLeftOuterSemiJoin,
-              JoinType::TypeAntiLeftOuterSemiJoin,
-              JoinType::TypeSemiJoin,
-              JoinType::TypeAntiSemiJoin})
-        {
-            auto reference = genSemiJoinResult(type, left, res);
-            auto request = context.scan("semi", "t")
-                               .join(context.scan("semi", "s"), type, {col("a"), col("b")}, {})
-                               .build(context);
-            executeAndAssertColumnsEqual(request, reference);
-        }
-    }
-}
-CATCH
-
-TEST_F(JoinExecutorTestRunner, ProbeCacheColumnsForRightSemiJoin)
-try
-{
-    UInt64 max_block_size = 800;
-    size_t max_streams = 2;
-    std::vector<String> left_table_names = {"left_table_1_concurrency", "left_table_3_concurrency"};
-    std::vector<String> right_table_names = {"right_table_1_concurrency", "right_table_3_concurrency"};
-    context.context->setSetting("max_block_size", Field(static_cast<UInt64>(max_block_size)));
-
-    for (const auto type : {tipb::JoinType::TypeSemiJoin, tipb::JoinType::TypeAntiSemiJoin})
-    {
-        auto request = context.scan("outer_join_test", left_table_names[0])
-                           .join(
-                               context.scan("outer_join_test", right_table_names[0]),
-                               type,
-                               {col("a")},
-                               {},
-                               {},
-                               {lt(col(left_table_names[0] + ".a"), col(right_table_names[0] + ".b"))},
-                               {},
-                               0,
-                               false,
-                               0)
-                           .build(context);
-        auto reference = executeStreams(request, max_streams);
-        std::vector<UInt64> probe_cache_column_threshold{2, 1000};
-        for (auto & left_table_name : left_table_names)
-        {
-            for (auto & right_table_name : right_table_names)
-            {
-                request = context.scan("outer_join_test", left_table_name)
-                              .join(
-                                  context.scan("outer_join_test", right_table_name),
-                                  type,
-                                  {col("a")},
-                                  {},
-                                  {},
-                                  {lt(col(left_table_name + ".a"), col(right_table_name + ".b"))},
-                                  {},
-                                  0,
-                                  false,
-                                  0)
-                              .build(context);
-                for (auto threshold : probe_cache_column_threshold)
-                {
-                    context.context->setSetting(
-                        "join_probe_cache_columns_threshold",
-                        Field(static_cast<UInt64>(threshold)));
-                    ASSERT_COLUMNS_EQ_UR(reference, executeStreams(request, max_streams))
-                        << "left_table_name = " << left_table_name << ", right_table_name = " << right_table_name
-                        << ", join_probe_cache_columns_threshold = " << threshold;
-                }
             }
         }
     }
@@ -3927,12 +2946,6 @@ try
                            .join(context.scan("right_semi_family", "s"), type, {col("a")}, {}, {}, {}, {}, 0, false, 0)
                            .build(context);
         executeAndAssertColumnsEqual(request, res);
-        auto request_column_prune
-            = context.scan("right_semi_family", "t")
-                  .join(context.scan("right_semi_family", "s"), type, {col("a")}, {}, {}, {}, {}, 0, false, 0)
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(res), executeStreams(request_column_prune, 2));
     }
 
     /// One join key(t.a = s.a) + other condition(t.c < s.c).
@@ -3995,21 +3008,6 @@ try
                                0)
                            .build(context);
         executeAndAssertColumnsEqual(request, res);
-        auto request_column_prune = context.scan("right_semi_family", "t")
-                                        .join(
-                                            context.scan("right_semi_family", "s"),
-                                            type,
-                                            {col("a")},
-                                            {},
-                                            {},
-                                            {lt(col("t.c"), col("s.c"))},
-                                            {},
-                                            0,
-                                            false,
-                                            0)
-                                        .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                        .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(res), executeStreams(request_column_prune, 2));
     }
 }
 CATCH
@@ -4078,12 +3076,6 @@ try
                             .join(context.scan("right_outer", "s"), type, {col("a")}, {}, {}, {}, {}, 0, false, 1)
                             .build(context);
         executeAndAssertColumnsEqual(request2, swap_expect);
-        auto request_column_prune
-            = context.scan("right_outer", "t")
-                  .join(context.scan("right_outer", "s"), type, {col("a")}, {}, {}, {}, {}, 0, false, 1)
-                  .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                  .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(swap_expect), executeStreams(request_column_prune, 2));
     }
 
     /// One join key(t.a = s.a) + no left/right condition + other condition(t.c < s.c).
@@ -4155,21 +3147,6 @@ try
                                 1)
                             .build(context);
         executeAndAssertColumnsEqual(request2, swap_expect);
-        auto request_column_prune = context.scan("right_outer", "t")
-                                        .join(
-                                            context.scan("right_outer", "s"),
-                                            type,
-                                            {col("a")},
-                                            {},
-                                            {},
-                                            {lt(col("t.c"), col("s.c"))},
-                                            {},
-                                            0,
-                                            false,
-                                            1)
-                                        .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                        .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(swap_expect), executeStreams(request_column_prune, 2));
     }
 
     /// One join key(t.a = s.a) + left/right condition + other condition(t.c < s.c).
@@ -4242,21 +3219,6 @@ try
                                 1)
                             .build(context);
         executeAndAssertColumnsEqual(request2, swap_expect);
-        auto request_column_prune = context.scan("right_outer", "t")
-                                        .join(
-                                            context.scan("right_outer", "s"),
-                                            type,
-                                            {col("a")},
-                                            {},
-                                            {lt(col("s.a"), literal_integer)},
-                                            {lt(col("t.c"), col("s.c"))},
-                                            {},
-                                            0,
-                                            false,
-                                            1)
-                                        .aggregation({Count(lit(static_cast<UInt64>(1)))}, {})
-                                        .build(context);
-        ASSERT_COLUMNS_EQ_UR(genScalarCountResults(swap_expect), executeStreams(request_column_prune, 2));
     }
 }
 CATCH

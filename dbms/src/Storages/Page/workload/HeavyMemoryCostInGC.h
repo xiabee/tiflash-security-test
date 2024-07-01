@@ -66,7 +66,7 @@ public:
     void onFailed() override
     {
         LOG_WARNING(
-            options.logger,
+            StressEnv::logger,
             "Memory Peak is {}, it should not bigger than {}",
             metrics_dumper->getMemoryPeak(),
             5 * 1024 * 1024);

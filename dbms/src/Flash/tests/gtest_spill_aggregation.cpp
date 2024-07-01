@@ -22,7 +22,6 @@ namespace DB
 namespace FailPoints
 {
 extern const char force_agg_on_partial_block[];
-extern const char force_thread_0_no_agg_spill[];
 } // namespace FailPoints
 
 namespace tests
@@ -48,17 +47,6 @@ public:
 
 #define WRAP_FOR_AGG_PARTIAL_BLOCK_END }
 
-#define WRAP_FOR_AGG_THREAD_0_NO_SPILL_START                                           \
-    for (auto thread_0_no_spill : {true, false})                                       \
-    {                                                                                  \
-        if (thread_0_no_spill)                                                         \
-            FailPointHelper::enableFailPoint(FailPoints::force_thread_0_no_agg_spill); \
-        else                                                                           \
-            FailPointHelper::disableFailPoint(FailPoints::force_thread_0_no_agg_spill);
-
-#define WRAP_FOR_AGG_THREAD_0_NO_SPILL_END }
-
-
 #define WRAP_FOR_SPILL_TEST_BEGIN                  \
     std::vector<bool> pipeline_bools{false, true}; \
     for (auto enable_pipeline : pipeline_bools)    \
@@ -78,8 +66,8 @@ try
         {"d", TiDB::TP::TypeLongLong},
         {"e", TiDB::TP::TypeLongLong}};
     ColumnsWithTypeAndName column_datas;
-    size_t table_rows = 12800;
-    size_t duplicated_rows = 6400;
+    size_t table_rows = 102400;
+    size_t duplicated_rows = 51200;
     UInt64 max_block_size = 500;
     size_t original_max_streams = 20;
     size_t total_data_size = 0;
@@ -115,11 +103,9 @@ try
     /// don't use `executeAndAssertColumnsEqual` since it takes too long to run
     /// test single thread aggregation
     WRAP_FOR_AGG_PARTIAL_BLOCK_START
-    WRAP_FOR_AGG_THREAD_0_NO_SPILL_START
     ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, 1));
     /// test parallel aggregation
     ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams));
-    WRAP_FOR_AGG_THREAD_0_NO_SPILL_END
     WRAP_FOR_AGG_PARTIAL_BLOCK_END
     /// enable spill and use small max_cached_data_bytes_in_spiller
     context.context->setSetting("max_cached_data_bytes_in_spiller", Field(static_cast<UInt64>(total_data_size / 200)));
@@ -128,9 +114,9 @@ try
     /// test parallel aggregation
     ASSERT_COLUMNS_EQ_UR(ref_columns, executeStreams(request, original_max_streams));
     /// test spill with small max_block_size
-    /// the avg rows in one bucket is ~10240/256 = 400, so set the small_max_block_size to 100
+    /// the avg rows in one bucket is ~10240/256 = 400, so set the small_max_block_size to 300
     /// is enough to test the output spilt
-    size_t small_max_block_size = 100;
+    size_t small_max_block_size = 300;
     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(small_max_block_size)));
     auto blocks = getExecuteStreamsReturnBlocks(request, 1);
     for (auto & block : blocks)
@@ -263,7 +249,6 @@ try
                     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(max_block_size)));
                     WRAP_FOR_SPILL_TEST_BEGIN
                     WRAP_FOR_AGG_PARTIAL_BLOCK_START
-                    WRAP_FOR_AGG_THREAD_0_NO_SPILL_START
                     auto blocks = getExecuteStreamsReturnBlocks(request, concurrency);
                     for (auto & block : blocks)
                     {
@@ -288,7 +273,6 @@ try
                             vstackBlocks(std::move(blocks)).getColumnsWithTypeAndName(),
                             false));
                     }
-                    WRAP_FOR_AGG_THREAD_0_NO_SPILL_END
                     WRAP_FOR_AGG_PARTIAL_BLOCK_END
                     WRAP_FOR_SPILL_TEST_END
                 }
@@ -418,7 +402,6 @@ try
                     context.context->setSetting("max_block_size", Field(static_cast<UInt64>(max_block_size)));
                     WRAP_FOR_SPILL_TEST_BEGIN
                     WRAP_FOR_AGG_PARTIAL_BLOCK_START
-                    WRAP_FOR_AGG_THREAD_0_NO_SPILL_START
                     auto blocks = getExecuteStreamsReturnBlocks(request, concurrency);
                     for (auto & block : blocks)
                     {
@@ -443,7 +426,6 @@ try
                             vstackBlocks(std::move(blocks)).getColumnsWithTypeAndName(),
                             false));
                     }
-                    WRAP_FOR_AGG_THREAD_0_NO_SPILL_END
                     WRAP_FOR_AGG_PARTIAL_BLOCK_END
                     WRAP_FOR_SPILL_TEST_END
                 }

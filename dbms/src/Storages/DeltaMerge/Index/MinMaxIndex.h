@@ -18,30 +18,44 @@
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnsCommon.h>
 #include <Common/LRUCache.h>
+#include <DataTypes/DataTypeEnum.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/IDataType.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
 
-namespace DB::DM
+namespace DB
+{
+namespace DM
 {
 class MinMaxIndex;
 using MinMaxIndexPtr = std::shared_ptr<MinMaxIndex>;
 
 class MinMaxIndex
 {
+private:
+    using HasValueMarkPtr = std::shared_ptr<PaddedPODArray<UInt8>>;
+    using HasNullMarkPtr = std::shared_ptr<PaddedPODArray<UInt8>>;
+
+    HasNullMarkPtr has_null_marks;
+    HasValueMarkPtr has_value_marks;
+    MutableColumnPtr minmaxes;
+
 public:
-    MinMaxIndex(
-        PaddedPODArray<UInt8> && has_null_marks_,
-        PaddedPODArray<UInt8> && has_value_marks_,
-        MutableColumnPtr && minmaxes_)
-        : has_null_marks(std::move(has_null_marks_))
-        , has_value_marks(std::move(has_value_marks_))
+#ifndef DBMS_PUBLIC_GTEST
+private:
+#endif
+    MinMaxIndex(HasNullMarkPtr has_null_marks_, HasValueMarkPtr has_value_marks_, MutableColumnPtr && minmaxes_)
+        : has_null_marks(has_null_marks_)
+        , has_value_marks(has_value_marks_)
         , minmaxes(std::move(minmaxes_))
     {}
 
+public:
     explicit MinMaxIndex(const IDataType & type)
-        : minmaxes(type.createColumn())
+        : has_null_marks(std::make_shared<PaddedPODArray<UInt8>>())
+        , has_value_marks(std::make_shared<PaddedPODArray<UInt8>>())
+        , minmaxes(type.createColumn())
     {}
 
     size_t byteSize() const
@@ -49,7 +63,7 @@ public:
         // we add 3 * sizeof(PaddedPODArray<UInt8>)
         // because has_null_marks/ has_value_marks / minmaxes are all use PaddedPODArray
         // Thus we need to add the structual memory cost of PaddedPODArray for each of them
-        return sizeof(UInt8) * has_null_marks.size() + sizeof(UInt8) * has_value_marks.size() + minmaxes->byteSize()
+        return sizeof(UInt8) * has_null_marks->size() + sizeof(UInt8) * has_value_marks->size() + minmaxes->byteSize()
             + 3 * sizeof(PaddedPODArray<UInt8>);
     }
 
@@ -67,56 +81,42 @@ public:
 
     std::pair<UInt64, UInt64> getUInt64MinMax(size_t pack_index);
 
-    template <typename Op>
-    RSResults checkCmp(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
-
-    // TODO: merge with checkCmp
+    RSResults checkEqual(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
     RSResults checkIn(
         size_t start_pack,
         size_t pack_count,
         const std::vector<Field> & values,
         const DataTypePtr & type);
-
-    RSResults checkIsNull(size_t start_pack, size_t pack_count);
-
-private:
-    template <typename Op, typename T>
-    RSResults checkCmpImpl(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
-    template <typename Op>
-    RSResults checkNullableCmp(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
-    template <typename Op, typename T>
-    RSResults checkNullableCmpImpl(
-        const DB::ColumnNullable & column_nullable,
-        const DB::ColumnUInt8 & null_map,
+    RSResults checkGreater(
         size_t start_pack,
         size_t pack_count,
         const Field & value,
-        const DataTypePtr & type);
-
-    template <typename T>
-    RSResults checkInImpl(
+        const DataTypePtr & type,
+        int nan_direction);
+    RSResults checkGreaterEqual(
         size_t start_pack,
         size_t pack_count,
-        const std::vector<Field> & values,
-        const DataTypePtr & type);
+        const Field & value,
+        const DataTypePtr & type,
+        int nan_direction);
+    RSResults checkIsNull(size_t start_pack, size_t pack_count);
+
+    RSResults checkNullableEqual(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
     RSResults checkNullableIn(
         size_t start_pack,
         size_t pack_count,
         const std::vector<Field> & values,
         const DataTypePtr & type);
-    template <typename T>
-    RSResults checkNullableInImpl(
-        const DB::ColumnNullable & column_nullable,
-        const DB::ColumnUInt8 & null_map,
+    RSResults checkNullableGreater(size_t start_pack, size_t pack_count, const Field & value, const DataTypePtr & type);
+    RSResults checkNullableGreaterEqual(
         size_t start_pack,
         size_t pack_count,
-        const std::vector<Field> & values,
+        const Field & value,
         const DataTypePtr & type);
 
-    PaddedPODArray<UInt8> has_null_marks;
-    PaddedPODArray<UInt8> has_value_marks;
-    MutableColumnPtr minmaxes;
+    static String toString();
 };
+
 
 struct MinMaxIndexWeightFunction
 {
@@ -140,6 +140,7 @@ struct MinMaxIndexWeightFunction
     }
 };
 
+
 class MinMaxIndexCache : public LRUCache<String, MinMaxIndex, std::hash<String>, MinMaxIndexWeightFunction>
 {
 private:
@@ -160,4 +161,6 @@ public:
 
 using MinMaxIndexCachePtr = std::shared_ptr<MinMaxIndexCache>;
 
-} // namespace DB::DM
+} // namespace DM
+
+} // namespace DB
