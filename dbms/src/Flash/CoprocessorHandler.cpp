@@ -156,6 +156,8 @@ grpc::Status CoprocessorHandler<is_stream>::execute()
                 cop_context.db_context.getClientInfo().current_address.toString(),
                 kind,
                 resource_group_name,
+                cop_request->connection_id(),
+                cop_request->connection_alias(),
                 Logger::get(log->identifier()));
             cop_context.db_context.setDAGContext(&dag_context);
 
@@ -238,6 +240,7 @@ grpc::Status CoprocessorHandler<is_stream>::execute()
         case RegionException::RegionReadStatus::FLASHBACK:
         case RegionException::RegionReadStatus::KEY_NOT_IN_REGION:
         case RegionException::RegionReadStatus::TIKV_SERVER_ISSUE:
+        case RegionException::RegionReadStatus::READ_INDEX_TIMEOUT:
         case RegionException::RegionReadStatus::NOT_LEADER:
         case RegionException::RegionReadStatus::NOT_FOUND_TIKV:
         case RegionException::RegionReadStatus::NOT_FOUND:

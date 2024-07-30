@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Common/Logger.h>
-#include <IO/MemoryReadWriteBuffer.h>
+#include <IO/Buffer/MemoryReadWriteBuffer.h>
 #include <Interpreters/Context_fwd.h>
 #include <Storages/KVStore/Types.h>
 #include <Storages/Page/FileUsage.h>
@@ -49,6 +49,7 @@ public:
 
     using RegionCacheWriteElement = std::tuple<RegionID, MemoryWriteBuffer, size_t, UInt64>;
     static void computeRegionWriteBuffer(const Region & region, RegionCacheWriteElement & region_write_buffer);
+    static size_t computeRegionWriteBuffer(const Region & region, WriteBuffer & buffer);
 
     PageStorageConfig getPageStorageSettings() const;
 

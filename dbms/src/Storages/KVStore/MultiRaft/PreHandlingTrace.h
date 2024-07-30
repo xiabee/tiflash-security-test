@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <Common/Exception.h>
+#include <Common/Logger.h>
 #include <Storages/KVStore/Utils.h>
 
 #include <atomic>
@@ -22,44 +24,63 @@
 
 namespace DB
 {
-struct PreHandlingTrace : MutexLockWrap
+enum class PrehandleTransformStatus
+{
+    Ok,
+    Aborted,
+    ErrUpdateSchema,
+    ErrTableDropped,
+};
+
+struct PreHandlingTrace : private MutexLockWrap
 {
     struct Item
     {
         Item()
-            : abort_flag(false)
+            : abort_error(PrehandleTransformStatus::Ok)
         {}
-        std::atomic_bool abort_flag;
-    };
-    std::unordered_map<uint64_t, std::shared_ptr<Item>> tasks;
+        bool isAbort() const { return abort_error.load() != PrehandleTransformStatus::Ok; }
+        std::optional<PrehandleTransformStatus> abortReason() const
+        {
+            auto res = abort_error.load();
+            if (res == PrehandleTransformStatus::Ok)
+            {
+                return std::nullopt;
+            }
+            return res;
+        }
+        void abortFor(PrehandleTransformStatus reason) { abort_error.store(reason); }
+        void reset() { abort_error.store(PrehandleTransformStatus::Ok); }
 
-    std::shared_ptr<Item> registerTask(uint64_t region_id)
+    protected:
+        std::atomic<PrehandleTransformStatus> abort_error;
+    };
+
+    // Prehandle use thread pool from Proxy's side, so it can't benefit from AsyncTasks.
+    std::unordered_map<uint64_t, std::shared_ptr<Item>> tasks;
+    std::atomic<uint64_t> ongoing_prehandle_subtask_count{0};
+    std::mutex cpu_resource_mut;
+    std::condition_variable cpu_resource_cv;
+    LoggerPtr log;
+
+    PreHandlingTrace()
+        : log(Logger::get("PreHandlingTrace"))
+    {}
+    std::shared_ptr<Item> registerTask(uint64_t region_id);
+    std::shared_ptr<Item> deregisterTask(uint64_t region_id);
+    bool hasTask(uint64_t region_id);
+    void waitForSubtaskResources(uint64_t region_id, size_t parallel, size_t parallel_subtask_limit);
+    void releaseSubtaskResources(uint64_t region_id, size_t split_id)
     {
-        // Automaticlly override the old one.
-        auto _ = genLockGuard();
-        auto b = std::make_shared<Item>();
-        tasks[region_id] = b;
-        return b;
-    }
-    std::shared_ptr<Item> deregisterTask(uint64_t region_id)
-    {
-        auto _ = genLockGuard();
-        auto it = tasks.find(region_id);
-        if (it != tasks.end())
-        {
-            auto b = it->second;
-            tasks.erase(it);
-            return b;
-        }
-        else
-        {
-            return nullptr;
-        }
-    }
-    bool hasTask(uint64_t region_id)
-    {
-        auto _ = genLockGuard();
-        return tasks.find(region_id) != tasks.end();
+        std::unique_lock<std::mutex> cpu_resource_lock(cpu_resource_mut);
+        // TODO(split) refine this to avoid notify_all
+        auto prev = ongoing_prehandle_subtask_count.fetch_sub(1);
+        RUNTIME_CHECK_MSG(
+            prev > 0,
+            "Try to decrease prehandle subtask count to below 0, region_id={}, split_id={}",
+            region_id,
+            split_id);
+        cpu_resource_cv.notify_all();
     }
 };
 } // namespace DB

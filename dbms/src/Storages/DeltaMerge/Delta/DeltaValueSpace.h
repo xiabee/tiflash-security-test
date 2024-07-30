@@ -24,6 +24,7 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileInMemory.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
+#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
 #include <Storages/DeltaMerge/Delta/MemTableSet.h>
 #include <Storages/DeltaMerge/DeltaIndex.h>
@@ -35,10 +36,13 @@
 #include <Storages/Page/PageDefinesBase.h>
 
 
-namespace DB
+namespace DB::DM
 {
-namespace DM
+namespace tests
 {
+class SegmentReadTaskTest;
+}
+
 using GenPageId = std::function<PageIdU64()>;
 class DeltaValueSpace;
 class DeltaValueSnapshot;
@@ -53,7 +57,6 @@ using DeltaIndexCompacted = DefaultDeltaTree::CompactedEntries;
 using DeltaIndexCompactedPtr = DefaultDeltaTree::CompactedEntriesPtr;
 using DeltaIndexIterator = DeltaIndexCompacted::Iterator;
 
-struct DMContext;
 struct WriteBatches;
 class StoragePool;
 
@@ -105,6 +108,9 @@ private:
 
     LoggerPtr log;
 
+private:
+    void saveMeta(WriteBuffer & buf) const;
+
 public:
     explicit DeltaValueSpace(
         PageIdU64 id_,
@@ -116,8 +122,17 @@ public:
     /// Restore the metadata of this instance.
     /// Only called after reboot.
     static DeltaValueSpacePtr restore(DMContext & context, const RowKeyRange & segment_range, PageIdU64 id);
+    /// Restore from a checkpoint from other peer.
+    /// Only used in FAP.
+    static DeltaValueSpacePtr restore(
+        DMContext & context,
+        const RowKeyRange & segment_range,
+        ReadBuffer & buf,
+        PageIdU64 id);
+
 
     static DeltaValueSpacePtr createFromCheckpoint( //
+        const LoggerPtr & parent_log,
         DMContext & context,
         UniversalPageStoragePtr temp_ps,
         const RowKeyRange & segment_range,
@@ -136,9 +151,10 @@ public:
         persisted_file_set->resetLogger(segment_log);
     }
 
-    /// The following two methods are just for test purposes
+    /// The following 3 methods are just for test purposes
     MemTableSetPtr getMemTableSet() const { return mem_table_set; }
     ColumnFilePersistedSetPtr getPersistedFileSet() const { return persisted_file_set; }
+    UInt64 getDeltaIndexEpoch() const { return delta_index_epoch; }
 
     String simpleInfo() const { return "<delta_id=" + DB::toString(persisted_file_set->getId()) + ">"; }
     String info() const { return fmt::format("{}. {}", mem_table_set->info(), persisted_file_set->info()); }
@@ -157,6 +173,7 @@ public:
     bool hasAbandoned() const { return abandoned.load(std::memory_order_relaxed); }
 
     void saveMeta(WriteBatches & wbs) const;
+    std::string serializeMeta() const;
 
     void recordRemoveColumnFilesPages(WriteBatches & wbs) const;
 
@@ -395,10 +412,12 @@ public:
 
     RowKeyRange getSquashDeleteRange() const;
 
-    const auto & getSharedDeltaIndex() { return shared_delta_index; }
+    const auto & getSharedDeltaIndex() const { return shared_delta_index; }
     size_t getDeltaIndexEpoch() const { return delta_index_epoch; }
 
     bool isForUpdate() const { return is_update; }
+
+    void setMemTableSetSnapshot(const ColumnFileSetSnapshotPtr & mem_table_snap_) { mem_table_snap = mem_table_snap_; }
 };
 
 class DeltaValueReader
@@ -556,5 +575,4 @@ public:
     }
 };
 
-} // namespace DM
-} // namespace DB
+} // namespace DB::DM

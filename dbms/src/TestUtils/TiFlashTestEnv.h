@@ -14,13 +14,14 @@
 
 #pragma once
 
-#include <Encryption/FileProvider_fwd.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Poco/Environment.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
 #include <Poco/SortedDirectoryIterator.h>
 #include <Storages/Page/PageConstants.h>
+#include <Storages/PathPool_fwd.h>
 #include <TestUtils/TiFlashTestException.h>
 #include <fmt/core.h>
 
@@ -69,6 +70,8 @@ public:
         DAGContext * dag_context,
         MockStorage * mock_storage,
         const TestType & test_type);
+
+    static std::unique_ptr<PathPool> createCleanPathPool(const String & path);
 
     // If you want to run these tests, you should set this envrionment variablle
     // For example:

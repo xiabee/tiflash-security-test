@@ -22,6 +22,7 @@
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/Segment.h>
+#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/StoragePool/GlobalPageIdAllocator.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
@@ -112,7 +113,7 @@ protected:
     {
         *table_columns = *columns;
 
-        dm_context = std::make_unique<DMContext>(
+        dm_context = DMContext::createUnique(
             *db_context,
             storage_path_pool,
             storage_pool,
@@ -386,7 +387,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndex)
+TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndex)
 try
 {
     // Test the case that reading rows with an advance DeltaIndex
@@ -421,6 +422,8 @@ try
         segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
         200);
 
+    ASSERT_EQ(snap->delta->getSharedDeltaIndex()->getDeltaTree()->maxDupTupleID(), -1);
+
     // Thread A
     {
         auto in = segment->getInputStreamModeNormal(
@@ -436,7 +439,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndex2)
+TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndex2)
 try
 {
     auto write_rows = [&](size_t offset, size_t rows) {
@@ -450,7 +453,7 @@ try
     ASSERT_INPUTSTREAM_NROWS(
         segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
         100);
-    auto snap = segment->createSnapshot(dmContext(), false, CurrentMetrics::DT_SnapshotOfRead);
+    auto snap_a = segment->createSnapshot(dmContext(), false, CurrentMetrics::DT_SnapshotOfRead);
 
     {
         // check segment
@@ -463,12 +466,22 @@ try
         segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
         100);
 
+    {
+        ASSERT_NE(snap_a->delta->getSharedDeltaIndex()->getDeltaTree()->maxDupTupleID(), -1);
+        // tryClone will return an empty delta-index because `rows <= this->delta_tree->maxDupTupleID()`
+        auto my_delta_index
+            = snap_a->delta->getSharedDeltaIndex()->tryClone(snap_a->delta->getRows(), snap_a->delta->getDeletes());
+        auto [my_placed_rows, my_placed_deletes] = my_delta_index->getPlacedStatus();
+        ASSERT_EQ(my_placed_rows, 0);
+        ASSERT_EQ(my_placed_deletes, 0);
+    }
+
     // Thread A
     {
         auto in = segment->getInputStreamModeNormal(
             dmContext(),
             *tableColumns(),
-            snap,
+            snap_a,
             {RowKeyRange::newAll(false, 1)},
             {},
             std::numeric_limits<UInt64>::max(),
@@ -478,7 +491,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexWithDeleteRange01)
+TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexWithDeleteRange01)
 try
 {
     auto write_rows = [&](size_t offset, size_t rows) {
@@ -531,7 +544,7 @@ try
 CATCH
 
 
-TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexWithDeleteRange02)
+TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexWithDeleteRange02)
 try
 {
     auto write_rows = [&](size_t offset, size_t rows) {
@@ -574,7 +587,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexComplicated)
+TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexComplicated)
 try
 {
     // Test the case that reading rows with an advance DeltaIndex
@@ -1148,7 +1161,7 @@ try
 
                 ASSERT_EQ(c1->size(), c2->size());
 
-                for (Int64 i = 0; i < Int64(c1->size()); i++)
+                for (Int64 i = 0; i < static_cast<Int64>(c1->size()); i++)
                 {
                     if (iter1->name == DMTestEnv::pk_name)
                     {
@@ -1204,7 +1217,7 @@ CATCH
 TEST_F(SegmentTest, MassiveSplit)
 try
 {
-    Settings settings = dmContext().db_context.getSettings();
+    Settings settings = dmContext().global_context.getSettings();
     settings.dt_segment_limit_rows = 11;
     settings.dt_segment_delta_limit_rows = 7;
 
@@ -1233,8 +1246,8 @@ try
             // if pk % 5 < 2, then the record would be deleted
             // if pk % 5 >= 2, then the record would be reserved
             HandleRange del{
-                Int64((num_batches_written - 1) * num_rows_per_write),
-                Int64((num_batches_written - 1) * num_rows_per_write + 2)};
+                static_cast<Int64>((num_batches_written - 1) * num_rows_per_write),
+                static_cast<Int64>((num_batches_written - 1) * num_rows_per_write + 2)};
             segment->write(dmContext(), {RowKeyRange::fromHandleRange(del)});
         }
 
@@ -1247,7 +1260,7 @@ try
              i < num_batches_written * num_rows_per_write;
              i++)
         {
-            temp.push_back(Int64(i));
+            temp.push_back(static_cast<Int64>(i));
         }
 
         {
@@ -1375,7 +1388,7 @@ try
             case SegmentTestMode::V3_FileOnly:
             {
                 auto delegate = dmContext().path_pool->getStableDiskDelegator();
-                auto file_provider = dmContext().db_context.getFileProvider();
+                auto file_provider = dmContext().global_context.getFileProvider();
                 auto [range, file_ids] = genDMFile(dmContext(), block);
                 auto file_id = file_ids[0];
                 auto file_parent_path = delegate.getDTFilePath(file_id);
@@ -1766,7 +1779,7 @@ CATCH
 TEST_F(SegmentTest, CalculateDTFileProperty)
 try
 {
-    Settings settings = dmContext().db_context.getSettings();
+    Settings settings = dmContext().global_context.getSettings();
     settings.dt_segment_stable_pack_rows = 10;
 
     segment = buildFirstSegment(DMTestEnv::getDefaultColumns(), std::move(settings));
@@ -1807,7 +1820,7 @@ CATCH
 TEST_F(SegmentTest, CalculateDTFilePropertyWithPropertyFileDeleted)
 try
 {
-    Settings settings = dmContext().db_context.getSettings();
+    Settings settings = dmContext().global_context.getSettings();
     settings.dt_segment_stable_pack_rows = 10;
 
     segment = buildFirstSegment(DMTestEnv::getDefaultColumns(), std::move(settings));

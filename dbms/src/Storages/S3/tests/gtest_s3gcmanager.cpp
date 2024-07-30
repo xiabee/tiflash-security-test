@@ -15,6 +15,7 @@
 #include <Common/FailPoint.h>
 #include <Common/Logger.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
+#include <IO/FileProvider/EncryptionPath.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStoreS3.h>
 #include <Storages/Page/V3/CheckpointFile/CPFilesWriter.h>
@@ -630,22 +631,20 @@ try
                 PageVersion(2),
                 PageEntryV3{
                     .size = entry_data.size(),
-                    .checkpoint_info = {
-                        .data_location = CheckpointLocation{.data_file_id = std::make_shared<String>("apple_lock")},
-                        .is_valid = true,
-                        .is_local_data_reclaimed = false,
-                    }},
+                    .checkpoint_info = OptionalCheckpointInfo(
+                        CheckpointLocation{.data_file_id = std::make_shared<String>("apple_lock")},
+                        true,
+                        false)},
                 1);
             // remote external entry ingest from other node
             edits.varExternal(
                 "banana",
                 PageVersion(3),
                 PageEntryV3{
-                    .checkpoint_info = {
-                        .data_location = CheckpointLocation{.data_file_id = std::make_shared<String>("banana_lock")},
-                        .is_valid = true,
-                        .is_local_data_reclaimed = true,
-                    }},
+                    .checkpoint_info = OptionalCheckpointInfo(
+                        CheckpointLocation{.data_file_id = std::make_shared<String>("banana_lock")},
+                        true,
+                        true)},
                 1);
             edits.varDel("banana", PageVersion(4));
             edits.varEntry(
@@ -655,7 +654,7 @@ try
                     .size = entry_data.size(),
                     .offset = entry_data.size(),
                     .checkpoint_info
-                    = OptionalCheckpointInfo{}, // an entry written by this node, do not contains checkpoint_info
+                    = OptionalCheckpointInfo(), // an entry written by this node, do not contains checkpoint_info
                 },
                 1);
             writer->writeEditsAndApplyCheckpointInfo(edits);
@@ -664,7 +663,12 @@ try
         LOG_DEBUG(log, "Checkpoint data paths: {}", data_paths);
         writer.reset();
 
-        S3::uploadFile(*mock_s3_client, manifest_file_path1, manifest_file_id1);
+        S3::uploadFile(
+            *mock_s3_client,
+            manifest_file_path1,
+            manifest_file_id1,
+            EncryptionPath(manifest_file_path1, ""),
+            ::DB::tests::TiFlashTestEnv::getMockFileProvider());
     }
     { // prepare the second manifest on S3
         const String entry_data = "cherry_value";
@@ -692,7 +696,7 @@ try
                     .size = entry_data.size(),
                     .offset = 0,
                     .checkpoint_info
-                    = OptionalCheckpointInfo{}, // an entry written by this node, do not contains checkpoint_info
+                    = OptionalCheckpointInfo(), // an entry written by this node, do not contains checkpoint_info
                 },
                 1);
             writer->writeEditsAndApplyCheckpointInfo(edits);
@@ -701,7 +705,12 @@ try
         LOG_DEBUG(log, "Checkpoint data paths: {}", data_paths);
         writer.reset();
 
-        S3::uploadFile(*mock_s3_client, manifest_file_path2, manifest_file_id2);
+        S3::uploadFile(
+            *mock_s3_client,
+            manifest_file_path2,
+            manifest_file_id2,
+            EncryptionPath(manifest_file_path2, ""),
+            ::DB::tests::TiFlashTestEnv::getMockFileProvider());
     }
 
     // read from S3 key

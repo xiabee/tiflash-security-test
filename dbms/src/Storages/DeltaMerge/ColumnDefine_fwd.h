@@ -20,17 +20,10 @@
 #include <unordered_map>
 #include <vector>
 
-namespace TiDB
-{
-struct ColumnInfo;
-}
-
 namespace DB::DM
 {
 struct ColumnDefine;
 using ColumnDefines = std::vector<ColumnDefine>;
 using ColumnDefinesPtr = std::shared_ptr<ColumnDefines>;
 using ColumnDefineMap = std::unordered_map<DB::ColumnID, ColumnDefine>;
-
-using ColumnInfos = std::vector<TiDB::ColumnInfo>;
 } // namespace DB::DM

@@ -18,6 +18,7 @@
 
 namespace DB::DM
 {
+
 DMFileBlockInputStreamBuilder::DMFileBlockInputStreamBuilder(const Context & context)
     : file_provider(context.getFileProvider())
     , read_limiter(context.getReadLimiter())
@@ -38,7 +39,7 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
     RUNTIME_CHECK(
         dmfile->getStatus() == DMFile::Status::READABLE,
         dmfile->fileId(),
-        DMFile::statusString(dmfile->getStatus()));
+        magic_enum::enum_name(dmfile->getStatus()));
 
     // if `rowkey_ranges` is empty, we unconditionally read all packs
     // `rowkey_ranges` and `is_common_handle`  will only be useful in clean read mode.
@@ -81,7 +82,6 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
         mark_cache,
         enable_column_cache,
         column_cache,
-        aio_threshold,
         max_read_buffer_size,
         file_provider,
         read_limiter,
@@ -94,4 +94,31 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
 
     return std::make_shared<DMFileBlockInputStream>(std::move(reader), max_sharing_column_bytes_for_all > 0);
 }
+
+DMFileBlockInputStreamPtr createSimpleBlockInputStream(
+    const DB::Context & context,
+    const DMFilePtr & file,
+    ColumnDefines cols)
+{
+    // disable clean read is needed, since we just want to read all data from the file, and we do not know about the column handle
+    // enable read_one_pack_every_time_ is needed to preserve same block structure as the original file
+    DMFileBlockInputStreamBuilder builder(context);
+    if (cols.empty())
+    {
+        // turn into read all columns from file
+        cols = file->getColumnDefines();
+    }
+    return builder.setRowsThreshold(DMFILE_READ_ROWS_THRESHOLD)
+        .onlyReadOnePackEveryTime()
+        .build(file, cols, DB::DM::RowKeyRanges{}, std::make_shared<ScanContext>());
+}
+
+DMFileBlockInputStreamBuilder & DMFileBlockInputStreamBuilder::setFromSettings(const Settings & settings)
+{
+    enable_column_cache = settings.dt_enable_stable_column_cache;
+    max_read_buffer_size = settings.max_read_buffer_size;
+    max_sharing_column_bytes_for_all = settings.dt_max_sharing_column_bytes_for_all;
+    return *this;
+}
+
 } // namespace DB::DM

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Core/TiFlashDisaggregatedMode.h>
-#include <Encryption/FileProvider_fwd.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/SharedContexts/Disagg_fwd.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore_fwd.h>
@@ -79,6 +79,8 @@ struct SharedContextDisagg : private boost::noncopyable
         : global_context(global_context_)
     {}
 
+    ~SharedContextDisagg();
+
     void initReadNodePageCache(const PathPool & path_pool, const String & cache_dir, size_t cache_capacity);
 
     /// Note that the unit of max_size is quantity, not byte size. It controls how
@@ -89,7 +91,7 @@ struct SharedContextDisagg : private boost::noncopyable
 
     void initRemoteDataStore(const FileProviderPtr & file_provider, bool s3_enabled);
 
-    void initFastAddPeerContext();
+    void initFastAddPeerContext(UInt64 fap_concur);
 
     bool isDisaggregatedComputeMode() const { return disaggregated_mode == DisaggregatedMode::Compute; }
 

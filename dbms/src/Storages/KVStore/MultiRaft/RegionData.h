@@ -37,7 +37,11 @@ public:
     using WriteCFIter = RegionWriteCFData::Map::iterator;
     using ConstWriteCFIter = RegionWriteCFData::Map::const_iterator;
 
-    void insert(ColumnFamilyType cf, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
+    static void reportAlloc(size_t delta);
+    static void reportDealloc(size_t delta);
+    static void reportDelta(size_t prev, size_t current);
+
+    RegionDataRes insert(ColumnFamilyType cf, TiKVKey && key, TiKVValue && value, DupCheck mode = DupCheck::Deny);
     void remove(ColumnFamilyType cf, const TiKVKey & key);
 
     WriteCFIter removeDataByWriteIt(const WriteCFIter & write_it);
@@ -50,6 +54,8 @@ public:
         bool hard_error);
 
     DecodedLockCFValuePtr getLockInfo(const RegionLockReadQuery & query) const;
+
+    std::shared_ptr<const TiKVValue> getLockByKey(const TiKVKey & key) const;
 
     void splitInto(const RegionRange & range, RegionData & new_region_data);
     void mergeFrom(const RegionData & ori_region_data);
@@ -92,6 +98,8 @@ public:
         void mergeFrom(const OrphanKeysInfo & other);
 
         void advanceAppliedIndex(uint64_t);
+
+        bool omitOrphanWriteKey(const std::shared_ptr<const TiKVKey> & key);
 
         // Providing a `snapshot_index` indicates we can scanning a snapshot of index `snapshot_index`.
         // `snapshot_index` can be set to null if TiFlash is not in a raftstore v2 cluster.

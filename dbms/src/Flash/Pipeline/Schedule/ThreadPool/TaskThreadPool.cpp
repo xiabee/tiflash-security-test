@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/CPUAffinityManager.h>
 #include <Common/Exception.h>
 #include <Common/Stopwatch.h>
 #include <Common/setThreadName.h>
 #include <Flash/Pipeline/Schedule/TaskScheduler.h>
+#include <Flash/Pipeline/Schedule/Tasks/NotifyFuture.h>
 #include <Flash/Pipeline/Schedule/Tasks/TaskHelper.h>
 #include <Flash/Pipeline/Schedule/ThreadPool/TaskThreadPool.h>
 #include <Flash/Pipeline/Schedule/ThreadPool/TaskThreadPoolImpl.h>
@@ -56,6 +58,7 @@ void TaskThreadPool<Impl>::loop(size_t thread_no)
 {
     try
     {
+        CPUAffinityManager::getInstance().bindSelfQueryThread();
         doLoop(thread_no);
     }
     CATCH_AND_TERMINATE(logger)
@@ -93,8 +96,8 @@ void TaskThreadPool<Impl>::handleTask(TaskPtr & task)
     metrics.incExecutingTask();
     metrics.elapsedPendingTime(task);
 
-    ExecTaskStatus status_before_exec = task->getStatus();
-    ExecTaskStatus status_after_exec = status_before_exec;
+    auto status_before_exec = task->getStatus();
+    auto status_after_exec = status_before_exec;
     UInt64 total_time_spent = 0;
     while (true)
     {
@@ -121,6 +124,10 @@ void TaskThreadPool<Impl>::handleTask(TaskPtr & task)
     case ExecTaskStatus::WAITING:
         task->endTraceMemory();
         scheduler.submitToWaitReactor(std::move(task));
+        break;
+    case ExecTaskStatus::WAIT_FOR_NOTIFY:
+        task->endTraceMemory();
+        registerTaskToFuture(std::move(task));
         break;
     case FINISH_STATUS:
         task->finalize();

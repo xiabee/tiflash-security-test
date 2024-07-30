@@ -23,6 +23,7 @@
 #include <Databases/DatabaseTiFlash.h>
 #include <Debug/MockSchemaGetter.h>
 #include <Debug/MockSchemaNameMapper.h>
+#include <IO/FileProvider/FileProvider.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterAlterQuery.h>
@@ -371,7 +372,7 @@ void SchemaBuilder<Getter, NameMapper>::applyDiff(const SchemaDiff & diff)
         {
             // >= SchemaActionType::MaxRecognizedType
             // log down the Int8 value directly
-            LOG_ERROR(log, "Unsupported change type: {}, diff_version={}", static_cast<Int8>(diff.type), diff.version);
+            LOG_ERROR(log, "Unsupported change type: {}, diff_version={}", fmt::underlying(diff.type), diff.version);
         }
 
         break;
@@ -403,9 +404,7 @@ void SchemaBuilder<Getter, NameMapper>::applySetTiFlashReplica(DatabaseID databa
             return;
         }
 
-        updateTiFlashReplicaNumOnStorage(database_id, table_id, storage, table_info);
-        // FIXME: Do not drop the table under release-7.5 branch, need more testing
-        // applyDropTable(database_id, table_id, "SetTiFlashReplica-0");
+        applyDropTable(database_id, table_id, "SetTiFlashReplica-0");
         return;
     }
 
@@ -483,9 +482,7 @@ void SchemaBuilder<Getter, NameMapper>::updateTiFlashReplicaNumOnStorage(
                 " physical_table_id={} logical_table_id={}",
                 old_replica_count,
                 new_replica_count,
-                table_info->replica_info.available.has_value()
-                    ? fmt::format("{}", table_info->replica_info.available.value())
-                    : "<none>",
+                table_info->replica_info.available,
                 part_def.id,
                 table_id);
         }
@@ -511,8 +508,7 @@ void SchemaBuilder<Getter, NameMapper>::updateTiFlashReplicaNumOnStorage(
         " physical_table_id={} logical_table_id={}",
         old_replica_count,
         new_replica_count,
-        table_info->replica_info.available.has_value() ? fmt::format("{}", table_info->replica_info.available.value())
-                                                       : "<none>",
+        table_info->replica_info.available,
         table_id,
         table_id);
 }
@@ -1109,7 +1105,7 @@ String createTableStmt(
         throw TiFlashException(
             Errors::DDL::Internal,
             "Unknown engine type : {}",
-            static_cast<int32_t>(table_info.engine_type));
+            fmt::underlying(table_info.engine_type));
     }
 
     return stmt;
@@ -1176,8 +1172,7 @@ void SchemaBuilder<Getter, NameMapper>::applyCreateStorageInstance(
         LOG_WARNING(
             log,
             "database instance is not exist (applyCreateStorageInstance), may has been dropped, create a database "
-            "with "
-            "fake DatabaseInfo for it, database_id={} database_name={} action={}",
+            "with fake DatabaseInfo for it, database_id={} database_name={} action={}",
             database_id,
             database_mapped_name,
             action);
@@ -1646,8 +1641,8 @@ bool SchemaBuilder<Getter, NameMapper>::applyTable(
         {
             LOG_WARNING(
                 log,
-                "new table info in TiKV is not partition table {}, applyTable need retry, database_id={} "
-                "table_id={}",
+                "new table info in TiKV is not partition table {}, applyTable need retry"
+                ", database_id={} table_id={}",
                 name_mapper.debugCanonicalName(*table_info, database_id, keyspace_id),
                 database_id,
                 table_info->id);
@@ -1751,6 +1746,9 @@ void SchemaBuilder<Getter, NameMapper>::dropAllSchema()
         applyDropDatabaseByName(db.first);
         LOG_INFO(log, "Database {} dropped during drop all schemas", db.first);
     }
+
+    /// Drop keyspace encryption key
+    context.getFileProvider()->dropEncryptionInfo(keyspace_id);
 
     LOG_INFO(log, "Drop all schemas end");
 }

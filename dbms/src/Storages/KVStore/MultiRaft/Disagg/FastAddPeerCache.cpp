@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Common/FailPoint.h>
-#include <Encryption/PosixRandomAccessFile.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/KVStore/FFI/ProxyFFI.h>
@@ -58,7 +57,7 @@ UInt64 EndToSegmentId::getSegmentIdContainingKey(std::unique_lock<std::mutex> & 
         end_to_segment_id.end(),
         key,
         [](const DM::RowKeyValue & key1, const std::pair<DM::RowKeyValue, UInt64> & element2) {
-            return compare(key1.toRowKeyValueRef(), element2.first.toRowKeyValueRef()) < 0;
+            return key1.toRowKeyValueRef() < element2.first.toRowKeyValueRef();
         });
     RUNTIME_CHECK(
         iter != end_to_segment_id.end(),
@@ -148,8 +147,23 @@ ParsedCheckpointDataHolderPtr buildParsedCheckpointData(Context & context, const
         // Note the `data_file_id` in temp ps is all lock key, we need transform them to data key before write to local ps.
         for (auto & record : records)
         {
+            {
+                // Filter remote peer's local page storage pages.
+                if (UniversalPageIdFormat::getUniversalPageIdType(record.page_id) == StorageType::LocalKV)
+                {
+                    continue;
+                }
+            }
             if (record.type == PS::V3::EditRecordType::VAR_ENTRY)
             {
+                if (!record.entry.checkpoint_info.data_location.isValid())
+                {
+                    // Eventually fallback to regular snapshot
+                    throw Exception(
+                        ErrorCodes::LOGICAL_ERROR,
+                        "buildParsedCheckpointData: can't put remote page with empty data_location, page_id={}",
+                        record.page_id);
+                }
                 wb.putRemotePage(
                     record.page_id,
                     record.entry.tag,
@@ -168,6 +182,14 @@ ParsedCheckpointDataHolderPtr buildParsedCheckpointData(Context & context, const
             else if (record.type == PS::V3::EditRecordType::VAR_EXTERNAL)
             {
                 RUNTIME_CHECK(record.entry.checkpoint_info.has_value());
+                if (!record.entry.checkpoint_info.data_location.isValid())
+                {
+                    // Eventually fallback to regular snapshot
+                    throw Exception(
+                        ErrorCodes::LOGICAL_ERROR,
+                        "buildParsedCheckpointData: can't put external page with empty data_location, page_id={}",
+                        record.page_id);
+                }
                 wb.putRemoteExternal(record.page_id, record.entry.checkpoint_info.data_location);
             }
             else

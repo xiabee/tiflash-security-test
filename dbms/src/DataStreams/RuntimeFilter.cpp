@@ -75,7 +75,7 @@ void RuntimeFilter::build()
         throw TiFlashException(
             Errors::Coprocessor::BadRequest,
             "The source expr {} of rf {} should be column ref",
-            source_expr.tp(),
+            tipb::ExprType_Name(source_expr.tp()),
             id);
     }
 }
@@ -206,14 +206,7 @@ bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string 
     return true;
 }
 
-void RuntimeFilter::setTargetAttr(
-    const DM::ColumnInfos & scan_column_infos,
-    const DM::ColumnDefines & table_column_defines)
-{
-    target_attr = DM::FilterParser::createAttr(target_expr, scan_column_infos, table_column_defines);
-}
-
-DM::RSOperatorPtr RuntimeFilter::parseToRSOperator()
+DM::RSOperatorPtr RuntimeFilter::parseToRSOperator(DM::ColumnDefines & columns_to_read)
 {
     switch (rf_type)
     {
@@ -223,7 +216,7 @@ DM::RSOperatorPtr RuntimeFilter::parseToRSOperator()
         return DM::FilterParser::parseRFInExpr(
             rf_type,
             target_expr,
-            target_attr,
+            columns_to_read,
             in_values_set->getUniqueSetElements(),
             timezone_info);
     case tipb::MIN_MAX:

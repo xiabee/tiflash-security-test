@@ -67,13 +67,11 @@ public:
 
     int estimateNewThreadCount() override;
 
-    RU collectRequestUnit() override;
+    UInt64 collectCPUTimeNs() override;
 
     Block getSampleBlock() const override;
 
     BaseRuntimeStatistics getRuntimeStatistics() const override;
-
-    String getExtraJsonInfo() const override;
 
 protected:
     ExecutionResult execute(ResultHandler && result_handler) override;

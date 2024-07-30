@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <IO/ReadBufferFromString.h>
+#include <IO/Buffer/ReadBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/V3/PageEntryCheckpointInfo.h>
@@ -100,23 +100,19 @@ public:
         // Convert from data_sizes to the offset of each field
         PageFieldOffsetChecksums offsets;
         PageFieldOffset off = 0;
-        for (auto data_sz : data_sizes)
+        for (const auto data_sz : data_sizes)
         {
             offsets.emplace_back(off, 0);
             off += data_sz;
         }
-        if (unlikely(!data_sizes.empty() && off != size))
-        {
-            throw Exception(
-                fmt::format(
-                    "Try to put Page with fields, but page size and fields total size not match "
-                    "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
-                    page_id,
-                    data_sizes.size(),
-                    size,
-                    off),
-                ErrorCodes::LOGICAL_ERROR);
-        }
+        RUNTIME_CHECK_MSG(
+            data_sizes.empty() || off == size,
+            "Try to put Page with fields, but page size and fields total size not match "
+            "[page_id={}] [num_fields={}] [page_size={}] [all_fields_size={}]",
+            page_id,
+            data_sizes.size(),
+            size,
+            off);
 
         Write w{WriteBatchWriteType::PUT, page_id, tag, read_buffer, size, 0, std::move(offsets), 0, 0, {}};
         total_data_size += size;
@@ -220,6 +216,8 @@ public:
         sequence = 0;
         total_data_size = 0;
     }
+
+    size_t size() const { return writes.size(); }
 
     SequenceID getSequence() const { return sequence; }
 

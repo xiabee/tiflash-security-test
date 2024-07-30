@@ -31,6 +31,9 @@
 
 namespace DB
 {
+
+struct Settings;
+
 using SyncPagePacketWriter = grpc::ServerWriter<disaggregated::PagesPacket>;
 
 class WNFetchPagesStreamWriter;
@@ -44,39 +47,26 @@ using WNFetchPagesStreamWriterPtr = std::unique_ptr<WNFetchPagesStreamWriter>;
 class WNFetchPagesStreamWriter
 {
 public:
-    static WNFetchPagesStreamWriterPtr build(
-        const DM::Remote::SegmentPagesFetchTask & task,
-        const PageIdU64s & read_page_ids,
-        UInt64 packet_limit_size);
-
-    void pipeTo(SyncPagePacketWriter * sync_writer);
-
-private:
     WNFetchPagesStreamWriter(
+        std::function<void(const disaggregated::PagesPacket &)> && sync_write_,
         DM::SegmentReadTaskPtr seg_task_,
-        DM::ColumnDefinesPtr column_defines_,
-        PageIdU64s read_page_ids,
-        UInt64 packet_limit_size_)
-        : seg_task(std::move(seg_task_))
-        , column_defines(column_defines_)
-        , read_page_ids(std::move(read_page_ids))
-        , packet_limit_size(packet_limit_size_)
-        , log(Logger::get())
-    {}
+        PageIdU64s read_page_ids_,
+        const Settings & settings_);
 
-    /// Returns the next packet that could write to the response sink.
-    disaggregated::PagesPacket nextPacket();
-
-    std::pair<DM::RemotePb::RemotePage, size_t> getPersistedRemotePage(UInt64 page_id);
+    void syncWrite();
 
 private:
-    const DM::DisaggTaskId task_id;
+    [[nodiscard]] std::tuple<DM::RemotePb::RemotePage, size_t> getPersistedRemotePage(UInt64 page_id);
+    [[nodiscard]] std::tuple<UInt64, UInt64, UInt64> sendMemTableSet();
+    [[nodiscard]] std::tuple<UInt64, UInt64, UInt64> sendPages();
+
+private:
+    std::function<void(const disaggregated::PagesPacket &)> sync_write;
     DM::SegmentReadTaskPtr seg_task;
-    DM::ColumnDefinesPtr column_defines;
     PageIdU64s read_page_ids;
     UInt64 packet_limit_size;
-
-    LoggerPtr log;
+    bool enable_fetch_memtableset;
+    MemTrackerWrapper mem_tracker_wrapper;
 };
 
 } // namespace DB

@@ -43,7 +43,6 @@
 #include <Storages/AlterCommands.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <Storages/DeltaMerge/FilterParser/FilterParser.h>
@@ -61,7 +60,6 @@
 #include <common/config_common.h>
 #include <common/logger_useful.h>
 
-#include <random>
 
 namespace DB
 {
@@ -675,6 +673,8 @@ DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(
     const String & req_id,
     const LoggerPtr & tracing_logger)
 {
+    LOG_DEBUG(tracing_logger, "Read with tso: {}", mvcc_query_info.read_tso);
+
     auto keyspace_id = getTableInfo().getKeyspaceID();
     checkReadTso(mvcc_query_info.read_tso, context, req_id, keyspace_id);
 
@@ -730,6 +730,7 @@ DM::RowKeyRanges StorageDeltaMerge::parseMvccQueryInfo(
 
 DM::RSOperatorPtr StorageDeltaMerge::buildRSOperator(
     const std::unique_ptr<DAGQueryInfo> & dag_query,
+    const ColumnDefines & columns_to_read,
     const Context & context,
     const LoggerPtr & tracing_logger)
 {
@@ -750,11 +751,8 @@ DM::RSOperatorPtr StorageDeltaMerge::buildRSOperator(
             // Maybe throw an exception? Or check if `type` is nullptr before creating filter?
             return Attr{.col_name = "", .col_id = column_id, .type = DataTypePtr{}};
         };
-        rs_operator = FilterParser::parseDAGQuery(
-            *dag_query,
-            dag_query->source_columns,
-            std::move(create_attr_by_column_id),
-            log);
+        rs_operator
+            = FilterParser::parseDAGQuery(*dag_query, columns_to_read, std::move(create_attr_by_column_id), log);
         if (likely(rs_operator != DM::EMPTY_RS_OPERATOR))
             LOG_DEBUG(tracing_logger, "Rough set filter: {}", rs_operator->toDebugString());
     }
@@ -840,14 +838,10 @@ DM::PushDownFilterPtr StorageDeltaMerge::buildPushDownFilter(
         has_cast)
     {
         NamesWithAliases project_cols;
-        for (size_t i = 0; i < table_scan_column_info.size(); ++i)
+        for (size_t i = 0; i < columns_to_read.size(); ++i)
         {
-            if (filter_col_id_set.contains(table_scan_column_info[i].id))
-            {
-                auto it = columns_to_read_map.find(table_scan_column_info[i].id);
-                RUNTIME_CHECK(it != columns_to_read_map.end(), table_scan_column_info[i].id);
-                project_cols.emplace_back(casted_columns[i], it->second.name);
-            }
+            if (filter_col_id_set.contains(columns_to_read[i].id))
+                project_cols.emplace_back(casted_columns[i], columns_to_read[i].name);
         }
         actions->add(ExpressionAction::project(project_cols));
 
@@ -908,7 +902,7 @@ DM::PushDownFilterPtr StorageDeltaMerge::parsePushDownFilter(
         return EMPTY_FILTER;
 
     // build rough set operator
-    const DM::RSOperatorPtr rs_operator = buildRSOperator(dag_query, context, tracing_logger);
+    const DM::RSOperatorPtr rs_operator = buildRSOperator(dag_query, columns_to_read, context, tracing_logger);
     // build push down filter
     const auto & columns_to_read_info = dag_query->source_columns;
     const auto & pushed_down_filters = dag_query->pushed_down_filters;
@@ -1017,11 +1011,6 @@ RuntimeFilteList StorageDeltaMerge::parseRuntimeFilterList(
     auto runtime_filter_list = db_context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(
         query_info.dag_query->runtime_filter_ids);
     LOG_DEBUG(log, "build runtime filter in local stream, list size:{}", runtime_filter_list.size());
-    const ColumnDefines & table_column_defines = getStoreColumnDefines();
-    for (auto & rf : runtime_filter_list)
-    {
-        rf->setTargetAttr(query_info.dag_query->source_columns, table_column_defines);
-    }
     return runtime_filter_list;
 }
 
@@ -1189,9 +1178,17 @@ UInt64 StorageDeltaMerge::ingestFiles(
     return getAndMaybeInitStore()->ingestFiles(global_context, settings, range, external_files, clear_data_in_range);
 }
 
-void StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
+DM::Segments StorageDeltaMerge::buildSegmentsFromCheckpointInfo(
     const DM::RowKeyRange & range,
     CheckpointInfoPtr checkpoint_info,
+    const Settings & settings)
+{
+    return getAndMaybeInitStore()->buildSegmentsFromCheckpointInfo(global_context, settings, range, checkpoint_info);
+}
+
+UInt64 StorageDeltaMerge::ingestSegmentsFromCheckpointInfo(
+    const DM::RowKeyRange & range,
+    const CheckpointIngestInfoPtr & checkpoint_info,
     const Settings & settings)
 {
     GET_METRIC(tiflash_storage_command_count, type_ingest_checkpoint).Increment();
@@ -1306,7 +1303,8 @@ DM::DeltaMergeStorePtr StorageDeltaMerge::getStoreIfInited() const
 
 std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> StorageDeltaMerge::getSchemaSnapshotAndBlockForDecoding(
     const TableStructureLockHolder & table_structure_lock,
-    bool need_block)
+    bool need_block,
+    bool with_version_column)
 {
     (void)table_structure_lock;
     std::lock_guard lock{decode_schema_mutex};
@@ -1317,16 +1315,18 @@ std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> StorageDeltaMerg
             store->getStoreColumns(),
             tidb_table_info,
             store->getHandle(),
-            decoding_schema_epoch++);
+            decoding_schema_epoch++,
+            with_version_column);
         cache_blocks.clear();
         decoding_schema_changed = false;
     }
 
     if (need_block)
     {
-        if (cache_blocks.empty())
+        if (cache_blocks.empty() || !with_version_column)
         {
-            BlockUPtr block = std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot));
+            BlockUPtr block
+                = std::make_unique<Block>(createBlockSortByColumnID(decoding_schema_snapshot, with_version_column));
             auto digest = hashSchema(*block);
             auto schema = global_context.getSharedBlockSchemas()->find(digest);
             if (schema)

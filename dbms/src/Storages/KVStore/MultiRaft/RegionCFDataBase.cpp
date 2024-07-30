@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/TiFlashMetrics.h>
 #include <Storages/KVStore/MultiRaft/RegionCFDataBase.h>
 #include <Storages/KVStore/MultiRaft/RegionCFDataTrait.h>
 #include <Storages/KVStore/MultiRaft/RegionData.h>
@@ -44,7 +45,6 @@ RegionDataRes RegionCFDataBase<Trait>::insert(TiKVKey && key, TiKVValue && value
 {
     const auto & raw_key = RecordKVFormat::decodeTiKVKey(key);
     auto kv_pair = Trait::genKVPair(std::move(key), raw_key, std::move(value));
-
     if (!kv_pair)
         return 0;
 
@@ -55,10 +55,28 @@ template <>
 RegionDataRes RegionCFDataBase<RegionLockCFDataTrait>::insert(TiKVKey && key, TiKVValue && value, DupCheck mode)
 {
     UNUSED(mode);
+    RegionDataRes added_size = calcTiKVKeyValueSize(key, value);
     Pair kv_pair = RegionLockCFDataTrait::genKVPair(std::move(key), std::move(value));
+    const auto & decoded = std::get<2>(kv_pair.second);
+    bool is_large_txn = decoded->isLargeTxn();
+    {
+        auto iter = data.find(kv_pair.first);
+        if (iter != data.end())
+        {
+            added_size -= calcTiKVKeyValueSize(iter->second);
+            data.erase(iter);
+        }
+        else
+        {
+            if unlikely (is_large_txn)
+            {
+                GET_METRIC(tiflash_raft_process_keys, type_large_txn_lock_put).Increment(1);
+            }
+        }
+    }
     // according to the process of pessimistic lock, just overwrite.
-    data.insert_or_assign(std::move(kv_pair.first), std::move(kv_pair.second));
-    return 0;
+    data.emplace(std::move(kv_pair.first), std::move(kv_pair.second));
+    return added_size;
 }
 
 template <typename Trait>
@@ -94,6 +112,8 @@ RegionDataRes RegionCFDataBase<Trait>::insert(std::pair<Key, Value> && kv_pair, 
                         + " new_val: " + prev_value.toDebugString(),
                     ErrorCodes::LOGICAL_ERROR);
             }
+            // duplicated key is ignored
+            return 0;
         }
         else
         {
@@ -117,12 +137,13 @@ size_t RegionCFDataBase<Trait>::calcTiKVKeyValueSize(const TiKVKey & key, const 
 {
     if constexpr (std::is_same<Trait, RegionLockCFDataTrait>::value)
     {
-        std::ignore = key;
-        std::ignore = value;
-        return 0;
+        // We start to count size of Lock Cf.
+        return key.dataSize() + value.dataSize();
     }
     else
+    {
         return key.dataSize() + value.dataSize();
+    }
 }
 
 
@@ -151,6 +172,14 @@ size_t RegionCFDataBase<Trait>::remove(const Key & key, bool quiet)
             return 0;
 
         size_t size = calcTiKVKeyValueSize(value);
+
+        if constexpr (std::is_same<Trait, RegionLockCFDataTrait>::value)
+        {
+            if unlikely (std::get<2>(value)->isLargeTxn())
+            {
+                GET_METRIC(tiflash_raft_process_keys, type_large_txn_lock_del).Increment(1);
+            }
+        }
         map.erase(it);
         return size;
     }

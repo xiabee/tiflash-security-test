@@ -108,7 +108,7 @@ ExecutionResult PipelineExecutor::execute(ResultHandler && result_handler)
         scheduleEvents();
         wait();
     }
-    LOG_TRACE(log, "query finish with {}", exec_context.getQueryProfileInfo().toJson());
+    LOG_DEBUG(log, "query finish with {}", exec_context.getQueryProfileInfo().toJson());
     return exec_context.toExecutionResult();
 }
 
@@ -128,7 +128,7 @@ int PipelineExecutor::estimateNewThreadCount()
     return 0;
 }
 
-RU PipelineExecutor::collectRequestUnit()
+UInt64 PipelineExecutor::collectCPUTimeNs()
 {
     // TODO Get cputime more accurately.
     // Currently, it is assumed that
@@ -139,7 +139,7 @@ RU PipelineExecutor::collectRequestUnit()
     // It may be necessary to obtain CPU time using a more accurate method, such as using system call `clock_gettime`.
     const auto & query_profile_info = exec_context.getQueryProfileInfo();
     auto cpu_time_ns = query_profile_info.getCPUExecuteTimeNs();
-    return cpuTimeToRU(cpu_time_ns);
+    return cpu_time_ns;
 }
 
 Block PipelineExecutor::getSampleBlock() const
@@ -160,10 +160,5 @@ BaseRuntimeStatistics PipelineExecutor::getRuntimeStatistics() const
             runtime_statistics.append(*profile_info);
     }
     return runtime_statistics;
-}
-
-String PipelineExecutor::getExtraJsonInfo() const
-{
-    return exec_context.getQueryProfileInfo().toJson();
 }
 } // namespace DB

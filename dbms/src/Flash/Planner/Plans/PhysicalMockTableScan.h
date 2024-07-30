@@ -16,7 +16,6 @@
 
 #include <DataStreams/IBlockInputStream.h>
 #include <Flash/Coprocessor/FilterConditions.h>
-#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
 #include <Flash/Planner/Plans/PhysicalLeaf.h>
 #include <tipb/executor.pb.h>
@@ -47,7 +46,7 @@ public:
         bool keep_order_,
         const std::vector<Int32> & runtime_filter_ids_);
 
-    void finalize(const Names & parent_require) override;
+    void finalizeImpl(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
@@ -70,8 +69,6 @@ private:
         size_t) override;
 
     void buildRuntimeFilterInLocalStream(Context & context);
-
-    RuntimeFilteList getRuntimeFilterList(Context & context);
 
 private:
     FilterConditions filter_conditions;

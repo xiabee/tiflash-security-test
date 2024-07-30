@@ -83,6 +83,7 @@ void MPPTaskTestUtils::startServers(size_t server_num_)
     }
 
     MockComputeServerManager::instance().startServers(log_ptr, test_meta.context_idx);
+    MockComputeServerManager::instance().setMockStorage(context.mockStorage());
     MockServerAddrGenerator::instance().reset();
 }
 
@@ -108,10 +109,21 @@ BlockInputStreamPtr MPPTaskTestUtils::prepareMPPStreams(DAGRequestBuilder builde
 
 std::vector<QueryTask> MPPTaskTestUtils::prepareMPPTasks(DAGRequestBuilder builder, const DAGProperties & properties)
 {
+    std::lock_guard lock(mu);
     auto tasks = builder.buildMPPTasks(context, properties);
     for (int i = test_meta.context_idx; i < TiFlashTestEnv::globalContextSize(); ++i)
         TiFlashTestEnv::getGlobalContext(i).setCancelTest();
-    MockComputeServerManager::instance().setMockStorage(context.mockStorage());
+    return tasks;
+}
+
+std::vector<QueryTask> MPPTaskTestUtils::prepareMPPTasks(
+    std::function<DAGRequestBuilder()> & gen_builder,
+    const DAGProperties & properties)
+{
+    std::lock_guard lock(mu);
+    auto tasks = gen_builder().buildMPPTasks(context, properties);
+    for (int i = test_meta.context_idx; i < TiFlashTestEnv::globalContextSize(); ++i)
+        TiFlashTestEnv::getGlobalContext(i).setCancelTest();
     return tasks;
 }
 
@@ -154,7 +166,7 @@ ColumnsWithTypeAndName MPPTaskTestUtils::executeCoprocessorTask(std::shared_ptr<
     auto * data = req->mutable_data();
     dag_request->AppendToString(data);
 
-    DAGContext dag_context(*dag_request, {}, NullspaceID, "", DAGRequestKind::Cop, "", Logger::get());
+    DAGContext dag_context(*dag_request, {}, NullspaceID, "", DAGRequestKind::Cop, "", 0, "", Logger::get());
 
     TiFlashTestEnv::getGlobalContext(test_meta.context_idx).setDAGContext(&dag_context);
     TiFlashTestEnv::getGlobalContext(test_meta.context_idx).setCopTest();

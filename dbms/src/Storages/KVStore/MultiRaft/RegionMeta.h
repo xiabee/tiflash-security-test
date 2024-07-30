@@ -27,13 +27,15 @@ namespace DB
 {
 namespace tests
 {
-class RegionKVStoreTest;
-}
+class KVStoreTestBase;
+class RegionKVStoreOldTest;
+} // namespace tests
 
 struct RegionMergeResult;
 class Region;
 class MetaRaftCommandDelegate;
 class RegionRaftCommandDelegate;
+
 enum class WaitIndexStatus
 {
     Finished,
@@ -88,6 +90,7 @@ public:
     UInt64 confVer() const;
 
     raft_serverpb::RaftApplyState clonedApplyState() const;
+    raft_serverpb::RegionLocalState clonedRegionState() const;
 
     void setApplied(UInt64 index, UInt64 term);
     void notifyAll() const;
@@ -119,6 +122,7 @@ public:
     const raft_serverpb::MergeState & getMergeState() const;
     raft_serverpb::MergeState cloneMergeState() const;
     const RegionState & getRegionState() const;
+    RegionState & debugMutRegionState();
     RegionMeta clone() const
     {
         std::lock_guard lock(mutex);
@@ -129,7 +133,8 @@ public:
 
 private:
     friend class MetaRaftCommandDelegate;
-    friend class tests::RegionKVStoreTest;
+    friend class tests::KVStoreTestBase;
+    friend class tests::RegionKVStoreOldTest;
 
     void doSetRegion(const metapb::Region & region);
     void doSetApplied(UInt64 index, UInt64 term);
@@ -171,7 +176,8 @@ class MetaRaftCommandDelegate
     , private boost::noncopyable
 {
     friend class RegionRaftCommandDelegate;
-    friend class tests::RegionKVStoreTest;
+    friend class tests::KVStoreTestBase;
+    friend class tests::RegionKVStoreOldTest;
 
     const metapb::Peer & getPeer() const;
     const raft_serverpb::RaftApplyState & applyState() const;

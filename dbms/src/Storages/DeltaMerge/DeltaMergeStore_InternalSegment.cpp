@@ -14,6 +14,7 @@
 
 #include <Common/SyncPoint/SyncPoint.h>
 #include <Common/TiFlashMetrics.h>
+#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
@@ -222,7 +223,7 @@ SegmentPair DeltaMergeStore::segmentSplit(
     }
 
     if constexpr (DM_RUN_CHECK)
-        check(dm_context.db_context);
+        check(dm_context.global_context);
 
     return {new_left, new_right};
 }
@@ -362,7 +363,7 @@ SegmentPtr DeltaMergeStore::segmentMerge(
     GET_METRIC(tiflash_storage_throughput_rows, type_merge).Increment(delta_rows);
 
     if constexpr (DM_RUN_CHECK)
-        check(dm_context.db_context);
+        check(dm_context.global_context);
 
     return merged;
 }
@@ -520,7 +521,7 @@ SegmentPtr DeltaMergeStore::segmentMergeDelta(
     GET_METRIC(tiflash_storage_throughput_rows, type_delta_merge).Increment(delta_rows);
 
     if constexpr (DM_RUN_CHECK)
-        check(dm_context.db_context);
+        check(dm_context.global_context);
 
     return new_segment;
 }
@@ -597,7 +598,7 @@ SegmentPtr DeltaMergeStore::segmentIngestData(
             new_segment = apply_result;
 
             RUNTIME_CHECK(
-                compare(segment->getRowKeyRange().getEnd(), new_segment->getRowKeyRange().getEnd()) == 0,
+                segment->getRowKeyRange().getEnd() == new_segment->getRowKeyRange().getEnd(),
                 segment->info(),
                 new_segment->info());
             RUNTIME_CHECK(segment->segmentId() == new_segment->segmentId(), segment->info(), new_segment->info());
@@ -630,7 +631,7 @@ SegmentPtr DeltaMergeStore::segmentIngestData(
     }
 
     if constexpr (DM_RUN_CHECK)
-        check(dm_context.db_context);
+        check(dm_context.global_context);
 
     return new_segment;
 }
@@ -672,7 +673,7 @@ SegmentPtr DeltaMergeStore::segmentDangerouslyReplaceDataFromCheckpoint(
             column_file_persisteds);
 
         RUNTIME_CHECK(
-            compare(segment->getRowKeyRange().getEnd(), new_segment->getRowKeyRange().getEnd()) == 0,
+            segment->getRowKeyRange().getEnd() == new_segment->getRowKeyRange().getEnd(),
             segment->info(),
             new_segment->info());
         RUNTIME_CHECK(segment->segmentId() == new_segment->segmentId(), segment->info(), new_segment->info());
@@ -690,7 +691,7 @@ SegmentPtr DeltaMergeStore::segmentDangerouslyReplaceDataFromCheckpoint(
     wbs.writeRemoves();
 
     if constexpr (DM_RUN_CHECK)
-        check(dm_context.db_context);
+        check(dm_context.global_context);
 
     return new_segment;
 }

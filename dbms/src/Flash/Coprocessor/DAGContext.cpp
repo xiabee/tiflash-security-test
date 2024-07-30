@@ -53,6 +53,8 @@ DAGContext::DAGContext(
     const String & tidb_host_,
     DAGRequestKind kind_,
     const String & resource_group_name_,
+    UInt64 connection_id_,
+    const String & connection_alias_,
     LoggerPtr log_)
     : dag_request(&dag_request_)
     , dummy_query_string(dag_request->ShortDebugString())
@@ -72,8 +74,12 @@ DAGContext::DAGContext(
     , warning_count(0)
     , keyspace_id(keyspace_id_)
     , resource_group_name(resource_group_name_)
+    , connection_id(connection_id_)
+    , connection_alias(connection_alias_)
 {
     RUNTIME_ASSERT(kind != DAGRequestKind::MPP, log, "DAGContext non-mpp constructor get a mpp kind");
+    if (dag_request->has_div_precision_increment())
+        div_precision_increment = dag_request->div_precision_increment();
     initOutputInfo();
 }
 
@@ -96,7 +102,11 @@ DAGContext::DAGContext(tipb::DAGRequest & dag_request_, const mpp::TaskMeta & me
     , warning_count(0)
     , keyspace_id(RequestUtils::deriveKeyspaceID(meta_))
     , resource_group_name(meta_.resource_group_name())
+    , connection_id(meta_.connection_id())
+    , connection_alias(meta_.connection_alias())
 {
+    if (dag_request->has_div_precision_increment())
+        div_precision_increment = dag_request->div_precision_increment();
     // only mpp task has join executor.
     initExecutorIdToJoinIdMap();
     initOutputInfo();
@@ -128,7 +138,11 @@ DAGContext::DAGContext(
     , warnings(max_recorded_error_count)
     , warning_count(0)
     , keyspace_id(RequestUtils::deriveKeyspaceID(task_meta_))
+    , connection_id(task_meta_.connection_id())
+    , connection_alias(task_meta_.connection_alias())
 {
+    if (dag_request->has_div_precision_increment())
+        div_precision_increment = dag_request->div_precision_increment();
     initOutputInfo();
 }
 
@@ -145,6 +159,7 @@ DAGContext::DAGContext(UInt64 max_error_count_)
     , max_recorded_error_count(max_error_count_)
     , warnings(max_recorded_error_count)
     , warning_count(0)
+    , connection_id(0)
 {}
 
 // for tests need to run query tasks.
@@ -164,8 +179,12 @@ DAGContext::DAGContext(tipb::DAGRequest & dag_request_, String log_identifier, s
     , max_recorded_error_count(getMaxErrorCount(*dag_request))
     , warnings(max_recorded_error_count)
     , warning_count(0)
+    , connection_id(0)
 {
-    query_operator_spill_contexts = std::make_shared<QueryOperatorSpillContexts>(MPPQueryId(0, 0, 0, 0, ""), 100);
+    if (dag_request->has_div_precision_increment())
+        div_precision_increment = dag_request->div_precision_increment();
+    query_operator_spill_contexts
+        = std::make_shared<QueryOperatorSpillContexts>(MPPQueryId(0, 0, 0, 0, "", 0, ""), 100);
     initOutputInfo();
 }
 
@@ -457,7 +476,7 @@ const SingleTableRegions & DAGContext::getTableRegionsInfoByTableID(Int64 table_
     return tables_regions_info.getTableRegionInfoByTableID(table_id);
 }
 
-RU DAGContext::getReadRU() const
+UInt64 DAGContext::getReadBytes() const
 {
     UInt64 read_bytes = 0;
     for (const auto & [id, sc] : scan_context_map)
@@ -465,7 +484,7 @@ RU DAGContext::getReadRU() const
         (void)id; // Disable unused variable warnning.
         read_bytes += sc->user_read_bytes;
     }
-    return bytesToRU(read_bytes);
+    return read_bytes;
 }
 
 } // namespace DB

@@ -18,8 +18,7 @@
 #include <Core/TiFlashDisaggregatedMode.h>
 #include <Core/Types.h>
 #include <Debug/MockServerInfo.h>
-#include <Encryption/FileProvider_fwd.h>
-#include <IO/CompressionSettings.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
 #include <Interpreters/ClientInfo.h>
 #include <Interpreters/Context_fwd.h>
 #include <Interpreters/Settings.h>
@@ -34,7 +33,6 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
 
 namespace pingcap
 {
@@ -57,7 +55,6 @@ class QuotaForIntervals;
 class BackgroundProcessingPool;
 class MergeList;
 class MarkCache;
-class UncompressedCache;
 class DBGInvoker;
 class TMTContext;
 using TMTContextPtr = std::shared_ptr<TMTContext>;
@@ -380,11 +377,6 @@ public:
     ProcessList & getProcessList();
     const ProcessList & getProcessList() const;
 
-    /// Create a cache of uncompressed blocks of specified size. This can be done only once.
-    void setUncompressedCache(size_t max_size_in_bytes);
-    std::shared_ptr<UncompressedCache> getUncompressedCache() const;
-    void dropUncompressedCache() const;
-
     /// Execute inner functions, debug only.
     DBGInvoker & getDBGInvoker() const;
 
@@ -434,8 +426,13 @@ public:
 
     void initializeTiFlashMetrics() const;
 
-    void initializeFileProvider(KeyManagerPtr key_manager, bool enable_encryption);
+    void initializeFileProvider(
+        KeyManagerPtr key_manager,
+        bool enable_encryption,
+        bool enable_keyspace_encryption = false);
     FileProviderPtr getFileProvider() const;
+    // For test only
+    void setFileProvider(FileProviderPtr file_provider);
 
     void initializeRateLimiter(
         Poco::Util::AbstractConfiguration & config,

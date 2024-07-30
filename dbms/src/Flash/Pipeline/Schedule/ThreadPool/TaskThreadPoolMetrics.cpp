@@ -19,43 +19,49 @@
 
 namespace DB
 {
-#define INC_METRIC(metric_name, value)                                                       \
-    do                                                                                       \
-    {                                                                                        \
-        if constexpr (is_cpu)                                                                \
-        {                                                                                    \
-            GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name).Increment(value); \
-        }                                                                                    \
-        else                                                                                 \
-        {                                                                                    \
-            GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name).Increment(value);  \
-        }                                                                                    \
+#define INC_METRIC(metric_name, value)                                                                    \
+    do                                                                                                    \
+    {                                                                                                     \
+        if constexpr (is_cpu)                                                                             \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name); \
+            metrics.Increment(value);                                                                     \
+        }                                                                                                 \
+        else                                                                                              \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name);  \
+            metrics.Increment(value);                                                                     \
+        }                                                                                                 \
     } while (0)
 
-#define DEC_METRIC(metric_name, value)                                                       \
-    do                                                                                       \
-    {                                                                                        \
-        if constexpr (is_cpu)                                                                \
-        {                                                                                    \
-            GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name).Decrement(value); \
-        }                                                                                    \
-        else                                                                                 \
-        {                                                                                    \
-            GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name).Decrement(value);  \
-        }                                                                                    \
+#define DEC_METRIC(metric_name, value)                                                                    \
+    do                                                                                                    \
+    {                                                                                                     \
+        if constexpr (is_cpu)                                                                             \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name); \
+            metrics.Decrement(value);                                                                     \
+        }                                                                                                 \
+        else                                                                                              \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name);  \
+            metrics.Decrement(value);                                                                     \
+        }                                                                                                 \
     } while (0)
 
-#define SET_METRIC(metric_name, value)                                                 \
-    do                                                                                 \
-    {                                                                                  \
-        if constexpr (is_cpu)                                                          \
-        {                                                                              \
-            GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name).Set(value); \
-        }                                                                              \
-        else                                                                           \
-        {                                                                              \
-            GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name).Set(value);  \
-        }                                                                              \
+#define SET_METRIC(metric_name, value)                                                                    \
+    do                                                                                                    \
+    {                                                                                                     \
+        if constexpr (is_cpu)                                                                             \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_cpu_##metric_name); \
+            metrics.Set(value);                                                                           \
+        }                                                                                                 \
+        else                                                                                              \
+        {                                                                                                 \
+            thread_local auto & metrics = GET_METRIC(tiflash_pipeline_scheduler, type_io_##metric_name);  \
+            metrics.Set(value);                                                                           \
+        }                                                                                                 \
     } while (0)
 
 template <bool is_cpu>

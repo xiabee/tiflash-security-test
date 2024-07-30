@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Common/RedactHelpers.h>
-#include <IO/WriteBufferFromString.h>
+#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/PageDefinesBase.h>
 
@@ -52,6 +52,7 @@ public:
     UniversalPageId substr(size_t pos, size_t npos) const { return id.substr(pos, npos); }
     bool operator<(const UniversalPageId & rhs) const { return id < rhs.id; }
     bool hasPrefix(const String & str) const { return startsWith(id, str); }
+    bool hasPrefix(const char * str) const { return startsWith(id, str); }
 
     String toStr() const { return id; }
     const String & asStr() const { return id; }
@@ -88,7 +89,7 @@ struct fmt::formatter<DB::UniversalPageId>
     template <typename FormatContext>
     auto format(const DB::UniversalPageId & value, FormatContext & ctx) const
     {
-        return format_to(ctx.out(), "{}", DB::details::UniversalPageIdFormatHelper::format(value));
+        return fmt::format_to(ctx.out(), "{}", DB::details::UniversalPageIdFormatHelper::format(value));
     }
 };
 

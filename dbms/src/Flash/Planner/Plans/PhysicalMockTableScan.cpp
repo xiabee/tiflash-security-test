@@ -159,7 +159,8 @@ void PhysicalMockTableScan::buildPipelineExecGroupImpl(
         {
             if (auto * source_op = dynamic_cast<UnorderedSourceOp *>(group_builder.getCurBuilder(i).source_op.get()))
             {
-                auto runtime_filter_list = getRuntimeFilterList(context);
+                auto runtime_filter_list
+                    = context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(runtime_filter_ids);
                 // todo config max wait time
                 source_op->setRuntimeFilterInfo(runtime_filter_list, rf_max_wait_time_ms);
             }
@@ -175,7 +176,7 @@ void PhysicalMockTableScan::buildPipelineExecGroupImpl(
     }
 }
 
-void PhysicalMockTableScan::finalize(const Names & parent_require)
+void PhysicalMockTableScan::finalizeImpl(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
 }
@@ -231,23 +232,11 @@ void PhysicalMockTableScan::buildRuntimeFilterInLocalStream(Context & context)
     {
         if (auto * p_stream = dynamic_cast<DM::UnorderedInputStream *>(local_stream.get()))
         {
-            auto runtime_filter_list = getRuntimeFilterList(context);
+            auto runtime_filter_list
+                = context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(runtime_filter_ids);
             // todo config max wait time
             p_stream->setRuntimeFilterInfo(runtime_filter_list, rf_max_wait_time_ms);
         }
     }
-}
-
-RuntimeFilteList PhysicalMockTableScan::getRuntimeFilterList(Context & context)
-{
-    auto mock_column_infos = context.mockStorage()->getTableSchemaForDeltaMerge(table_id);
-    auto column_infos = mockColumnInfosToTiDBColumnInfos(mock_column_infos);
-    auto column_defines = context.mockStorage()->getStoreColumnDefines(table_id);
-    auto rfs = context.getDAGContext()->runtime_filter_mgr.getLocalRuntimeFilterByIds(runtime_filter_ids);
-    for (auto & rf : rfs)
-    {
-        rf->setTargetAttr(column_infos, column_defines);
-    }
-    return rfs;
 }
 } // namespace DB

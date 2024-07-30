@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 source ../docker/util.sh
 
 set_branch
@@ -39,4 +38,3 @@ docker-compose -f cluster.yaml -f tiflash-dt-sync-grpc.yaml exec -T tiflash0 bas
 
 docker-compose -f cluster.yaml -f tiflash-dt-sync-grpc.yaml down
 clean_data_log
-

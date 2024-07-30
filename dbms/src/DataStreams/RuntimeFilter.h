@@ -16,7 +16,6 @@
 
 #include <Columns/IColumn.h>
 #include <Interpreters/Set.h>
-#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <tipb/executor.pb.h>
@@ -48,7 +47,7 @@ public:
         }
         source_expr = rf_pb.source_expr_list().Get(0);
         target_expr = rf_pb.target_expr_list().Get(0);
-    }
+    };
 
     std::string getSourceColumnName() const;
 
@@ -78,8 +77,7 @@ public:
 
     bool await(int64_t ms_remaining);
 
-    void setTargetAttr(const DM::ColumnInfos & scan_column_infos, const DM::ColumnDefines & table_column_defines);
-    DM::RSOperatorPtr parseToRSOperator();
+    DM::RSOperatorPtr parseToRSOperator(DM::ColumnDefines & columns_to_read);
 
     const int id;
 
@@ -88,7 +86,6 @@ private:
 
     tipb::Expr source_expr;
     tipb::Expr target_expr;
-    std::optional<DM::Attr> target_attr;
     const tipb::RuntimeFilterType rf_type;
     TimezoneInfo timezone_info;
     // thread safe
