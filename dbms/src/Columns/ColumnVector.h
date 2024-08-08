@@ -229,6 +229,11 @@ public:
             data[i + old_size] = src_container[position_vec[i]];
     }
 
+    void insertMany(const Field & field, size_t length) override
+    {
+        data.resize_fill(data.size() + length, static_cast<T>(field.get<T>()));
+    }
+
     void insertData(const char * pos, size_t /*length*/) override { data.push_back(*reinterpret_cast<const T *>(pos)); }
 
     bool decodeTiDBRowV2Datum(
@@ -243,7 +248,7 @@ public:
             {
                 throw Exception("Invalid float value length " + std::to_string(length), ErrorCodes::LOGICAL_ERROR);
             }
-            constexpr UInt64 SIGN_MASK = static_cast<UInt64>(1) << 63;
+            constexpr UInt64 SIGN_MASK = static_cast<UInt64>(1) << 63; // NOLINT(readability-identifier-naming)
             auto num = readBigEndian<UInt64>(raw_value.c_str() + cursor);
             if (num & SIGN_MASK)
                 num ^= SIGN_MASK;
@@ -316,6 +321,8 @@ public:
     void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
         const override;
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
+        const override;
 
     size_t byteSize() const override { return data.size() * sizeof(data[0]); }
 
@@ -366,9 +373,24 @@ public:
         return this->template scatterImpl<Self>(num_columns, selector);
     }
 
+    MutableColumns scatter(
+        IColumn::ColumnIndex num_columns,
+        const IColumn::Selector & selector,
+        const BlockSelective & selective) const override
+    {
+        return this->template scatterImpl<Self>(num_columns, selector, selective);
+    }
+
     void scatterTo(IColumn::ScatterColumns & columns, const IColumn::Selector & selector) const override
     {
         this->template scatterToImpl<Self>(columns, selector);
+    }
+    void scatterTo(
+        IColumn::ScatterColumns & columns,
+        const IColumn::Selector & selector,
+        const BlockSelective & selective) const override
+    {
+        this->template scatterToImpl<Self>(columns, selector, selective);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;
@@ -388,6 +410,9 @@ public:
     const T & getElement(size_t n) const { return data[n]; }
 
     T & getElement(size_t n) { return data[n]; }
+
+    template <bool selective_block>
+    void updateWeakHash32Impl(WeakHash32 & hash, const BlockSelective & selective) const;
 
 protected:
     Container data;

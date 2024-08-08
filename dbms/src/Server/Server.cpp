@@ -1085,9 +1085,20 @@ int Server::main(const std::vector<std::string> & /*args*/)
       *  settings, available functions, data types, aggregate functions, databases...
       */
     global_context = Context::createGlobal();
+    SCOPE_EXIT({
+        if (!proxy_conf.is_proxy_runnable)
+            return;
+
+        LOG_INFO(log, "Unlink tiflash_instance_wrap.tmt");
+        // Reset the `tiflash_instance_wrap.tmt` before `global_context` get released, or it will be a dangling pointer
+        tiflash_instance_wrap.tmt = nullptr;
+    });
     global_context->setApplicationType(Context::ApplicationType::SERVER);
     global_context->getSharedContextDisagg()->disaggregated_mode = disaggregated_mode;
     global_context->getSharedContextDisagg()->use_autoscaler = use_autoscaler;
+
+    // Must init this before KVStore.
+    global_context->initializeJointThreadInfoJeallocMap();
 
     /// Init File Provider
     if (proxy_conf.is_proxy_runnable)
@@ -1490,7 +1501,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
             S3::ClientFactory::instance().setKVCluster(tmt.getKVCluster());
         }
     }
-
+    LOG_INFO(log, "Init S3 GC Manager");
+    global_context->getTMTContext().initS3GCManager(tiflash_instance_wrap.proxy_helper);
     // Initialize the thread pool of storage before the storage engine is initialized.
     LOG_INFO(log, "dt_enable_read_thread {}", global_context->getSettingsRef().dt_enable_read_thread);
     // `DMFileReaderPool` should be constructed before and destructed after `SegmentReaderPoolManager`.
@@ -1715,8 +1727,6 @@ int Server::main(const std::vector<std::string> & /*args*/)
                 LOG_ERROR(log, "Current status of engine-store is NOT Running, should not happen");
                 exit(-1);
             }
-            LOG_INFO(log, "Stop collecting thread alloc metrics");
-            tmt_context.getKVStore()->stopThreadAllocInfo();
             LOG_INFO(log, "Set store context status Stopping");
             tmt_context.setStatusStopping();
             {

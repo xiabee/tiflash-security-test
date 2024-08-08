@@ -37,6 +37,7 @@
 #include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
 #include <Storages/KVStore/MultiRaft/Disagg/CheckpointIngestInfo.h>
 #include <Storages/Page/PageStorage_fwd.h>
+#include <Storages/TableNameMeta.h>
 #include <TiDB/Schema/TiDB.h>
 
 #include <queue>
@@ -277,8 +278,12 @@ public:
 
     void setUpBackgroundTask(const DMContextPtr & dm_context);
 
-    const String & getDatabaseName() const { return db_name; }
-    const String & getTableName() const { return table_name; }
+    TableNameMeta getTableMeta() const
+    {
+        auto meta = table_meta.lockShared();
+        return TableNameMeta{meta->db_name, meta->table_name};
+    }
+    String getIdent() const { return fmt::format("keyspace={} table_id={}", keyspace_id, physical_table_id); }
 
     void rename(String new_path, String new_database_name, String new_table_name);
 
@@ -291,7 +296,11 @@ public:
 
     static Block addExtraColumnIfNeed(const Context & db_context, const ColumnDefine & handle_define, Block && block);
 
-    DM::WriteResult write(const Context & db_context, const DB::Settings & db_settings, Block & block);
+    DM::WriteResult write(
+        const Context & db_context,
+        const DB::Settings & db_settings,
+        Block & block,
+        const RegionAppliedStatus & applied_status = {});
 
     void deleteRange(const Context & db_context, const DB::Settings & db_settings, const RowKeyRange & delete_range);
 
@@ -401,7 +410,7 @@ public:
         const ColumnDefines & columns_to_read,
         const RowKeyRanges & sorted_ranges,
         size_t num_streams,
-        UInt64 max_version,
+        UInt64 start_ts,
         const PushDownFilterPtr & filter,
         const RuntimeFilteList & runtime_filter_list,
         int rf_max_wait_time_ms,
@@ -426,7 +435,7 @@ public:
         const ColumnDefines & columns_to_read,
         const RowKeyRanges & sorted_ranges,
         size_t num_streams,
-        UInt64 max_version,
+        UInt64 start_ts,
         const PushDownFilterPtr & filter,
         const RuntimeFilteList & runtime_filter_list,
         int rf_max_wait_time_ms,
@@ -496,7 +505,7 @@ public:
      *   It is ensured that there are at least 2 elements in the returned vector.
      * When there is no mergeable segment, the returned vector will be empty.
      */
-    std::vector<SegmentPtr> getMergeableSegments(const DMContextPtr & context, const SegmentPtr & baseSegment);
+    std::vector<SegmentPtr> getMergeableSegments(const DMContextPtr & context, const SegmentPtr & base_segment);
 
     /// Apply schema change on `table_columns`
     void applySchemaChanges(TableInfo & table_info);
@@ -559,7 +568,7 @@ private:
     /// by returning a non-empty DM::WriteResult.
     // Deferencing `Iter` can get a pointer to a Segment.
     template <typename Iter>
-    DM::WriteResult checkSegmentsUpdateForKVStore(
+    DM::WriteResult checkSegmentsUpdateForProxy(
         const DMContextPtr & context,
         Iter begin,
         Iter end,
@@ -792,8 +801,7 @@ public:
     Settings settings;
     StoragePoolPtr storage_pool;
 
-    String db_name;
-    String table_name;
+    SharedMutexProtected<TableNameMeta> table_meta;
 
     const KeyspaceID keyspace_id;
     const TableID physical_table_id;
@@ -834,7 +842,7 @@ public:
     mutable std::shared_mutex read_write_mutex;
 
     LoggerPtr log;
-}; // namespace DM
+};
 
 using DeltaMergeStorePtr = std::shared_ptr<DeltaMergeStore>;
 

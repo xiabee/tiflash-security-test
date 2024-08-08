@@ -83,7 +83,8 @@ static void inline writeCommittedBlockDataIntoStorage(
     AtomicReadWriteCtx & rw_ctx,
     TableStructureLockHolder & lock,
     ManageableStoragePtr & storage,
-    Block & block)
+    Block & block,
+    RegionAppliedStatus applied_status)
 {
     /// Write block into storage.
     // Release the alter lock so that writing does not block DDL operations
@@ -97,7 +98,7 @@ static void inline writeCommittedBlockDataIntoStorage(
         static_cast<Int32>(storage->engineType()));
     // Note: do NOT use typeid_cast, since Storage is multi-inherited and typeid_cast will return nullptr
     auto dm_storage = std::dynamic_pointer_cast<StorageDeltaMerge>(storage);
-    rw_ctx.write_result = dm_storage->write(block, rw_ctx.context.getSettingsRef());
+    rw_ctx.write_result = dm_storage->write(block, rw_ctx.context.getSettingsRef(), applied_status);
     rw_ctx.write_part_cost = watch.elapsedMilliseconds();
     GET_METRIC(tiflash_raft_write_data_to_storage_duration_seconds, type_write)
         .Observe(rw_ctx.write_part_cost / 1000.0);
@@ -172,7 +173,12 @@ static inline bool atomicReadWrite(
     if constexpr (std::is_same_v<ReadList, RegionDataReadInfoList>)
     {
         RUNTIME_CHECK(block_ptr != nullptr);
-        writeCommittedBlockDataIntoStorage(rw_ctx, lock, storage, *block_ptr);
+        writeCommittedBlockDataIntoStorage(
+            rw_ctx,
+            lock,
+            storage,
+            *block_ptr,
+            {.region_id = region->id(), .applied_index = region->appliedIndex()});
         storage->releaseDecodingBlock(block_decoding_schema_epoch, std::move(block_ptr));
     }
     else
@@ -349,10 +355,34 @@ std::optional<RegionDataReadInfoList> ReadRegionCommitCache(const RegionPtr & re
 
     RegionDataReadInfoList data_list_read;
     data_list_read.reserve(scanner.writeMapSize());
+    auto read_tso = region->getLastObservedReadTso();
+    Timestamp min_error_commit_tso = std::numeric_limits<Timestamp>::max();
+    size_t error_prone_count = 0;
     do
     {
-        data_list_read.emplace_back(scanner.next());
+        // A read index request with read_tso will stop concurrency manager from committing txns with smaller tso by advancing max_ts to at least read_tso.
+        auto data_read = scanner.next();
+        // It's a natual fallback when there has not been any read_tso on this region.
+        if (data_read.commit_ts <= read_tso)
+        {
+            error_prone_count++;
+            min_error_commit_tso = std::min(min_error_commit_tso, data_read.commit_ts);
+        }
+        data_list_read.emplace_back(std::move(data_read));
     } while (scanner.hasNext());
+    if (unlikely(error_prone_count > 0))
+    {
+        LOG_DEBUG(
+            DB::Logger::get(),
+            "Error prone txn commit, tot_count={} error_prone_count={} min_error_commit_tso={} read_tso={} "
+            "region_id={} applied_index={}",
+            data_list_read.size(),
+            error_prone_count,
+            min_error_commit_tso,
+            read_tso,
+            region->id(),
+            region->appliedIndex());
+    }
     return data_list_read;
 }
 
@@ -475,25 +505,31 @@ RegionTable::ResolveLocksAndWriteRegionRes RegionTable::resolveLocksAndWriteRegi
         region_data_lock);
 }
 
+// Note that there could be a chance that the table have been totally removed from TiKV
+// and TiFlash can not get the IStorage instance.
+// - Check whether the StorageDeltaMerge is nullptr or not before you accessing to it.
+// - You should hold the `TableLockHolder` when you're accessing to the IStorage instance.
 std::tuple<TableLockHolder, std::shared_ptr<StorageDeltaMerge>, DecodingStorageSchemaSnapshotConstPtr> //
-AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
+AtomicGetStorageSchema(RegionID region_id, KeyspaceID keyspace_id, TableID table_id, TMTContext & tmt)
 {
     TableLockHolder drop_lock = nullptr;
     std::shared_ptr<StorageDeltaMerge> dm_storage;
     DecodingStorageSchemaSnapshotConstPtr schema_snapshot;
 
-    auto keyspace_id = region->getKeyspaceID();
-    auto table_id = region->getMappedTableID();
-    LOG_DEBUG(Logger::get(__PRETTY_FUNCTION__), "Get schema, keyspace={} table_id={}", keyspace_id, table_id);
+    LOG_DEBUG(
+        Logger::get("AtomicGetStorageSchema"),
+        "Get schema, region_id={} keyspace={} table_id={}",
+        region_id,
+        keyspace_id,
+        table_id);
     auto & context = tmt.getContext();
     const auto atomic_get = [&](bool force_decode) -> bool {
         auto storage = tmt.getStorages().get(keyspace_id, table_id);
         if (storage == nullptr)
         {
-            if (!force_decode)
-                return false;
-            if (storage == nullptr) // Table must have just been GC-ed
-                return true;
+            // If force_decode == false, then should sync schema and check again
+            // Else force_decode == true, and storage instance still not exist, table must have just been GC-ed
+            return force_decode;
         }
         // Get a structure read lock. It will throw exception if the table has been dropped,
         // the caller should handle this situation.
@@ -509,22 +545,19 @@ AtomicGetStorageSchema(const RegionPtr & region, TMTContext & tmt)
     {
         GET_METRIC(tiflash_schema_trigger_count, type_raft_decode).Increment();
         Stopwatch watch;
-        tmt.getSchemaSyncerManager()->syncTableSchema(context, keyspace_id, table_id);
+        auto sync_schema_ok = tmt.getSchemaSyncerManager()->syncTableSchema(context, keyspace_id, table_id);
         auto schema_sync_cost = watch.elapsedMilliseconds();
         LOG_INFO(
             Logger::get("AtomicGetStorageSchema"),
-            "sync schema cost {} ms, keyspace={} table_id={}",
+            "sync schema cost {} ms, sync_schema_ok={} region_id={} keyspace={} table_id={}",
             schema_sync_cost,
+            sync_schema_ok,
+            region_id,
             keyspace_id,
             table_id);
 
-        if (!atomic_get(true))
-            throw Exception(
-                ErrorCodes::LOGICAL_ERROR,
-                "AtomicGetStorageSchema failed, region={} keyspace={} table_id={}",
-                region->toString(),
-                keyspace_id,
-                table_id);
+        // try get with `force_decode == true`
+        atomic_get(true);
     }
 
     return {std::move(drop_lock), std::move(dm_storage), std::move(schema_snapshot)};
@@ -537,8 +570,10 @@ static Block sortColumnsBySchemaSnap(Block && ori, const DM::ColumnDefines & sch
     if (ori.columns() != schema.size())
     {
         throw Exception(
-            "Try to sortColumnsBySchemaSnap with different column size [block_columns=" + DB::toString(ori.columns())
-            + "] [schema_columns=" + DB::toString(schema.size()) + "]");
+            ErrorCodes::LOGICAL_ERROR,
+            "Try to sortColumnsBySchemaSnap with different column size [block_columns={}] [schema_columns={}]",
+            ori.columns(),
+            schema.size());
     }
 #endif
 

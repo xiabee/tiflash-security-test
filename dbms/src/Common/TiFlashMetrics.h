@@ -212,6 +212,11 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
       "The freshness of tiflash data with tikv data",                                                                               \
       Histogram,                                                                                                                    \
       F(type_syncing_data_freshness, {{"type", "data_freshness"}}, ExpBuckets{0.001, 2, 20}))                                       \
+    M(tiflash_memory_usage_by_class,                                                                                                \
+      "TiFlash memory consumes by class",                                                                                           \
+      Gauge,                                                                                                                        \
+      F(type_uni_page_ids, {"type", "uni_page_ids"}),                                                                               \
+      F(type_versioned_entries, {"type", "versioned_entries"}))                                                                     \
     M(tiflash_storage_read_tasks_count, "Total number of storage engine read tasks", Counter)                                       \
     M(tiflash_storage_command_count,                                                                                                \
       "Total number of storage's command, such as delete range / shutdown /startup",                                                \
@@ -399,6 +404,7 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
       F(type_failed_timeout, {{"type", "failed_timeout"}}),                                                                         \
       F(type_failed_baddata, {{"type", "failed_baddata"}}),                                                                         \
       F(type_failed_repeated, {{"type", "failed_repeated"}}),                                                                       \
+      F(type_failed_build_chkpt, {{"type", "failed_build_chkpt"}}),                                                                 \
       F(type_restore, {{"type", "restore"}}),                                                                                       \
       F(type_succeed, {{"type", "succeed"}}))                                                                                       \
     M(tiflash_fap_task_state,                                                                                                       \
@@ -419,12 +425,19 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
     M(tiflash_fap_task_duration_seconds,                                                                                            \
       "",                                                                                                                           \
       Histogram,                                                                                                                    \
-      F(type_select_stage, {{"type", "select_stage"}}, ExpBucketsWithRange{0.1, 2, 60}),                                            \
-      F(type_write_stage, {{"type", "write_stage"}}, ExpBucketsWithRange{0.05, 2, 60}),                                             \
-      F(type_ingest_stage, {{"type", "ingest_stage"}}, ExpBucketsWithRange{0.05, 2, 30}),                                           \
-      F(type_total, {{"type", "total"}}, ExpBucketsWithRange{0.1, 2, 300}),                                                         \
-      F(type_queue_stage, {{"type", "queue_stage"}}, ExpBucketsWithRange{0.1, 2, 300}),                                             \
-      F(type_phase1_total, {{"type", "phase1_total"}}, ExpBucketsWithRange{0.2, 2, 80}))                                            \
+      F(type_select_stage, {{"type", "select_stage"}}, ExpBucketsWithRange{0.2, 2, 120}),                                           \
+      F(type_write_stage, {{"type", "write_stage"}}, ExpBucketsWithRange{0.2, 2, 120}),                                             \
+      F(type_write_stage_build, {{"type", "write_stage_build"}}, ExpBucketsWithRange{0.2, 2, 120}),                                 \
+      F(type_write_stage_raft, {{"type", "write_stage_raft"}}, ExpBucketsWithRange{0.2, 2, 30}),                                    \
+      F(type_write_stage_insert, {{"type", "write_stage_insert"}}, ExpBucketsWithRange{0.2, 2, 30}),                                \
+      F(type_ingest_stage, {{"type", "ingest_stage"}}, ExpBucketsWithRange{0.2, 2, 30}),                                            \
+      F(type_total, {{"type", "total"}}, ExpBucketsWithRange{0.2, 4, 300}),                                                         \
+      F(type_queue_stage, {{"type", "queue_stage"}}, ExpBucketsWithRange{0.2, 4, 300}),                                             \
+      F(type_phase1_total, {{"type", "phase1_total"}}, ExpBucketsWithRange{0.2, 4, 300}))                                           \
+    M(tiflash_raft_command_throughput,                                                                                              \
+      "",                                                                                                                           \
+      Histogram,                                                                                                                    \
+      F(type_prehandle_snapshot, {{"type", "prehandle_snapshot"}}, ExpBuckets{128, 2, 11}))                                         \
     M(tiflash_raft_command_duration_seconds,                                                                                        \
       "Bucketed histogram of some raft command: apply snapshot and ingest SST",                                                     \
       Histogram, /* these command usually cost several seconds, increase the start bucket to 50ms */                                \
@@ -493,6 +506,7 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
       F(type_flush_log_gap, {{"type", "flush_log_gap"}}),                                                                           \
       F(type_flush_size, {{"type", "flush_size"}}),                                                                                 \
       F(type_flush_rowcount, {{"type", "flush_rowcount"}}),                                                                         \
+      F(type_prehandle, {{"type", "prehandle"}}),                                                                                   \
       F(type_flush_eager_gc, {{"type", "flush_eager_gc"}}))                                                                         \
     M(tiflash_raft_raft_frequent_events_count,                                                                                      \
       "Raft frequent event counter",                                                                                                \
@@ -537,6 +551,7 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
       "Raft read index events counter",                                                                                             \
       Counter,                                                                                                                      \
       F(type_bypass_lock, {{"type", "bypass_lock"}}),                                                                               \
+      F(type_zero_read_tso, {{"type", "zero_read_tso"}}),                                                                           \
       F(type_use_histroy, {{"type", "use_histroy"}}),                                                                               \
       F(type_use_cache, {{"type", "use_cache"}}))                                                                                   \
     M(tiflash_raft_learner_read_failures_count,                                                                                     \
@@ -848,7 +863,11 @@ static_assert(RAFT_REGION_BIG_WRITE_THRES * 4 < RAFT_REGION_BIG_WRITE_MAX, "Inva
       F(type_fg_read, {"type", "fg_read"}),                                                                                         \
       F(type_bg_read, {"type", "bg_read"}),                                                                                         \
       F(type_fg_write, {"type", "fg_write"}),                                                                                       \
-      F(type_bg_write, {"type", "bg_write"}))
+      F(type_bg_write, {"type", "bg_write"}))                                                                                       \
+    M(tiflash_read_thread_internal_us,                                                                                              \
+      "Durations of read thread internal components",                                                                               \
+      Histogram,                                                                                                                    \
+      F(type_block_queue_pop_latency, {{"type", "block_queue_pop_latency"}}, ExpBuckets{1, 2, 20}))
 
 
 /// Buckets with boundaries [start * base^0, start * base^1, ..., start * base^(size-1)]
@@ -1113,9 +1132,17 @@ public:
 
     void addReplicaSyncRU(UInt32 keyspace_id, UInt64 ru);
     UInt64 debugQueryReplicaSyncRU(UInt32 keyspace_id);
-    void setProxyThreadMemory(const std::string & k, Int64 v);
-    double getProxyThreadMemory(const std::string & k);
+    enum class MemoryAllocType
+    {
+        Alloc = 1,
+        Dealloc = 2,
+    };
+    void setProxyThreadMemory(MemoryAllocType type, const std::string & k, Int64 v);
+    double getProxyThreadMemory(MemoryAllocType type, const std::string & k);
+    void setStorageThreadMemory(MemoryAllocType type, const std::string & k, Int64 v);
+    double getStorageThreadMemory(MemoryAllocType type, const std::string & k);
     void registerProxyThreadMemory(const std::string & k);
+    void registerStorageThreadMemory(const std::string & k);
 
 private:
     TiFlashMetrics();
@@ -1127,6 +1154,7 @@ private:
     static constexpr auto current_metrics_prefix = "tiflash_system_current_metric_";
     static constexpr auto async_metrics_prefix = "tiflash_system_asynchronous_metric_";
     static constexpr auto raft_proxy_thread_memory_usage = "tiflash_raft_proxy_thread_memory_usage";
+    static constexpr auto storages_thread_memory_usage = "tiflash_storages_thread_memory_usage";
 
     std::shared_ptr<prometheus::Registry> registry = std::make_shared<prometheus::Registry>();
     // Here we add a ProcessCollector to collect cpu/rss/vsize/start_time information.
@@ -1151,6 +1179,10 @@ private:
     prometheus::Family<prometheus::Gauge> * registered_raft_proxy_thread_memory_usage_family;
     std::shared_mutex proxy_thread_report_mtx;
     std::unordered_map<std::string, prometheus::Gauge *> registered_raft_proxy_thread_memory_usage_metrics;
+
+    prometheus::Family<prometheus::Gauge> * registered_storage_thread_memory_usage_family;
+    std::shared_mutex storage_thread_report_mtx;
+    std::unordered_map<std::string, prometheus::Gauge *> registered_storage_thread_memory_usage_metrics;
 
 public:
 #define MAKE_METRIC_MEMBER_M(family_name, help, type, ...) \

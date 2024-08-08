@@ -60,7 +60,7 @@ public:
     const char * getFamilyName() const override { return "Nullable"; }
     std::string getName() const override { return "Nullable(" + nested_column->getName() + ")"; }
     MutableColumnPtr cloneResized(size_t size) const override;
-    size_t size() const override { return nested_column->size(); }
+    size_t size() const override { return static_cast<const ColumnUInt8 &>(*null_map).size(); }
     bool isNullAt(size_t n) const override { return static_cast<const ColumnUInt8 &>(*null_map).getData()[n] != 0; }
     Field operator[](size_t n) const override;
     void get(size_t n, Field & res) const override;
@@ -129,6 +129,8 @@ public:
     void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
         const override;
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
+    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
+        const override;
     void getExtremes(Field & min, Field & max) const override;
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override
@@ -136,9 +138,20 @@ public:
         return scatterImpl<ColumnNullable>(num_columns, selector);
     }
 
+    MutableColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
+        const override
+    {
+        return scatterImpl<ColumnNullable>(num_columns, selector, selective);
+    }
+
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override
     {
         scatterToImpl<ColumnNullable>(columns, selector);
+    }
+
+    void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const override
+    {
+        scatterToImpl<ColumnNullable>(columns, selector, selective);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;
@@ -193,6 +206,13 @@ private:
 
     template <bool negative>
     void applyNullMapImpl(const ColumnUInt8 & map);
+
+    template <bool selective_block>
+    void updateWeakHash32Impl(
+        WeakHash32 & hash,
+        const TiDB::TiDBCollatorPtr & collator,
+        String & sort_key_container,
+        const BlockSelective & selective) const;
 };
 
 

@@ -16,7 +16,6 @@
 
 #include <Columns/IColumn.h>
 #include <Interpreters/Set.h>
-#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <tipb/executor.pb.h>

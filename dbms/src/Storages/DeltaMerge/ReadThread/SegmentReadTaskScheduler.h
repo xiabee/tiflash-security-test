@@ -54,11 +54,7 @@ public:
 
     void updateConfig(const Settings & settings);
 
-#ifndef DBMS_PUBLIC_GTEST
 private:
-#else
-public:
-#endif
     // `run_sched_thread` is used for test.
     explicit SegmentReadTaskScheduler(bool run_sched_thread = true);
 

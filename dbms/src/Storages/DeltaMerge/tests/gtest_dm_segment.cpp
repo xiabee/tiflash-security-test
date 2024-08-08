@@ -387,7 +387,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndex)
+TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndex)
 try
 {
     // Test the case that reading rows with an advance DeltaIndex
@@ -422,7 +422,47 @@ try
         segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
         200);
 
-    ASSERT_EQ(snap->delta->getSharedDeltaIndex()->getDeltaTree()->maxDupTupleID(), -1);
+    // Thread A
+    {
+        auto in = segment->getInputStreamModeNormal(
+            dmContext(),
+            *tableColumns(),
+            snap,
+            {RowKeyRange::newAll(false, 1)},
+            {},
+            std::numeric_limits<UInt64>::max(),
+            DEFAULT_BLOCK_SIZE);
+        ASSERT_INPUTSTREAM_NROWS(in, 100);
+    }
+}
+CATCH
+
+TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndex2)
+try
+{
+    auto write_rows = [&](size_t offset, size_t rows) {
+        Block block = DMTestEnv::prepareSimpleWriteBlock(offset, offset + rows, false);
+        // write to segment
+        segment->write(dmContext(), block);
+    };
+
+    // Thread A
+    write_rows(0, 100);
+    ASSERT_INPUTSTREAM_NROWS(
+        segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
+        100);
+    auto snap = segment->createSnapshot(dmContext(), false, CurrentMetrics::DT_SnapshotOfRead);
+
+    {
+        // check segment
+        segment->check(dmContext(), "test");
+    }
+
+    // Thread B
+    write_rows(0, 100);
+    ASSERT_INPUTSTREAM_NROWS(
+        segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
+        100);
 
     // Thread A
     {
@@ -439,59 +479,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndex2)
-try
-{
-    auto write_rows = [&](size_t offset, size_t rows) {
-        Block block = DMTestEnv::prepareSimpleWriteBlock(offset, offset + rows, false);
-        // write to segment
-        segment->write(dmContext(), block);
-    };
-
-    // Thread A
-    write_rows(0, 100);
-    ASSERT_INPUTSTREAM_NROWS(
-        segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
-        100);
-    auto snap_a = segment->createSnapshot(dmContext(), false, CurrentMetrics::DT_SnapshotOfRead);
-
-    {
-        // check segment
-        segment->check(dmContext(), "test");
-    }
-
-    // Thread B
-    write_rows(0, 100);
-    ASSERT_INPUTSTREAM_NROWS(
-        segment->getInputStreamModeNormal(dmContext(), *tableColumns(), {RowKeyRange::newAll(false, 1)}),
-        100);
-
-    {
-        ASSERT_NE(snap_a->delta->getSharedDeltaIndex()->getDeltaTree()->maxDupTupleID(), -1);
-        // tryClone will return an empty delta-index because `rows <= this->delta_tree->maxDupTupleID()`
-        auto my_delta_index
-            = snap_a->delta->getSharedDeltaIndex()->tryClone(snap_a->delta->getRows(), snap_a->delta->getDeletes());
-        auto [my_placed_rows, my_placed_deletes] = my_delta_index->getPlacedStatus();
-        ASSERT_EQ(my_placed_rows, 0);
-        ASSERT_EQ(my_placed_deletes, 0);
-    }
-
-    // Thread A
-    {
-        auto in = segment->getInputStreamModeNormal(
-            dmContext(),
-            *tableColumns(),
-            snap_a,
-            {RowKeyRange::newAll(false, 1)},
-            {},
-            std::numeric_limits<UInt64>::max(),
-            DEFAULT_BLOCK_SIZE);
-        ASSERT_INPUTSTREAM_NROWS(in, 100);
-    }
-}
-CATCH
-
-TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexWithDeleteRange01)
+TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexWithDeleteRange01)
 try
 {
     auto write_rows = [&](size_t offset, size_t rows) {
@@ -544,7 +532,7 @@ try
 CATCH
 
 
-TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexWithDeleteRange02)
+TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexWithDeleteRange02)
 try
 {
     auto write_rows = [&](size_t offset, size_t rows) {
@@ -587,7 +575,7 @@ try
 }
 CATCH
 
-TEST_F(SegmentTest, ReadWithMoreAdvancedDeltaIndexComplicated)
+TEST_F(SegmentTest, ReadWithMoreAdvacedDeltaIndexComplicated)
 try
 {
     // Test the case that reading rows with an advance DeltaIndex
@@ -1316,9 +1304,12 @@ class SegmentTest2
     : public SegmentTest
     , public testing::WithParamInterface<SegmentTestMode>
 {
-public:
-    SegmentTest2() = default;
+    const StorageFormatVersion current_version;
 
+public:
+    SegmentTest2()
+        : current_version(STORAGE_FORMAT_CURRENT)
+    {}
 
     void SetUp() override
     {
@@ -1340,6 +1331,8 @@ public:
 
         SegmentTest::SetUp();
     }
+
+    ~SegmentTest2() override { setStorageFormat(current_version); }
 
     std::pair<RowKeyRange, PageIdU64s> genDMFile(DMContext & context, const Block & block)
     {
@@ -1365,7 +1358,7 @@ public:
         return {RowKeyRange::fromHandleRange(range), {file_id}};
     }
 
-    SegmentTestMode mode;
+    SegmentTestMode mode{};
 };
 
 TEST_P(SegmentTest2, FlushDuringSplitAndMerge)
@@ -1393,7 +1386,7 @@ try
                 auto file_id = file_ids[0];
                 auto file_parent_path = delegate.getDTFilePath(file_id);
                 auto file
-                    = DMFile::restore(file_provider, file_id, file_id, file_parent_path, DMFile::ReadMetaMode::all());
+                    = DMFile::restore(file_provider, file_id, file_id, file_parent_path, DMFileMeta::ReadMode::all());
                 WriteBatches wbs(*storage_pool);
                 wbs.data.putExternal(file_id, 0);
                 wbs.writeLogAndData();
@@ -1851,7 +1844,7 @@ try
             ASSERT_EQ(Poco::File(file_path + "/property").exists(), false);
         }
         // clear PackProperties to force it to calculate from scratch
-        dmfile->getPackProperties().clear_property();
+        dmfile->clearPackProperties();
         ASSERT_EQ(dmfile->getPackProperties().property_size(), 0);
         // caculate StableProperty
         ASSERT_EQ(stable->isStablePropertyCached(), false);

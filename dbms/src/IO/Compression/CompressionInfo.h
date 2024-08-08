@@ -48,15 +48,35 @@ namespace DB
   */
 
 // clang-format off
+// `CompressionMethodByte` is used to indicate which compression/decompression algorithm to use.
+// The value of `CompressionMethodByte` will be stored with compressed data.
 enum class CompressionMethodByte : UInt8
 {
     NONE            = 0x02,
     LZ4             = 0x82,
     QPL             = 0x88,
     ZSTD            = 0x90,
+    Multiple        = 0x91,
+    DeltaFOR        = 0x92,
+    RunLength       = 0x93,
+    FOR             = 0x94,
+    Lightweight     = 0x95,
     // COL_END is not a compreesion method, but a flag of column end used in compact file.
     COL_END         = 0x66,
 };
 // clang-format on
+
+enum class CompressionDataType : UInt8
+{
+    // These enum values are used to represent the number of bytes of the type
+    Int8 = 1, // Int8/UInt8
+    Int16 = 2, // Int16/UInt16
+    Int32 = 4, // Int32/UInt32
+    Int64 = 8, // Int64/UInt64
+    // These enum values are not related to the number of bytes of the type
+    Float32 = 9,
+    Float64 = 10,
+    String = 11,
+};
 
 } // namespace DB

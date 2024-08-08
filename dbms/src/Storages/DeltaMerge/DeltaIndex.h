@@ -18,9 +18,7 @@
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/Remote/RNDeltaIndexCache.h>
 #include <Storages/Page/PageDefinesBase.h>
-namespace DB
-{
-namespace DM
+namespace DB::DM
 {
 class DeltaIndex;
 using DeltaIndexPtr = std::shared_ptr<DeltaIndex>;
@@ -171,6 +169,7 @@ public:
         return delta_tree->getBytes();
     }
 
+    // Return <placed_rows, placed_deletes>
     std::pair<size_t, size_t> getPlacedStatus()
     {
         std::scoped_lock lock(mutex);
@@ -209,10 +208,8 @@ public:
 
     /**
      * Try to get a clone of current instance.
-     * Return an empty DeltaIndex if
-     * - `deletes < this->placed_deletes`
-     * - `rows <= this->delta_tree->maxDupTupleID()`
-     * because the advanced delta-index will break the MVCC view.
+     * Return an empty DeltaIndex if `deletes < this->placed_deletes` because the advanced delta-index will break
+     * the MVCC view.
      */
     DeltaIndexPtr tryClone(size_t rows, size_t deletes) { return tryCloneInner(rows, deletes); }
 
@@ -225,5 +222,4 @@ public:
     const std::optional<Remote::RNDeltaIndexCache::CacheKey> & getRNCacheKey() const { return rn_cache_key; }
 };
 
-} // namespace DM
-} // namespace DB
+} // namespace DB::DM

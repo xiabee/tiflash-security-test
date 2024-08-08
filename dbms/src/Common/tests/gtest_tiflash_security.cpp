@@ -22,13 +22,8 @@
 
 #include <ext/singleton.h>
 
-namespace DB
+namespace DB::tests
 {
-namespace tests
-{
-class TiFlashSecurityTest : public ext::Singleton<TiFlashSecurityTest>
-{
-};
 
 TEST(TiFlashSecurityTest, Config)
 {
@@ -160,6 +155,31 @@ key_path="security/key.pem")",
     }
 }
 CATCH
+
+TEST(TiFlashSecurityTest, RedactLogConfig)
+{
+    for (const auto & [input, expect] : std::vector<std::pair<String, RedactMode>>{
+             {"marker", RedactMode::Marker},
+             {"Marker", RedactMode::Marker},
+             {"MARKER", RedactMode::Marker},
+             {"true", RedactMode::Enable},
+             {"True", RedactMode::Enable},
+             {"TRUE", RedactMode::Enable},
+             {"yes", RedactMode::Enable},
+             {"on", RedactMode::Enable},
+             {"1", RedactMode::Enable},
+             {"2", RedactMode::Enable},
+             {"false", RedactMode::Disable},
+             {"False", RedactMode::Disable},
+             {"FALSE", RedactMode::Disable},
+             {"no", RedactMode::Disable},
+             {"off", RedactMode::Disable},
+             {"0", RedactMode::Disable},
+         })
+    {
+        EXPECT_EQ(TiFlashSecurityConfig::parseRedactLog(input), expect);
+    }
+}
 
 TEST(TiFlashSecurityTest, Update)
 {
@@ -353,5 +373,5 @@ TEST(TiFlashSecurityTest, readAndCacheSslCredentialOptions)
     Poco::File key_file(key_path);
     key_file.remove(false);
 }
-} // namespace tests
-} // namespace DB
+
+} // namespace DB::tests

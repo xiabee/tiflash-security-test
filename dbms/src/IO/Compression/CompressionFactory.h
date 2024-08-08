@@ -15,13 +15,16 @@
 #pragma once
 
 #include <Common/config.h>
+#include <IO/Compression/CompressionCodecDeltaFOR.h>
+#include <IO/Compression/CompressionCodecFOR.h>
 #include <IO/Compression/CompressionCodecLZ4.h>
+#include <IO/Compression/CompressionCodecLightweight.h>
+#include <IO/Compression/CompressionCodecMultiple.h>
 #include <IO/Compression/CompressionCodecNone.h>
+#include <IO/Compression/CompressionCodecRunLength.h>
 #include <IO/Compression/CompressionCodecZSTD.h>
 #include <IO/Compression/CompressionSettings.h>
 #include <IO/Compression/ICompressionCodec.h>
-
-#include <magic_enum.hpp>
 
 #if USE_QPL
 #include <IO/Compression/CompressionCodecDeflateQpl.h>
@@ -37,53 +40,67 @@ extern const int UNKNOWN_COMPRESSION_METHOD;
 class CompressionFactory
 {
 public:
-    static CompressionCodecPtr create(const CompressionSettings & settings)
+    static CompressionCodecPtr create(const CompressionSetting & setting)
     {
-        switch (settings.method)
+        // LZ4 and LZ4HC have the same format, the difference is only in compression.
+        // So they have the same method byte.
+        if (setting.method == CompressionMethod::LZ4HC)
+            return std::make_unique<CompressionCodecLZ4HC>(setting.level);
+
+        switch (setting.method_byte)
         {
-        case CompressionMethod::LZ4:
-            return std::make_shared<CompressionCodecLZ4>(settings.level);
-        case CompressionMethod::LZ4HC:
-            return std::make_shared<CompressionCodecLZ4HC>(settings.level);
-        case CompressionMethod::ZSTD:
-            return std::make_shared<CompressionCodecZSTD>(settings.level);
+        case CompressionMethodByte::LZ4:
+            return std::make_unique<CompressionCodecLZ4>(setting.level);
+        case CompressionMethodByte::ZSTD:
+            return std::make_unique<CompressionCodecZSTD>(setting.level);
 #if USE_QPL
-        case CompressionMethod::QPL:
-            return std::make_shared<CompressionCodecDeflateQpl>();
+        case CompressionMethodByte::QPL:
+            return std::make_unique<CompressionCodecDeflateQpl>();
 #endif
-        case CompressionMethod::NONE:
-            return std::make_shared<CompressionCodecNone>();
+        case CompressionMethodByte::Lightweight:
+            return std::make_unique<CompressionCodecLightweight>(setting.data_type);
+        case CompressionMethodByte::DeltaFOR:
+            return std::make_unique<CompressionCodecDeltaFOR>(setting.data_type);
+        case CompressionMethodByte::RunLength:
+            return std::make_unique<CompressionCodecRunLength>(setting.data_type);
+        case CompressionMethodByte::FOR:
+            return std::make_unique<CompressionCodecFOR>(setting.data_type);
+        case CompressionMethodByte::NONE:
+            return std::make_unique<CompressionCodecNone>();
         default:
             throw Exception(
                 ErrorCodes::UNKNOWN_COMPRESSION_METHOD,
-                "Unknown compression method: {}",
-                static_cast<int>(settings.method));
+                "Unknown compression method byte: {:02x}",
+                static_cast<UInt16>(setting.method_byte));
         }
     }
 
-    static CompressionCodecPtr create(UInt8 method_byte)
+    // Create codec for compressing/decompressing data with specified settings.
+    static CompressionCodecPtr create(const CompressionSettings & settings)
     {
-        CompressionSettings settings;
-        switch (method_byte)
+        RUNTIME_CHECK(!settings.settings.empty());
+        return settings.settings.size() > 1 ? std::make_unique<CompressionCodecMultiple>(createCodecs(settings))
+                                            : create(settings.settings.front());
+    }
+
+    // Create codec for decompressing data with specified method byte.
+    // All decompression codecs are stateless, so we don't need to pass settings.
+    static CompressionCodecPtr createForDecompress(UInt8 method_byte)
+    {
+        CompressionSetting setting(static_cast<CompressionMethodByte>(method_byte));
+        return create(setting);
+    }
+
+private:
+    static Codecs createCodecs(const CompressionSettings & settings)
+    {
+        Codecs codecs;
+        codecs.reserve(settings.settings.size());
+        for (const auto & setting : settings.settings)
         {
-        case static_cast<UInt8>(CompressionMethodByte::LZ4):
-            settings.method = CompressionMethod::LZ4;
-            break;
-        case static_cast<UInt8>(CompressionMethodByte::ZSTD):
-            settings.method = CompressionMethod::ZSTD;
-            break;
-#if USE_QPL
-        case static_cast<UInt8>(CompressionMethodByte::QPL):
-            settings.method = CompressionMethod::QPL;
-            break;
-#endif
-        case static_cast<UInt8>(CompressionMethodByte::NONE):
-            settings.method = CompressionMethod::NONE;
-            break;
-        default:
-            throw Exception(ErrorCodes::UNKNOWN_COMPRESSION_METHOD, "Unknown compression method byte: {}", method_byte);
+            codecs.push_back(create(setting));
         }
-        return create(settings);
+        return codecs;
     }
 };
 

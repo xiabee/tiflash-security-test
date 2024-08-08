@@ -37,7 +37,7 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
     const ScanContextPtr & scan_context)
 {
     RUNTIME_CHECK(
-        dmfile->getStatus() == DMFile::Status::READABLE,
+        dmfile->getStatus() == DMFileStatus::READABLE,
         dmfile->fileId(),
         magic_enum::enum_name(dmfile->getStatus()));
 
@@ -60,7 +60,8 @@ DMFileBlockInputStreamPtr DMFileBlockInputStreamBuilder::build(
         file_provider,
         read_limiter,
         scan_context,
-        tracing_id);
+        tracing_id,
+        read_tag);
 
     bool enable_read_thread = SegmentReaderPoolManager::instance().isSegmentReader();
 

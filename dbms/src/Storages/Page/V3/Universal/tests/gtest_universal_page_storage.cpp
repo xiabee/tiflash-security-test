@@ -561,5 +561,109 @@ TEST(UniPageStorageIdTest, UniversalPageId)
     }
 }
 
+TEST(UniPageStorageIdTest, UniversalPageIdMemoryTrace)
+{
+    auto prim_mem = PS::PageStorageMemorySummary::uni_page_id_bytes.load();
+    {
+        auto u_id = UniversalPageIdFormat::toFullPageId("aaa", 100);
+        auto page1_mem = PS::PageStorageMemorySummary::uni_page_id_bytes.load();
+        auto ps = page1_mem - prim_mem;
+        // copy construct
+        auto u_id_cpy = u_id;
+        ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem + ps * 2);
+        // move assignment
+        UniversalPageId u_id_mv = UniversalPageIdFormat::toFullPageId("aaa", 100);
+        ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem + ps * 3);
+        u_id_mv = std::move(u_id_cpy);
+        ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem + ps * 2);
+        // copy assignment
+        UniversalPageId u_id_cpy2 = UniversalPageIdFormat::toFullPageId("aaa", 100);
+        u_id_cpy2 = u_id_mv;
+        ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem + ps * 3);
+        // move construct
+        auto u_id_mv2 = std::move(u_id_cpy2);
+        ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem + ps * 3);
+    }
+    ASSERT_EQ(PS::PageStorageMemorySummary::uni_page_id_bytes.load(), prim_mem);
+}
+
+
+TEST(UniPageStorageIdTest, UniversalWriteBatchMemory)
+{
+    const String prefix = "aaa";
+    const UInt64 tag = 0;
+    static constexpr size_t buf_sz = 1024;
+    char c_buff[buf_sz] = {};
+    for (size_t i = 0; i < buf_sz; ++i)
+    {
+        c_buff[i] = i % 0xff;
+    }
+    {
+        UniversalWriteBatch wb;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 0),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 1);
+    }
+    ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 0);
+    {
+        UniversalWriteBatch wb;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 0),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        UniversalWriteBatch wb2 = std::move(wb);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 1);
+    }
+    ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 0);
+    {
+        UniversalWriteBatch wb;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 0),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        UniversalWriteBatch wb2;
+        wb2.merge(wb);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 2);
+    }
+    {
+        UniversalWriteBatch wb;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 0),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        wb.clear();
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 0);
+    }
+    {
+        UniversalWriteBatch wb;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 0),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 1);
+        UniversalWriteBatch wb2;
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 1),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        wb.putPage(
+            UniversalPageIdFormat::toFullPageId(prefix, 2),
+            tag,
+            std::make_shared<ReadBufferFromMemory>(c_buff, buf_sz),
+            buf_sz);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 3);
+        wb.swap(wb2);
+        ASSERT_EQ(PageStorageMemorySummary::universal_write_count.load(), 3);
+    }
+}
+
 } // namespace PS::universal::tests
 } // namespace DB

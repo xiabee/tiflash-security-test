@@ -19,6 +19,7 @@
 #include <Common/PODArray.h>
 #include <Common/SipHash.h>
 #include <Common/WeakHash.h>
+#include <Core/BlockInfo.h>
 #include <Core/Field.h>
 #include <TiDB/Collation/Collator.h>
 #include <common/StringRef.h>
@@ -50,7 +51,7 @@ private:
 
 public:
     /// Name of a Column. It is used in info messages.
-    virtual std::string getName() const { return getFamilyName(); };
+    virtual std::string getName() const { return getFamilyName(); }
 
     /// Name of a Column kind, without parameters (example: FixedString, Array).
     virtual const char * getFamilyName() const = 0;
@@ -130,17 +131,28 @@ public:
 
     /// Appends n-th element from other column with the same type.
     /// Is used in merge-sort and merges. It could be implemented in inherited classes more optimally than default implementation.
+    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertFrom(ConstColumnXXX, ...)
     virtual void insertFrom(const IColumn & src, size_t n) { insert(src[n]); }
 
-    /// Appends range of elements from other column.
+    /// Appends range of elements from other column with the same type.
     /// Could be used to concatenate columns.
+    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertRangeFrom(ConstColumnXXX, ...)
     virtual void insertRangeFrom(const IColumn & src, size_t start, size_t length) = 0;
 
     /// Appends one element from other column with the same type multiple times.
+    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertManyFrom(ConstColumnXXX, ...)
     virtual void insertManyFrom(const IColumn & src, size_t position, size_t length) = 0;
 
     /// Appends disjunctive elements from other column with the same type.
+    /// Note: the source column and the destination column must be of the same type, can not ColumnXXX->insertDisjunctFrom(ConstColumnXXX, ...)
     virtual void insertDisjunctFrom(const IColumn & src, const std::vector<size_t> & position_vec) = 0;
+
+    /// Appends one field multiple times. Can be optimized in inherited classes.
+    virtual void insertMany(const Field & field, size_t length)
+    {
+        for (size_t i = 0; i < length; ++i)
+            insert(field);
+    }
 
     /// Appends data located in specified memory chunk if it is possible (throws an exception if it cannot be implemented).
     /// Is used to optimize some computations (in aggregation, for example).
@@ -249,6 +261,9 @@ public:
         const TiDB::TiDBCollatorPtr & collator,
         String & sort_key_container) const
         = 0;
+    virtual void updateWeakHash32(WeakHash32 &, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective &) const
+        = 0;
+
     void updateWeakHash32(WeakHash32 & hash) const { updateWeakHash32(hash, nullptr, TiDB::dummy_sort_key_contaner); }
 
     /** Removes elements that don't match the filter.
@@ -318,6 +333,9 @@ public:
     using ScatterColumns = std::vector<MutablePtr>;
     using Selector = PaddedPODArray<ColumnIndex>;
     virtual ScatterColumns scatter(ColumnIndex num_columns, const Selector & selector) const = 0;
+    virtual ScatterColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
+        const
+        = 0;
 
     void initializeScatterColumns(ScatterColumns & columns, ColumnIndex num_columns, size_t num_rows) const
     {
@@ -334,6 +352,8 @@ public:
 
     /// Different from scatter, scatterTo appends the scattered data to 'columns' instead of creating ScatterColumns
     virtual void scatterTo(ScatterColumns & columns, const Selector & selector) const = 0;
+    virtual void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const
+        = 0;
 
     /// Insert data from several other columns according to source mask (used in vertical merge).
     /// For now it is a helper to de-virtualize calls to insert*() functions inside gather loop
@@ -355,7 +375,7 @@ public:
 
     /// Reserve memory for specified amount of elements with a total memory hint, the default impl is
     /// calling `reserve(n)`, columns with non-fixed size elements can overwrite it for better reserve
-    virtual void reserveWithTotalMemoryHint(size_t n, Int64 /*total_memory_hint*/) { reserve(n); };
+    virtual void reserveWithTotalMemoryHint(size_t n, Int64 /*total_memory_hint*/) { reserve(n); }
 
     /// Size of column data in memory (may be approximate) - for profiling. Zero, if could not be determined.
     virtual size_t byteSize() const = 0;
@@ -478,10 +498,11 @@ protected:
     {
         size_t num_rows = size();
 
-        if (num_rows != selector.size())
-            throw Exception(
-                fmt::format("Size of selector: {} doesn't match size of column: {}", selector.size(), num_rows),
-                ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+        RUNTIME_CHECK_MSG(
+            num_rows == selector.size(),
+            "Size of selector: {} doesn't match size of column: {}",
+            selector.size(),
+            num_rows);
 
         ScatterColumns columns;
         initializeScatterColumns(columns, num_columns, num_rows);
@@ -493,17 +514,56 @@ protected:
     }
 
     template <typename Derived>
+    std::vector<MutablePtr> scatterImpl(
+        ColumnIndex num_columns,
+        const Selector & selector,
+        const BlockSelective & selective) const
+    {
+        const auto selective_rows = selective.size();
+
+        RUNTIME_CHECK_MSG(
+            selective_rows == selector.size(),
+            "Size of selector: {} doesn't match size of selective column: {}",
+            selector.size(),
+            selective_rows);
+
+        ScatterColumns columns;
+        initializeScatterColumns(columns, num_columns, selective_rows);
+
+        for (size_t i = 0; i < selective_rows; ++i)
+            static_cast<Derived &>(*columns[selector[i]]).insertFrom(*this, selective[i]);
+
+        return columns;
+    }
+
+    template <typename Derived>
     void scatterToImpl(ScatterColumns & columns, const Selector & selector) const
     {
         size_t num_rows = size();
 
-        if (num_rows != selector.size())
-            throw Exception(
-                fmt::format("Size of selector: {} doesn't match size of column: {}", selector.size(), num_rows),
-                ErrorCodes::SIZES_OF_COLUMNS_DOESNT_MATCH);
+        RUNTIME_CHECK_MSG(
+            num_rows == selector.size(),
+            "Size of selector: {} doesn't match size of column: {}",
+            selector.size(),
+            num_rows);
 
         for (size_t i = 0; i < num_rows; ++i)
             static_cast<Derived &>(*columns[selector[i]]).insertFrom(*this, i);
+    }
+
+    template <typename Derived>
+    void scatterToImpl(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const
+    {
+        const auto selective_rows = selective.size();
+
+        RUNTIME_CHECK_MSG(
+            selective_rows == selector.size(),
+            "Size of selector: {} doesn't match size of selective column: {}",
+            selector.size(),
+            selective_rows);
+
+        for (size_t i = 0; i < selective_rows; ++i)
+            static_cast<Derived &>(*columns[selector[i]]).insertFrom(*this, selective[i]);
     }
 };
 
