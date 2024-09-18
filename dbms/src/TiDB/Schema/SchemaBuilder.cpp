@@ -489,7 +489,7 @@ void SchemaBuilder<Getter, NameMapper>::applyDiff(const SchemaDiff & diff)
             auto db_info = getter.getDatabase(opt.schema_id);
             if (db_info == nullptr)
                 throw TiFlashException("miss database: " + std::to_string(diff.schema_id), Errors::DDL::StaleSchema);
-            applyRenameTable(db_info, opt.table_id);
+            applyRenameTable(db_info, opt.table_id, "RenameTables");
         }
         return;
     }
@@ -536,7 +536,7 @@ void SchemaBuilder<Getter, NameMapper>::applyDiff(const SchemaDiff & diff)
     }
     case SchemaActionType::RenameTable:
     {
-        applyRenameTable(db_info, diff.table_id);
+        applyRenameTable(db_info, diff.table_id, "RenameTable");
         break;
     }
     case SchemaActionType::AddTablePartition:
@@ -573,7 +573,8 @@ void SchemaBuilder<Getter, NameMapper>::applyDiff(const SchemaDiff & diff)
 
     if (old_table_id)
     {
-        applyDropTable(db_info, old_table_id);
+        String action = fmt::format("{}", magic_enum::enum_name(diff.type));
+        applyDropTable(db_info, old_table_id, action);
     }
 
     if (new_table_id)
@@ -588,11 +589,11 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
     auto table_info = getter.getTableInfo(db_info->id, table_id);
     if (table_info == nullptr)
     {
-        throw TiFlashException(fmt::format("miss old table id in TiKV {}", table_id), Errors::DDL::StaleSchema);
+        throw TiFlashException(fmt::format("miss old table id in TiKV when applyPartitionDiff, table_id={}", table_id), Errors::DDL::StaleSchema);
     }
     if (!table_info->isLogicalPartitionTable())
     {
-        throw TiFlashException(fmt::format("new table in TiKV not partition table {}", name_mapper.debugCanonicalName(*db_info, *table_info)),
+        throw TiFlashException(fmt::format("new table in TiKV not partition table when applyPartitionDiff, {}", name_mapper.debugCanonicalName(*db_info, *table_info)),
                                Errors::DDL::TableTypeNotMatch);
     }
 
@@ -600,10 +601,10 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
     auto storage = tmt_context.getStorages().get(table_info->id);
     if (storage == nullptr)
     {
-        throw TiFlashException(fmt::format("miss table in TiFlash {}", table_id), Errors::DDL::MissingTable);
+        throw TiFlashException(fmt::format("miss table in TiFlash when applyPartitionDiff, table_id={}", table_id), Errors::DDL::MissingTable);
     }
 
-    applyPartitionDiff(db_info, table_info, storage, /*drop_part_if_not_exist*/ true);
+    applyPartitionDiffOnLogicalTable(db_info, table_info, storage, /*drop_part_if_not_exist*/ true);
 }
 
 template <typename Getter, typename NameMapper>
@@ -637,7 +638,7 @@ TiDB::DBInfoPtr SchemaBuilder<Getter, NameMapper>::tryFindDatabaseByPartitionTab
 }
 
 template <typename Getter, typename NameMapper>
-void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr & db_info, const TableInfoPtr & table_info, const ManageableStoragePtr & storage, bool drop_part_if_not_exist)
+void SchemaBuilder<Getter, NameMapper>::applyPartitionDiffOnLogicalTable(const TiDB::DBInfoPtr & db_info, const TableInfoPtr & table_info, const ManageableStoragePtr & storage, bool drop_part_if_not_exist)
 {
     const auto & orig_table_info = storage->getTableInfo();
     if (!orig_table_info.isLogicalPartitionTable())
@@ -679,6 +680,7 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
     updated_table_info.partition = table_info->partition;
 
     /// Apply changes to physical tables.
+    auto reason = fmt::format("ApplyPartitionDiff-logical_table_id={}", orig_table_info.id);
     if (drop_part_if_not_exist)
     {
         for (const auto & orig_def : orig_defs)
@@ -686,10 +688,10 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
             if (new_part_id_set.count(orig_def.id) == 0)
             {
                 const auto part_table_name = name_mapper.mapTableNameByID(orig_def.id);
-                // When `tryLoadSchemaDiffs` fails, we may run into `SchemaBuilder::syncAllSchem` -> `applyPartitionDiff` without `applyExchangeTablePartition`
+                // When `tryLoadSchemaDiffs` fails, we may run into `SchemaBuilder::syncAllSchema` -> `applyPartitionDiffOnLogicalTable` without `applyExchangeTablePartition`
                 // The physical table maybe `EXCHANGE` to another database, try to find the partition from all database
                 auto part_db_info = tryFindDatabaseByPartitionTable(db_info, part_table_name);
-                applyDropPhysicalTable(name_mapper.mapDatabaseName(*part_db_info), orig_def.id);
+                applyDropPhysicalTable(name_mapper.mapDatabaseName(*part_db_info), orig_def.id, /*must_update_tombstone*/ false, reason);
             }
         }
     }
@@ -700,7 +702,7 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
         {
             auto part_table_info = updated_table_info.producePartitionTableInfo(new_def.id, name_mapper);
             const auto part_table_name = name_mapper.mapTableName(*part_table_info);
-            // When `tryLoadSchemaDiffs` fails, we may run into `SchemaBuilder::syncAllSchem` -> `applyPartitionDiff` without `applyExchangeTablePartition`
+            // When `tryLoadSchemaDiffs` fails, we may run into `SchemaBuilder::syncAllSchema` -> `applyPartitionDiffOnLogicalTable` without `applyExchangeTablePartition`
             // The physical table maybe `EXCHANGE` from another database, try to find the partition from all database
             auto part_db_info = tryFindDatabaseByPartitionTable(db_info, part_table_name);
             applyCreatePhysicalTable(part_db_info, part_table_info);
@@ -715,31 +717,32 @@ void SchemaBuilder<Getter, NameMapper>::applyPartitionDiff(const TiDB::DBInfoPtr
 }
 
 template <typename Getter, typename NameMapper>
-void SchemaBuilder<Getter, NameMapper>::applyRenameTable(const DBInfoPtr & new_db_info, TableID table_id)
+void SchemaBuilder<Getter, NameMapper>::applyRenameTable(const DBInfoPtr & new_db_info, TableID table_id, std::string_view action)
 {
     auto new_table_info = getter.getTableInfo(new_db_info->id, table_id);
     if (new_table_info == nullptr)
     {
-        throw TiFlashException(fmt::format("miss table id in TiKV {}", table_id), Errors::DDL::StaleSchema);
+        throw TiFlashException(fmt::format("miss table id in TiKV when renameTable, table_id={} action={}", table_id, action), Errors::DDL::StaleSchema);
     }
 
     auto & tmt_context = context.getTMTContext();
     auto storage = tmt_context.getStorages().get(table_id);
     if (storage == nullptr)
     {
-        throw TiFlashException(fmt::format("miss table id in TiFlash {}", table_id), Errors::DDL::MissingTable);
+        throw TiFlashException(fmt::format("miss table id in TiFlash when renameTable, table_id={} action={}", table_id, action), Errors::DDL::MissingTable);
     }
 
-    applyRenameLogicalTable(new_db_info, new_table_info, storage);
+    applyRenameLogicalTable(new_db_info, new_table_info, storage, action);
 }
 
 template <typename Getter, typename NameMapper>
 void SchemaBuilder<Getter, NameMapper>::applyRenameLogicalTable(
     const DBInfoPtr & new_db_info,
     const TableInfoPtr & new_table_info,
-    const ManageableStoragePtr & storage)
+    const ManageableStoragePtr & storage,
+    std::string_view action)
 {
-    applyRenamePhysicalTable(new_db_info, *new_table_info, storage);
+    applyRenamePhysicalTable(new_db_info, *new_table_info, storage, action);
 
     if (new_table_info->isLogicalPartitionTable())
     {
@@ -749,10 +752,16 @@ void SchemaBuilder<Getter, NameMapper>::applyRenameLogicalTable(
             auto part_storage = tmt_context.getStorages().get(part_def.id);
             if (part_storage == nullptr)
             {
-                throw Exception(fmt::format("miss old table id in Flash {}", part_def.id));
+                throw Exception( //
+                    ErrorCodes::LOGICAL_ERROR,
+                    "Storage instance is not exist in TiFlash, the partition is not created yet in this TiFlash instance, "
+                    "physical_table_id={} logical_table_id={} action={}",
+                    part_def.id,
+                    new_table_info->id,
+                    action);
             }
             auto part_table_info = new_table_info->producePartitionTableInfo(part_def.id, name_mapper);
-            applyRenamePhysicalTable(new_db_info, *part_table_info, part_storage);
+            applyRenamePhysicalTable(new_db_info, *part_table_info, part_storage, action);
         }
     }
 }
@@ -761,7 +770,8 @@ template <typename Getter, typename NameMapper>
 void SchemaBuilder<Getter, NameMapper>::applyRenamePhysicalTable(
     const DBInfoPtr & new_db_info,
     const TableInfo & new_table_info,
-    const ManageableStoragePtr & storage)
+    const ManageableStoragePtr & storage,
+    std::string_view action)
 {
     const auto old_mapped_db_name = storage->getDatabaseName();
     const auto new_mapped_db_name = name_mapper.mapDatabaseName(*new_db_info);
@@ -769,19 +779,24 @@ void SchemaBuilder<Getter, NameMapper>::applyRenamePhysicalTable(
     const auto new_display_table_name = name_mapper.displayTableName(new_table_info);
     if (old_mapped_db_name == new_mapped_db_name && old_display_table_name == new_display_table_name)
     {
-        LOG_DEBUG(log, "Table {} name identical, not renaming.", name_mapper.debugCanonicalName(*new_db_info, new_table_info));
+        LOG_DEBUG(log, "Table {} name identical, not renaming, action={}", name_mapper.debugCanonicalName(*new_db_info, new_table_info), action);
         return;
     }
 
+    // There could be a chance that the target database has been dropped in TiKV before
+    // TiFlash accepts the "create database" schema diff. We need to ensure the local
+    // database exist before executing renaming.
+    ensureLocalDatabaseExist(new_db_info->id, new_mapped_db_name, action);
     const auto old_mapped_tbl_name = storage->getTableName();
     GET_METRIC(tiflash_schema_internal_ddl_count, type_rename_column).Increment();
     LOG_INFO(
         log,
-        "Renaming table {}.{} (display name: {}) to {}.",
+        "Renaming table {}.{} (display name: {}) to {}, action={}",
         old_mapped_db_name,
         old_mapped_tbl_name,
         old_display_table_name,
-        name_mapper.debugCanonicalName(*new_db_info, new_table_info));
+        name_mapper.debugCanonicalName(*new_db_info, new_table_info),
+        action);
 
     // Note that rename will update table info in table create statement by modifying original table info
     // with "tidb_display.table" instead of using new_table_info directly, so that other changes
@@ -797,11 +812,12 @@ void SchemaBuilder<Getter, NameMapper>::applyRenamePhysicalTable(
 
     LOG_INFO(
         log,
-        "Renamed table {}.{} (display name: {}) to {}",
+        "Renamed table {}.{} (display name: {}) to {}, action={}",
         old_mapped_db_name,
         old_mapped_tbl_name,
         old_display_table_name,
-        name_mapper.debugCanonicalName(*new_db_info, new_table_info));
+        name_mapper.debugCanonicalName(*new_db_info, new_table_info),
+        action);
 }
 
 template <typename Getter, typename NameMapper>
@@ -871,7 +887,7 @@ void SchemaBuilder<Getter, NameMapper>::applyExchangeTablePartition(const Schema
     // once it became a partition.
     // But this method will skip dropping partition id that is not exist in the new table_info,
     // because the physical table could be changed into a normal table without dropping.
-    applyPartitionDiff(pt_db_info, table_info, storage, /*drop_part_if_not_exist*/ false);
+    applyPartitionDiffOnLogicalTable(pt_db_info, table_info, storage, /*drop_part_if_not_exist*/ false);
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_after_step_1_in_exchange_partition);
 
     /// step 2 change non partition table to a partition of the partition table
@@ -897,7 +913,7 @@ void SchemaBuilder<Getter, NameMapper>::applyExchangeTablePartition(const Schema
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_step_2_rename_in_exchange_partition);
 
     if (npt_db_info->id != pt_db_info->id)
-        applyRenamePhysicalTable(pt_db_info, orig_table_info, storage);
+        applyRenamePhysicalTable(pt_db_info, orig_table_info, storage, "exchange partition");
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_after_step_2_in_exchange_partition);
 
     /// step 3 change partition of the partition table to non partition table
@@ -929,9 +945,9 @@ void SchemaBuilder<Getter, NameMapper>::applyExchangeTablePartition(const Schema
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_before_step_3_rename_in_exchange_partition);
 
     if (npt_db_info->id != pt_db_info->id)
-        applyRenamePhysicalTable(npt_db_info, orig_table_info, storage);
+        applyRenamePhysicalTable(npt_db_info, orig_table_info, storage, "exchange partition");
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::exception_after_step_3_in_exchange_partition);
-    LOG_INFO(log, "Execute exchange partition done, npt_table_id={} npt_database_id={} pt_table_id={} pt_partition_id={}  pt_database_id={}", npt_table_id, npt_database_id, pt_table_id, pt_partition_id, pt_database_id);
+    LOG_INFO(log, "Execute exchange partition done, npt_table_id={} npt_database_id={} pt_table_id={} pt_partition_id={} pt_database_id={}", npt_table_id, npt_database_id, pt_table_id, pt_partition_id, pt_database_id);
 }
 
 template <typename Getter, typename NameMapper>
@@ -942,7 +958,7 @@ bool SchemaBuilder<Getter, NameMapper>::applyCreateSchema(DatabaseID schema_id)
     {
         return false;
     }
-    applyCreateSchema(db);
+    applyCreateSchemaByInfo(db);
     return true;
 }
 
@@ -988,10 +1004,10 @@ String createDatabaseStmt(Context & context, const DBInfo & db_info, const Schem
 }
 
 template <typename Getter, typename NameMapper>
-void SchemaBuilder<Getter, NameMapper>::applyCreateSchema(const TiDB::DBInfoPtr & db_info)
+void SchemaBuilder<Getter, NameMapper>::applyCreateSchemaByInfo(const TiDB::DBInfoPtr & db_info)
 {
     GET_METRIC(tiflash_schema_internal_ddl_count, type_create_db).Increment();
-    LOG_INFO(log, "Creating database {}", name_mapper.debugDatabaseName(*db_info));
+    LOG_INFO(log, "Create database {} begin, database_id={}", name_mapper.debugDatabaseName(*db_info), db_info->id);
 
     auto statement = createDatabaseStmt(context, *db_info, name_mapper);
 
@@ -1003,7 +1019,7 @@ void SchemaBuilder<Getter, NameMapper>::applyCreateSchema(const TiDB::DBInfoPtr 
     interpreter.execute();
 
     databases[db_info->id] = db_info;
-    LOG_INFO(log, "Created database {}", name_mapper.debugDatabaseName(*db_info));
+    LOG_INFO(log, "Created database {} end, database_id={}", name_mapper.debugDatabaseName(*db_info), db_info->id);
 }
 
 template <typename Getter, typename NameMapper>
@@ -1026,11 +1042,11 @@ template <typename Getter, typename NameMapper>
 void SchemaBuilder<Getter, NameMapper>::applyDropSchema(const String & db_name)
 {
     GET_METRIC(tiflash_schema_internal_ddl_count, type_drop_db).Increment();
-    LOG_INFO(log, "Tombstoning database {}", db_name);
+    LOG_INFO(log, "Tombstone database begin, db_name={}", db_name);
     auto db = context.tryGetDatabase(db_name);
     if (db == nullptr)
     {
-        LOG_INFO(log, "Database {} does not exists", db_name);
+        LOG_INFO(log, "Database does not exists, db_name={}", db_name);
         return;
     }
 
@@ -1047,7 +1063,7 @@ void SchemaBuilder<Getter, NameMapper>::applyDropSchema(const String & db_name)
     auto tombstone = PDClientHelper::getTSO(tmt_context.getPDClient(), PDClientHelper::get_tso_maxtime);
     db->alterTombstone(context, tombstone, /*new_db_info*/ nullptr); // keep the old db_info
 
-    LOG_INFO(log, "Tombstoned database {}, tombstone={}", db_name, tombstone);
+    LOG_INFO(log, "Tombstone database end, db_name={} tombstone={}", db_name, tombstone);
 }
 
 template <typename Getter, typename NameMapper>
@@ -1206,7 +1222,7 @@ void SchemaBuilder<Getter, NameMapper>::applyCreatePhysicalTable(const DBInfoPtr
             }
             auto alter_lock = storage->lockForAlter(getThreadName());
             storage->alterFromTiDB(alter_lock, commands, name_mapper.mapDatabaseName(*db_info), *table_info, name_mapper, context);
-            LOG_INFO(log, "Created table {}", name_mapper.debugCanonicalName(*db_info, *table_info));
+            LOG_INFO(log, "Create table {} end", name_mapper.debugCanonicalName(*db_info, *table_info));
             return;
         }
     }
@@ -1220,7 +1236,13 @@ void SchemaBuilder<Getter, NameMapper>::applyCreatePhysicalTable(const DBInfoPtr
 
     String stmt = createTableStmt(*db_info, *table_info, name_mapper, log);
 
-    LOG_INFO(log, "Creating table {} with statement: {}", name_mapper.debugCanonicalName(*db_info, *table_info), stmt);
+    LOG_INFO(log, "Create table begin {} with statement: {}", name_mapper.debugCanonicalName(*db_info, *table_info), stmt);
+
+    // If "CREATE DATABASE" is executed in TiFlash after user has executed "DROP DATABASE"
+    // in TiDB, then TiFlash may not create the IDatabase instance. Make sure we can access
+    // to the IDatabase when creating IStorage.
+    const auto database_mapped_name = name_mapper.mapDatabaseName(*db_info);
+    ensureLocalDatabaseExist(db_info->id, database_mapped_name, fmt::format("CreatePhysicalTable-table_id={}", table_info->id));
 
     ParserCreateQuery parser;
     ASTPtr ast = parseQuery(parser, stmt.data(), stmt.data() + stmt.size(), "from syncSchema " + table_info->name, 0);
@@ -1228,13 +1250,41 @@ void SchemaBuilder<Getter, NameMapper>::applyCreatePhysicalTable(const DBInfoPtr
     auto * ast_create_query = typeid_cast<ASTCreateQuery *>(ast.get());
     ast_create_query->attach = true;
     ast_create_query->if_not_exists = true;
-    ast_create_query->database = name_mapper.mapDatabaseName(*db_info);
+    ast_create_query->database = database_mapped_name;
 
     InterpreterCreateQuery interpreter(ast, context);
     interpreter.setInternal(true);
     interpreter.setForceRestoreData(false);
     interpreter.execute();
-    LOG_INFO(log, "Created table {}", name_mapper.debugCanonicalName(*db_info, *table_info));
+    LOG_INFO(log, "Created table {} end", name_mapper.debugCanonicalName(*db_info, *table_info));
+}
+
+template <typename Getter, typename NameMapper>
+void SchemaBuilder<Getter, NameMapper>::ensureLocalDatabaseExist(
+    DatabaseID database_id,
+    const String & database_mapped_name,
+    std::string_view action)
+{
+    if (likely(context.isDatabaseExist(database_mapped_name)))
+        return;
+
+    LOG_WARNING(
+        log,
+        "database instance is not exist, may has been dropped, create a database "
+        "with fake DatabaseInfo for it, database_id={} database_name={} action={}",
+        database_id,
+        database_mapped_name,
+        action);
+    // The database is dropped in TiKV and we can not fetch it. Generate a fake
+    // DatabaseInfo for it. It is OK because the DatabaseInfo will be updated
+    // when the database is `FLASHBACK`.
+    TiDB::DBInfoPtr database_info = std::make_shared<TiDB::DBInfo>();
+    database_info->id = database_id;
+    database_info->name = database_mapped_name; // use the mapped name because we don't known the actual name
+    database_info->charset = "utf8mb4"; // default value
+    database_info->collate = "utf8mb4_bin"; // default value
+    database_info->state = TiDB::StateNone; // special state
+    applyCreateSchemaByInfo(database_info);
 }
 
 template <typename Getter, typename NameMapper>
@@ -1269,17 +1319,29 @@ void SchemaBuilder<Getter, NameMapper>::applyCreateLogicalTable(const TiDB::DBIn
 }
 
 template <typename Getter, typename NameMapper>
-void SchemaBuilder<Getter, NameMapper>::applyDropPhysicalTable(const String & db_name, TableID table_id)
+void SchemaBuilder<Getter, NameMapper>::applyDropPhysicalTable(const String & db_name, TableID table_id, bool must_update_tombstone, std::string_view action)
 {
     auto & tmt_context = context.getTMTContext();
     auto storage = tmt_context.getStorages().get(table_id);
     if (storage == nullptr)
     {
-        LOG_DEBUG(log, "table {} does not exist.", table_id);
+        LOG_DEBUG(log, "table does not exist, table_id={} action={}", table_id, action);
         return;
     }
+
+    if (!must_update_tombstone)
+    {
+        // When must_update_tombstone == false, we can try to skip updating
+        // the tombstone_ts if the table is already tombstone.
+        if (auto tombstone_ts = storage->getTombstone(); tombstone_ts != 0)
+        {
+            LOG_INFO(log, "Tombstone table {}.{} has been done before, action={} tombstone={}", db_name, name_mapper.debugTableName(storage->getTableInfo()), action, tombstone_ts);
+            return;
+        }
+    }
+
     GET_METRIC(tiflash_schema_internal_ddl_count, type_drop_table).Increment();
-    LOG_INFO(log, "Tombstoning table {}.{}", db_name, name_mapper.debugTableName(storage->getTableInfo()));
+    LOG_INFO(log, "Tombstone table {}.{} begin, action={}", db_name, name_mapper.debugTableName(storage->getTableInfo()), action);
     const auto tombstone_ts = PDClientHelper::getTSO(tmt_context.getPDClient(), PDClientHelper::get_tso_maxtime);
     AlterCommands commands;
     {
@@ -1295,11 +1357,11 @@ void SchemaBuilder<Getter, NameMapper>::applyDropPhysicalTable(const String & db
     }
     auto alter_lock = storage->lockForAlter(getThreadName());
     storage->alterFromTiDB(alter_lock, commands, db_name, storage->getTableInfo(), name_mapper, context);
-    LOG_INFO(log, "Tombstoned table {}.{}, tombstone={}", db_name, name_mapper.debugTableName(storage->getTableInfo()), tombstone_ts);
+    LOG_INFO(log, "Tombstone table {}.{} end, action={} tombstone={}", db_name, name_mapper.debugTableName(storage->getTableInfo()), action, tombstone_ts);
 }
 
 template <typename Getter, typename NameMapper>
-void SchemaBuilder<Getter, NameMapper>::applyDropTable(const DBInfoPtr & db_info, TableID table_id)
+void SchemaBuilder<Getter, NameMapper>::applyDropTable(const DBInfoPtr & db_info, TableID table_id, std::string_view action)
 {
     auto & tmt_context = context.getTMTContext();
     auto * storage = tmt_context.getStorages().get(table_id).get();
@@ -1308,18 +1370,23 @@ void SchemaBuilder<Getter, NameMapper>::applyDropTable(const DBInfoPtr & db_info
         LOG_DEBUG(log, "table {} does not exist.", table_id);
         return;
     }
+
+    // `applyDropTable` is only called by applying schema diff. So we should update tombstone_ts.
+    // If a table is dropped at tso_1. Then the table is recorvered, then droppped again at tso_2.
+    // When tiflash meet the SchemaDiff of "drop table" at tso_2, it should update the tombstone_ts.
+    const bool update_tombstone_ts = true;
     const auto & table_info = storage->getTableInfo();
     if (table_info.isLogicalPartitionTable())
     {
         for (const auto & part_def : table_info.partition.definitions)
         {
-            applyDropPhysicalTable(name_mapper.mapDatabaseName(*db_info), part_def.id);
+            applyDropPhysicalTable(name_mapper.mapDatabaseName(*db_info), part_def.id, update_tombstone_ts, action);
         }
     }
 
     // Drop logical table at last, only logical table drop will be treated as "complete".
     // Intermediate failure will hide the logical table drop so that schema syncing when restart will re-drop all (despite some physical tables may have dropped).
-    applyDropPhysicalTable(name_mapper.mapDatabaseName(*db_info), table_info.id);
+    applyDropPhysicalTable(name_mapper.mapDatabaseName(*db_info), table_info.id, update_tombstone_ts, action);
 }
 
 template <typename Getter, typename NameMapper>
@@ -1404,7 +1471,7 @@ void SchemaBuilder<Getter, NameMapper>::syncAllSchema()
         db_set.emplace(name_mapper.mapDatabaseName(*db));
         if (databases.find(db->id) == databases.end())
         {
-            applyCreateSchema(db);
+            applyCreateSchemaByInfo(db);
             LOG_INFO(log, "Database {} created during sync all schemas", name_mapper.debugDatabaseName(*db));
         }
     }
@@ -1452,10 +1519,10 @@ void SchemaBuilder<Getter, NameMapper>::syncAllSchema()
             if (table->isLogicalPartitionTable())
             {
                 /// Apply partition diff if needed.
-                applyPartitionDiff(db, table, storage, /*drop_part_if_not_exist*/ true);
+                applyPartitionDiffOnLogicalTable(db, table, storage, /*drop_part_if_not_exist*/ true);
             }
             /// Rename if needed.
-            applyRenameLogicalTable(db, table, storage);
+            applyRenameLogicalTable(db, table, storage, "SyncAllSchema");
             /// Update replica info if needed.
             applySetTiFlashReplicaOnLogicalTable(db, table, storage);
             /// Alter if needed.
@@ -1471,7 +1538,8 @@ void SchemaBuilder<Getter, NameMapper>::syncAllSchema()
     {
         if (table_set.count(it->first) == 0)
         {
-            applyDropPhysicalTable(it->second->getDatabaseName(), it->first);
+            // If the table is already tombstone, don't need to update its tombstone_ts.
+            applyDropPhysicalTable(it->second->getDatabaseName(), it->first, /*must_update_tombstone*/ false, "SyncAllSchema");
             LOG_INFO(log, "Table {}.{} dropped during sync all schemas", it->second->getDatabaseName(), name_mapper.debugTableName(it->second->getTableInfo()));
         }
     }
@@ -1497,5 +1565,4 @@ template struct SchemaBuilder<MockSchemaGetter, MockSchemaNameMapper>;
 // unit test
 template struct SchemaBuilder<MockSchemaGetter, SchemaNameMapper>;
 
-// end namespace
 } // namespace DB
