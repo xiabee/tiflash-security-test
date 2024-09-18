@@ -16,9 +16,9 @@
 
 #include <Common/nocopyable.h>
 #include <Core/Defines.h>
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 
 namespace DB
@@ -103,7 +103,8 @@ class CompactArray<BucketIndex, content_width, bucket_count>::Reader final
 public:
     explicit Reader(ReadBuffer & in_)
         : in(in_)
-    {}
+    {
+    }
 
     DISALLOW_COPY(Reader);
 
@@ -224,7 +225,10 @@ public:
 private:
     Locus() = default;
 
-    explicit Locus(BucketIndex bucket_index) { init(bucket_index); }
+    explicit Locus(BucketIndex bucket_index)
+    {
+        init(bucket_index);
+    }
 
     void ALWAYS_INLINE init(BucketIndex bucket_index)
     {

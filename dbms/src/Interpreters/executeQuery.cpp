@@ -22,8 +22,8 @@
 #include <DataStreams/InputStreamFromASTInsertQuery.h>
 #include <DataStreams/copyData.h>
 #include <Flash/Coprocessor/DAGContext.h>
-#include <IO/Buffer/ConcatReadBuffer.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
+#include <IO/ConcatReadBuffer.h>
+#include <IO/WriteBufferFromFile.h>
 #include <Interpreters/IQuerySource.h>
 #include <Interpreters/InterpreterFactory.h>
 #include <Interpreters/ProcessList.h>
@@ -80,7 +80,9 @@ String joinLines(const String & query)
 LoggerPtr getLogger(const Context & context)
 {
     auto * dag_context = context.getDAGContext();
-    return (dag_context && dag_context->log) ? dag_context->log : Logger::get();
+    return (dag_context && dag_context->log)
+        ? dag_context->log
+        : Logger::get();
 }
 
 
@@ -96,7 +98,8 @@ void setExceptionStackTrace(QueryLogElement & elem)
         elem.stack_trace = e.getStackTrace().toString();
     }
     catch (...)
-    {}
+    {
+    }
 }
 
 
@@ -143,18 +146,34 @@ void onExceptionBeforeStart(const String & query, Context & context, time_t curr
     }
 }
 
-void prepareForInputStream(Context & context, const BlockInputStreamPtr & in)
+void prepareForInputStream(
+    Context & context,
+    QueryProcessingStage::Enum stage,
+    const BlockInputStreamPtr & in)
 {
     assert(in);
     if (auto * stream = dynamic_cast<IProfilingBlockInputStream *>(in.get()))
     {
         stream->setProgressCallback(context.getProgressCallback());
         stream->setProcessListElement(context.getProcessListElement());
+
+        /// Limits on the result, the quota on the result, and also callback for progress.
+        /// Limits apply only to the final result.
+        if (stage == QueryProcessingStage::Complete)
+        {
+            IProfilingBlockInputStream::LocalLimits limits;
+            limits.mode = IProfilingBlockInputStream::LIMITS_CURRENT;
+            const auto & settings = context.getSettingsRef();
+            limits.size_limits = SizeLimits(settings.max_result_rows, settings.max_result_bytes, settings.result_overflow_mode);
+
+            stream->setLimits(limits);
+            stream->setQuota(context.getQuota());
+        }
     }
 }
 
 std::tuple<ASTPtr, BlockIO> executeQueryImpl(
-    SQLQuerySource & query_src,
+    IQuerySource & query_src,
     Context & context,
     bool internal,
     QueryProcessingStage::Enum stage)
@@ -205,15 +224,14 @@ std::tuple<ASTPtr, BlockIO> executeQueryImpl(
 
         QuotaForIntervals & quota = context.getQuota();
 
-        quota
-            .addQuery(); /// NOTE Seems that when new time interval has come, first query is not accounted in number of queries.
+        quota.addQuery(); /// NOTE Seems that when new time interval has come, first query is not accounted in number of queries.
         quota.checkExceeded(current_time);
 
         /// Put query to process list. But don't put SHOW PROCESSLIST query itself.
         ProcessList::EntryPtr process_list_entry;
         if (!internal && nullptr == typeid_cast<const ASTShowProcesslistQuery *>(&*ast))
         {
-            process_list_entry = setProcessListElement(context, query, ast.get(), false);
+            process_list_entry = setProcessListElement(context, query, ast.get());
         }
 
         FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_interpreter_failpoint);
@@ -229,7 +247,7 @@ std::tuple<ASTPtr, BlockIO> executeQueryImpl(
 
         if (res.in)
         {
-            prepareForInputStream(context, res.in);
+            prepareForInputStream(context, stage, res.in);
         }
 
         if (res.out)
@@ -263,9 +281,7 @@ std::tuple<ASTPtr, BlockIO> executeQueryImpl(
             }
 
             /// Also make possible for caller to log successful query finish and exception during execution.
-            res.finish_callback = [elem, &context, log_queries, execute_query_logger](
-                                      IBlockInputStream * stream_in,
-                                      IBlockOutputStream * stream_out) mutable {
+            res.finish_callback = [elem, &context, log_queries, execute_query_logger](IBlockInputStream * stream_in, IBlockOutputStream * stream_out) mutable {
                 ProcessListElement * process_list_elem = context.getProcessListElement();
 
                 if (!process_list_elem)
@@ -392,22 +408,21 @@ void logQuery(const String & query, const Context & context, const LoggerPtr & l
         context.getClientInfo().current_address.toString(),
         (current_user != "default" ? ", user: " + current_user : ""),
         current_query_id,
-        (!initial_query_id.empty() && current_query_id != initial_query_id ? ", initial_query_id: " + initial_query_id
-                                                                           : ""),
+        (!initial_query_id.empty() && current_query_id != initial_query_id ? ", initial_query_id: " + initial_query_id : ""),
         joinLines(query));
 }
 
 std::shared_ptr<ProcessListEntry> setProcessListElement(
     Context & context,
     const String & query,
-    const IAST * ast,
-    bool is_dag_task)
+    const IAST * ast)
 {
     assert(ast);
-    auto total_memory = context.getServerInfo().has_value() ? context.getServerInfo()->memory_info.capacity : 0;
-    auto process_list_entry
-        = context.getProcessList()
-              .insert(query, ast, context.getClientInfo(), context.getSettingsRef(), total_memory, is_dag_task);
+    auto process_list_entry = context.getProcessList().insert(
+        query,
+        ast,
+        context.getClientInfo(),
+        context.getSettingsRef());
     context.setProcessListElement(&process_list_entry->get());
     return process_list_entry;
 }
@@ -424,7 +439,11 @@ void logQueryPipeline(const LoggerPtr & logger, const BlockInputStreamPtr & in)
     LOG_INFO(logger, pipeline_log_str());
 }
 
-BlockIO executeQuery(const String & query, Context & context, bool internal, QueryProcessingStage::Enum stage)
+BlockIO executeQuery(
+    const String & query,
+    Context & context,
+    bool internal,
+    QueryProcessingStage::Enum stage)
 {
     BlockIO streams;
     SQLQuerySource query_src(query.data(), query.data() + query.size());
@@ -491,8 +510,7 @@ void executeQuery(
                 if (!allow_into_outfile)
                     throw Exception("INTO OUTFILE is not allowed", ErrorCodes::INTO_OUTFILE_NOT_ALLOWED);
 
-                const auto & out_file
-                    = typeid_cast<const ASTLiteral &>(*ast_query_with_output->out_file).value.safeGet<std::string>();
+                const auto & out_file = typeid_cast<const ASTLiteral &>(*ast_query_with_output->out_file).value.safeGet<std::string>();
                 out_file_buf.emplace(out_file, DBMS_DEFAULT_BUFFER_SIZE, O_WRONLY | O_EXCL | O_CREAT);
                 out_buf = &*out_file_buf;
             }

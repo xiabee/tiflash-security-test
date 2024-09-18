@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Common/ThreadFactory.h>
+#include <Common/UnaryCallback.h>
 #include <Common/grpcpp.h>
 
 #include <atomic>
@@ -31,7 +32,10 @@ public:
 
     ::grpc::CompletionQueue & pickQueue();
 
-    void markShutdown() { is_shutdown = true; }
+    void markShutdown()
+    {
+        is_shutdown = true;
+    }
 
 private:
     void thread(size_t index);

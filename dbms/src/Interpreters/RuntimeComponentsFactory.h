@@ -26,7 +26,10 @@ namespace DB
 class RuntimeComponentsFactory : public IRuntimeComponentsFactory
 {
 public:
-    std::unique_ptr<ISecurityManager> createSecurityManager() override { return std::make_unique<SecurityManager>(); }
+    std::unique_ptr<ISecurityManager> createSecurityManager() override
+    {
+        return std::make_unique<SecurityManager>();
+    }
 
     std::unique_ptr<IExternalLoaderConfigRepository> createExternalDictionariesConfigRepository() override
     {

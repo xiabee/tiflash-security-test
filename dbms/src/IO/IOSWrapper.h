@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #pragma once
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ReadBuffer.h>
+#include <IO/WriteBuffer.h>
 
 #include <streambuf>
 
@@ -79,8 +79,7 @@ public:
             auto * gptr = underlying.buffer().begin();
             this->setg(gptr, gptr, underlying.buffer().end());
         }
-        return this->gptr() == this->egptr() ? std::char_traits<char>::eof()
-                                             : std::char_traits<char>::to_int_type(*this->gptr());
+        return this->gptr() == this->egptr() ? std::char_traits<char>::eof() : std::char_traits<char>::to_int_type(*this->gptr());
     }
 };
 
@@ -116,8 +115,7 @@ struct OutputStreamWrapperBase
 /// InputStreamWrapper istream{ tiflash_buffer };
 /// proto.ParseFromIstream( istream );
 /// \endcode
-class InputStreamWrapper
-    : virtual Detail::InputStreamWrapperBase
+class InputStreamWrapper : virtual Detail::InputStreamWrapperBase
     , public std::istream
 {
 public:
@@ -135,8 +133,7 @@ public:
 /// OutputStreamWrapper ostream{ tiflash_buffer };
 /// proto.SerializeToOstream( ostream );
 /// \endcode
-class OutputStreamWrapper
-    : virtual Detail::OutputStreamWrapperBase
+class OutputStreamWrapper : virtual Detail::OutputStreamWrapperBase
     , public std::ostream
 {
 public:

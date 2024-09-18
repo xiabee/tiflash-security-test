@@ -14,7 +14,7 @@
 
 #include <Common/Exception.h>
 #include <Common/ShellCommand.h>
-#include <IO/Buffer/WriteBufferFromVector.h>
+#include <IO/WriteBufferFromVector.h>
 #include <IO/WriteHelpers.h>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -43,7 +43,7 @@ struct Pipe
 {
     union
     {
-        int fds[2]{};
+        int fds[2];
         struct
         {
             int read_fd;
@@ -52,8 +52,6 @@ struct Pipe
     };
 
     Pipe()
-        : read_fd(0)
-        , write_fd(0)
     {
 #ifndef __APPLE__
         if (0 != pipe2(fds, O_CLOEXEC))
@@ -80,8 +78,7 @@ struct Pipe
 /// By these return codes from the child process, we learn (for sure) about errors when creating it.
 enum class ReturnCodes : int
 {
-    CANNOT_DUP_STDIN
-        = 0x55555555, /// The value is not important, but it is chosen so that it's rare to conflict with the program return code.
+    CANNOT_DUP_STDIN = 0x55555555, /// The value is not important, but it is chosen so that it's rare to conflict with the program return code.
     CANNOT_DUP_STDOUT = 0x55555556,
     CANNOT_DUP_STDERR = 0x55555557,
     CANNOT_EXEC = 0x55555558,
@@ -97,10 +94,7 @@ ShellCommand::~ShellCommand()
         tryWait();
 }
 
-std::unique_ptr<ShellCommand> ShellCommand::executeImpl(
-    const char * filename,
-    char * const argv[],
-    bool pipe_stdin_only)
+std::unique_ptr<ShellCommand> ShellCommand::executeImpl(const char * filename, char * const argv[], bool pipe_stdin_only)
 {
     /** Here it is written that with a normal call `vfork`, there is a chance of deadlock in multithreaded programs,
       *  because of the resolving of characters in the shared library
@@ -130,25 +124,24 @@ std::unique_ptr<ShellCommand> ShellCommand::executeImpl(
 
         /// Replace the file descriptors with the ends of our pipes.
         if (STDIN_FILENO != dup2(pipe_stdin.read_fd, STDIN_FILENO))
-            _exit(static_cast<int>(ReturnCodes::CANNOT_DUP_STDIN));
+            _exit(int(ReturnCodes::CANNOT_DUP_STDIN));
 
         if (!pipe_stdin_only)
         {
             if (STDOUT_FILENO != dup2(pipe_stdout.write_fd, STDOUT_FILENO))
-                _exit(static_cast<int>(ReturnCodes::CANNOT_DUP_STDOUT));
+                _exit(int(ReturnCodes::CANNOT_DUP_STDOUT));
 
             if (STDERR_FILENO != dup2(pipe_stderr.write_fd, STDERR_FILENO))
-                _exit(static_cast<int>(ReturnCodes::CANNOT_DUP_STDERR));
+                _exit(int(ReturnCodes::CANNOT_DUP_STDERR));
         }
 
         execv(filename, argv);
         /// If the process is running, then `execv` does not return here.
 
-        _exit(static_cast<int>(ReturnCodes::CANNOT_EXEC));
+        _exit(int(ReturnCodes::CANNOT_EXEC));
     }
 
-    std::unique_ptr<ShellCommand> res(
-        new ShellCommand(pid, pipe_stdin.write_fd, pipe_stdout.read_fd, pipe_stderr.read_fd));
+    std::unique_ptr<ShellCommand> res(new ShellCommand(pid, pipe_stdin.write_fd, pipe_stdout.read_fd, pipe_stderr.read_fd));
 
     /// Now the ownership of the file descriptors is passed to the result.
     pipe_stdin.write_fd = -1;
@@ -173,9 +166,7 @@ std::unique_ptr<ShellCommand> ShellCommand::execute(const std::string & command,
 }
 
 
-std::unique_ptr<ShellCommand> ShellCommand::executeDirect(
-    const std::string & path,
-    const std::vector<std::string> & arguments)
+std::unique_ptr<ShellCommand> ShellCommand::executeDirect(const std::string & path, const std::vector<std::string> & arguments)
 {
     size_t argv_sum_size = path.size() + 1;
     for (const auto & arg : arguments)
@@ -212,18 +203,12 @@ int ShellCommand::tryWait()
         return WEXITSTATUS(status);
 
     if (WIFSIGNALED(status))
-        throw Exception(
-            "Child process was terminated by signal " + toString(WTERMSIG(status)),
-            ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
+        throw Exception("Child process was terminated by signal " + toString(WTERMSIG(status)), ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
 
     if (WIFSTOPPED(status))
-        throw Exception(
-            "Child process was stopped by signal " + toString(WSTOPSIG(status)),
-            ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
+        throw Exception("Child process was stopped by signal " + toString(WSTOPSIG(status)), ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
 
-    throw Exception(
-        "Child process was not exited normally by unknown reason",
-        ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
+    throw Exception("Child process was not exited normally by unknown reason", ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
 }
 
 
@@ -235,18 +220,16 @@ void ShellCommand::wait()
     {
         switch (retcode)
         {
-        case static_cast<int>(ReturnCodes::CANNOT_DUP_STDIN):
+        case int(ReturnCodes::CANNOT_DUP_STDIN):
             throw Exception("Cannot dup2 stdin of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case static_cast<int>(ReturnCodes::CANNOT_DUP_STDOUT):
+        case int(ReturnCodes::CANNOT_DUP_STDOUT):
             throw Exception("Cannot dup2 stdout of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case static_cast<int>(ReturnCodes::CANNOT_DUP_STDERR):
+        case int(ReturnCodes::CANNOT_DUP_STDERR):
             throw Exception("Cannot dup2 stderr of child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
-        case static_cast<int>(ReturnCodes::CANNOT_EXEC):
+        case int(ReturnCodes::CANNOT_EXEC):
             throw Exception("Cannot execv in child process", ErrorCodes::CANNOT_CREATE_CHILD_PROCESS);
         default:
-            throw Exception(
-                "Child process was exited with return code " + toString(retcode),
-                ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
+            throw Exception("Child process was exited with return code " + toString(retcode), ErrorCodes::CHILD_WAS_NOT_EXITED_NORMALLY);
         }
     }
 }

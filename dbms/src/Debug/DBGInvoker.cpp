@@ -13,20 +13,18 @@
 // limitations under the License.
 
 #include <Common/FmtUtils.h>
-#include <Common/typeid_cast.h>
 #include <DataStreams/StringStreamBlockInputStream.h>
 #include <Debug/DBGInvoker.h>
 #include <Debug/ReadIndexStressTest.h>
 #include <Debug/dbgFuncCoprocessor.h>
 #include <Debug/dbgFuncFailPoint.h>
 #include <Debug/dbgFuncMisc.h>
+#include <Debug/dbgFuncMockRaftCommand.h>
 #include <Debug/dbgFuncMockTiDBData.h>
 #include <Debug/dbgFuncMockTiDBTable.h>
+#include <Debug/dbgFuncRegion.h>
 #include <Debug/dbgFuncSchema.h>
 #include <Debug/dbgFuncSchemaName.h>
-#include <Debug/dbgKVStore/dbgFuncInvestigator.h>
-#include <Debug/dbgKVStore/dbgFuncMockRaftCommand.h>
-#include <Debug/dbgKVStore/dbgFuncRegion.h>
 #include <Parsers/ASTLiteral.h>
 
 #include <thread>
@@ -68,6 +66,8 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("create_tidb_tables", MockTiDBTable::dbgFuncCreateTiDBTables);
     regSchemalessFunc("rename_tidb_tables", MockTiDBTable::dbgFuncRenameTiDBTables);
 
+    regSchemalessFunc("set_flush_threshold", dbgFuncSetFlushThreshold);
+
     regSchemalessFunc("raft_insert_row", dbgFuncRaftInsertRow);
     regSchemalessFunc("raft_insert_row_full", dbgFuncRaftInsertRowFull);
     regSchemalessFunc("raft_insert_rows", dbgFuncRaftInsertRows);
@@ -77,6 +77,7 @@ DBGInvoker::DBGInvoker()
 
     regSchemalessFunc("put_region", dbgFuncPutRegion);
 
+    regSchemalessFunc("try_flush", dbgFuncTryFlush);
     regSchemalessFunc("try_flush_region", dbgFuncTryFlushRegion);
 
     regSchemalessFunc("dump_all_region", dbgFuncDumpAllRegion);
@@ -89,10 +90,6 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("gc_schemas", dbgFuncGcSchemas);
     regSchemalessFunc("reset_schemas", dbgFuncResetSchemas);
     regSchemalessFunc("is_tombstone", dbgFuncIsTombstone);
-    regSchemalessFunc("refresh_table_schema", dbgFuncRefreshTableSchema);
-    regSchemalessFunc("refresh_mapped_table_schema", dbgFuncRefreshMappedTableSchema);
-    regSchemalessFunc("skip_schema_version", dbgFuncSkipSchemaVersion);
-    regSchemalessFunc("regenerate_schema_map", dbgFuncRegrenationSchemaMap);
 
     regSchemalessFunc("region_split", MockRaftCommand::dbgFuncRegionBatchSplit);
     regSchemalessFunc("region_prepare_merge", MockRaftCommand::dbgFuncPrepareMerge);
@@ -104,15 +101,9 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("region_snapshot_pre_handle_block", /**/ MockRaftCommand::dbgFuncRegionSnapshotPreHandleBlock);
     regSchemalessFunc("region_snapshot_apply_block", /*     */ MockRaftCommand::dbgFuncRegionSnapshotApplyBlock);
     regSchemalessFunc("region_snapshot_pre_handle_file", /* */ MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFiles);
-    regSchemalessFunc(
-        "region_snapshot_pre_handle_file_pks",
-        MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles);
+    regSchemalessFunc("region_snapshot_pre_handle_file_pks", MockRaftCommand::dbgFuncRegionSnapshotPreHandleDTFilesWithHandles);
     regSchemalessFunc("region_snapshot_apply_file", /*      */ MockRaftCommand::dbgFuncRegionSnapshotApplyDTFiles);
     regSchemalessFunc("region_ingest_sst", MockRaftCommand::dbgFuncIngestSST);
-    // Test whether a PK exists in KVStore.
-    regSchemalessFunc("find_key_kvstore", dbgFuncFindKey);
-    // Test whether a PK exists in DT.
-    regSchemafulFunc("find_key_dt", dbgFuncFindKeyDt);
 
     regSchemalessFunc("init_fail_point", DbgFailPointFunc::dbgInitFailPoint);
     regSchemalessFunc("enable_fail_point", DbgFailPointFunc::dbgEnableFailPoint);
@@ -127,8 +118,6 @@ DBGInvoker::DBGInvoker()
 
     regSchemalessFunc("mapped_database", dbgFuncMappedDatabase);
     regSchemalessFunc("mapped_table", dbgFuncMappedTable);
-    regSchemalessFunc("mapped_table_exists", dbgFuncTableExists);
-    regSchemalessFunc("mapped_database_exists", dbgFuncDatabaseExists);
     regSchemafulFunc("query_mapped", dbgFuncQueryMapped);
     regSchemalessFunc("get_tiflash_replica_count", dbgFuncGetTiflashReplicaCount);
     regSchemalessFunc("get_partition_tables_tiflash_replica_count", dbgFuncGetPartitionTablesTiflashReplicaCount);
@@ -138,10 +127,6 @@ DBGInvoker::DBGInvoker()
     regSchemalessFunc("gc_global_storage_pool", dbgFuncTriggerGlobalPageStorageGC);
 
     regSchemalessFunc("read_index_stress_test", ReadIndexStressTest::dbgFuncStressTest);
-
-    regSchemalessFunc(
-        "wait_until_no_temp_active_threads_in_dynamic_thread_pool",
-        dbgFuncWaitUntilNoTempActiveThreadsInDynamicThreadPool);
 }
 
 void replaceSubstr(std::string & str, const std::string & target, const std::string & replacement)
@@ -207,8 +192,7 @@ BlockInputStreamPtr DBGInvoker::invokeSchemaless(
         ", ");
     fmt_buf.append(")");
 
-    std::shared_ptr<StringStreamBlockInputStream> res
-        = std::make_shared<StringStreamBlockInputStream>(fmt_buf.toString());
+    std::shared_ptr<StringStreamBlockInputStream> res = std::make_shared<StringStreamBlockInputStream>(fmt_buf.toString());
     Printer printer = [&](const std::string & s) {
         res->append(s);
     };
@@ -218,11 +202,7 @@ BlockInputStreamPtr DBGInvoker::invokeSchemaless(
     return res;
 }
 
-BlockInputStreamPtr DBGInvoker::invokeSchemaful(
-    Context & context,
-    const std::string &,
-    const SchemafulDBGFunc & func,
-    const ASTs & args)
+BlockInputStreamPtr DBGInvoker::invokeSchemaful(Context & context, const std::string &, const SchemafulDBGFunc & func, const ASTs & args)
 {
     return func(context, args);
 }

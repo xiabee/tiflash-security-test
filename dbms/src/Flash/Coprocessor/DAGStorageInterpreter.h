@@ -15,21 +15,18 @@
 #pragma once
 
 #include <Common/nocopyable.h>
-#include <Flash/Coprocessor/CoprocessorReader.h>
 #include <Flash/Coprocessor/DAGExpressionAnalyzer.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
-#include <Flash/Coprocessor/FilterConditions.h>
+#include <Flash/Coprocessor/PushDownFilter.h>
 #include <Flash/Coprocessor/RemoteRequest.h>
 #include <Flash/Coprocessor/TiDBTableScan.h>
-#include <Flash/Pipeline/Exec/PipelineExecBuilder.h>
-#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
-#include <Storages/KVStore/Read/LearnerRead.h>
-#include <Storages/KVStore/Read/RegionException.h>
-#include <Storages/KVStore/TMTStorages.h>
-#include <Storages/KVStore/Types.h>
-#include <Storages/RegionQueryInfo_fwd.h>
+#include <Storages/RegionQueryInfo.h>
 #include <Storages/SelectQueryInfo.h>
 #include <Storages/TableLockHolder.h>
+#include <Storages/Transaction/LearnerRead.h>
+#include <Storages/Transaction/RegionException.h>
+#include <Storages/Transaction/TMTStorages.h>
+#include <Storages/Transaction/Types.h>
 #include <pingcap/coprocessor/Client.h>
 
 #include <vector>
@@ -39,23 +36,24 @@ namespace DB
 class TMTContext;
 using TablesRegionInfoMap = std::unordered_map<Int64, std::reference_wrapper<const RegionInfoMap>>;
 /// DAGStorageInterpreter encapsulates operations around storage during interprete stage.
-/// After DAGStorageInterpreter::execute some of its members will be used later.
+/// It's only intended to be used by DAGQueryBlockInterpreter.
+/// After DAGStorageInterpreter::execute some of its members will be transferred to DAGQueryBlockInterpreter.
 class DAGStorageInterpreter
 {
 public:
     DAGStorageInterpreter(
         Context & context_,
         const TiDBTableScan & table_scan,
-        const FilterConditions & filter_conditions_,
+        const PushDownFilter & push_down_filter_,
         size_t max_streams_);
-
-    ~DAGStorageInterpreter();
 
     DISALLOW_MOVE(DAGStorageInterpreter);
 
     void execute(DAGPipeline & pipeline);
 
-    void execute(PipelineExecutorContext & exec_context, PipelineExecGroupBuilder & group_builder);
+    /// Members will be transferred to DAGQueryBlockInterpreter after execute
+
+    std::unique_ptr<DAGExpressionAnalyzer> analyzer;
 
 private:
     struct StorageWithStructureLock
@@ -72,32 +70,18 @@ private:
         const SelectQueryInfo & query_info,
         const RegionException & e,
         int num_allow_retry);
-
-    DM::Remote::DisaggPhysicalTableReadSnapshotPtr buildLocalStreamsForPhysicalTable(
+    void buildLocalStreamsForPhysicalTable(
         const TableID & table_id,
         const SelectQueryInfo & query_info,
         DAGPipeline & pipeline,
         size_t max_block_size);
-
-    DM::Remote::DisaggPhysicalTableReadSnapshotPtr buildLocalExecForPhysicalTable(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        const TableID & table_id,
-        const SelectQueryInfo & query_info,
-        size_t max_block_size);
-
     void buildLocalStreams(DAGPipeline & pipeline, size_t max_block_size);
-
-    void buildLocalExec(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        size_t max_block_size);
 
     std::unordered_map<TableID, StorageWithStructureLock> getAndLockStorages(Int64 query_schema_version);
 
-    std::pair<Names, std::vector<UInt8>> getColumnsForTableScan();
+    std::tuple<Names, NamesAndTypes, std::vector<ExtraCastAfterTSMode>> getColumnsForTableScan(Int64 max_columns_to_read);
 
-    std::vector<RemoteRequest> buildRemoteRequests(const DM::ScanContextPtr & scan_context);
+    std::vector<RemoteRequest> buildRemoteRequests();
 
     TableLockHolders releaseAlterLocks();
 
@@ -107,34 +91,25 @@ private:
 
     void recordProfileStreams(DAGPipeline & pipeline, const String & key);
 
-    std::vector<pingcap::coprocessor::CopTask> buildCopTasks(const std::vector<RemoteRequest> & remote_requests);
-
-    CoprocessorReaderPtr buildCoprocessorReader(const std::vector<RemoteRequest> & remote_requests);
-
+    std::vector<pingcap::coprocessor::copTask> buildCopTasks(const std::vector<RemoteRequest> & remote_requests);
     void buildRemoteStreams(const std::vector<RemoteRequest> & remote_requests, DAGPipeline & pipeline);
 
-    void buildRemoteExec(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        const std::vector<RemoteRequest> & remote_requests);
-
-    void executeCastAfterTableScan(DAGPipeline & pipeline, DAGExpressionAnalyzer & analyzer);
-
     void executeCastAfterTableScan(
-        PipelineExecutorContext & exec_context,
-        PipelineExecGroupBuilder & group_builder,
-        DAGExpressionAnalyzer & analyzer);
+        size_t remote_read_streams_start_index,
+        DAGPipeline & pipeline);
+
+    // before_where, filter_column_name, after_where
+    std::tuple<ExpressionActionsPtr, String, ExpressionActionsPtr> buildPushDownFilter();
+    void executePushedDownFilter(
+        size_t remote_read_streams_start_index,
+        DAGPipeline & pipeline);
 
     void prepare();
 
     void executeImpl(DAGPipeline & pipeline);
 
-    void executeImpl(PipelineExecutorContext & exec_context, PipelineExecGroupBuilder & group_builder);
-
 private:
-    /// Normally, time and timestamp(when timezone is not UTC) type columns need to be casted after table scan.
-    /// But handle column and virtual column needn't to be casted, we use may_need_add_cast_column to record them.
-    std::vector<UInt8> may_need_add_cast_column;
+    std::vector<ExtraCastAfterTSMode> is_need_add_cast_column;
     /// it shouldn't be hash map because duplicated region id may occur if merge regions to retry of dag.
     RegionRetryList region_retry_from_local_region;
 
@@ -142,13 +117,14 @@ private:
 
     Context & context;
     const TiDBTableScan & table_scan;
-    const FilterConditions & filter_conditions;
-    const size_t max_streams;
+    const PushDownFilter & push_down_filter;
+    size_t max_streams;
     LoggerPtr log;
 
     /// derived from other members, doesn't change during DAGStorageInterpreter's lifetime
 
-    const TableID logical_table_id;
+    TableID logical_table_id;
+    const Settings & settings;
     TMTContext & tmt;
 
     /// Intermediate variables shared by multiple member functions
@@ -164,6 +140,7 @@ private:
     std::unordered_map<TableID, StorageWithStructureLock> storages_with_structure_lock;
     ManageableStoragePtr storage_for_logical_table;
     Names required_columns;
+    NamesAndTypes source_columns;
     // For generated column, just need a placeholder, and TiDB will fill this column.
     std::vector<std::tuple<UInt64, String, DataTypePtr>> generated_column_infos;
 };

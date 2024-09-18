@@ -38,12 +38,8 @@ class SharedQueryBlockInputStream : public IProfilingBlockInputStream
     static constexpr auto NAME = "SharedQuery";
 
 public:
-    SharedQueryBlockInputStream(
-        size_t clients,
-        Int64 max_buffered_bytes,
-        const BlockInputStreamPtr & in_,
-        const String & req_id)
-        : queue(CapacityLimits(clients, max_buffered_bytes), [](const Block & block) { return block.allocatedBytes(); })
+    SharedQueryBlockInputStream(size_t clients, const BlockInputStreamPtr & in_, const String & req_id)
+        : queue(clients)
         , log(Logger::get(req_id))
         , in(in_)
     {
@@ -110,7 +106,10 @@ public:
         ptr->cancel(kill);
     }
 
-    virtual void collectNewThreadCountOfThisLevel(int & cnt) override { ++cnt; }
+    virtual void collectNewThreadCountOfThisLevel(int & cnt) override
+    {
+        ++cnt;
+    }
 
 protected:
     /// The BlockStreamProfileInfo of SharedQuery is useless,
@@ -138,7 +137,10 @@ protected:
 
         return block;
     }
-    Block readImpl() override { throw Exception("Unsupport"); }
+    Block readImpl() override
+    {
+        throw Exception("Unsupport");
+    }
 
     void fetchBlocks()
     {
@@ -179,20 +181,6 @@ protected:
         }
         if (!exception_msg.empty())
             throw Exception(exception_msg);
-    }
-
-    uint64_t collectCPUTimeNsImpl(bool /*is_thread_runner*/) override
-    {
-        // `SharedQueryBlockInputStream` does not count its own execute time,
-        // whether `SharedQueryBlockInputStream` is `thread-runner` or not,
-        // because `SharedQueryBlockInputStream` basically does not use cpu, only `condition_cv.wait`.
-        uint64_t cpu_time_ns = 0;
-        forEachChild([&](IBlockInputStream & child) {
-            // Each of SharedQueryBlockInputStream's children is a thread-runner.
-            cpu_time_ns += child.collectCPUTimeNs(true);
-            return false;
-        });
-        return cpu_time_ns;
     }
 
 private:

@@ -17,7 +17,7 @@
 #include <Common/Logger.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/DAGResponseWriter.h>
-
+#include <Interpreters/ExpressionAnalyzer.h>
 namespace DB
 {
 /// read blocks directly from Union, then broadcast or partition blocks and encode them, later put them into sending tunnels
@@ -38,12 +38,16 @@ public:
     String getName() const override { return name; }
     Block getHeader() const override { return children.back()->getHeader(); }
 
-    bool canHandleSelectiveBlock() const override { return true; }
-
 protected:
     Block readImpl() override;
-    void readPrefixImpl() override { writer->prepare(getHeader()); }
-    void readSuffixImpl() override { LOG_DEBUG(log, "finish write with {} rows", total_rows); }
+    void readPrefixImpl() override
+    {
+        writer->prepare(getHeader());
+    }
+    void readSuffixImpl() override
+    {
+        LOG_DEBUG(log, "finish write with {} rows", total_rows);
+    }
 
 private:
     std::unique_ptr<DAGResponseWriter> writer;

@@ -29,37 +29,38 @@ try
     {
         // pass
         BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")}),
+            Block({createColumn<String>({"hello", "world"}, "col1"),
+                   createColumn<Int64>({123, 456}, "col2")}),
+            Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                   createColumn<Int64>({1, 2, 3, 4}, "col2")}),
         };
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
-        EXPECT_TRUE(InputStreamVSBlockUnrestrictlyCompare(
-            "",
-            "",
-            in,
-            Block({
-                createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
-                createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2"),
-            })));
+        EXPECT_TRUE(
+            InputStreamVSBlockUnrestrictlyCompare(
+                "",
+                "",
+                in,
+                Block({
+                    createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
+                    createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2"),
+                })));
     }
     {
         // pass
         BlocksList blocks{
-            Block(
-                {createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")}),
+            Block({createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
+                   createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")}),
         };
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
-        EXPECT_TRUE(InputStreamVSBlockUnrestrictlyCompare(
-            "",
-            "",
-            in,
-            Block({
-                createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
-                createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2"),
-            })));
+        EXPECT_TRUE(
+            InputStreamVSBlockUnrestrictlyCompare(
+                "",
+                "",
+                in,
+                Block({
+                    createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
+                    createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2"),
+                })));
     }
 }
 CATCH
@@ -69,11 +70,10 @@ try
 {
     {
         // column num not match
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         auto res = InputStreamVSBlockUnrestrictlyCompare(
             "in",
             "block",
@@ -87,11 +87,10 @@ try
     }
     {
         // column num not match
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         auto res = InputStreamVSBlockUnrestrictlyCompare(
             "in",
             "block",
@@ -109,11 +108,10 @@ try
 {
     {
         // rows not match
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         auto res = InputStreamVSBlockUnrestrictlyCompare(
             "in",
             "block",
@@ -126,11 +124,10 @@ try
     }
     {
         // rows not match
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         auto res = InputStreamVSBlockUnrestrictlyCompare(
             "in",
             "block",
@@ -151,10 +148,10 @@ try
 
     {
         BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")}),
+            Block({createColumn<String>({"hello", "world"}, "col1"),
+                   createColumn<Int64>({123, 456}, "col2")}),
+            Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                   createColumn<Int64>({1, 2, 3, 4}, "col2")}),
         };
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         auto res = InputStreamVSBlockUnrestrictlyCompare(
@@ -170,9 +167,8 @@ try
     {
         // pass
         BlocksList blocks{
-            Block(
-                {createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")}),
+            Block({createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
+                   createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")}),
         };
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         auto res = InputStreamVSBlockUnrestrictlyCompare(
@@ -198,17 +194,16 @@ try
         ASSERT_INPUTSTREAM_NROWS(in, 0);
     }
     {
-        BlocksList blocks{
-            Block({createConstColumn<String>(100, "test_data", "col1"), createConstColumn<Int64>(100, 123, "col2")})};
+        BlocksList blocks{Block({createConstColumn<String>(100, "test_data", "col1"),
+                                 createConstColumn<Int64>(100, 123, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_NROWS(in, 100);
     }
     {
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_NROWS(in, 6);
     }
@@ -225,40 +220,32 @@ try
         ASSERT_INPUTSTREAM_BLOCKS(in, Blocks());
     }
     {
-        BlocksList blocks{
-            Block({createConstColumn<String>(100, "test_data", "col1"), createConstColumn<Int64>(100, 123, "col2")})};
+        BlocksList blocks{Block({createConstColumn<String>(100, "test_data", "col1"),
+                                 createConstColumn<Int64>(100, 123, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
-        ASSERT_INPUTSTREAM_BLOCKS(
-            in,
-            Blocks({Block{
-                createConstColumn<String>(100, "test_data", "col1"),
-                createConstColumn<Int64>(100, 123, "col2")}}));
+        ASSERT_INPUTSTREAM_BLOCKS(in, Blocks({Block{createConstColumn<String>(100, "test_data", "col1"), createConstColumn<Int64>(100, 123, "col2")}}));
     }
     {
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_BLOCKS(
             in,
             Blocks({
                 Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-                Block(
-                    {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                     createColumn<Int64>({1, 2, 3, 4}, "col2")}),
+                Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"), createColumn<Int64>({1, 2, 3, 4}, "col2")}),
             }));
     }
 
     // unrestrictly check
     {
         //the input stream return smaller blocks
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_BLOCK_UR(
             in,
@@ -268,9 +255,8 @@ try
     }
     {
         //the input stream return excatly the same block
-        BlocksList blocks{Block(
-            {createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
-             createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world", "tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({123, 456, 1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_BLOCK_UR(
             in,
@@ -287,11 +273,10 @@ try
     // unrestrictly check a part of columns
     {
         //the input stream return smaller blocks, only check col1
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
         ASSERT_INPUTSTREAM_COLS_UR(
             in,
@@ -300,13 +285,15 @@ try
     }
     {
         //the input stream return smaller blocks, only check col2
-        BlocksList blocks{
-            Block({createColumn<String>({"hello", "world"}, "col1"), createColumn<Int64>({123, 456}, "col2")}),
-            Block(
-                {createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
-                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
+        BlocksList blocks{Block({createColumn<String>({"hello", "world"}, "col1"),
+                                 createColumn<Int64>({123, 456}, "col2")}),
+                          Block({createColumn<String>({"tikv", "tidb", "pd", "tiflash"}, "col1"),
+                                 createColumn<Int64>({1, 2, 3, 4}, "col2")})};
         BlockInputStreamPtr in = std::make_unique<BlocksListBlockInputStream>(std::move(blocks));
-        ASSERT_INPUTSTREAM_COLS_UR(in, Strings({"col2"}), createColumns({createColumn<Int64>({123, 456, 1, 2, 3, 4})}));
+        ASSERT_INPUTSTREAM_COLS_UR(
+            in,
+            Strings({"col2"}),
+            createColumns({createColumn<Int64>({123, 456, 1, 2, 3, 4})}));
     }
 }
 CATCH

@@ -31,61 +31,60 @@ public:
     {
         ExecutorTest::initializeContext();
 
-        context.addMockTable(
-            {"test_db", "test_table"},
-            {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s1", {"banana", {}, "banana"}),
-             toNullableVec<String>("s2", {"apple", {}, "banana"})});
-        context.addExchangeReceiver(
-            "exchange1",
-            {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s1", {"banana", {}, "banana"}),
-             toNullableVec<String>("s2", {"apple", {}, "banana"})});
+        context.context.setExecutorTest();
 
-        context.addExchangeReceiver(
-            "exchange2",
-            {{"partition", TiDB::TP::TypeLongLong}, {"order", TiDB::TP::TypeLongLong}},
-            {toNullableVec<Int64>("partition", {1, 1, 1, 1, 2, 2, 2, 2}),
-             toNullableVec<Int64>("order", {1, 1, 2, 2, 1, 1, 2, 2})},
-            1,
-            {{"partition", TiDB::TP::TypeLongLong}});
+        context.addMockTable({"test_db", "test_table"},
+                             {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
+                             {toNullableVec<String>("s1", {"banana", {}, "banana"}),
+                              toNullableVec<String>("s2", {"apple", {}, "banana"})});
+        context.addExchangeReceiver("exchange1",
+                                    {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}},
+                                    {toNullableVec<String>("s1", {"banana", {}, "banana"}),
+                                     toNullableVec<String>("s2", {"apple", {}, "banana"})});
 
-        context.addExchangeReceiver(
-            "exchange3",
-            {{"s1", TiDB::TP::TypeString},
-             {"s2", TiDB::TP::TypeString},
-             {"s3", TiDB::TP::TypeLongLong},
-             {"s4", TiDB::TP::TypeLongLong}},
-            {toNullableVec<String>("s1", {"banana", {}, "banana"}),
-             toNullableVec<String>("s2", {"apple", {}, "banana"}),
-             toNullableVec<Int64>("s3", {1, {}, 1}),
-             toNullableVec<Int64>("s4", {1, 1, {}})});
+        context.addExchangeReceiver("exchange2",
+                                    {{"partition", TiDB::TP::TypeLongLong}, {"order", TiDB::TP::TypeLongLong}},
+                                    {toNullableVec<Int64>("partition", {1, 1, 1, 1, 2, 2, 2, 2}),
+                                     toNullableVec<Int64>("order", {1, 1, 2, 2, 1, 1, 2, 2})});
 
-        context.addExchangeReceiver(
-            "exchange_r_table",
-            {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s", {"banana", "banana"}), toNullableVec<String>("join_c", {"apple", "banana"})});
-        context.addExchangeReceiver(
-            "exchange_l_table",
-            {{"s", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
-            {toNullableVec<String>("s", {"banana", "banana"}), toNullableVec<String>("join_c", {"apple", "banana"})});
+        context.addExchangeReceiver("exchange3",
+                                    {{"s1", TiDB::TP::TypeString}, {"s2", TiDB::TP::TypeString}, {"s3", TiDB::TP::TypeLongLong}, {"s4", TiDB::TP::TypeLongLong}},
+                                    {toNullableVec<String>("s1", {"banana", {}, "banana"}),
+                                     toNullableVec<String>("s2", {"apple", {}, "banana"}),
+                                     toNullableVec<Int64>("s3", {1, {}, 1}),
+                                     toNullableVec<Int64>("s4", {1, 1, {}})});
+
+        context.addExchangeReceiver("exchange_r_table",
+                                    {{"s1", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
+                                    {toNullableVec<String>("s", {"banana", "banana"}),
+                                     toNullableVec<String>("join_c", {"apple", "banana"})});
+        context.addExchangeReceiver("exchange_l_table",
+                                    {{"s1", TiDB::TP::TypeString}, {"join_c", TiDB::TP::TypeString}},
+                                    {toNullableVec<String>("s", {"banana", "banana"}),
+                                     toNullableVec<String>("join_c", {"apple", "banana"})});
 
         context.addMockTable(
             {"multi_test", "t1"},
             {{"a", TiDB::TP::TypeLong}, {"b", TiDB::TP::TypeLong}, {"c", TiDB::TP::TypeLong}},
-            {toVec<Int32>("a", {1, 3, 0}), toVec<Int32>("b", {2, 2, 0}), toVec<Int32>("c", {3, 2, 0})});
+            {toVec<Int32>("a", {1, 3, 0}),
+             toVec<Int32>("b", {2, 2, 0}),
+             toVec<Int32>("c", {3, 2, 0})});
         context.addMockTable(
             {"multi_test", "t2"},
             {{"a", TiDB::TP::TypeLong}, {"b", TiDB::TP::TypeLong}, {"c", TiDB::TP::TypeLong}},
-            {toVec<Int32>("a", {3, 3, 0}), toVec<Int32>("b", {4, 2, 0}), toVec<Int32>("c", {5, 3, 0})});
+            {toVec<Int32>("a", {3, 3, 0}),
+             toVec<Int32>("b", {4, 2, 0}),
+             toVec<Int32>("c", {5, 3, 0})});
         context.addMockTable(
             {"multi_test", "t3"},
             {{"a", TiDB::TP::TypeLong}, {"b", TiDB::TP::TypeLong}},
-            {toVec<Int32>("a", {1, 2, 0}), toVec<Int32>("b", {2, 2, 0})});
+            {toVec<Int32>("a", {1, 2, 0}),
+             toVec<Int32>("b", {2, 2, 0})});
         context.addMockTable(
             {"multi_test", "t4"},
             {{"a", TiDB::TP::TypeLong}, {"b", TiDB::TP::TypeLong}},
-            {toVec<Int32>("a", {3, 2, 0}), toVec<Int32>("b", {4, 2, 0})});
+            {toVec<Int32>("a", {3, 2, 0}),
+             toVec<Int32>("b", {4, 2, 0})});
     }
 
     void execute(
@@ -98,13 +97,10 @@ public:
         size_t max_streams = 1;
 
         DAGContext dag_context(*request, "executor_test", max_streams);
-        TiFlashTestEnv::setUpTestContext(
-            *context.context,
-            &dag_context,
-            context.mockStorage(),
-            TestType::EXECUTOR_TEST);
+        context.context.setDAGContext(&dag_context);
+        context.context.setMockStorage(context.mockStorage());
 
-        PhysicalPlan physical_plan{*context.context, log->identifier()};
+        PhysicalPlan physical_plan{context.context, log->identifier()};
         assert(request);
         physical_plan.build(request.get());
         physical_plan.outputAndOptimize();
@@ -114,8 +110,8 @@ public:
         BlockInputStreamPtr final_stream;
         {
             DAGPipeline pipeline;
-            physical_plan.buildBlockInputStream(pipeline, *context.context, max_streams);
-            executeCreatingSets(pipeline, *context.context, max_streams, log);
+            physical_plan.transform(pipeline, context.context, max_streams);
+            executeCreatingSets(pipeline, context.context, max_streams, log);
             final_stream = pipeline.firstStream();
             FmtBuffer fb;
             final_stream->dumpTree(fb);
@@ -127,11 +123,7 @@ public:
 
     std::tuple<DAGRequestBuilder, DAGRequestBuilder, DAGRequestBuilder, DAGRequestBuilder> multiTestScan()
     {
-        return {
-            context.scan("multi_test", "t1"),
-            context.scan("multi_test", "t2"),
-            context.scan("multi_test", "t3"),
-            context.scan("multi_test", "t4")};
+        return {context.scan("multi_test", "t1"), context.scan("multi_test", "t2"), context.scan("multi_test", "t3"), context.scan("multi_test", "t4")};
     }
 
     LoggerPtr log = Logger::get("PhysicalPlanTestRunner", "test_physical_plan");
@@ -140,7 +132,9 @@ public:
 TEST_F(PhysicalPlanTestRunner, Filter)
 try
 {
-    auto request = context.receive("exchange1").filter(eq(col("s1"), col("s2"))).build(context);
+    auto request = context.receive("exchange1")
+                       .filter(eq(col("s1"), col("s2")))
+                       .build(context);
 
     execute(
         request,
@@ -152,14 +146,17 @@ try
 Expression: <final projection>
  Filter
   MockExchangeReceiver)",
-        {toNullableVec<String>({"banana"}), toNullableVec<String>({"banana"})});
+        {toNullableVec<String>({"banana"}),
+         toNullableVec<String>({"banana"})});
 }
 CATCH
 
 TEST_F(PhysicalPlanTestRunner, Limit)
 try
 {
-    auto request = context.receive("exchange1").limit(1).build(context);
+    auto request = context.receive("exchange1")
+                       .limit(1)
+                       .build(context);
 
     execute(
         request,
@@ -171,14 +168,17 @@ try
 Expression: <final projection>
  Limit, limit = 1
   MockExchangeReceiver)",
-        {toNullableVec<String>({"banana"}), toNullableVec<String>({"apple"})});
+        {toNullableVec<String>({"banana"}),
+         toNullableVec<String>({"apple"})});
 }
 CATCH
 
 TEST_F(PhysicalPlanTestRunner, TopN)
 try
 {
-    auto request = context.receive("exchange1").topN("s2", false, 1).build(context);
+    auto request = context.receive("exchange1")
+                       .topN("s2", false, 1)
+                       .build(context);
 
     execute(
         request,
@@ -191,7 +191,8 @@ Expression: <final projection>
  MergeSorting, limit = 1
   PartialSorting: limit = 1
    MockExchangeReceiver)",
-        {toNullableVec<String>({{}}), toNullableVec<String>({{}})});
+        {toNullableVec<String>({{}}),
+         toNullableVec<String>({{}})});
 }
 CATCH
 
@@ -199,27 +200,33 @@ CATCH
 TEST_F(PhysicalPlanTestRunner, Aggregation)
 try
 {
-    auto request = context.receive("exchange1").aggregation(Max(col("s2")), col("s1")).build(context);
+    auto request = context.receive("exchange1")
+                       .aggregation(Max(col("s2")), col("s1"))
+                       .build(context);
 
     execute(
         request,
         /*expected_physical_plan=*/R"(
-<Projection, aggregation_1> | is_tidb_operator: false, schema: <aggregation_1_max(s2)_collator_46 , Nullable(String)>, <aggregation_1_first_row(s1)_collator_46 , Nullable(String)>
- <Aggregation, aggregation_1> | is_tidb_operator: true, schema: <max(s2)_collator_46 , Nullable(String)>, <first_row(s1)_collator_46 , Nullable(String)>
+<Projection, aggregation_1> | is_tidb_operator: false, schema: <aggregation_1_max(s2)_collator_46 , Nullable(String)>, <aggregation_1_any(s1)_collator_46 , Nullable(String)>
+ <Aggregation, aggregation_1> | is_tidb_operator: true, schema: <max(s2)_collator_46 , Nullable(String)>, <any(s1)_collator_46 , Nullable(String)>
   <MockExchangeReceiver, exchange_receiver_0> | is_tidb_operator: true, schema: <s1, Nullable(String)>, <s2, Nullable(String)>)",
         /*expected_streams=*/R"(
 Expression: <final projection>
  Expression: <expr after aggregation>
   Aggregating
-   MockExchangeReceiver)",
-        {toNullableVec<String>({{}, "banana"}), toNullableVec<String>({{}, "banana"})});
+   Concat
+    MockExchangeReceiver)",
+        {toNullableVec<String>({{}, "banana"}),
+         toNullableVec<String>({{}, "banana"})});
 }
 CATCH
 
 TEST_F(PhysicalPlanTestRunner, Projection)
 try
 {
-    auto request = context.receive("exchange1").project({concat(col("s1"), col("s2"))}).build(context);
+    auto request = context.receive("exchange1")
+                       .project({concat(col("s1"), col("s2"))})
+                       .build(context);
 
     execute(
         request,
@@ -234,11 +241,7 @@ Expression: <final projection>
         {toNullableVec<String>({"bananaapple", {}, "bananabanana"})});
 
     request = context.receive("exchange3")
-                  .project(
-                      {concat(col("s1"), col("s2")),
-                       concat(col("s1"), col("s2")),
-                       And(col("s3"), col("s4")),
-                       NOT(col("s3"))})
+                  .project({concat(col("s1"), col("s2")), concat(col("s1"), col("s2")), And(col("s3"), col("s4")), NOT(col("s3"))})
                   .build(context);
 
     execute(
@@ -261,7 +264,9 @@ CATCH
 TEST_F(PhysicalPlanTestRunner, MockExchangeSender)
 try
 {
-    auto request = context.receive("exchange1").exchangeSender(tipb::Hash).build(context);
+    auto request = context.receive("exchange1")
+                       .exchangeSender(tipb::Hash)
+                       .build(context);
 
     execute(
         request,
@@ -273,14 +278,16 @@ try
 MockExchangeSender
  Expression: <final projection>
   MockExchangeReceiver)",
-        {toNullableVec<String>({"banana", {}, "banana"}), toNullableVec<String>({"apple", {}, "banana"})});
+        {toNullableVec<String>({"banana", {}, "banana"}),
+         toNullableVec<String>({"apple", {}, "banana"})});
 }
 CATCH
 
 TEST_F(PhysicalPlanTestRunner, MockExchangeReceiver)
 try
 {
-    auto request = context.receive("exchange1").build(context);
+    auto request = context.receive("exchange1")
+                       .build(context);
 
     execute(
         request,
@@ -290,7 +297,8 @@ try
         /*expected_streams=*/R"(
 Expression: <final projection>
  MockExchangeReceiver)",
-        {toNullableVec<String>({"banana", {}, "banana"}), toNullableVec<String>({"apple", {}, "banana"})});
+        {toNullableVec<String>({"banana", {}, "banana"}),
+         toNullableVec<String>({"apple", {}, "banana"})});
 }
 CATCH
 
@@ -301,17 +309,10 @@ try
         static const uint64_t enable = 8;
         static const uint64_t disable = 0;
         bool fine_grained_shuffle_stream_count = enable_fine_grained_shuffle ? enable : disable;
-        return context.receive("exchange2", fine_grained_shuffle_stream_count)
-            .sort(
-                {{"partition", false}, {"order", false}, {"partition", false}, {"order", false}},
-                true,
-                fine_grained_shuffle_stream_count)
-            .window(
-                RowNumber(),
-                {"order", false},
-                {"partition", false},
-                buildDefaultRowsFrame(),
-                fine_grained_shuffle_stream_count)
+        return context
+            .receive("exchange2", fine_grained_shuffle_stream_count)
+            .sort({{"partition", false}, {"order", false}, {"partition", false}, {"order", false}}, true, fine_grained_shuffle_stream_count)
+            .window(RowNumber(), {"order", false}, {"partition", false}, buildDefaultRowsFrame(), fine_grained_shuffle_stream_count)
             .build(context);
     };
 
@@ -358,7 +359,8 @@ CATCH
 TEST_F(PhysicalPlanTestRunner, MockTableScan)
 try
 {
-    auto request = context.scan("test_db", "test_table").build(context);
+    auto request = context.scan("test_db", "test_table")
+                       .build(context);
 
     execute(
         request,
@@ -368,7 +370,8 @@ try
         /*expected_streams=*/R"(
 Expression: <final projection>
  MockTableScan)",
-        {toNullableVec<String>({"banana", {}, "banana"}), toNullableVec<String>({"apple", {}, "banana"})});
+        {toNullableVec<String>({"banana", {}, "banana"}),
+         toNullableVec<String>({"apple", {}, "banana"})});
 }
 CATCH
 
@@ -378,7 +381,8 @@ try
     // Simple Join
     {
         auto get_request = [&](const tipb::JoinType & join_type) {
-            return context.receive("exchange_l_table")
+            return context
+                .receive("exchange_l_table")
                 .join(context.receive("exchange_r_table"), join_type, {col("join_c"), col("join_c")})
                 .build(context);
         };
@@ -396,12 +400,15 @@ try
             /*expected_streams=*/R"(
 CreatingSets
  HashJoinBuild: <join build, build_side_root_executor_id = exchange_receiver_1>, join_kind = Inner
-  Expression: <final projection>
-   MockExchangeReceiver
- Expression: <final projection>
-  HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
+  Expression: <append join key and join filters for build side>
    Expression: <final projection>
-    MockExchangeReceiver)",
+    MockExchangeReceiver
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_2>
+    Expression: <append join key and join filters for probe side>
+     Expression: <final projection>
+      MockExchangeReceiver)",
             {toNullableVec<String>({"banana", "banana"}),
              toNullableVec<String>({"apple", "banana"}),
              toNullableVec<String>({"banana", "banana"}),
@@ -420,12 +427,15 @@ CreatingSets
             /*expected_streams=*/R"(
 CreatingSets
  HashJoinBuild: <join build, build_side_root_executor_id = exchange_receiver_1>, join_kind = Left
-  Expression: <final projection>
-   MockExchangeReceiver
- Expression: <final projection>
-  HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
+  Expression: <append join key and join filters for build side>
    Expression: <final projection>
-    MockExchangeReceiver)",
+    MockExchangeReceiver
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_2>
+    Expression: <append join key and join filters for probe side>
+     Expression: <final projection>
+      MockExchangeReceiver)",
             {toNullableVec<String>({"banana", "banana"}),
              toNullableVec<String>({"apple", "banana"}),
              toNullableVec<String>({"banana", "banana"}),
@@ -444,12 +454,19 @@ CreatingSets
             /*expected_streams=*/R"(
 CreatingSets
  HashJoinBuild: <join build, build_side_root_executor_id = exchange_receiver_1>, join_kind = Right
-  Expression: <final projection>
-   MockExchangeReceiver
- Expression: <final projection>
-  HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
+  Expression: <append join key and join filters for build side>
    Expression: <final projection>
-    MockExchangeReceiver)",
+    MockExchangeReceiver
+ Union: <for test>
+  Expression: <final projection>
+   Expression: <remove useless column after join>
+    HashJoinProbe: <join probe, join_executor_id = Join_2>
+     Expression: <append join key and join filters for probe side>
+      Expression: <final projection>
+       MockExchangeReceiver
+  Expression: <final projection>
+   Expression: <remove useless column after join>
+    NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<String>({"banana", "banana"}),
              toNullableVec<String>({"apple", "banana"}),
              toNullableVec<String>({"banana", "banana"}),
@@ -460,10 +477,9 @@ CreatingSets
     {
         auto [t1, t2, t3, t4] = multiTestScan();
         auto request = t1.join(t2, tipb::JoinType::TypeRightOuterJoin, {col("a")})
-                           .join(
-                               t3.join(t4, tipb::JoinType::TypeRightOuterJoin, {col("a")}),
-                               tipb::JoinType::TypeInnerJoin,
-                               {col("b")})
+                           .join(t3.join(t4, tipb::JoinType::TypeRightOuterJoin, {col("a")}),
+                                 tipb::JoinType::TypeInnerJoin,
+                                 {col("b")})
                            .build(context);
         execute(
             request,
@@ -485,19 +501,36 @@ CreatingSets
             /*expected_streams=*/R"(
 CreatingSets
  HashJoinBuild x 2: <join build, build_side_root_executor_id = table_scan_3>, join_kind = Right
-  Expression: <final projection>
-   MockTableScan
- HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
-  Expression: <final projection>
-   HashJoinProbe: <join probe, join_executor_id = Join_5, scan_hash_map_after_probe = true>
-    Expression: <final projection>
-     MockTableScan
- Expression: <final projection>
-  HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
+  Expression: <append join key and join filters for build side>
    Expression: <final projection>
-    HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = true>
+    MockTableScan
+ Union: <for join>
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      HashJoinProbe: <join probe, join_executor_id = Join_5>
+       Expression: <append join key and join filters for probe side>
+        Expression: <final projection>
+         MockTableScan
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Inner
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      NonJoined: <add stream with non_joined_data if full_or_right_join>
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_6>
+    Union: <final union for non_joined_data>
      Expression: <final projection>
-      MockTableScan)",
+      Expression: <remove useless column after join>
+       HashJoinProbe: <join probe, join_executor_id = Join_4>
+        Expression: <append join key and join filters for probe side>
+         Expression: <final projection>
+          MockTableScan
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<Int32>({3, 3, 0}),
              toNullableVec<Int32>({2, 2, 0}),
              toNullableVec<Int32>({2, 2, 0}),
@@ -514,10 +547,9 @@ CreatingSets
     {
         auto [t1, t2, t3, t4] = multiTestScan();
         auto request = t1.join(t2, tipb::JoinType::TypeRightOuterJoin, {col("a")})
-                           .join(
-                               t3.join(t4, tipb::JoinType::TypeRightOuterJoin, {col("a")}),
-                               tipb::JoinType::TypeLeftOuterJoin,
-                               {col("b")})
+                           .join(t3.join(t4, tipb::JoinType::TypeRightOuterJoin, {col("a")}),
+                                 tipb::JoinType::TypeLeftOuterJoin,
+                                 {col("b")})
                            .build(context);
         execute(
             request,
@@ -539,19 +571,36 @@ CreatingSets
             /*expected_streams=*/R"(
 CreatingSets
  HashJoinBuild x 2: <join build, build_side_root_executor_id = table_scan_3>, join_kind = Right
-  Expression: <final projection>
-   MockTableScan
- HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
-  Expression: <final projection>
-   HashJoinProbe: <join probe, join_executor_id = Join_5, scan_hash_map_after_probe = true>
-    Expression: <final projection>
-     MockTableScan
- Expression: <final projection>
-  HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
+  Expression: <append join key and join filters for build side>
    Expression: <final projection>
-    HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = true>
+    MockTableScan
+ Union: <for join>
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      HashJoinProbe: <join probe, join_executor_id = Join_5>
+       Expression: <append join key and join filters for probe side>
+        Expression: <final projection>
+         MockTableScan
+  HashJoinBuild: <join build, build_side_root_executor_id = Join_5>, join_kind = Left
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <remove useless column after join>
+      NonJoined: <add stream with non_joined_data if full_or_right_join>
+ Expression: <final projection>
+  Expression: <remove useless column after join>
+   HashJoinProbe: <join probe, join_executor_id = Join_6>
+    Union: <final union for non_joined_data>
      Expression: <final projection>
-      MockTableScan)",
+      Expression: <remove useless column after join>
+       HashJoinProbe: <join probe, join_executor_id = Join_4>
+        Expression: <append join key and join filters for probe side>
+         Expression: <final projection>
+          MockTableScan
+     Expression: <final projection>
+      Expression: <remove useless column after join>
+       NonJoined: <add stream with non_joined_data if full_or_right_join>)",
             {toNullableVec<Int32>({3, 3, 0}),
              toNullableVec<Int32>({2, 2, 0}),
              toNullableVec<Int32>({2, 2, 0}),

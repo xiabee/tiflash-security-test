@@ -18,10 +18,7 @@
 
 namespace DB::PS::V2
 {
-LegacyCompactor::LegacyCompactor(
-    const PageStorage & storage,
-    const WriteLimiterPtr & write_limiter_,
-    const ReadLimiterPtr & read_limiter_)
+LegacyCompactor::LegacyCompactor(const PageStorage & storage, const WriteLimiterPtr & write_limiter_, const ReadLimiterPtr & read_limiter_)
     : storage_name(storage.storage_name)
     , delegator(storage.delegator)
     , file_provider(storage.getFileProvider())
@@ -31,9 +28,11 @@ LegacyCompactor::LegacyCompactor(
     , version_set(storage.storage_name + ".legacy_compactor", config.version_set_config, log)
     , write_limiter(write_limiter_)
     , read_limiter(read_limiter_)
-{}
+{
+}
 
-std::tuple<PageFileSet, PageFileSet, size_t> LegacyCompactor::tryCompact(
+std::tuple<PageFileSet, PageFileSet, size_t>
+LegacyCompactor::tryCompact(
     PageFileSet && page_files,
     const WritingFilesSnapshot & writing_files)
 {
@@ -50,12 +49,7 @@ std::tuple<PageFileSet, PageFileSet, size_t> LegacyCompactor::tryCompact(
     if (page_files_to_compact.size() < config.gc_min_legacy_num)
     {
         // Nothing to compact
-        LOG_DEBUG(
-            log,
-            "{} LegacyCompactor::tryCompact exit without compaction, candidates size: {}, compact_legacy_min_num: {}",
-            storage_name,
-            page_files_to_compact.size(),
-            config.gc_min_legacy_num);
+        LOG_DEBUG(log, "{} LegacyCompactor::tryCompact exit without compaction, candidates size: {}, compact_legacy_min_num: {}", storage_name, page_files_to_compact.size(), config.gc_min_legacy_num);
         removePageFilesIf(page_files, [&min_writing_file_id_level](const PageFile & pf) -> bool {
             return
                 // Remove page files that maybe writing to
@@ -72,19 +66,9 @@ std::tuple<PageFileSet, PageFileSet, size_t> LegacyCompactor::tryCompact(
     // We only store the checkpoint file to `defaultPath` for convenience. If we store the checkpoint
     // to multi disk one day, don't forget to check existence for multi disks deployment.
     const String storage_path = delegator->defaultPath();
-    if (PageFile::isPageFileExist(
-            checkpoint_id,
-            storage_path,
-            file_provider,
-            PageFile::Type::Checkpoint,
-            page_file_log))
+    if (PageFile::isPageFileExist(checkpoint_id, storage_path, file_provider, PageFile::Type::Checkpoint, page_file_log))
     {
-        LOG_WARNING(
-            log,
-            "{} LegacyCompactor::tryCompact to checkpoint PageFile_{}_{} is done before.",
-            storage_name,
-            checkpoint_id.first,
-            checkpoint_id.second);
+        LOG_WARNING(log, "{} LegacyCompactor::tryCompact to checkpoint PageFile_{}_{} is done before.", storage_name, checkpoint_id.first, checkpoint_id.second);
         removePageFilesIf(page_files, [&min_writing_file_id_level](const PageFile & pf) -> bool {
             return
                 // Remove page files that maybe writing to
@@ -107,28 +91,13 @@ std::tuple<PageFileSet, PageFileSet, size_t> LegacyCompactor::tryCompact(
         legacy_ss << "]";
         const String old_checkpoint_str = (old_checkpoint ? old_checkpoint->toString() : "(none)");
 
-        LOG_INFO(
-            log,
-            "{} Compact legacy PageFile {} and old checkpoint: {} into checkpoint PageFile_{}_{} with {} sequence: {}",
-            storage_name,
-            legacy_ss.str(),
-            old_checkpoint_str,
-            checkpoint_id.first,
-            checkpoint_id.second,
-            info.toString(),
-            checkpoint_sequence);
+        LOG_INFO(log, "{} Compact legacy PageFile {} and old checkpoint: {} into checkpoint PageFile_{}_{} with {} sequence: {}", storage_name, legacy_ss.str(), old_checkpoint_str, checkpoint_id.first, checkpoint_id.second, info.toString(), checkpoint_sequence);
     }
 
     size_t bytes_written = 0;
     if (!info.empty())
     {
-        bytes_written = writeToCheckpoint(
-            storage_path,
-            checkpoint_id,
-            std::move(wb),
-            file_provider,
-            page_file_log,
-            write_limiter);
+        bytes_written = writeToCheckpoint(storage_path, checkpoint_id, std::move(wb), file_provider, page_file_log, write_limiter);
         // 1. Don't need to insert location since Checkpoint PageFile won't be read except using listAllPageFiles in `PageStorage::restore`
         // 2. Also, `checkpoint_id` is the same as the largest page file compacted,
         //    so insert the checkpoint file's location here will overwrite the old page file's location and may incur error when deploy on multi disk environment
@@ -159,8 +128,8 @@ std::tuple<PageFileSet, PageFileSet, size_t> LegacyCompactor::tryCompact(
     return {std::move(page_files), std::move(page_files_to_remove), bytes_written};
 }
 
-std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageFile>> LegacyCompactor::
-    collectPageFilesToCompact(const PageFileSet & page_files, const WritingFilesSnapshot & writing_files)
+std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageFile>>
+LegacyCompactor::collectPageFilesToCompact(const PageFileSet & page_files, const WritingFilesSnapshot & writing_files)
 {
     PageStorage::MetaMergingQueue merging_queue;
     for (const auto & page_file : page_files)
@@ -169,18 +138,11 @@ std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageF
         if (auto iter = writing_files.find(page_file.fileIdLevel()); iter != writing_files.end())
         {
             // create reader with max meta reading offset
-            reader = PageFile::MetaMergingReader::createFrom(
-                const_cast<PageFile &>(page_file),
-                iter->second.meta_offset,
-                read_limiter,
-                /*background*/ true);
+            reader = PageFile::MetaMergingReader::createFrom(const_cast<PageFile &>(page_file), iter->second.meta_offset, read_limiter, /*background*/ true);
         }
         else
         {
-            reader = PageFile::MetaMergingReader::createFrom(
-                const_cast<PageFile &>(page_file),
-                read_limiter,
-                /*background*/ true);
+            reader = PageFile::MetaMergingReader::createFrom(const_cast<PageFile &>(page_file), read_limiter, /*background*/ true);
         }
         if (reader->hasNext())
         {
@@ -222,14 +184,7 @@ std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageF
             || reader_wb_seq >= gc_safe_sequence //
             || writing_files.contains(reader->fileIdLevel()))
         {
-            LOG_DEBUG(
-                log,
-                "{} collectPageFilesToCompact stop on {}, sequence: {} last sequence: {} gc safe squence: {}",
-                storage_name,
-                reader->belongingPageFile().toString(),
-                reader_wb_seq,
-                last_sequence,
-                gc_safe_sequence);
+            LOG_DEBUG(log, "{} collectPageFilesToCompact stop on {}, sequence: {} last sequence: {} gc safe squence: {}", storage_name, reader->belongingPageFile().toString(), reader_wb_seq, last_sequence, gc_safe_sequence);
             break;
         }
 
@@ -251,13 +206,7 @@ std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageF
                 // Then there would be a hole in the WAL. We need to automatically recover from crashes in the middle
                 // from writing, so just skip the hole and continue the compaction.
                 // FIXME: rethink the multi-threads writing support.
-                LOG_WARNING(
-                    log,
-                    "{} collectPageFilesToCompact skip non-continuous sequence from {} to {}, {{{}}}",
-                    storage_name,
-                    last_sequence,
-                    reader_wb_seq,
-                    reader->toString());
+                LOG_WARNING(log, "{} collectPageFilesToCompact skip non-continuous sequence from {} to {}, {{{}}}", storage_name, last_sequence, reader_wb_seq, reader->toString());
             }
 
             try
@@ -271,9 +220,8 @@ std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageF
             catch (Exception & e)
             {
                 /// Better diagnostics.
-                e.addMessage(
-                    "(PageStorage: " + storage_name + " while applying edit in collectPageFilesToCompact with "
-                    + reader->toString() + ")");
+                e.addMessage("(PageStorage: " + storage_name + " while applying edit in collectPageFilesToCompact with "
+                             + reader->toString() + ")");
                 throw;
             }
         }
@@ -285,11 +233,7 @@ std::tuple<PageFileSet, PageFileSet, WriteBatch::SequenceID, std::optional<PageF
         else
         {
             // We apply all edit of belonging PageFile, do compaction on it.
-            LOG_TRACE(
-                log,
-                "{} collectPageFilesToCompact try to compact: {}",
-                storage_name,
-                reader->belongingPageFile().toString());
+            LOG_TRACE(log, "{} collectPageFilesToCompact try to compact: {}", storage_name, reader->belongingPageFile().toString());
             page_files_to_compact.emplace(reader->belongingPageFile());
         }
     }
@@ -309,18 +253,16 @@ WriteBatch LegacyCompactor::prepareCheckpointWriteBatch(
         auto entry = snapshot->version()->findNormalPageEntry(page_id);
         if (unlikely(!entry))
         {
-            throw Exception(
-                "Normal Page " + DB::toString(page_id) + " not found while prepareCheckpointWriteBatch.",
-                ErrorCodes::LOGICAL_ERROR);
+            throw Exception("Normal Page " + DB::toString(page_id) + " not found while prepareCheckpointWriteBatch.",
+                            ErrorCodes::LOGICAL_ERROR);
         }
-        wb.upsertPage(
-            page_id, //
-            entry->tag,
-            entry->fileIdLevel(),
-            entry->offset,
-            entry->size,
-            entry->checksum,
-            entry->field_offsets);
+        wb.upsertPage(page_id, //
+                      entry->tag,
+                      entry->fileIdLevel(),
+                      entry->offset,
+                      entry->size,
+                      entry->checksum,
+                      entry->field_offsets);
     }
 
     // After ingesting normal_pages, we will ref them manually to ensure the ref-count is correct.
@@ -335,17 +277,15 @@ WriteBatch LegacyCompactor::prepareCheckpointWriteBatch(
     return wb;
 }
 
-size_t LegacyCompactor::writeToCheckpoint(
-    const String & storage_path,
-    const PageFileIdAndLevel & file_id,
-    WriteBatch && wb,
-    FileProviderPtr & file_provider,
-    LoggerPtr log,
-    const WriteLimiterPtr & write_limiter)
+size_t LegacyCompactor::writeToCheckpoint(const String & storage_path,
+                                          const PageFileIdAndLevel & file_id,
+                                          WriteBatch && wb,
+                                          FileProviderPtr & file_provider,
+                                          Poco::Logger * log,
+                                          const WriteLimiterPtr & write_limiter)
 {
     size_t bytes_written = 0;
-    auto checkpoint_file
-        = PageFile::newPageFile(file_id.first, file_id.second, storage_path, file_provider, PageFile::Type::Temp, log);
+    auto checkpoint_file = PageFile::newPageFile(file_id.first, file_id.second, storage_path, file_provider, PageFile::Type::Temp, log);
     {
         auto checkpoint_writer = checkpoint_file.createWriter(false, true);
 

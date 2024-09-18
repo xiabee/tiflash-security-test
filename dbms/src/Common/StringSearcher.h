@@ -21,7 +21,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <bit>
 #include <ext/range.h>
 
 #if __SSE2__
@@ -196,9 +195,7 @@ public:
                     pos += cache_valid_len;
                     const auto * needle_pos = needle + cache_valid_len;
 
-                    while (needle_pos < needle_end
-                           && Poco::Unicode::toLower(utf8.convert(pos))
-                               == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                    while (needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                     {
                         /// @note assuming sequences for lowercase and uppercase have exact same length
                         const auto len = DB::UTF8::seqLength(*pos);
@@ -221,8 +218,7 @@ public:
             pos += first_needle_symbol_is_ascii;
             const auto * needle_pos = needle + first_needle_symbol_is_ascii;
 
-            while (needle_pos < needle_end
-                   && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+            while (needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
             {
                 const auto len = DB::UTF8::seqLength(*pos);
                 pos += len, needle_pos += len;
@@ -252,7 +248,7 @@ public:
                 const auto v_against_u = _mm_cmpeq_epi8(v_haystack, patu);
                 const auto v_against_l_or_u = _mm_or_si128(v_against_l, v_against_u);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_l_or_u);
+                const auto mask = _mm_movemask_epi8(v_against_l_or_u);
 
                 if (mask == 0)
                 {
@@ -261,7 +257,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))
@@ -279,9 +275,7 @@ public:
                             const auto * haystack_pos = haystack + cache_valid_len;
                             const auto * needle_pos = needle + cache_valid_len;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && Poco::Unicode::toLower(utf8.convert(haystack_pos))
-                                       == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(haystack_pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                             {
                                 /// @note assuming sequences for lowercase and uppercase have exact same length
                                 const auto len = DB::UTF8::seqLength(*haystack_pos);
@@ -310,9 +304,7 @@ public:
                 const auto * haystack_pos = haystack + first_needle_symbol_is_ascii;
                 const auto * needle_pos = needle + first_needle_symbol_is_ascii;
 
-                while (haystack_pos < haystack_end && needle_pos < needle_end
-                       && Poco::Unicode::toLower(utf8.convert(haystack_pos))
-                           == Poco::Unicode::toLower(utf8.convert(needle_pos)))
+                while (haystack_pos < haystack_end && needle_pos < needle_end && Poco::Unicode::toLower(utf8.convert(haystack_pos)) == Poco::Unicode::toLower(utf8.convert(needle_pos)))
                 {
                     const auto len = DB::UTF8::seqLength(*haystack_pos);
                     haystack_pos += len, needle_pos += len;
@@ -452,7 +444,7 @@ public:
                 const auto v_against_u = _mm_cmpeq_epi8(v_haystack, patu);
                 const auto v_against_l_or_u = _mm_or_si128(v_against_l, v_against_u);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_l_or_u);
+                const auto mask = _mm_movemask_epi8(v_against_l_or_u);
 
                 if (mask == 0)
                 {
@@ -460,7 +452,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))
@@ -478,8 +470,7 @@ public:
                             const auto * haystack_pos = haystack + n;
                             const auto * needle_pos = needle + n;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
                                 ++haystack_pos, ++needle_pos;
 
                             if (needle_pos == needle_end)
@@ -503,8 +494,7 @@ public:
                 const auto * haystack_pos = haystack + 1;
                 const auto * needle_pos = needle + 1;
 
-                while (haystack_pos < haystack_end && needle_pos < needle_end
-                       && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
+                while (haystack_pos < haystack_end && needle_pos < needle_end && std::tolower(*haystack_pos) == std::tolower(*needle_pos))
                     ++haystack_pos, ++needle_pos;
 
                 if (needle_pos == needle_end)
@@ -632,7 +622,7 @@ public:
                 const auto v_haystack = _mm_loadu_si128(reinterpret_cast<const __m128i *>(haystack));
                 const auto v_against_pattern = _mm_cmpeq_epi8(v_haystack, pattern);
 
-                const UInt32 mask = _mm_movemask_epi8(v_against_pattern);
+                const auto mask = _mm_movemask_epi8(v_against_pattern);
 
                 /// first character not present in 16 octets starting at `haystack`
                 if (mask == 0)
@@ -641,7 +631,7 @@ public:
                     continue;
                 }
 
-                const auto offset = std::countr_zero(mask);
+                const auto offset = __builtin_ctz(mask);
                 haystack += offset;
 
                 if (haystack < haystack_end && haystack + n <= haystack_end && pageSafe(haystack))
@@ -658,8 +648,7 @@ public:
                             const auto * haystack_pos = haystack + n;
                             const auto * needle_pos = needle + n;
 
-                            while (haystack_pos < haystack_end && needle_pos < needle_end
-                                   && *haystack_pos == *needle_pos)
+                            while (haystack_pos < haystack_end && needle_pos < needle_end && *haystack_pos == *needle_pos)
                                 ++haystack_pos, ++needle_pos;
 
                             if (needle_pos == needle_end)

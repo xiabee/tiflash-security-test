@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Columns/IColumn.h>
-#include <Common/HashTable/HashTable.h>
 #include <Common/HashTable/HashTableKeyHolder.h>
 #include <Common/assert_cast.h>
 #include <Functions/FunctionHelpers.h>
@@ -81,7 +80,7 @@ public:
 };
 
 template <>
-class EmplaceResultImpl<VoidMapped>
+class EmplaceResultImpl<void>
 {
     bool inserted;
 
@@ -108,7 +107,7 @@ public:
 };
 
 template <>
-class FindResultImpl<VoidMapped>
+class FindResultImpl<void>
 {
     bool found;
 
@@ -125,37 +124,25 @@ class HashMethodBase
 public:
     using EmplaceResult = EmplaceResultImpl<Mapped>;
     using FindResult = FindResultImpl<Mapped>;
-    static constexpr bool has_mapped = !std::is_same<Mapped, VoidMapped>::value;
+    static constexpr bool has_mapped = !std::is_same<Mapped, void>::value;
     using Cache = LastElementCache<Value, consecutive_keys_optimization>;
 
     template <typename Data>
-    ALWAYS_INLINE inline EmplaceResult emplaceKey(
-        Data & data,
-        size_t row,
-        Arena & pool,
-        std::vector<String> & sort_key_containers)
+    ALWAYS_INLINE inline EmplaceResult emplaceKey(Data & data, size_t row, Arena & pool, std::vector<String> & sort_key_containers)
     {
         auto key_holder = static_cast<Derived &>(*this).getKeyHolder(row, &pool, sort_key_containers);
         return emplaceImpl(key_holder, data);
     }
 
     template <typename Data>
-    ALWAYS_INLINE inline FindResult findKey(
-        Data & data,
-        size_t row,
-        Arena & pool,
-        std::vector<String> & sort_key_containers)
+    ALWAYS_INLINE inline FindResult findKey(Data & data, size_t row, Arena & pool, std::vector<String> & sort_key_containers)
     {
         auto key_holder = static_cast<Derived &>(*this).getKeyHolder(row, &pool, sort_key_containers);
         return findKeyImpl(keyHolderGetKey(key_holder), data);
     }
 
     template <typename Data>
-    ALWAYS_INLINE inline size_t getHash(
-        const Data & data,
-        size_t row,
-        Arena & pool,
-        std::vector<String> & sort_key_containers)
+    ALWAYS_INLINE inline size_t getHash(const Data & data, size_t row, Arena & pool, std::vector<String> & sort_key_containers)
     {
         auto key_holder = static_cast<Derived &>(*this).getKeyHolder(row, &pool, sort_key_containers);
         return data.hash(keyHolderGetKey(key_holder));
@@ -281,7 +268,7 @@ struct MappedCache : public PaddedPODArray<T>
 };
 
 template <>
-struct MappedCache<VoidMapped>
+struct MappedCache<void>
 {
 };
 
@@ -320,7 +307,10 @@ protected:
     /// Return the columns which actually contain the values of the keys.
     /// For a given key column, if it is nullable, we return its nested
     /// column. Otherwise we return the key column itself.
-    inline const ColumnRawPtrs & getActualColumns() const { return actual_columns; }
+    inline const ColumnRawPtrs & getActualColumns() const
+    {
+        return actual_columns;
+    }
 
     /// Create a bitmap that indicates whether, for a particular row,
     /// a key column bears a null value or not.
@@ -363,10 +353,9 @@ protected:
 
     KeysNullMap<Key> createBitmap(size_t) const
     {
-        throw Exception{
-            "Internal error: calling createBitmap() for non-nullable keys"
-            " is forbidden",
-            ErrorCodes::LOGICAL_ERROR};
+        throw Exception{"Internal error: calling createBitmap() for non-nullable keys"
+                        " is forbidden",
+                        ErrorCodes::LOGICAL_ERROR};
     }
 
 private:

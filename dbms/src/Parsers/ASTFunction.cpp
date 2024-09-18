@@ -13,11 +13,11 @@
 // limitations under the License.
 
 #include <Common/typeid_cast.h>
-#include <IO/Buffer/WriteBufferFromString.h>
-#include <IO/WriteHelpers.h>
-#include <Parsers/ASTFunction.h>
 #include <Parsers/ASTLiteral.h>
+#include <Parsers/ASTFunction.h>
 #include <Parsers/ASTWithAlias.h>
+#include <IO/WriteHelpers.h>
+#include <IO/WriteBufferFromString.h>
 
 
 namespace DB
@@ -31,7 +31,7 @@ String ASTFunction::getColumnNameImpl() const
     if (parameters)
     {
         writeChar('(', wb);
-        for (auto it = parameters->children.begin(); it != parameters->children.end(); ++it)
+        for (ASTs::const_iterator it = parameters->children.begin(); it != parameters->children.end(); ++it)
         {
             if (it != parameters->children.begin())
                 writeCString(", ", wb);
@@ -41,7 +41,7 @@ String ASTFunction::getColumnNameImpl() const
     }
 
     writeChar('(', wb);
-    for (auto it = arguments->children.begin(); it != arguments->children.end(); ++it)
+    for (ASTs::const_iterator it = arguments->children.begin(); it != arguments->children.end(); ++it)
     {
         if (it != arguments->children.begin())
             writeCString(", ", wb);
@@ -62,22 +62,13 @@ ASTPtr ASTFunction::clone() const
     auto res = std::make_shared<ASTFunction>(*this);
     res->children.clear();
 
-    if (arguments)
-    {
-        res->arguments = arguments->clone();
-        res->children.push_back(res->arguments);
-    }
-    if (parameters)
-    {
-        res->parameters = parameters->clone();
-        res->children.push_back(res->parameters);
-    }
+    if (arguments) { res->arguments = arguments->clone(); res->children.push_back(res->arguments); }
+    if (parameters) { res->parameters = parameters->clone(); res->children.push_back(res->parameters); }
 
     return res;
 }
 
-void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, FormatState & state, FormatStateStacked frame)
-    const
+void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, FormatState & state, FormatStateStacked frame) const
 {
     FormatStateStacked nested_need_parens = frame;
     FormatStateStacked nested_dont_need_parens = frame;
@@ -96,27 +87,33 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
 
             arguments->children.front()->formatImpl(settings, state, nested_need_parens);
 
-            settings.ostr << (settings.hilite ? hilite_keyword : "") << " AS " << (settings.hilite ? hilite_none : "");
+            settings.ostr <<  (settings.hilite ? hilite_keyword : "") << " AS "
+                << (settings.hilite ? hilite_none : "");
 
             settings.ostr << (settings.hilite ? hilite_function : "")
-                          << typeid_cast<const ASTLiteral &>(*arguments->children.back()).value.safeGet<String>()
-                          << (settings.hilite ? hilite_none : "");
+                << typeid_cast<const ASTLiteral &>(*arguments->children.back()).value.safeGet<String>()
+                << (settings.hilite ? hilite_none : "");
 
-            settings.ostr << (settings.hilite ? hilite_keyword : "") << ')' << (settings.hilite ? hilite_none : "");
+            settings.ostr << (settings.hilite ? hilite_keyword : "") << ')'
+                << (settings.hilite ? hilite_none : "");
 
             written = true;
         }
 
         if (arguments->children.size() == 1)
         {
-            const char * operators[] = {"negate", "-", "not", "NOT ", nullptr};
+            const char * operators[] =
+            {
+                "negate", "-",
+                "not", "NOT ",
+                nullptr
+            };
 
             for (const char ** func = operators; *func; func += 2)
             {
                 if (0 == strcmp(name.c_str(), func[0]))
                 {
-                    settings.ostr << (settings.hilite ? hilite_operator : "") << func[1]
-                                  << (settings.hilite ? hilite_none : "");
+                    settings.ostr << (settings.hilite ? hilite_operator : "") << func[1] << (settings.hilite ? hilite_none : "");
 
                     /** A particularly stupid case. If we have a unary minus before a literal that is a negative number
                         * "-(-1)" or "- -1", this can not be formatted as `--1`, since this will be interpreted as a comment.
@@ -138,42 +135,27 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
 
         if (!written && arguments->children.size() == 2)
         {
-            const char * operators[]
-                = {"multiply",
-                   " * ",
-                   "divide",
-                   " / ",
-                   "modulo",
-                   " % ",
-                   "plus",
-                   " + ",
-                   "minus",
-                   " - ",
-                   "notEquals",
-                   " != ",
-                   "lessOrEquals",
-                   " <= ",
-                   "greaterOrEquals",
-                   " >= ",
-                   "less",
-                   " < ",
-                   "greater",
-                   " > ",
-                   "equals",
-                   " = ",
-                   "like",
-                   " LIKE ",
-                   "notLike",
-                   " NOT LIKE ",
-                   "in",
-                   " IN ",
-                   "notIn",
-                   " NOT IN ",
-                   "globalIn",
-                   " GLOBAL IN ",
-                   "globalNotIn",
-                   " GLOBAL NOT IN ",
-                   nullptr};
+            const char * operators[] =
+            {
+                "multiply",        " * ",
+                "divide",          " / ",
+                "modulo",          " % ",
+                "plus",            " + ",
+                "minus",           " - ",
+                "notEquals",       " != ",
+                "lessOrEquals",    " <= ",
+                "greaterOrEquals", " >= ",
+                "less",            " < ",
+                "greater",         " > ",
+                "equals",          " = ",
+                "like",            " LIKE ",
+                "notLike",         " NOT LIKE ",
+                "in",              " IN ",
+                "notIn",           " NOT IN ",
+                "globalIn",        " GLOBAL IN ",
+                "globalNotIn",     " GLOBAL NOT IN ",
+                nullptr
+            };
 
             for (const char ** func = operators; *func; func += 2)
             {
@@ -182,8 +164,7 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
                     if (frame.need_parens)
                         settings.ostr << '(';
                     arguments->children[0]->formatImpl(settings, state, nested_need_parens);
-                    settings.ostr << (settings.hilite ? hilite_operator : "") << func[1]
-                                  << (settings.hilite ? hilite_none : "");
+                    settings.ostr << (settings.hilite ? hilite_operator : "") << func[1] << (settings.hilite ? hilite_none : "");
                     arguments->children[1]->formatImpl(settings, state, nested_need_parens);
                     if (frame.need_parens)
                         settings.ostr << ')';
@@ -194,24 +175,21 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
             if (!written && 0 == strcmp(name.c_str(), "arrayElement"))
             {
                 arguments->children[0]->formatImpl(settings, state, nested_need_parens);
-                settings.ostr << (settings.hilite ? hilite_operator : "") << '['
-                              << (settings.hilite ? hilite_none : "");
+                settings.ostr << (settings.hilite ? hilite_operator : "") << '[' << (settings.hilite ? hilite_none : "");
                 arguments->children[1]->formatImpl(settings, state, nested_need_parens);
-                settings.ostr << (settings.hilite ? hilite_operator : "") << ']'
-                              << (settings.hilite ? hilite_none : "");
+                settings.ostr << (settings.hilite ? hilite_operator : "") << ']' << (settings.hilite ? hilite_none : "");
                 written = true;
             }
 
             if (!written && 0 == strcmp(name.c_str(), "tupleElement"))
             {
                 /// It can be printed in a form of 'x.1' only if right hand side is unsigned integer literal.
-                if (const auto * lit = typeid_cast<const ASTLiteral *>(arguments->children[1].get()))
+                if (const ASTLiteral * lit = typeid_cast<const ASTLiteral *>(arguments->children[1].get()))
                 {
                     if (lit->value.getType() == Field::Types::UInt64)
                     {
                         arguments->children[0]->formatImpl(settings, state, nested_need_parens);
-                        settings.ostr << (settings.hilite ? hilite_operator : "") << "."
-                                      << (settings.hilite ? hilite_none : "");
+                        settings.ostr << (settings.hilite ? hilite_operator : "") << "." << (settings.hilite ? hilite_none : "");
                         arguments->children[1]->formatImpl(settings, state, nested_need_parens);
                         written = true;
                     }
@@ -225,8 +203,10 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
                 if (frame.need_parens)
                     settings.ostr << '(';
 
-                const auto * first_arg_func = typeid_cast<const ASTFunction *>(arguments->children[0].get());
-                if (first_arg_func && first_arg_func->name == "tuple" && first_arg_func->arguments
+                const ASTFunction * first_arg_func = typeid_cast<const ASTFunction *>(arguments->children[0].get());
+                if (first_arg_func
+                    && first_arg_func->name == "tuple"
+                    && first_arg_func->arguments
                     && first_arg_func->arguments->children.size() == 1)
                 {
                     first_arg_func->arguments->children[0]->formatImpl(settings, state, nested_need_parens);
@@ -234,8 +214,7 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
                 else
                     arguments->children[0]->formatImpl(settings, state, nested_need_parens);
 
-                settings.ostr << (settings.hilite ? hilite_operator : "") << " -> "
-                              << (settings.hilite ? hilite_none : "");
+                settings.ostr << (settings.hilite ? hilite_operator : "") << " -> " << (settings.hilite ? hilite_none : "");
                 arguments->children[1]->formatImpl(settings, state, nested_need_parens);
                 if (frame.need_parens)
                     settings.ostr << ')';
@@ -245,7 +224,12 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
 
         if (!written && arguments->children.size() >= 2)
         {
-            const char * operators[] = {"and", " AND ", "or", " OR ", nullptr};
+            const char * operators[] =
+            {
+                "and", " AND ",
+                "or", " OR ",
+                nullptr
+            };
 
             for (const char ** func = operators; *func; func += 2)
             {
@@ -256,8 +240,7 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
                     for (size_t i = 0; i < arguments->children.size(); ++i)
                     {
                         if (i != 0)
-                            settings.ostr << (settings.hilite ? hilite_operator : "") << func[1]
-                                          << (settings.hilite ? hilite_none : "");
+                            settings.ostr << (settings.hilite ? hilite_operator : "") << func[1] << (settings.hilite ? hilite_none : "");
                         arguments->children[i]->formatImpl(settings, state, nested_need_parens);
                     }
                     if (frame.need_parens)
@@ -316,4 +299,4 @@ void ASTFunction::formatImplWithoutAlias(const FormatSettings & settings, Format
     }
 }
 
-} // namespace DB
+}

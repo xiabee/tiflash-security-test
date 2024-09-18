@@ -20,20 +20,25 @@
 #include <Common/ProfileEvents.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashException.h>
-#include <IO/BaseFile/RateLimiter.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
+#include <Encryption/FileProvider.h>
 #include <IO/WriteHelpers.h>
-#include <Poco/File.h>
-#include <Storages/Page/Page.h>
 #include <boost_wrapper/string_split.h>
 #include <common/logger_useful.h>
 
 #include <boost/algorithm/string/classification.hpp>
-#include <ext/scope_guard.h>
+#include <random>
 
 #ifndef __APPLE__
 #include <fcntl.h>
 #endif
+#include <Encryption/RandomAccessFile.h>
+#include <Encryption/RateLimiter.h>
+#include <Encryption/WritableFile.h>
+#include <Encryption/WriteReadableFile.h>
+#include <IO/WriteBufferFromFile.h>
+#include <Poco/File.h>
+
+#include <ext/scope_guard.h>
 
 
 namespace ProfileEvents
@@ -116,9 +121,8 @@ int openFile(const std::string & path)
                 return 0;
             }
         }
-        DB::throwFromErrno(
-            fmt::format("Cannot open file {}. ", path),
-            errno == ENOENT ? ErrorCodes::FILE_DOESNT_EXIST : ErrorCodes::CANNOT_OPEN_FILE);
+        DB::throwFromErrno(fmt::format("Cannot open file {}. ", path),
+                           errno == ENOENT ? ErrorCodes::FILE_DOESNT_EXIST : ErrorCodes::CANNOT_OPEN_FILE);
     }
 
     return fd;
@@ -145,9 +149,7 @@ template <typename T>
 void ftruncateFile(T & file, off_t length)
 {
     if (-1 == file->ftruncate(length))
-        DB::throwFromErrno(
-            fmt::format("Cannot truncate file: {}. ", file->getFileName()),
-            ErrorCodes::CANNOT_FTRUNCATE);
+        DB::throwFromErrno(fmt::format("Cannot truncate file: {}. ", file->getFileName()), ErrorCodes::CANNOT_FTRUNCATE);
 }
 
 // TODO: split current api into V2 and V3.
@@ -178,8 +180,7 @@ void writeFile(
         write_io_calls += 1;
         ssize_t res = 0;
         {
-            size_t bytes_need_write
-                = split_bytes == 0 ? (to_write - bytes_written) : std::min(to_write - bytes_written, split_bytes);
+            size_t bytes_need_write = split_bytes == 0 ? (to_write - bytes_written) : std::min(to_write - bytes_written, split_bytes);
             res = file->pwrite(data + bytes_written, bytes_need_write, offset + bytes_written);
 #ifndef NDEBUG
             fiu_do_on(FailPoints::force_set_page_file_write_errno, {
@@ -205,18 +206,16 @@ void writeFile(
                     truncate_res = ::ftruncate(file->getFd(), offset);
                 }
 
-                DB::throwFromErrno(
-                    fmt::format(
-                        "Cannot write to file {},[truncate_res = {}],[errno_after_truncate = {}],"
-                        "[bytes_written={},to_write={},offset = {}]",
-                        file->getFileName(),
-                        truncate_if_failed ? DB::toString(truncate_res) : "no need truncate",
-                        strerror(errno),
-                        bytes_written,
-                        to_write,
-                        offset),
-                    ErrorCodes::CANNOT_WRITE_TO_FILE_DESCRIPTOR,
-                    saved_errno);
+                DB::throwFromErrno(fmt::format("Cannot write to file {},[truncate_res = {}],[errno_after_truncate = {}],"
+                                               "[bytes_written={},to_write={},offset = {}]",
+                                               file->getFileName(),
+                                               truncate_if_failed ? DB::toString(truncate_res) : "no need truncate",
+                                               strerror(errno),
+                                               bytes_written,
+                                               to_write,
+                                               offset),
+                                   ErrorCodes::CANNOT_WRITE_TO_FILE_DESCRIPTOR,
+                                   saved_errno);
             }
         }
 
@@ -233,13 +232,12 @@ void writeFile(
 }
 
 template <typename T>
-void readFile(
-    T & file,
-    const off_t offset,
-    const char * buf,
-    size_t expected_bytes,
-    const ReadLimiterPtr & read_limiter = nullptr,
-    const bool background = false)
+void readFile(T & file,
+              const off_t offset,
+              const char * buf,
+              size_t expected_bytes,
+              const ReadLimiterPtr & read_limiter = nullptr,
+              const bool background = false)
 {
     if (unlikely(expected_bytes == 0))
         return;
@@ -260,8 +258,7 @@ void readFile(
 
         ssize_t res = 0;
         {
-            size_t bytes_need_read
-                = split_bytes == 0 ? (expected_bytes - bytes_read) : std::min(expected_bytes - bytes_read, split_bytes);
+            size_t bytes_need_read = split_bytes == 0 ? (expected_bytes - bytes_read) : std::min(expected_bytes - bytes_read, split_bytes);
             res = file->pread(const_cast<char *>(buf + bytes_read), bytes_need_read, offset + bytes_read);
         }
         if (!res)
@@ -270,9 +267,7 @@ void readFile(
         if (-1 == res && errno != EINTR)
         {
             ProfileEvents::increment(ProfileEvents::PSMReadFailed);
-            DB::throwFromErrno(
-                fmt::format("Cannot read from file {}.", file->getFileName()),
-                ErrorCodes::CANNOT_READ_FROM_FILE_DESCRIPTOR);
+            DB::throwFromErrno(fmt::format("Cannot read from file {}.", file->getFileName()), ErrorCodes::CANNOT_READ_FROM_FILE_DESCRIPTOR);
         }
 
         if (res > 0)
@@ -286,14 +281,8 @@ void readFile(
     }
 
     if (unlikely(bytes_read != expected_bytes))
-        throw DB::TiFlashException(
-            fmt::format(
-                "No enough data in file {}, read bytes: {}, expected bytes: {}, offset: {}",
-                file->getFileName(),
-                bytes_read,
-                expected_bytes,
-                offset),
-            Errors::PageStorage::FileSizeNotMatch);
+        throw DB::TiFlashException(fmt::format("No enough data in file {}, read bytes: {}, expected bytes: {}, offset: {}", file->getFileName(), bytes_read, expected_bytes, offset),
+                                   Errors::PageStorage::FileSizeNotMatch);
 }
 
 /// Write and advance sizeof(T) bytes.
@@ -314,8 +303,6 @@ inline T get(std::conditional_t<advance, char *&, const char *> pos)
         pos += sizeof(T);
     return v;
 }
-
-std::vector<size_t> getFieldSizes(const std::set<FieldOffsetInsidePage> & field_offsets, size_t data_size);
 
 } // namespace PageUtil
 

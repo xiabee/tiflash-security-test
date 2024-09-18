@@ -17,6 +17,7 @@
 
 #include <Common/FailPoint.h>
 #include <IO/WriteHelpers.h>
+#include <Interpreters/Context.h>
 #include <Storages/Page/Page.h>
 #include <Storages/Page/V2/PageStorage.h>
 #include <Storages/Page/V2/gc/DataCompactor.h>
@@ -58,11 +59,11 @@ try
     };
 #endif
 
-    const auto file_provider = TiFlashTestEnv::getDefaultFileProvider();
+    auto ctx = TiFlashTestEnv::getContext(DB::Settings());
+    const auto file_provider = ctx.getFileProvider();
     PSDiskDelegatorPtr delegate = std::make_shared<DB::tests::MockDiskDelegatorMulti>(test_paths);
 
-    auto bkg_pool
-        = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-", std::make_shared<JointThreadInfoJeallocMap>());
+    auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
     PageStorage storage("data_compact_test", delegate, config, file_provider, *bkg_pool);
 #ifdef GENERATE_TEST_DATA
     // Codes to generate a directory of test data
@@ -132,8 +133,9 @@ try
         std::ignore = bytes_written;
         ASSERT_EQ(edits.size(), 3); // page 1, 2, 6
         auto & records = edits.getRecords();
-        for (auto & rec : records)
+        for (size_t i = 0; i < records.size(); ++i)
         {
+            const auto & rec = records[i];
             EXPECT_EQ(rec.type, WriteBatchWriteType::UPSERT);
             // Page 1, 2, 6 is moved to PageFile{2,1}
             if (rec.page_id == 1 || rec.page_id == 2 || rec.page_id == 6)
@@ -173,10 +175,7 @@ try
 
     {
         // Try to recover from disk, check whether page 1, 2, 3, 4, 5, 6 is valid or not.
-        auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(
-            4,
-            "bg-page-",
-            std::make_shared<JointThreadInfoJeallocMap>());
+        auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
         PageStorage ps("data_compact_test", delegate, config, file_provider, *bkg_pool);
         ps.restore();
         // Page 1, 2 have been migrated to PageFile_2_1

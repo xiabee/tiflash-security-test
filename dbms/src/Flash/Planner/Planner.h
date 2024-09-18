@@ -17,20 +17,23 @@
 #include <Common/Logger.h>
 #include <DataStreams/IBlockInputStream.h>
 #include <Flash/Coprocessor/DAGPipeline.h>
+#include <Flash/Planner/PlanQuerySource.h>
 
 namespace DB
 {
 class Context;
 class DAGContext;
 
-class Planner
+class Planner : public IInterpreter
 {
 public:
-    explicit Planner(Context & context_);
+    Planner(
+        Context & context_,
+        const PlanQuerySource & plan_source_);
 
     ~Planner() = default;
 
-    BlockInputStreamPtr execute();
+    BlockIO execute() override;
 
 private:
     DAGContext & dagContext() const;
@@ -39,6 +42,8 @@ private:
 
 private:
     Context & context;
+
+    const PlanQuerySource & plan_source;
 
     /// Max streams we will do processing.
     size_t max_streams = 1;

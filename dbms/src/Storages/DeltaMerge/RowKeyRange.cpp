@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Common/RedactHelpers.h>
-#include <Common/SharedMutexProtected.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 
 namespace DB::DM
@@ -36,14 +35,10 @@ String getIntHandleMaxKey()
     return ss.releaseStr();
 }
 
-const RowKeyValue RowKeyValue::INT_HANDLE_MIN_KEY
-    = RowKeyValue(false, std::make_shared<String>(getIntHandleMinKey()), int_handle_min);
-const RowKeyValue RowKeyValue::INT_HANDLE_MAX_KEY
-    = RowKeyValue(false, std::make_shared<String>(getIntHandleMaxKey()), int_handle_max);
-const RowKeyValue RowKeyValue::COMMON_HANDLE_MIN_KEY
-    = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagBytes), 0);
-const RowKeyValue RowKeyValue::COMMON_HANDLE_MAX_KEY
-    = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagMax), 0);
+const RowKeyValue RowKeyValue::INT_HANDLE_MIN_KEY = RowKeyValue(false, std::make_shared<String>(getIntHandleMinKey()), int_handle_min);
+const RowKeyValue RowKeyValue::INT_HANDLE_MAX_KEY = RowKeyValue(false, std::make_shared<String>(getIntHandleMaxKey()), int_handle_max);
+const RowKeyValue RowKeyValue::COMMON_HANDLE_MIN_KEY = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagBytes), 0);
+const RowKeyValue RowKeyValue::COMMON_HANDLE_MAX_KEY = RowKeyValue(true, std::make_shared<String>(1, TiDB::CodecFlag::CodecFlagMax), 0);
 const RowKeyValue RowKeyValue::EMPTY_STRING_KEY = RowKeyValue(true, std::make_shared<String>(""), 0);
 
 RowKeyValue RowKeyValueRef::toRowKeyValue() const
@@ -60,22 +55,18 @@ RowKeyValue RowKeyValueRef::toRowKeyValue() const
     }
 }
 
-SharedMutexProtected<std::unordered_map<KeyspaceTableID, RowKeyRange::TableRangeMinMax, boost::hash<KeyspaceTableID>>>
-    RowKeyRange::table_min_max_data;
+std::unordered_map<TableID, RowKeyRange::TableRangeMinMax> RowKeyRange::table_min_max_data;
+std::shared_mutex RowKeyRange::table_mutex;
 
-const RowKeyRange::TableRangeMinMax & RowKeyRange::getTableMinMaxData(
-    KeyspaceID keyspace_id,
-    TableID table_id,
-    bool is_common_handle)
+const RowKeyRange::TableRangeMinMax & RowKeyRange::getTableMinMaxData(TableID table_id, bool is_common_handle)
 {
-    auto keyspace_table_id = KeyspaceTableID{keyspace_id, table_id};
     {
-        auto lock = table_min_max_data.lockShared();
-        if (auto it = lock->find(keyspace_table_id); it != lock->end())
+        std::shared_lock lock(table_mutex);
+        if (auto it = table_min_max_data.find(table_id); it != table_min_max_data.end())
             return it->second;
     }
-    auto lock = table_min_max_data.lockExclusive();
-    return lock->try_emplace(keyspace_table_id, keyspace_id, table_id, is_common_handle).first->second;
+    std::unique_lock lock(table_mutex);
+    return table_min_max_data.try_emplace(table_id, table_id, is_common_handle).first->second;
 }
 
 template <bool enable_redact, bool right_open = true>

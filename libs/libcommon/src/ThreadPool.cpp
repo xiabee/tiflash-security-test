@@ -25,9 +25,6 @@ static Poco::Logger * getLogger()
     return logger;
 }
 
-namespace legacy
-{
-
 ThreadPool::ThreadPool(size_t m_size, Job pre_worker)
     : m_size(m_size)
 {
@@ -154,5 +151,3 @@ void ThreadPool::worker()
         has_free_thread.notify_all();
     }
 }
-
-} // namespace legacy

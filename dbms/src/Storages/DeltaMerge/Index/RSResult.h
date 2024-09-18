@@ -32,10 +32,9 @@ enum class RSResult : UInt8
 {
     Unknown = 0, // Not checked yet
     Some = 1, // Suspected (but may be empty or full)
-    None = 2, // Empty, no need to read
-    All = 3, // Full, need to read
+    None = 2, // Empty
+    All = 3, // Full
 };
-using RSResults = std::vector<RSResult>;
 
 static constexpr RSResult Unknown = RSResult::Unknown;
 static constexpr RSResult Some = RSResult::Some;
@@ -75,10 +74,6 @@ inline RSResult operator&&(RSResult v0, RSResult v1)
     return Some;
 }
 
-ALWAYS_INLINE inline bool isUse(RSResult res) noexcept
-{
-    return res != RSResult::None;
-}
 } // namespace DM
 
 } // namespace DB

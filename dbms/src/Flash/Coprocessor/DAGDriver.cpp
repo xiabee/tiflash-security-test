@@ -12,56 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/FailPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Core/QueryProcessingStage.h>
 #include <DataStreams/BlockIO.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/copyData.h>
-#include <Flash/Coprocessor/DAGContext.h>
+#include <Flash/Coprocessor/DAGBlockOutputStream.h>
 #include <Flash/Coprocessor/DAGDriver.h>
+#include <Flash/Coprocessor/ExecutionSummaryCollector.h>
 #include <Flash/Coprocessor/StreamWriter.h>
 #include <Flash/Coprocessor/StreamingDAGResponseWriter.h>
 #include <Flash/Coprocessor/UnaryDAGResponseWriter.h>
-#include <Flash/Statistics/ExecutorStatisticsCollector.h>
 #include <Flash/executeQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ProcessList.h>
-#include <Storages/KVStore/Read/LockException.h>
-#include <Storages/KVStore/Read/RegionException.h>
+#include <Storages/Transaction/LockException.h>
+#include <Storages/Transaction/RegionException.h>
 #include <pingcap/Exception.h>
 
 namespace DB
 {
-namespace FailPoints
-{
-extern const char cop_send_failure[];
-extern const char random_cop_send_failure_failpoint[];
-} // namespace FailPoints
-
 namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
 extern const int UNKNOWN_EXCEPTION;
 } // namespace ErrorCodes
 
-template <DAGRequestKind kind>
-const tipb::DAGRequest & DAGDriver<kind>::dagRequest() const
+template <bool batch>
+const tipb::DAGRequest & DAGDriver<batch>::dagRequest() const
 {
     return *context.getDAGContext()->dag_request;
 }
 
 template <>
-DAGDriver<DAGRequestKind::Cop>::DAGDriver(
+DAGDriver<false>::DAGDriver(
     Context & context_,
     UInt64 start_ts,
     UInt64 schema_ver,
-    tipb::SelectResponse * cop_response_,
+    tipb::SelectResponse * dag_response_,
     bool internal_)
     : context(context_)
-    , cop_response(cop_response_)
+    , dag_response(dag_response_)
+    , writer(nullptr)
     , internal(internal_)
-    , log(Logger::get("DAGDriver"))
+    , log(&Poco::Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -71,16 +65,17 @@ DAGDriver<DAGRequestKind::Cop>::DAGDriver(
 }
 
 template <>
-DAGDriver<DAGRequestKind::CopStream>::DAGDriver(
+DAGDriver<true>::DAGDriver(
     Context & context_,
     UInt64 start_ts,
     UInt64 schema_ver,
-    grpc::ServerWriter<::coprocessor::Response> * cop_writer_,
+    ::grpc::ServerWriter<::coprocessor::BatchResponse> * writer_,
     bool internal_)
     : context(context_)
-    , cop_writer(cop_writer_)
+    , dag_response(nullptr)
+    , writer(writer_)
     , internal(internal_)
-    , log(Logger::get("DAGDriver"))
+    , log(&Poco::Logger::get("DAGDriver"))
 {
     context.setSetting("read_tso", start_ts);
     if (schema_ver)
@@ -89,35 +84,16 @@ DAGDriver<DAGRequestKind::CopStream>::DAGDriver(
     context.getTimezoneInfo().resetByDAGRequest(dagRequest());
 }
 
-template <>
-DAGDriver<DAGRequestKind::BatchCop>::DAGDriver(
-    Context & context_,
-    UInt64 start_ts,
-    UInt64 schema_ver,
-    grpc::ServerWriter<coprocessor::BatchResponse> * batch_cop_writer_,
-    bool internal_)
-    : context(context_)
-    , batch_cop_writer(batch_cop_writer_)
-    , internal(internal_)
-    , log(Logger::get("DAGDriver"))
-{
-    context.setSetting("read_tso", start_ts);
-    if (schema_ver)
-        // schema_ver being 0 means TiDB/TiSpark hasn't specified schema version.
-        context.setSetting("schema_version", schema_ver);
-    context.getTimezoneInfo().resetByDAGRequest(dagRequest());
-}
-
-template <DAGRequestKind Kind>
-void DAGDriver<Kind>::execute()
+template <bool batch>
+void DAGDriver<batch>::execute()
 try
 {
     auto start_time = Clock::now();
     DAGContext & dag_context = *context.getDAGContext();
 
-    auto query_executor = queryExecute(context, internal);
-    if (!query_executor)
-        // Only query is allowed, so query_executor must not be null
+    BlockIO streams = executeQuery(context, internal);
+    if (!streams.in || streams.out)
+        // Only query is allowed, so streams.in must not be null and streams.out must be null
         throw TiFlashException("DAG is not query.", Errors::Coprocessor::Internal);
 
     auto end_time = Clock::now();
@@ -126,82 +102,21 @@ try
     LOG_DEBUG(log, "Compile dag request cost {} ms", compile_time_ns / 1000000);
 
     BlockOutputStreamPtr dag_output_stream = nullptr;
-    auto update_ru_statistics = [&]() -> RUConsumption {
-        RUConsumption ru_info{
-            .cpu_time_ns = query_executor->collectCPUTimeNs(),
-            .read_bytes = dag_context.getReadBytes()};
-        ru_info.cpu_ru = cpuTimeToRU(ru_info.cpu_time_ns);
-        ru_info.read_ru = bytesToRU(ru_info.read_bytes);
-        return ru_info;
-    };
-    if constexpr (Kind == DAGRequestKind::Cop)
+    if constexpr (!batch)
     {
-        auto response_writer = std::make_unique<UnaryDAGResponseWriter>(
-            cop_response,
+        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<UnaryDAGResponseWriter>(
+            dag_response,
             context.getSettingsRef().dag_records_per_chunk,
             dag_context);
-        response_writer->prepare(query_executor->getSampleBlock());
-        query_executor
-            ->execute([&response_writer](const Block & block) {
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::cop_send_failure);
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_cop_send_failure_failpoint);
-                response_writer->write(block);
-            })
-            .verify();
-        response_writer->flush();
-
-        auto ru_info = update_ru_statistics();
-        LOG_INFO(log, "cop finish with request unit: cpu={} read={}", ru_info.cpu_ru, ru_info.read_ru);
-        GET_METRIC(tiflash_compute_request_unit, type_cop).Increment(ru_info.cpu_ru + ru_info.read_ru);
+        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
+        copyData(*streams.in, *dag_output_stream);
         if (dag_context.collect_execution_summaries)
         {
-            ExecutorStatisticsCollector statistics_collector(log->identifier());
-            statistics_collector.setLocalRUConsumption(ru_info);
-            statistics_collector.initialize(&dag_context);
-            statistics_collector.fillExecuteSummaries(*cop_response);
+            ExecutionSummaryCollector summary_collector(dag_context);
+            summary_collector.addExecuteSummaries(*dag_response);
         }
     }
-    else if constexpr (Kind == DAGRequestKind::CopStream)
-    {
-        auto streaming_writer = std::make_shared<CopStreamWriter>(cop_writer);
-        TiDB::TiDBCollators collators;
-        auto response_writer = std::make_unique<StreamingDAGResponseWriter<CopStreamWriterPtr>>(
-            streaming_writer,
-            context.getSettingsRef().dag_records_per_chunk,
-            context.getSettingsRef().batch_send_min_limit,
-            dag_context);
-        response_writer->prepare(query_executor->getSampleBlock());
-        query_executor
-            ->execute([&response_writer](const Block & block) {
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::cop_send_failure);
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_cop_send_failure_failpoint);
-                response_writer->write(block);
-            })
-            .verify();
-        response_writer->flush();
-
-        tipb::SelectResponse last_response;
-        bool need_send = false;
-        auto ru_info = update_ru_statistics();
-        LOG_INFO(log, "cop stream finish with request unit: cpu={} read={}", ru_info.cpu_ru, ru_info.read_ru);
-        GET_METRIC(tiflash_compute_request_unit, type_cop_stream).Increment(ru_info.cpu_ru + ru_info.read_ru);
-        if (dag_context.collect_execution_summaries)
-        {
-            ExecutorStatisticsCollector statistics_collector(log->identifier());
-            statistics_collector.setLocalRUConsumption(ru_info);
-            statistics_collector.initialize(&dag_context);
-            statistics_collector.fillExecuteSummaries(last_response);
-            need_send = true;
-        }
-        if (dag_context.getWarningCount() > 0)
-        {
-            dag_context.fillWarnings(last_response);
-            need_send = true;
-        }
-        if (need_send)
-            streaming_writer->write(last_response);
-    }
-    else if constexpr (Kind == DAGRequestKind::BatchCop)
+    else
     {
         if (!dag_context.retry_regions.empty())
         {
@@ -213,46 +128,25 @@ try
                 retry_region->mutable_region_epoch()->set_conf_ver(region.region_conf_version);
                 retry_region->mutable_region_epoch()->set_version(region.region_version);
             }
-            batch_cop_writer->Write(response);
+            writer->Write(response);
         }
 
-        auto streaming_writer = std::make_shared<BatchCopStreamWriter>(batch_cop_writer);
+        auto streaming_writer = std::make_shared<StreamWriter>(writer);
         TiDB::TiDBCollators collators;
-        auto response_writer = std::make_unique<StreamingDAGResponseWriter<BatchCopStreamWriterPtr>>(
+
+        std::unique_ptr<DAGResponseWriter> response_writer = std::make_unique<StreamingDAGResponseWriter<StreamWriterPtr>>(
             streaming_writer,
             context.getSettingsRef().dag_records_per_chunk,
             context.getSettingsRef().batch_send_min_limit,
             dag_context);
-        response_writer->prepare(query_executor->getSampleBlock());
-        query_executor
-            ->execute([&response_writer](const Block & block) {
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::cop_send_failure);
-                FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_cop_send_failure_failpoint);
-                response_writer->write(block);
-            })
-            .verify();
-        response_writer->flush();
-
-        tipb::SelectResponse last_response;
-        bool need_send = false;
-        auto ru_info = update_ru_statistics();
-        LOG_INFO(log, "batch cop finish with request unit: cpu={} read={}", ru_info.cpu_ru, ru_info.read_ru);
-        GET_METRIC(tiflash_compute_request_unit, type_batch).Increment(ru_info.cpu_ru + ru_info.read_ru);
+        dag_output_stream = std::make_shared<DAGBlockOutputStream>(streams.in->getHeader(), std::move(response_writer));
+        copyData(*streams.in, *dag_output_stream);
         if (dag_context.collect_execution_summaries)
         {
-            ExecutorStatisticsCollector statistics_collector(log->identifier());
-            statistics_collector.setLocalRUConsumption(ru_info);
-            statistics_collector.initialize(&dag_context);
-            statistics_collector.fillExecuteSummaries(last_response);
-            need_send = true;
+            ExecutionSummaryCollector summary_collector(dag_context);
+            auto execution_summary_response = summary_collector.genExecutionSummaryResponse();
+            streaming_writer->write(execution_summary_response);
         }
-        if (dag_context.getWarningCount() > 0)
-        {
-            dag_context.fillWarnings(last_response);
-            need_send = true;
-        }
-        if (need_send)
-            streaming_writer->write(last_response);
     }
 
     if (auto throughput = dag_context.getTableScanThroughput(); throughput.first)
@@ -262,27 +156,34 @@ try
     {
         auto process_info = context.getProcessListElement()->getInfo();
         auto peak_memory = process_info.peak_memory_usage > 0 ? process_info.peak_memory_usage : 0;
-        if constexpr (Kind == DAGRequestKind::Cop)
+        if constexpr (!batch)
         {
             GET_METRIC(tiflash_coprocessor_request_memory_usage, type_cop).Observe(peak_memory);
         }
-        else if constexpr (Kind == DAGRequestKind::CopStream)
-        {
-            GET_METRIC(tiflash_coprocessor_request_memory_usage, type_cop_stream).Observe(peak_memory);
-        }
-        else if constexpr (Kind == DAGRequestKind::BatchCop)
+        else
         {
             GET_METRIC(tiflash_coprocessor_request_memory_usage, type_batch).Observe(peak_memory);
         }
     }
 
-    auto runtime_statistics = query_executor->getRuntimeStatistics();
-    LOG_DEBUG(
-        log,
-        "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
-        runtime_statistics.execution_time_ns / static_cast<double>(1000000000),
-        runtime_statistics.rows,
-        runtime_statistics.bytes);
+    if (auto * p_stream = dynamic_cast<IProfilingBlockInputStream *>(streams.in.get()))
+    {
+        LOG_DEBUG(
+            log,
+            "dag request without encode cost: {} seconds, produce {} rows, {} bytes.",
+            p_stream->getProfileInfo().execution_time / (double)1000000000,
+            p_stream->getProfileInfo().rows,
+            p_stream->getProfileInfo().bytes);
+
+        if constexpr (!batch)
+        {
+            // Under some test cases, there may be dag response whose size is bigger than INT_MAX, and GRPC can not limit it.
+            // Throw exception to prevent receiver from getting wrong response.
+            if (accurate::greaterOp(p_stream->getProfileInfo().bytes, std::numeric_limits<int>::max()))
+                throw TiFlashException("DAG response is too big, please check config about region size or region merge scheduler",
+                                       Errors::Coprocessor::Internal);
+        }
+    }
 }
 catch (const RegionException & e)
 {
@@ -318,27 +219,10 @@ catch (...)
     recordError(ErrorCodes::UNKNOWN_EXCEPTION, "other exception");
 }
 
-template <DAGRequestKind Kind>
-void DAGDriver<Kind>::recordError(Int32 err_code, const String & err_msg)
+template <bool batch>
+void DAGDriver<batch>::recordError(Int32 err_code, const String & err_msg)
 {
-    if constexpr (Kind == DAGRequestKind::Cop)
-    {
-        cop_response->Clear();
-        tipb::Error * error = cop_response->mutable_error();
-        error->set_code(err_code);
-        error->set_msg(err_msg);
-    }
-    else if constexpr (Kind == DAGRequestKind::CopStream)
-    {
-        tipb::SelectResponse dag_response;
-        tipb::Error * error = dag_response.mutable_error();
-        error->set_code(err_code);
-        error->set_msg(err_msg);
-        coprocessor::Response err_response;
-        err_response.set_data(dag_response.SerializeAsString());
-        cop_writer->Write(err_response);
-    }
-    else if constexpr (Kind == DAGRequestKind::BatchCop)
+    if constexpr (batch)
     {
         tipb::SelectResponse dag_response;
         tipb::Error * error = dag_response.mutable_error();
@@ -346,12 +230,18 @@ void DAGDriver<Kind>::recordError(Int32 err_code, const String & err_msg)
         error->set_msg(err_msg);
         coprocessor::BatchResponse err_response;
         err_response.set_data(dag_response.SerializeAsString());
-        batch_cop_writer->Write(err_response);
+        writer->Write(err_response);
+    }
+    else
+    {
+        dag_response->Clear();
+        tipb::Error * error = dag_response->mutable_error();
+        error->set_code(err_code);
+        error->set_msg(err_msg);
     }
 }
 
-template class DAGDriver<DAGRequestKind::Cop>;
-template class DAGDriver<DAGRequestKind::CopStream>;
-template class DAGDriver<DAGRequestKind::BatchCop>;
+template class DAGDriver<true>;
+template class DAGDriver<false>;
 
 } // namespace DB

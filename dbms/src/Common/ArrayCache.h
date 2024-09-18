@@ -103,8 +103,7 @@ private:
     using SizeMultimapHook = boost::intrusive::set_base_hook<boost::intrusive::tag<SizeMultimapTag>>;
     using KeyMapHook = boost::intrusive::set_base_hook<boost::intrusive::tag<KeyMapTag>>;
 
-    struct RegionMetadata
-        : public LRUListHook
+    struct RegionMetadata : public LRUListHook
         , AdjacencyListHook
         , SizeMultimapHook
         , KeyMapHook
@@ -121,9 +120,15 @@ private:
 
         bool isFree() const { return SizeMultimapHook::is_linked(); }
 
-        static RegionMetadata * create() { return new RegionMetadata; }
+        static RegionMetadata * create()
+        {
+            return new RegionMetadata;
+        }
 
-        void destroy() { delete this; }
+        void destroy()
+        {
+            delete this;
+        }
 
     private:
         RegionMetadata() = default;
@@ -144,22 +149,20 @@ private:
         bool operator()(Key key, const RegionMetadata & b) const { return key < b.key; }
     };
 
-    using LRUList = boost::intrusive::
-        list<RegionMetadata, boost::intrusive::base_hook<LRUListHook>, boost::intrusive::constant_time_size<true>>;
-    using AdjacencyList = boost::intrusive::list<
-        RegionMetadata,
-        boost::intrusive::base_hook<AdjacencyListHook>,
-        boost::intrusive::constant_time_size<true>>;
-    using SizeMultimap = boost::intrusive::multiset<
-        RegionMetadata,
-        boost::intrusive::compare<RegionCompareBySize>,
-        boost::intrusive::base_hook<SizeMultimapHook>,
-        boost::intrusive::constant_time_size<true>>;
-    using KeyMap = boost::intrusive::set<
-        RegionMetadata,
-        boost::intrusive::compare<RegionCompareByKey>,
-        boost::intrusive::base_hook<KeyMapHook>,
-        boost::intrusive::constant_time_size<true>>;
+    using LRUList = boost::intrusive::list<RegionMetadata,
+                                           boost::intrusive::base_hook<LRUListHook>,
+                                           boost::intrusive::constant_time_size<true>>;
+    using AdjacencyList = boost::intrusive::list<RegionMetadata,
+                                                 boost::intrusive::base_hook<AdjacencyListHook>,
+                                                 boost::intrusive::constant_time_size<true>>;
+    using SizeMultimap = boost::intrusive::multiset<RegionMetadata,
+                                                    boost::intrusive::compare<RegionCompareBySize>,
+                                                    boost::intrusive::base_hook<SizeMultimapHook>,
+                                                    boost::intrusive::constant_time_size<true>>;
+    using KeyMap = boost::intrusive::set<RegionMetadata,
+                                         boost::intrusive::compare<RegionCompareByKey>,
+                                         boost::intrusive::base_hook<KeyMapHook>,
+                                         boost::intrusive::constant_time_size<true>>;
 
     /** Each region could be:
       * - free: not holding any data;
@@ -194,17 +197,13 @@ private:
         {
             ptr = mmap(address_hint, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             if (MAP_FAILED == ptr)
-                DB::throwFromErrno(
-                    "Allocator: Cannot mmap " + formatReadableSizeWithBinarySuffix(size) + ".",
-                    DB::ErrorCodes::CANNOT_ALLOCATE_MEMORY);
+                DB::throwFromErrno("Allocator: Cannot mmap " + formatReadableSizeWithBinarySuffix(size) + ".", DB::ErrorCodes::CANNOT_ALLOCATE_MEMORY);
         }
 
         ~Chunk()
         {
             if (ptr && 0 != munmap(ptr, size))
-                DB::throwFromErrno(
-                    "Allocator: Cannot munmap " + formatReadableSizeWithBinarySuffix(size) + ".",
-                    DB::ErrorCodes::CANNOT_MUNMAP);
+                DB::throwFromErrno("Allocator: Cannot munmap " + formatReadableSizeWithBinarySuffix(size) + ".", DB::ErrorCodes::CANNOT_MUNMAP);
         }
 
         Chunk(Chunk && other)
@@ -232,8 +231,7 @@ private:
 
     /// Cache stats.
     std::atomic<size_t> hits{0}; /// Value was in cache.
-    std::atomic<size_t> concurrent_hits{
-        0}; /// Value was calculated by another thread and we was waiting for it. Also summed in hits.
+    std::atomic<size_t> concurrent_hits{0}; /// Value was calculated by another thread and we was waiting for it. Also summed in hits.
     std::atomic<size_t> misses{0};
 
     /// For whole lifetime.
@@ -311,19 +309,14 @@ private:
 
         InsertTokenHolder() = default;
 
-        void acquire(
-            const Key * key_,
-            const std::shared_ptr<InsertToken> & token_,
-            [[maybe_unused]] std::lock_guard<std::mutex> & cache_lock)
+        void acquire(const Key * key_, const std::shared_ptr<InsertToken> & token_, [[maybe_unused]] std::lock_guard<std::mutex> & cache_lock)
         {
             key = key_;
             token = token_;
             ++token->refcount;
         }
 
-        void cleanup(
-            [[maybe_unused]] std::lock_guard<std::mutex> & token_lock,
-            [[maybe_unused]] std::lock_guard<std::mutex> & cache_lock)
+        void cleanup([[maybe_unused]] std::lock_guard<std::mutex> & token_lock, [[maybe_unused]] std::lock_guard<std::mutex> & cache_lock)
         {
             token->cache.insert_tokens.erase(*key);
             token->cleaned_up = true;
@@ -354,7 +347,10 @@ private:
     friend struct InsertTokenHolder;
 
 
-    static size_t roundUp(size_t x, size_t rounding) { return (x + (rounding - 1)) / rounding * rounding; }
+    static size_t roundUp(size_t x, size_t rounding)
+    {
+        return (x + (rounding - 1)) / rounding * rounding;
+    }
 
     static constexpr size_t page_size = 4096;
 
@@ -378,6 +374,8 @@ private:
         {
             --left_it;
 
+            //std::cerr << "left_it->isFree(): " << left_it->isFree() << "\n";
+
             if (left_it->chunk == region.chunk && left_it->isFree())
             {
                 region.size += left_it->size;
@@ -390,6 +388,8 @@ private:
         ++right_it;
         if (right_it != adjacency_list.end())
         {
+            //std::cerr << "right_it->isFree(): " << right_it->isFree() << "\n";
+
             if (right_it->chunk == region.chunk && right_it->isFree())
             {
                 region.size += right_it->size;
@@ -397,6 +397,8 @@ private:
                 adjacency_list.erase_and_dispose(right_it, [](RegionMetadata * elem) { elem->destroy(); });
             }
         }
+
+        //std::cerr << "size is enlarged: " << was_size << " -> " << region.size << "\n";
 
         size_multimap.insert(region);
     }
@@ -427,6 +429,10 @@ private:
         if (lru_list.empty())
             return nullptr;
 
+        /*for (const auto & elem : adjacency_list)
+            std::cerr << (!elem.SizeMultimapHook::is_linked() ? "\033[1m" : "") << elem.size << (!elem.SizeMultimapHook::is_linked() ? "\033[0m " : " ");
+        std::cerr << '\n';*/
+
         auto it = adjacency_list.iterator_to(lru_list.front());
 
         while (true)
@@ -450,8 +456,7 @@ private:
     RegionMetadata * addNewChunk(size_t size)
     {
         /// ASLR by hand.
-        void * address_hint
-            = reinterpret_cast<void *>(std::uniform_int_distribution<size_t>(0x100000000000UL, 0x700000000000UL)(rng));
+        void * address_hint = reinterpret_cast<void *>(std::uniform_int_distribution<size_t>(0x100000000000UL, 0x700000000000UL)(rng));
 
         chunks.emplace_back(size, address_hint);
         Chunk & chunk = chunks.back();
@@ -534,6 +539,8 @@ private:
             return allocateFromFreeRegion(*free_region, size);
         }
 
+        //        std::cerr << "Requested size: " << size << "\n";
+
         /// Evict something from cache and continue.
         while (true)
         {
@@ -555,7 +562,8 @@ private:
 public:
     explicit ArrayCache(size_t max_total_size_)
         : max_total_size(max_total_size_)
-    {}
+    {
+    }
 
     ~ArrayCache()
     {

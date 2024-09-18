@@ -20,9 +20,9 @@ namespace DB
 namespace DM
 {
 ColumnFileReaderPtr ColumnFileDeleteRange::getReader(
-    const DMContext &,
-    const IColumnFileDataProviderPtr &,
-    const ColumnDefinesPtr &) const
+    const DMContext & /*context*/,
+    const StorageSnapshotPtr & /*storage_snap*/,
+    const ColumnDefinesPtr & /*col_defs*/) const
 {
     return std::make_shared<ColumnFileEmptyReader>();
 }

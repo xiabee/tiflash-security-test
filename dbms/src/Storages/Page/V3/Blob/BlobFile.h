@@ -15,40 +15,43 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/WriteReadableFile.h>
 #include <Poco/Logger.h>
 #include <Storages/FormatVersion.h>
-#include <Storages/Page/V3/PageDefines.h>
-#include <Storages/PathPool_fwd.h>
+#include <Storages/Page/Page.h>
+#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/WriteBatch.h>
+#include <Storages/PathPool.h>
 
 namespace DB::PS::V3
 {
-
-/**
- * BlobFile is a file that stores the data of multiple pages.
- */
 class BlobFile
 {
 public:
     constexpr static const char * BLOB_PREFIX_NAME = "blobfile_";
 
 public:
-    BlobFile(String parent_path_, BlobFileId blob_id_, FileProviderPtr file_provider_, PSDiskDelegatorPtr delegator_);
+    BlobFile(String parent_path_,
+             BlobFileId blob_id_,
+             FileProviderPtr file_provider_,
+             PSDiskDelegatorPtr delegator_);
 
     ~BlobFile();
 
-    String getPath() const { return fmt::format("{}/{}{}", parent_path, BLOB_PREFIX_NAME, blob_id); }
+    String getPath() const
+    {
+        return fmt::format("{}/{}{}", parent_path, BLOB_PREFIX_NAME, blob_id);
+    }
 
-    EncryptionPath getEncryptionPath() const { return EncryptionPath(getPath(), ""); }
+    EncryptionPath getEncryptionPath() const
+    {
+        return EncryptionPath(getPath(), "");
+    }
 
     void read(char * buffer, size_t offset, size_t size, const ReadLimiterPtr & read_limiter, bool background = false);
 
-    void write(
-        char * buffer,
-        size_t offset,
-        size_t size,
-        const WriteLimiterPtr & write_limiter,
-        bool background = false);
+    void write(char * buffer, size_t offset, size_t size, const WriteLimiterPtr & write_limiter, bool background = false);
 
     void truncate(size_t size);
 

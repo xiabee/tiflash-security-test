@@ -109,9 +109,7 @@ void ColumnTuple::insert(const Field & x)
 
     const size_t tuple_size = columns.size();
     if (tuple.size() != tuple_size)
-        throw Exception(
-            "Cannot insert value of different size into tuple",
-            ErrorCodes::CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE);
+        throw Exception("Cannot insert value of different size into tuple", ErrorCodes::CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE);
 
     for (size_t i = 0; i < tuple_size; ++i)
         columns[i]->assumeMutableRef().insert(tuple[i]);
@@ -123,9 +121,7 @@ void ColumnTuple::insertFrom(const IColumn & src_, size_t n)
 
     const size_t tuple_size = columns.size();
     if (src.columns.size() != tuple_size)
-        throw Exception(
-            "Cannot insert value of different size into tuple",
-            ErrorCodes::CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE);
+        throw Exception("Cannot insert value of different size into tuple", ErrorCodes::CANNOT_INSERT_VALUE_OF_DIFFERENT_SIZE_INTO_TUPLE);
 
     for (size_t i = 0; i < tuple_size; ++i)
         columns[i]->assumeMutableRef().insertFrom(*src.columns[i], n);
@@ -143,12 +139,7 @@ void ColumnTuple::popBack(size_t n)
         column->assumeMutableRef().popBack(n);
 }
 
-StringRef ColumnTuple::serializeValueIntoArena(
-    size_t n,
-    Arena & arena,
-    char const *& begin,
-    const TiDB::TiDBCollatorPtr & collator,
-    String & sort_key_container) const
+StringRef ColumnTuple::serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
 {
     size_t values_size = 0;
     for (const auto & column : columns)
@@ -165,58 +156,27 @@ const char * ColumnTuple::deserializeAndInsertFromArena(const char * pos, const 
     return pos;
 }
 
-void ColumnTuple::updateHashWithValue(
-    size_t n,
-    SipHash & hash,
-    const TiDB::TiDBCollatorPtr & collator,
-    String & sort_key_container) const
+void ColumnTuple::updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
 {
     for (const auto & column : columns)
         column->updateHashWithValue(n, hash, collator, sort_key_container);
 }
 
-void ColumnTuple::updateHashWithValues(
-    IColumn::HashValues & hash_values,
-    const TiDB::TiDBCollatorPtr & collator,
-    String & sort_key_container) const
+void ColumnTuple::updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
 {
     for (const auto & column : columns)
         column->updateHashWithValues(hash_values, collator, sort_key_container);
 }
 
-void ColumnTuple::updateWeakHash32(
-    WeakHash32 & hash,
-    const TiDB::TiDBCollatorPtr & collator,
-    String & sort_key_container) const
+void ColumnTuple::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr & collator, String & sort_key_container) const
 {
     auto s = size();
 
-    RUNTIME_CHECK_MSG(
-        hash.getData().size() == s,
-        "size of WeakHash32({}) does not match size of column({})",
-        hash.getData().size(),
-        s);
+    if (hash.getData().size() != s)
+        throw Exception("Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is " + std::to_string(hash.getData().size()), ErrorCodes::LOGICAL_ERROR);
 
     for (const auto & column : columns)
         column->updateWeakHash32(hash, collator, sort_key_container);
-}
-
-void ColumnTuple::updateWeakHash32(
-    WeakHash32 & hash,
-    const TiDB::TiDBCollatorPtr & collator,
-    String & sort_key_container,
-    const BlockSelective & selective) const
-{
-    const size_t rows = selective.size();
-
-    RUNTIME_CHECK_MSG(
-        hash.getData().size() == rows,
-        "size of WeakHash32({}) doesn't match size of column({})",
-        hash.getData().size(),
-        rows);
-
-    for (const auto & column : columns)
-        column->updateWeakHash32(hash, collator, sort_key_container, selective);
 }
 
 void ColumnTuple::insertRangeFrom(const IColumn & src, size_t start, size_t length)
@@ -251,47 +211,24 @@ ColumnPtr ColumnTuple::permute(const Permutation & perm, size_t limit) const
     return ColumnTuple::create(new_columns);
 }
 
-ColumnPtr ColumnTuple::replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & offsets) const
+ColumnPtr ColumnTuple::replicate(const Offsets & offsets) const
 {
     const size_t tuple_size = columns.size();
     Columns new_columns(tuple_size);
 
     for (size_t i = 0; i < tuple_size; ++i)
-        new_columns[i] = columns[i]->replicateRange(start_row, end_row, offsets);
+        new_columns[i] = columns[i]->replicate(offsets);
 
     return ColumnTuple::create(new_columns);
 }
 
 MutableColumns ColumnTuple::scatter(ColumnIndex num_columns, const Selector & selector) const
 {
-    return scatterImplForColumnTuple<false>(num_columns, selector, {});
-}
-
-MutableColumns ColumnTuple::scatter(
-    ColumnIndex num_columns,
-    const Selector & selector,
-    const BlockSelective & selective) const
-{
-    return scatterImplForColumnTuple<true>(num_columns, selector, selective);
-}
-
-template <bool selective_block>
-MutableColumns ColumnTuple::scatterImplForColumnTuple(
-    ColumnIndex num_columns,
-    const Selector & selector,
-    const BlockSelective & selective) const
-{
     const size_t tuple_size = columns.size();
     std::vector<MutableColumns> scattered_tuple_elements(tuple_size);
 
     for (size_t tuple_element_idx = 0; tuple_element_idx < tuple_size; ++tuple_element_idx)
-    {
-        if constexpr (selective_block)
-            scattered_tuple_elements[tuple_element_idx]
-                = columns[tuple_element_idx]->scatter(num_columns, selector, selective);
-        else
-            scattered_tuple_elements[tuple_element_idx] = columns[tuple_element_idx]->scatter(num_columns, selector);
-    }
+        scattered_tuple_elements[tuple_element_idx] = columns[tuple_element_idx]->scatter(num_columns, selector);
 
     MutableColumns res(num_columns);
 
@@ -308,23 +245,6 @@ MutableColumns ColumnTuple::scatterImplForColumnTuple(
 
 void ColumnTuple::scatterTo(ScatterColumns & scatterColumns, const Selector & selector) const
 {
-    scatterToImplForColumnTuple<false>(scatterColumns, selector, {});
-}
-
-void ColumnTuple::scatterTo(
-    ScatterColumns & scatterColumns,
-    const Selector & selector,
-    const BlockSelective & selective) const
-{
-    scatterToImplForColumnTuple<true>(scatterColumns, selector, selective);
-}
-
-template <bool selective_block>
-void ColumnTuple::scatterToImplForColumnTuple(
-    ScatterColumns & scatterColumns,
-    const Selector & selector,
-    const BlockSelective & selective) const
-{
     const size_t tuple_size = columns.size();
     ColumnIndex scattered_num_columns = scatterColumns.size();
     std::vector<MutableColumns> scattered_tuple_elements(tuple_size);
@@ -332,15 +252,10 @@ void ColumnTuple::scatterToImplForColumnTuple(
     {
         for (size_t scatter_idx = 0; scatter_idx < scattered_num_columns; ++scatter_idx)
         {
-            auto col = static_cast<ColumnTuple &>(scatterColumns[scatter_idx]->assumeMutableRef())
-                           .columns[tuple_element_idx]
-                           ->assumeMutable();
+            auto col = static_cast<ColumnTuple &>(scatterColumns[scatter_idx]->assumeMutableRef()).columns[tuple_element_idx]->assumeMutable();
             scattered_tuple_elements[tuple_element_idx].push_back(std::move(col));
         }
-        if constexpr (selective_block)
-            columns[tuple_element_idx]->scatterTo(scattered_tuple_elements[tuple_element_idx], selector, selective);
-        else
-            columns[tuple_element_idx]->scatterTo(scattered_tuple_elements[tuple_element_idx], selector);
+        columns[tuple_element_idx]->scatterTo(scattered_tuple_elements[tuple_element_idx], selector);
     }
 
     for (size_t scattered_idx = 0; scattered_idx < scattered_num_columns; ++scattered_idx)
@@ -356,8 +271,7 @@ int ColumnTuple::compareAt(size_t n, size_t m, const IColumn & rhs, int nan_dire
 {
     const size_t tuple_size = columns.size();
     for (size_t i = 0; i < tuple_size; ++i)
-        if (int res
-            = columns[i]->compareAt(n, m, *static_cast<const ColumnTuple &>(rhs).columns[i], nan_direction_hint))
+        if (int res = columns[i]->compareAt(n, m, *static_cast<const ColumnTuple &>(rhs).columns[i], nan_direction_hint))
             return res;
 
     return 0;

@@ -17,7 +17,7 @@
 #include <Common/Logger.h>
 #include <Common/TiFlashMetrics.h>
 #include <DataTypes/IDataType.h>
-#include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/DeltaMerge/File/DMFile.h>
 
 #include <memory>
 
@@ -34,7 +34,7 @@ enum class ColumnCacheStatus
     GET_HIT,
     GET_COPY,
 
-    _TOTAL_COUNT, // NOLINT(bugprone-reserved-identifier)
+    _TOTAL_COUNT,
 };
 
 class ColumnSharingCache
@@ -58,12 +58,7 @@ public:
         }
     }
 
-    ColumnCacheStatus get(
-        size_t start_pack_id,
-        size_t pack_count,
-        size_t read_rows,
-        ColumnPtr & col_data,
-        DataTypePtr data_type)
+    ColumnCacheStatus get(size_t start_pack_id, size_t pack_count, size_t read_rows, ColumnPtr & col_data, DataTypePtr data_type)
     {
         ColumnCacheStatus status;
         std::lock_guard lock(mtx);
@@ -137,7 +132,10 @@ public:
         }
     }
 
-    ~ColumnSharingCacheMap() { LOG_DEBUG(log, "dmfile {} stat {}", dmfile_name, statString()); }
+    ~ColumnSharingCacheMap()
+    {
+        LOG_DEBUG(log, "dmfile {} stat {}", dmfile_name, statString());
+    }
 
     // `addStale` just do some statistics.
     void addStale()
@@ -157,13 +155,7 @@ public:
         itr->second.add(start_pack_id, pack_count, col_data);
     }
 
-    bool get(
-        int64_t col_id,
-        size_t start_pack_id,
-        size_t pack_count,
-        size_t read_rows,
-        ColumnPtr & col_data,
-        DataTypePtr data_type)
+    bool get(int64_t col_id, size_t start_pack_id, size_t pack_count, size_t read_rows, ColumnPtr & col_data, DataTypePtr data_type)
     {
         auto status = ColumnCacheStatus::GET_MISS;
         auto itr = cols.find(col_id);
@@ -187,7 +179,10 @@ public:
     }
 
 private:
-    void addColumn(int64_t col_id) { cols[col_id]; }
+    void addColumn(int64_t col_id)
+    {
+        cols[col_id];
+    }
     std::string statString() const
     {
         auto add_count = stats[static_cast<int>(ColumnCacheStatus::ADD_COUNT)].load(std::memory_order_relaxed);
@@ -199,16 +194,15 @@ private:
         auto add_total = add_count + add_stale;
         auto get_cached = get_hit + get_copy;
         auto get_total = get_miss + get_part + get_hit + get_copy;
-        return fmt::format(
-            "add_count={} add_stale={} add_ratio={} get_miss={} get_part={} get_hit={} get_copy={} cached_ratio={}",
-            add_count,
-            add_stale,
-            add_total > 0 ? add_count * 1.0 / add_total : 0,
-            get_miss,
-            get_part,
-            get_hit,
-            get_copy,
-            get_total > 0 ? get_cached * 1.0 / get_total : 0);
+        return fmt::format("add_count={} add_stale={} add_ratio={} get_miss={} get_part={} get_hit={} get_copy={} cached_ratio={}",
+                           add_count,
+                           add_stale,
+                           add_total > 0 ? add_count * 1.0 / add_total : 0,
+                           get_miss,
+                           get_part,
+                           get_hit,
+                           get_copy,
+                           get_total > 0 ? get_cached * 1.0 / get_total : 0);
     }
     std::string dmfile_name;
     std::unordered_map<int64_t, ColumnSharingCache> cols;
@@ -217,27 +211,6 @@ private:
 };
 
 class DMFileReader;
-
-class DMFileReaderPoolSharding
-{
-public:
-    void add(const String & path, DMFileReader & reader);
-    void del(const String & path, DMFileReader & reader);
-    void set(
-        const String & path,
-        DMFileReader & from_reader,
-        int64_t col_id,
-        size_t start,
-        size_t count,
-        ColumnPtr & col);
-    bool hasConcurrentReader(const String & path);
-    // `get` is just for test.
-    DMFileReader * get(const std::string & path);
-
-private:
-    std::mutex mtx;
-    std::unordered_map<std::string, std::unordered_set<DMFileReader *>> readers;
-};
 
 // DMFileReaderPool holds all the DMFileReader objects, so we can easily find DMFileReader objects with the same DMFile ID.
 // When a DMFileReader object successfully reads a column's packs, it will try to put these packs into other DMFileReader objects' cache.
@@ -253,14 +226,14 @@ public:
     void set(DMFileReader & from_reader, int64_t col_id, size_t start, size_t count, ColumnPtr & col);
     bool hasConcurrentReader(DMFileReader & from_reader);
     // `get` is just for test.
-    DMFileReader * get(const std::string & path);
+    DMFileReader * get(const std::string & name);
 
 private:
     DMFileReaderPool() = default;
-    DMFileReaderPoolSharding & getSharding(const String & path);
 
 private:
-    std::array<DMFileReaderPoolSharding, 16> shardings;
+    std::mutex mtx;
+    std::unordered_map<std::string, std::unordered_set<DMFileReader *>> readers;
 };
 
 } // namespace DB::DM

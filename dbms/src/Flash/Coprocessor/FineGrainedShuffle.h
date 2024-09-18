@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Flash/Coprocessor/DAGContext.h>
 #include <common/types.h>
 #include <tipb/executor.pb.h>
 
@@ -21,26 +22,22 @@ namespace DB
 {
 static constexpr std::string_view enableFineGrainedShuffleExtraInfo = "enable fine grained shuffle";
 
-static constexpr size_t maxFineGrainedStreamCount = 1024;
-
-inline bool fineGrainedShuffleEnabled(uint64_t stream_count)
+inline bool enableFineGrainedShuffle(uint64_t stream_count)
 {
     return stream_count > 0;
 }
 
 struct FineGrainedShuffle
 {
-    FineGrainedShuffle()
-        : stream_count(0)
-        , batch_size(0)
-    {}
-
     explicit FineGrainedShuffle(const tipb::Executor * executor)
         : stream_count(executor ? executor->fine_grained_shuffle_stream_count() : 0)
         , batch_size(executor ? executor->fine_grained_shuffle_batch_size() : 0)
     {}
 
-    bool enabled() const { return fineGrainedShuffleEnabled(stream_count); }
+    bool enable() const
+    {
+        return enableFineGrainedShuffle(stream_count);
+    }
 
     const UInt64 stream_count;
     const UInt64 batch_size;

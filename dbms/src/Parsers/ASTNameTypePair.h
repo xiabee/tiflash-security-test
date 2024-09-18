@@ -58,4 +58,5 @@ protected:
 };
 
 
-} // namespace DB
+}
+

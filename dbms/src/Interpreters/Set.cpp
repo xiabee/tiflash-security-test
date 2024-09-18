@@ -29,7 +29,7 @@
 #include <Parsers/ASTExpressionList.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTLiteral.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <Storages/Transaction/TypeMapping.h>
 
 
 namespace DB
@@ -78,12 +78,7 @@ void NO_INLINE Set::insertFromBlockImplCase(
         if (has_null_map && (*null_map)[i])
             continue;
 
-        auto emplace_result = state.emplaceKey(method.data, i, variants.string_pool, sort_key_containers);
-
-        if (emplace_result.isInserted() && keys_size == 1)
-        {
-            unique_set_elements->emplace((*key_columns[0])[i]);
-        }
+        state.emplaceKey(method.data, i, variants.string_pool, sort_key_containers);
     }
 }
 
@@ -198,9 +193,7 @@ static Field extractValueFromNode(ASTPtr & node, const IDataType & type, const C
         return convertFieldToType(value_raw.first, type, value_raw.second.get());
     }
     else
-        throw Exception(
-            "Incorrect element of set. Must be literal or constant expression.",
-            ErrorCodes::INCORRECT_ELEMENT_OF_SET);
+        throw Exception("Incorrect element of set. Must be literal or constant expression.", ErrorCodes::INCORRECT_ELEMENT_OF_SET);
 }
 
 
@@ -236,9 +229,8 @@ void Set::createFromAST(const DataTypes & types, ASTPtr node, const Context & co
 
             size_t tuple_size = func->arguments->children.size();
             if (tuple_size != num_columns)
-                throw Exception(
-                    "Incorrect size of tuple in set: " + toString(tuple_size) + " instead of " + toString(num_columns),
-                    ErrorCodes::INCORRECT_ELEMENT_OF_SET);
+                throw Exception("Incorrect size of tuple in set: " + toString(tuple_size) + " instead of " + toString(num_columns),
+                                ErrorCodes::INCORRECT_ELEMENT_OF_SET);
 
             if (tuple_values.empty())
                 tuple_values.resize(tuple_size);
@@ -267,10 +259,7 @@ void Set::createFromAST(const DataTypes & types, ASTPtr node, const Context & co
     insertFromBlock(block, fill_set_elements);
 }
 
-std::vector<const tipb::Expr *> Set::createFromDAGExpr(
-    const DataTypes & types,
-    const tipb::Expr & expr,
-    bool fill_set_elements)
+std::vector<const tipb::Expr *> Set::createFromDAGExpr(const DataTypes & types, const tipb::Expr & expr, bool fill_set_elements)
 {
     /// Will form a block with values from the set.
 
@@ -278,9 +267,7 @@ std::vector<const tipb::Expr *> Set::createFromDAGExpr(
     size_t num_columns = types.size();
     if (num_columns != 1)
     {
-        throw Exception(
-            "Incorrect element of set, tuple in is not supported yet",
-            ErrorCodes::INCORRECT_ELEMENT_OF_SET);
+        throw Exception("Incorrect element of set, tuple in is not supported yet", ErrorCodes::INCORRECT_ELEMENT_OF_SET);
     }
     for (size_t i = 0; i < num_columns; ++i)
         header.insert(ColumnWithTypeAndName(types[i]->createColumn(), types[i], "_" + toString(i)));
@@ -343,8 +330,8 @@ ColumnPtr Set::execute(const Block & block, bool negative) const
     if (data_types.size() != num_key_columns)
     {
         std::stringstream message;
-        message << "Number of columns in section IN doesn't match. " << num_key_columns << " at left, "
-                << data_types.size() << " at right.";
+        message << "Number of columns in section IN doesn't match. "
+                << num_key_columns << " at left, " << data_types.size() << " at right.";
         throw Exception(message.str(), ErrorCodes::NUMBER_OF_COLUMNS_DOESNT_MATCH);
     }
 
@@ -360,10 +347,9 @@ ColumnPtr Set::execute(const Block & block, bool negative) const
         key_columns.push_back(block.safeGetByPosition(i).column.get());
 
         if (!removeNullable(data_types[i])->equals(*removeNullable(block.safeGetByPosition(i).type)))
-            throw Exception(
-                "Types of column " + toString(i + 1) + " in section IN don't match: " + data_types[i]->getName()
-                    + " on the right, " + block.safeGetByPosition(i).type->getName() + " on the left.",
-                ErrorCodes::TYPE_MISMATCH);
+            throw Exception("Types of column " + toString(i + 1) + " in section IN don't match: "
+                                + data_types[i]->getName() + " on the right, " + block.safeGetByPosition(i).type->getName() + " on the left.",
+                            ErrorCodes::TYPE_MISMATCH);
 
         if (ColumnPtr converted = key_columns.back()->convertToFullColumnIfConst())
         {

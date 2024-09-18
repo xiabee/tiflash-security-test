@@ -82,7 +82,7 @@ public:
      * If such span is found.
      * It will mark that span to be used and also return a hint of the max capacity available in this SpaceMap. 
      * 
-     * return value is <insert_offset, max_cap, is_expansion>:
+     * return value is <insert_offset, max_cap>:
      *  insert_offset: start offset for the inserted space
      *  max_cap: A hint of the largest available space this SpaceMap can hold. 
      *  is_expansion: Whether it is an expansion span
@@ -110,14 +110,25 @@ public:
      * Sanity check for correctness
      */
     using CheckerFunc = std::function<bool(size_t idx, UInt64 start, UInt64 end)>;
-    virtual bool check(CheckerFunc /*checker*/, size_t /*size*/) { return true; }
+    virtual bool check(CheckerFunc /*checker*/, size_t /*size*/)
+    {
+        return true;
+    }
+
+    /**
+     * Log the status of space map
+     */
+    void logDebugString();
 
     /**
      * return the status of space map
      */
     virtual String toDebugString() = 0;
 
-    SpaceMapType getType() const { return type; }
+    SpaceMapType getType() const
+    {
+        return type;
+    }
 
     static String typeToString(SpaceMapType type)
     {
@@ -130,10 +141,10 @@ public:
         }
     }
 
-    virtual ~SpaceMap() = default;
-
 protected:
     SpaceMap(UInt64 start_, UInt64 end_, SpaceMapType type_);
+
+    virtual ~SpaceMap() = default;
 
     // Return true if space [offset, offset+size) are all free
     virtual bool isMarkUnused(UInt64 offset, size_t size) = 0;
@@ -145,7 +156,7 @@ protected:
 
 private:
     /* Check the range */
-    bool isInvalidRange(UInt64 offset, size_t size) const;
+    bool checkSpace(UInt64 offset, size_t size) const;
 
 #ifndef DBMS_PUBLIC_GTEST
 protected:

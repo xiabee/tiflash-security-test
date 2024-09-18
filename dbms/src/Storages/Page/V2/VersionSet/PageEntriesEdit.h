@@ -16,8 +16,8 @@
 
 #include <Common/nocopyable.h>
 #include <Storages/Page/Page.h>
-#include <Storages/Page/PageDefinesBase.h>
-#include <Storages/Page/WriteBatchImpl.h>
+#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/WriteBatch.h>
 
 namespace DB::PS::V2
 {

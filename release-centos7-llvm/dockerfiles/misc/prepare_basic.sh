@@ -17,10 +17,7 @@
 # Prepare basic environment for CI/CD.
 
 function prepare_basic() {
-    yum install -y epel-release centos-release-scl && \
-    sed -i s/mirror.centos.org/vault.centos.org/g /etc/yum.repos.d/*.repo && \
-    sed -i s/^#.*baseurl=http/baseurl=http/g /etc/yum.repos.d/*.repo && \
-    sed -i s/^mirrorlist=http/#mirrorlist=http/g /etc/yum.repos.d/*.repo
+    yum install -y epel-release centos-release-scl
     yum install -y \
          devscripts \
          fakeroot \
@@ -30,8 +27,8 @@ function prepare_basic() {
          libtool-ltdl-devel \
          python3-devel \
          bzip2 \
-         chrpath
+         chrpath \
     yum install -y curl git perl wget cmake3 glibc-static zlib-devel diffutils ninja-build devtoolset-10
-    yum install -y 'perl(Data::Dumper)' 
+    yum -y install 'perl(Data::Dumper)' 
     yum clean all -y
 }

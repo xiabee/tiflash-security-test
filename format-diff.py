@@ -16,7 +16,6 @@
 import argparse
 import os
 import subprocess
-from shutil import which
 from os import path
 
 import json
@@ -28,14 +27,6 @@ def run_cmd(cmd, show_cmd=False):
         print("RUN CMD: {}".format(cmd))
     return res
 
-def try_find_clang_format(exec_path):
-    candidates = ['clang-format']
-    if exec_path is not None:
-        candidates.insert(0, exec_path)
-    for c in candidates:
-        if which(c) is not None:
-            return c
-    return candidates[-1]
 
 def main():
     default_suffix = ['.cpp', '.h', '.cc', '.hpp']
@@ -47,14 +38,12 @@ def main():
                         help='suffix of files to format, split by space', default=' '.join(default_suffix))
     parser.add_argument('--ignore_suffix',
                         help='ignore files with suffix, split by space')
-    parser.add_argument('--diff_from',
-                        help='commit hash/branch to check git diff', default='HEAD')
+    parser.add_argument(
+        '--diff_from', help='commit hash/branch to check git diff', default='HEAD')
     parser.add_argument('--check_formatted',
                         help='exit -1 if NOT formatted', action='store_true')
     parser.add_argument('--dump_diff_files_to',
                         help='dump diff file names to specific path', default=None)
-    parser.add_argument('--clang_format',
-                        help='path to clang-format', default=None)
 
     args = parser.parse_args()
     default_suffix = args.suffix.strip().split(' ') if args.suffix else []
@@ -93,9 +82,8 @@ def main():
 
     if files_to_format:
         print('Files to format:\n  {}'.format('\n  '.join(files_to_format)))
-        clang_format_cmd = try_find_clang_format(args.clang_format)
         for file in files_to_format:
-            cmd = clang_format_cmd + ' -i {}'.format(file)
+            cmd = 'clang-format -i {}'.format(file)
             if subprocess.Popen(cmd, shell=True, cwd=tiflash_repo_path).wait():
                 exit(-1)
 

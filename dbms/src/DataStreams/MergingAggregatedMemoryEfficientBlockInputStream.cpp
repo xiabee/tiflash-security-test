@@ -83,7 +83,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::MergingAggregatedMemoryEfficie
     size_t merging_threads_,
     const String & req_id)
     : log(Logger::get(req_id))
-    , aggregator(params, req_id, merging_threads_, [](const OperatorSpillContextPtr &) {})
+    , aggregator(params, req_id)
     , final(final_)
     , reading_threads(std::min(reading_threads_, inputs_.size()))
     , merging_threads(merging_threads_)
@@ -94,7 +94,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::MergingAggregatedMemoryEfficie
     /** Create threads that will request and read data from remote servers.
       */
     if (reading_threads > 1)
-        reading_pool = std::make_unique<legacy::ThreadPool>(reading_threads);
+        reading_pool = std::make_unique<ThreadPool>(reading_threads);
 
     /** Create threads. Each of them will pull next set of blocks to merge in a loop,
       *  then merge them and place result in a queue (in fact, ordered map), from where we will read ready result blocks.
@@ -189,7 +189,10 @@ void MergingAggregatedMemoryEfficientBlockInputStream::start()
         {
             auto & child = children[i];
 
-            reading_pool->schedule(wrapInvocable(true, [&child] { child->readPrefix(); }));
+            reading_pool->schedule(
+                wrapInvocable(true, [&child] {
+                    child->readPrefix();
+                }));
         }
 
         reading_pool->wait();
@@ -210,26 +213,11 @@ Block MergingAggregatedMemoryEfficientBlockInputStream::readImpl()
 {
     start();
 
-    if (Block block = popBlocksListFront(current_result))
-    {
-        return block;
-    }
-
     if (!parallel_merge_data)
     {
-        BlocksToMerge blocks_to_merge = getNextBlocksToMerge();
-        if (blocks_to_merge && !blocks_to_merge->empty())
-        {
-            current_result = aggregator.vstackBlocks(*blocks_to_merge, final);
-            auto block = popBlocksListFront(current_result);
-            assert(block);
-            return block;
-        }
-        else
-        {
-            /// if all the buckets are done, return empty block
-            return {};
-        }
+        if (BlocksToMerge blocks_to_merge = getNextBlocksToMerge())
+            return aggregator.mergeBlocks(*blocks_to_merge, final);
+        return {};
     }
     else
     {
@@ -261,16 +249,13 @@ Block MergingAggregatedMemoryEfficientBlockInputStream::readImpl()
             {
                 auto it = parallel_merge_data->merged_blocks.begin();
 
-                if (!it->second.empty())
+                if (it->second)
                 {
-                    current_result.swap(it->second);
+                    res.swap(it->second);
                     parallel_merge_data->merged_blocks.erase(it);
 
                     lock.unlock();
-                    parallel_merge_data->have_space
-                        .notify_one(); /// We consumed block. Merging thread may merge next block for us.
-                    res = popBlocksListFront(current_result);
-                    assert(res);
+                    parallel_merge_data->have_space.notify_one(); /// We consumed block. Merging thread may merge next block for us.
                     break;
                 }
             }
@@ -347,7 +332,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
                 if (!blocks_to_merge || blocks_to_merge->empty())
                 {
                     {
-                        std::unique_lock merged_blocks_lock(parallel_merge_data->merged_blocks_mutex);
+                        std::unique_lock lock(parallel_merge_data->merged_blocks_mutex);
                         parallel_merge_data->exhausted = true;
                     }
 
@@ -356,12 +341,14 @@ void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
                     break;
                 }
 
-                output_order = blocks_to_merge->front().info.bucket_num;
+                output_order = blocks_to_merge->front().info.is_overflows
+                    ? NUM_BUCKETS /// "Overflow" blocks returned by 'getNextBlocksToMerge' after all other blocks.
+                    : blocks_to_merge->front().info.bucket_num;
 
                 {
-                    std::unique_lock merged_blocks_lock(parallel_merge_data->merged_blocks_mutex);
+                    std::unique_lock lock(parallel_merge_data->merged_blocks_mutex);
 
-                    parallel_merge_data->have_space.wait(merged_blocks_lock, [this] {
+                    parallel_merge_data->have_space.wait(lock, [this] {
                         return parallel_merge_data->merged_blocks.size() < merging_threads
                             || parallel_merge_data->finish;
                     });
@@ -369,7 +356,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
                     if (parallel_merge_data->finish)
                         break;
 
-                    /** Place empty blockslist. It is promise to do merge and fill it.
+                    /** Place empty block. It is promise to do merge and fill it.
                       * Main thread knows, that there will be result for 'output_order' place.
                       * Main thread must return results exactly in 'output_order', so that is important.
                       */
@@ -378,14 +365,14 @@ void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
             }
 
             /// At this point, several merge threads may work in parallel.
-            BlocksList res = aggregator.vstackBlocks(*blocks_to_merge, final);
-            assert(!res.empty());
+            Block res = aggregator.mergeBlocks(*blocks_to_merge, final);
 
             {
                 std::lock_guard lock(parallel_merge_data->merged_blocks_mutex);
 
                 if (parallel_merge_data->finish)
                     break;
+
                 parallel_merge_data->merged_blocks[output_order] = res;
             }
 
@@ -407,8 +394,7 @@ void MergingAggregatedMemoryEfficientBlockInputStream::mergeThread()
 }
 
 
-MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregatedMemoryEfficientBlockInputStream::
-    getNextBlocksToMerge()
+MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregatedMemoryEfficientBlockInputStream::getNextBlocksToMerge()
 {
     /** There are several input sources.
       * From each of them, data may be received in one of following forms:
@@ -424,22 +410,30 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
       * If all servers will send non-partitioned data, we may just merge it.
       * But if some other servers will send partitioned data,
       *  then we must first partition non-partitioned data, and then merge data in each partition.
+      *
+      * 3. Blocks with 'is_overflows' = true.
+      * It is additional data, that was not passed 'max_rows_to_group_by' threshold.
+      * It must be merged together independently of ordinary data.
       */
     ++current_bucket_num;
 
     /// Read from source next block with bucket number not greater than 'current_bucket_num'.
 
     auto need_that_input = [this](Input & input) {
-        return !input.is_exhausted && input.block.info.bucket_num < current_bucket_num;
+        return !input.is_exhausted
+            && input.block.info.bucket_num < current_bucket_num;
     };
 
     auto read_from_input = [this](Input & input) {
+        /// If block with 'overflows' (not ordinary data) will be received, then remember that block and repeat.
         while (true)
         {
+            //            std::cerr << "reading block\n";
             Block block = input.stream->read();
 
             if (!block)
             {
+                //                std::cerr << "input is exhausted\n";
                 input.is_exhausted = true;
                 break;
             }
@@ -447,12 +441,25 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
             if (block.info.bucket_num != -1)
             {
                 /// One of partitioned blocks for two-level data.
+                //                std::cerr << "block for bucket " << block.info.bucket_num << "\n";
+
                 has_two_level = true;
                 input.block = block;
+            }
+            else if (block.info.is_overflows)
+            {
+                //                std::cerr << "block for overflows\n";
+
+                has_overflows = true;
+                input.overflow_block = block;
+
+                continue;
             }
             else
             {
                 /// Block for non-partitioned (single-level) data.
+                //                std::cerr << "block without bucket\n";
+
                 input.block = block;
             }
 
@@ -472,7 +479,9 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
         {
             if (need_that_input(input))
             {
-                reading_pool->schedule(wrapInvocable(true, [&input, &read_from_input] { read_from_input(input); }));
+                reading_pool->schedule(wrapInvocable(true, [&input, &read_from_input] {
+                    read_from_input(input);
+                }));
             }
         }
 
@@ -483,7 +492,24 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
     {
         if (current_bucket_num >= NUM_BUCKETS)
         {
-            return {};
+            /// All ordinary data was processed. Maybe, there are also 'overflows'-blocks.
+            //            std::cerr << "at end\n";
+
+            if (has_overflows)
+            {
+                //                std::cerr << "merging overflows\n";
+
+                has_overflows = false;
+                BlocksToMerge blocks_to_merge = std::make_unique<BlocksList>();
+
+                for (auto & input : inputs)
+                    if (input.overflow_block)
+                        blocks_to_merge->emplace_back(std::move(input.overflow_block));
+
+                return blocks_to_merge;
+            }
+            else
+                return {};
         }
         else if (has_two_level)
         {
@@ -492,6 +518,8 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
               * Find minimum bucket number, for which there is data
               *  - this will be data for merge.
               */
+            //            std::cerr << "has two level\n";
+
             int min_bucket_num = NUM_BUCKETS;
 
             for (auto & input : inputs)
@@ -525,6 +553,8 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
 
             current_bucket_num = min_bucket_num;
 
+            //            std::cerr << "current_bucket_num = " << current_bucket_num << "\n";
+
             /// No more blocks with ordinary data.
             if (current_bucket_num == NUM_BUCKETS)
                 continue;
@@ -536,11 +566,15 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
             {
                 if (input.block.info.bucket_num == current_bucket_num)
                 {
+                    //                    std::cerr << "having block for current_bucket_num\n";
+
                     blocks_to_merge->emplace_back(std::move(input.block));
                     input.block = Block();
                 }
                 else if (!input.splitted_blocks.empty() && input.splitted_blocks[min_bucket_num])
                 {
+                    //                    std::cerr << "having splitted data for bucket\n";
+
                     blocks_to_merge->emplace_back(std::move(input.splitted_blocks[min_bucket_num]));
                     input.splitted_blocks[min_bucket_num] = Block();
                 }
@@ -551,6 +585,7 @@ MergingAggregatedMemoryEfficientBlockInputStream::BlocksToMerge MergingAggregate
         else
         {
             /// There are only non-partitioned (single-level) data. Just merge them.
+            //            std::cerr << "don't have two level\n";
 
             BlocksToMerge blocks_to_merge = std::make_unique<BlocksList>();
 

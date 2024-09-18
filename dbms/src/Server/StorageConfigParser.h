@@ -19,65 +19,80 @@
 #include <tuple>
 #include <vector>
 
-namespace Poco::Util
+namespace Poco
+{
+class Logger;
+namespace Util
 {
 class LayeredConfiguration;
-} // namespace Poco::Util
+}
+} // namespace Poco
 
 namespace DB
 {
 class Logger;
 using LoggerPtr = std::shared_ptr<Logger>;
 
-struct StorageS3Config
+struct StorageIORateLimitConfig
 {
-    bool is_enabled = false;
+public:
+    // For disk that read bandwidth and write bandwith are calculated together, such as AWS's EBS.
+    UInt64 max_bytes_per_sec;
+    // For disk that read bandwidth and write bandwith are calculated separatly, such as GCP's persistent disks.
+    UInt64 max_read_bytes_per_sec;
+    UInt64 max_write_bytes_per_sec;
 
-    // verbose logging for http requests. Use for debugging
-    bool verbose = false;
+    bool use_max_bytes_per_sec;
 
-    bool enable_http_pool = false; // will be removed after testing
-    bool enable_poco_client = true; // will be removed after testing
+    // Currently, IORateLimiter supports 4 I/O type: foreground write, foreground read, background write and background read.
+    // Initially, We calculate bandwidth for each I/O type according to the proportion of weights.
+    // If *_weight is 0, the corresponding I/O type is not limited.
+    UInt32 fg_write_weight;
+    UInt32 bg_write_weight;
+    UInt32 fg_read_weight;
+    UInt32 bg_read_weight;
 
-    String endpoint;
-    String bucket;
-    String access_key_id;
-    String secret_access_key;
-    UInt64 max_connections = 4096;
-    UInt64 connection_timeout_ms = 1000;
-    UInt64 request_timeout_ms = 30000;
-    UInt64 max_redirections = 10;
-    String root;
+    Int32 emergency_pct;
+    Int32 high_pct;
+    Int32 medium_pct;
 
-    inline static String S3_ACCESS_KEY_ID = "S3_ACCESS_KEY_ID";
-    inline static String S3_SECRET_ACCESS_KEY = "S3_SECRET_ACCESS_KEY";
+    Int32 tune_base;
+    Int64 min_bytes_per_sec;
 
-    void parse(const String & content);
-    void enable(bool check_requirements, const LoggerPtr & log);
-    bool isS3Enabled() const;
-    void disable() { is_enabled = false; }
+    Int32 auto_tune_sec;
 
-    String toString() const;
-};
+    StorageIORateLimitConfig()
+        : max_bytes_per_sec(0)
+        , max_read_bytes_per_sec(0)
+        , max_write_bytes_per_sec(0)
+        , use_max_bytes_per_sec(true)
+        , fg_write_weight(25)
+        , bg_write_weight(25)
+        , fg_read_weight(25)
+        , bg_read_weight(25)
+        , emergency_pct(96)
+        , high_pct(85)
+        , medium_pct(60)
+        , tune_base(2)
+        , min_bytes_per_sec(2 * 1024 * 1024)
+        , auto_tune_sec(5)
+    {}
 
-struct StorageRemoteCacheConfig
-{
-    String dir;
-    UInt64 capacity = 0;
-    UInt64 dtfile_level = 100;
-    double delta_rate = 0.1;
-    double reserved_rate = 0.1;
+    void parse(const String & storage_io_rate_limit, const LoggerPtr & log);
 
-    bool isCacheEnabled() const;
-    void initCacheDir() const;
-    String getDTFileCacheDir() const;
-    String getPageCacheDir() const;
-    UInt64 getDTFileCapacity() const;
-    UInt64 getPageCapacity() const;
-    UInt64 getReservedCapacity() const;
-    void parse(const String & content, const LoggerPtr & log);
+    std::string toString() const;
 
-    std::pair<Strings, std::vector<size_t>> getCacheDirInfos(bool is_compute_mode) const;
+    UInt64 getFgWriteMaxBytesPerSec() const;
+    UInt64 getBgWriteMaxBytesPerSec() const;
+    UInt64 getFgReadMaxBytesPerSec() const;
+    UInt64 getBgReadMaxBytesPerSec() const;
+    UInt64 getWriteMaxBytesPerSec() const;
+    UInt64 getReadMaxBytesPerSec() const;
+    UInt64 readWeight() const;
+    UInt64 writeWeight() const;
+    UInt64 totalWeight() const;
+
+    bool operator==(const StorageIORateLimitConfig & config) const;
 };
 
 struct TiFlashStorageConfig
@@ -91,19 +106,13 @@ public:
 
     UInt64 format_version = 0;
     bool lazily_init_store = true;
-    UInt64 api_version = 1;
-
-    StorageS3Config s3_config;
-    StorageRemoteCacheConfig remote_cache_config;
 
 public:
     TiFlashStorageConfig() = default;
 
     Strings getAllNormalPaths() const;
 
-    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(
-        Poco::Util::LayeredConfiguration & config,
-        const LoggerPtr & log);
+    static std::tuple<size_t, TiFlashStorageConfig> parseSettings(Poco::Util::LayeredConfiguration & config, const LoggerPtr & log);
 
 private:
     void parseStoragePath(const String & storage_section, const LoggerPtr & log);

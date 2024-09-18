@@ -20,7 +20,6 @@
 
 #include <ext/shared_ptr_helper.h>
 #include <map>
-#include <tuple>
 
 namespace DB
 {
@@ -65,16 +64,15 @@ protected:
         UInt64 count = 0;
 
         FmtBuffer fmt_buffer;
-        fmt_buffer.append("SpaceMap entries: [");
-        fmt_buffer.joinStr(
-            free_map.begin(),
-            free_map.end(),
-            [&count](const auto & it, FmtBuffer & fb) {
-                fb.fmtAppend(R"({{"index":{},"start":{},"size":{}}})", count, it.first, it.second);
-                count += 1;
-            },
-            ",");
-        fmt_buffer.append("]");
+        fmt_buffer.append("    STD-Map entries status: \n");
+
+        // Need use `count`,so can't use `joinStr` here.
+        for (auto it = free_map.begin(); it != free_map.end(); it++)
+        {
+            fmt_buffer.fmtAppend("      Space: {} start: {} size : {}\n", count, it->first, it->second);
+            count++;
+        }
+
         return fmt_buffer.toString();
     }
 
@@ -154,11 +152,6 @@ protected:
 
     bool markUsedImpl(UInt64 offset, size_t length) override
     {
-        // An empty data, we can simply consider it is stored and return true
-        // Do not let it split the space into smaller pieces.
-        if (length == 0)
-            return true;
-
         auto it = MapUtils::findLessEQ(free_map, offset); // first free block <= `offset`
         if (it == free_map.end())
         {
@@ -173,13 +166,7 @@ protected:
 
         if (length > it->second || it->first + it->second < offset + length)
         {
-            LOG_WARNING(
-                Logger::get(),
-                "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]",
-                offset,
-                length,
-                it->first,
-                it->second);
+            LOG_WARNING(Logger::get(), "Marked space used failed. [offset={}, size={}] is bigger than space [offset={},size={}]", offset, length, it->first, it->second);
             return false;
         }
 
@@ -223,23 +210,14 @@ protected:
         return true;
     }
 
-    // return value is <insert_offset, max_cap, is_expansion>
     std::tuple<UInt64, UInt64, bool> searchInsertOffset(size_t size) override
     {
-        if (unlikely(size == 0))
-        {
-            // The returned `max_cap` is 0 under this case, user should not use it.
-            return std::make_tuple(0, 0, false);
-        }
-
         if (unlikely(free_map.empty()))
         {
             LOG_ERROR(Logger::get(), "Current space map is full");
             return std::make_tuple(UINT64_MAX, 0, false);
         }
-        RUNTIME_CHECK_MSG(
-            !free_map_invert_index.empty(),
-            "Invalid state: free_map is empty but invert index is not empty");
+        RUNTIME_CHECK_MSG(!free_map_invert_index.empty(), "Invalid state: free_map is empty but invert index is not empty");
         auto iter = free_map_invert_index.lower_bound(size);
         if (unlikely(iter == free_map_invert_index.end()))
         {
@@ -268,18 +246,13 @@ protected:
 
     bool markFreeImpl(UInt64 offset, size_t length) override
     {
-        // for an empty blob, no new free block is created, just skip
-        if (length == 0)
-        {
-            return true;
-        }
+        auto it = free_map.find(offset);
 
         /**
          * already unmarked.
          * The `offset` won't be mid of free space.
          * Because we alloc space from left to right.
          */
-        auto it = free_map.find(offset);
         if (it != free_map.end())
         {
             return true;
@@ -303,13 +276,7 @@ protected:
             it_prev--;
             if (it_prev->first + it_prev->second > it->first)
             {
-                LOG_WARNING(
-                    Logger::get(),
-                    "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]",
-                    it->first,
-                    it->second,
-                    it_prev->first,
-                    it_prev->second);
+                LOG_WARNING(Logger::get(), "Marked space free failed. [offset={}, size={}], prev node is [offset={},size={}]", it->first, it->second, it_prev->first, it_prev->second);
                 free_map.erase(it);
                 deleteFromInvertIndex(length, offset);
                 return false;
@@ -321,13 +288,7 @@ protected:
         {
             if (it->first + it->second > it_next->first)
             {
-                LOG_WARNING(
-                    Logger::get(),
-                    "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]",
-                    it->first,
-                    it->second,
-                    it_next->first,
-                    it_next->second);
+                LOG_WARNING(Logger::get(), "Marked space free failed. [offset={}, size={}], next node is [offset={},size={}]", it->first, it->second, it_next->first, it_next->second);
                 free_map.erase(it);
                 deleteFromInvertIndex(length, offset);
                 return false;
@@ -384,11 +345,7 @@ private:
     inline void deleteFromInvertIndex(UInt64 length, UInt64 offset)
     {
         auto index_iter = free_map_invert_index.find(length);
-        RUNTIME_CHECK_MSG(
-            index_iter != free_map_invert_index.end(),
-            "Fail to find length {} offset {} in free_map_invert_index",
-            length,
-            offset);
+        RUNTIME_CHECK_MSG(index_iter != free_map_invert_index.end(), "Fail to find length {} offset {} in free_map_invert_index", length, offset);
         auto & offsets = index_iter->second;
         offsets.erase(offset);
         if (offsets.empty())

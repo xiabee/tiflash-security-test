@@ -75,7 +75,10 @@ public:
 
     const DictionaryStructure & getStructure() const override { return dict_struct; }
 
-    std::chrono::time_point<std::chrono::system_clock> getCreationTime() const override { return creation_time; }
+    std::chrono::time_point<std::chrono::system_clock> getCreationTime() const override
+    {
+        return creation_time;
+    }
 
     bool isInjective(const std::string & attribute_name) const override
     {
@@ -163,6 +166,8 @@ public:
 
     void has(const Columns & key_columns, const DataTypes & key_types, PaddedPODArray<UInt8> & out) const;
 
+    BlockInputStreamPtr getBlockInputStream(const Names & column_names, size_t max_block_size) const override;
+
 private:
     template <typename Value>
     using ContainerType = std::vector<Value>;
@@ -172,7 +177,19 @@ private:
     struct Attribute final
     {
         AttributeUnderlyingType type;
-        std::tuple<UInt8, UInt16, UInt32, UInt64, UInt128, Int8, Int16, Int32, Int64, Float32, Float64, String>
+        std::tuple<
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            UInt128,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            Float32,
+            Float64,
+            String>
             null_values;
         std::tuple<
             ContainerPtrType<UInt8>,
@@ -200,7 +217,7 @@ private:
 
     void calculateBytesAllocated();
 
-    static void validateKeyTypes(const DataTypes & key_types);
+    void validateKeyTypes(const DataTypes & key_types) const;
 
     template <typename T>
     void createAttributeImpl(Attribute & attribute, const Field & null_value);
@@ -234,7 +251,7 @@ private:
     void has(const Attribute & attribute, const Columns & key_columns, PaddedPODArray<UInt8> & out) const;
 
     template <typename Getter, typename KeyType>
-    void trieTraverse(const btrie_t * tree, Getter && getter) const;
+    void trieTraverse(const btrie_t * trie, Getter && getter) const;
 
     Columns getKeyColumns() const;
 

@@ -55,7 +55,10 @@ public:
         return ColumnArray::create(nested_column->assumeMutable(), offsets_column->assumeMutable());
     }
 
-    static Ptr create(const ColumnPtr & nested_column) { return ColumnArray::create(nested_column->assumeMutable()); }
+    static Ptr create(const ColumnPtr & nested_column)
+    {
+        return ColumnArray::create(nested_column->assumeMutable());
+    }
 
     template <typename... Args, typename = typename std::enable_if<IsMutableColumns<Args...>::value>::type>
     static MutablePtr create(Args &&... args)
@@ -74,40 +77,15 @@ public:
     void get(size_t n, Field & res) const override;
     StringRef getDataAt(size_t n) const override;
     void insertData(const char * pos, size_t length) override;
-    StringRef serializeValueIntoArena(
-        size_t n,
-        Arena & arena,
-        char const *& begin,
-        const TiDB::TiDBCollatorPtr &,
-        String &) const override;
+    StringRef serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const TiDB::TiDBCollatorPtr &, String &) const override;
     const char * deserializeAndInsertFromArena(const char * pos, const TiDB::TiDBCollatorPtr &) override;
     void updateHashWithValue(size_t n, SipHash & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
-        const override;
+    void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &) const override;
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
-        const override;
     void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;
     void insert(const Field & x) override;
     void insertFrom(const IColumn & src_, size_t n) override;
-    void insertManyFrom(const IColumn & src_, size_t n, size_t length) override
-    {
-        for (size_t i = 0; i < length; ++i)
-            insertFrom(src_, n);
-    }
-
-    void insertDisjunctFrom(const IColumn & src_, const std::vector<size_t> & position_vec) override
-    {
-        for (auto position : position_vec)
-            insertFrom(src_, position);
-    }
-
     void insertDefault() override;
-    void insertManyDefaults(size_t length) override
-    {
-        for (size_t i = 0; i < length; ++i)
-            insertDefault();
-    }
     void popBack(size_t n) override;
     /// TODO: If result_size_hint < 0, makes reserve() using size of filtered column, not source column to avoid some OOM issues.
     ColumnPtr filter(const Filter & filt, ssize_t result_size_hint) const override;
@@ -118,8 +96,7 @@ public:
     size_t byteSize() const override;
     size_t byteSize(size_t offset, size_t limit) const override;
     size_t allocatedBytes() const override;
-    ColumnPtr replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & replicate_offsets)
-        const override;
+    ColumnPtr replicate(const Offsets & replicate_offsets) const override;
     ColumnPtr convertToFullColumnIfConst() const override;
     void getExtremes(Field & min, Field & max) const override;
 
@@ -132,9 +109,15 @@ public:
     IColumn & getOffsetsColumn() { return offsets->assumeMutableRef(); }
     const IColumn & getOffsetsColumn() const { return *offsets; }
 
-    Offsets & ALWAYS_INLINE getOffsets() { return static_cast<ColumnOffsets &>(offsets->assumeMutableRef()).getData(); }
+    Offsets & ALWAYS_INLINE getOffsets()
+    {
+        return static_cast<ColumnOffsets &>(offsets->assumeMutableRef()).getData();
+    }
 
-    const Offsets & ALWAYS_INLINE getOffsets() const { return static_cast<const ColumnOffsets &>(*offsets).getData(); }
+    const Offsets & ALWAYS_INLINE getOffsets() const
+    {
+        return static_cast<const ColumnOffsets &>(*offsets).getData();
+    }
 
     const ColumnPtr & getDataPtr() const { return data; }
     ColumnPtr & getDataPtr() { return data; }
@@ -146,18 +129,9 @@ public:
     {
         return scatterImpl<ColumnArray>(num_columns, selector);
     }
-    MutableColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
-        const override
-    {
-        return scatterImpl<ColumnArray>(num_columns, selector, selective);
-    }
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override
     {
         scatterToImpl<ColumnArray>(columns, selector);
-    }
-    void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const override
-    {
-        scatterToImpl<ColumnArray>(columns, selector, selective);
     }
     void gather(ColumnGathererStream & gatherer_stream) override;
 
@@ -172,10 +146,7 @@ private:
     ColumnPtr offsets;
 
     size_t ALWAYS_INLINE offsetAt(size_t i) const { return i == 0 ? 0 : getOffsets()[i - 1]; }
-    size_t ALWAYS_INLINE sizeAt(size_t i) const
-    {
-        return i == 0 ? getOffsets()[0] : (getOffsets()[i] - getOffsets()[i - 1]);
-    }
+    size_t ALWAYS_INLINE sizeAt(size_t i) const { return i == 0 ? getOffsets()[0] : (getOffsets()[i] - getOffsets()[i - 1]); }
 
 
     /// Multiply values if the nested column is ColumnVector<T>.
@@ -207,13 +178,6 @@ private:
     ColumnPtr filterTuple(const Filter & filt, ssize_t result_size_hint) const;
     ColumnPtr filterNullable(const Filter & filt, ssize_t result_size_hint) const;
     ColumnPtr filterGeneric(const Filter & filt, ssize_t result_size_hint) const;
-
-    template <bool selective_block>
-    void updateWeakHash32Impl(
-        WeakHash32 & hash,
-        const TiDB::TiDBCollatorPtr & collator,
-        String & sort_key_container,
-        const BlockSelective & selective) const;
 };
 
 

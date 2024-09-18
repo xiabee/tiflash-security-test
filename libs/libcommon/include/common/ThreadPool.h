@@ -15,7 +15,7 @@
 #pragma once
 
 #include <condition_variable>
-#include <exception>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -23,8 +23,6 @@
 #include <vector>
 
 
-namespace legacy
-{
 /** Very simple thread pool similar to boost::threadpool.
   * Advantages:
   * - catches exceptions and rethrows on wait.
@@ -77,4 +75,3 @@ private:
     void worker();
     void finalize();
 };
-} // namespace legacy

@@ -14,121 +14,84 @@
 
 #pragma once
 
-#include <Interpreters/Context_fwd.h>
-#include <Storages/KVStore/Types.h>
-#include <TiDB/Schema/DatabaseInfoCache.h>
+#include <Interpreters/Context.h>
+#include <Storages/Transaction/TMTStorages.h>
 #include <TiDB/Schema/SchemaGetter.h>
-#include <TiDB/Schema/TableIDMap.h>
 
 namespace DB
 {
-class IManageableStorage;
-using ManageableStoragePtr = std::shared_ptr<IManageableStorage>;
-
 template <typename Getter, typename NameMapper>
 struct SchemaBuilder
 {
-private:
     NameMapper name_mapper;
 
     Getter & getter;
 
     Context & context;
 
-    DatabaseInfoCache & databases;
+    std::unordered_map<DB::DatabaseID, TiDB::DBInfoPtr> & databases;
 
-    TableIDMap & table_id_map;
-
-    const KeyspaceID keyspace_id;
+    Int64 target_version;
 
     LoggerPtr log;
 
-public:
-    SchemaBuilder(Getter & getter_, Context & context_, DatabaseInfoCache & dbs_, TableIDMap & table_id_map_)
+    SchemaBuilder(Getter & getter_, Context & context_, std::unordered_map<DB::DatabaseID, TiDB::DBInfoPtr> & dbs_, Int64 version)
         : getter(getter_)
         , context(context_)
         , databases(dbs_)
-        , table_id_map(table_id_map_)
-        , keyspace_id(getter_.getKeyspaceID())
-        , log(Logger::get(fmt::format("keyspace={}", keyspace_id)))
+        , target_version(version)
+        , log(Logger::get())
     {}
 
     void applyDiff(const SchemaDiff & diff);
 
     void syncAllSchema();
 
-    /**
-      * Drop all schema of a given keyspace.
-      * When a keyspace is removed, drop all its databases and tables.
-      */
-    void dropAllSchema();
-
-    bool applyTable(DatabaseID database_id, TableID logical_table_id, TableID physical_table_id, bool force);
-
 private:
-    void applyDropDatabase(DatabaseID database_id);
+    void applyDropSchema(DatabaseID schema_id);
+
     /// Parameter db_name should be mapped.
-    void applyDropDatabaseByName(const String & db_name);
+    void applyDropSchema(const String & db_name);
 
-    bool applyCreateDatabase(DatabaseID database_id);
-    void applyCreateDatabaseByInfo(const TiDB::DBInfoPtr & db_info);
-    void ensureLocalDatabaseExist(DatabaseID database_id, const String & database_mapped_name, std::string_view action);
+    void applyRecoverSchema(DatabaseID database_id);
 
-    void applyRecoverDatabase(DatabaseID database_id);
+    bool applyCreateSchema(DatabaseID schema_id);
 
-    void applyCreateTable(DatabaseID database_id, TableID table_id, std::string_view action);
-    void applyCreateStorageInstance(
-        DatabaseID database_id,
-        const TiDB::TableInfoPtr & table_info,
-        bool is_tombstone,
-        std::string_view action);
+    void applyCreateSchema(const TiDB::DBInfoPtr & db_info);
 
-    void applyDropTable(DatabaseID database_id, TableID table_id, std::string_view action);
+    void applyCreateTable(const TiDB::DBInfoPtr & db_info, TableID table_id);
+
+    void applyCreateLogicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info);
+
+    void applyCreatePhysicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info);
+
+    void applyDropTable(const TiDB::DBInfoPtr & db_info, TableID table_id);
+
     /// Parameter schema_name should be mapped.
-    void applyDropPhysicalTable(const String & db_name, TableID table_id, std::string_view action);
+    void applyDropPhysicalTable(const String & db_name, TableID table_id);
 
-    void applyRecoverTable(DatabaseID database_id, TiDB::TableID table_id);
-    void applyRecoverLogicalTable(
-        DatabaseID database_id,
-        const TiDB::TableInfoPtr & table_info,
-        std::string_view action);
-    bool tryRecoverPhysicalTable(
-        DatabaseID database_id,
-        const TiDB::TableInfoPtr & table_info,
-        std::string_view action);
+    void applyPartitionDiff(const TiDB::DBInfoPtr & db_info, TableID table_id);
 
-    void applyPartitionDiff(DatabaseID database_id, TableID table_id);
-    void applyPartitionDiffOnLogicalTable(
-        DatabaseID database_id,
-        const TiDB::TableInfoPtr & table_info,
-        const ManageableStoragePtr & storage);
+    void applyPartitionDiff(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage, bool drop_part_if_not_exist);
+    TiDB::DBInfoPtr tryFindDatabaseByPartitionTable(const TiDB::DBInfoPtr & db_info, const String & part_table_name);
 
-    void applyRenameTable(DatabaseID database_id, TiDB::TableID table_id);
+    void applyAlterTable(const TiDB::DBInfoPtr & db_info, TableID table_id);
 
-    void applyRenameLogicalTable(
-        DatabaseID new_database_id,
-        const String & new_database_display_name,
-        const TiDB::TableInfoPtr & new_table_info,
-        const ManageableStoragePtr & storage);
+    void applyAlterLogicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage);
 
-    void applyRenamePhysicalTable(
-        DatabaseID new_database_id,
-        const String & new_database_display_name,
-        const TiDB::TableInfo & new_table_info,
-        const ManageableStoragePtr & storage);
+    void applyAlterPhysicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage);
 
-    void applySetTiFlashReplica(DatabaseID database_id, TableID table_id);
-    void updateTiFlashReplicaNumOnStorage(
-        DatabaseID database_id,
-        TableID table_id,
-        const ManageableStoragePtr & storage,
-        const TiDB::TableInfoPtr & table_info);
+    void applyRenameTable(const TiDB::DBInfoPtr & new_db_info, TiDB::TableID table_id);
+
+    void applyRenameLogicalTable(const TiDB::DBInfoPtr & new_db_info, const TiDB::TableInfoPtr & new_table_info, const ManageableStoragePtr & storage);
+
+    void applyRenamePhysicalTable(const TiDB::DBInfoPtr & new_db_info, const TiDB::TableInfo & new_table_info, const ManageableStoragePtr & storage);
 
     void applyExchangeTablePartition(const SchemaDiff & diff);
 
-    String tryGetDatabaseDisplayNameFromLocal(DatabaseID database_id);
-
-    void tryFixPartitionsBelongingDatabase();
+    void applySetTiFlashReplica(const TiDB::DBInfoPtr & db_info, TableID table_id);
+    void applySetTiFlashReplicaOnLogicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage);
+    void applySetTiFlashReplicaOnPhysicalTable(const TiDB::DBInfoPtr & db_info, const TiDB::TableInfoPtr & table_info, const ManageableStoragePtr & storage);
 };
 
 } // namespace DB

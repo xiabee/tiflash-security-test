@@ -60,8 +60,7 @@ DataTypePtr DataTypeFactory::getOrSet(const String & full_name)
     {
         // DataTypeEnum may generate too many full_name, so just skip inserting DataTypeEnum into fullname_types when
         // the capacity limit is almost reached, which ensures that most datatypes can be cached.
-        if (fullname_types.size() > FULLNAME_TYPES_HIGH_WATER_MARK
-            && (datatype_ptr->getTypeId() == TypeIndex::Enum8 || datatype_ptr->getTypeId() == TypeIndex::Enum16))
+        if (fullname_types.size() > FULLNAME_TYPES_HIGH_WATER_MARK && (datatype_ptr->getTypeId() == TypeIndex::Enum8 || datatype_ptr->getTypeId() == TypeIndex::Enum16))
         {
             return datatype_ptr;
         }
@@ -81,9 +80,7 @@ DataTypePtr DataTypeFactory::get(const ASTPtr & ast) const
     if (const auto * func = typeid_cast<const ASTFunction *>(ast.get()))
     {
         if (func->parameters)
-            throw Exception(
-                "Data type cannot have multiple parenthesed parameters.",
-                ErrorCodes::ILLEGAL_SYNTAX_FOR_DATA_TYPE);
+            throw Exception("Data type cannot have multiple parenthesed parameters.", ErrorCodes::ILLEGAL_SYNTAX_FOR_DATA_TYPE);
         return get(func->name, func->arguments);
     }
 
@@ -120,10 +117,7 @@ DataTypePtr DataTypeFactory::get(const String & family_name, const ASTPtr & para
 }
 
 
-void DataTypeFactory::registerDataType(
-    const String & family_name,
-    Creator creator,
-    CaseSensitiveness case_sensitiveness)
+void DataTypeFactory::registerDataType(const String & family_name, Creator creator, CaseSensitiveness case_sensitiveness)
 {
     if (creator == nullptr)
         throw Exception(
@@ -145,10 +139,7 @@ void DataTypeFactory::registerDataType(
 }
 
 
-void DataTypeFactory::registerSimpleDataType(
-    const String & name,
-    SimpleCreator creator,
-    CaseSensitiveness case_sensitiveness)
+void DataTypeFactory::registerSimpleDataType(const String & name, SimpleCreator creator, CaseSensitiveness case_sensitiveness)
 {
     if (creator == nullptr)
         throw Exception(
@@ -159,9 +150,7 @@ void DataTypeFactory::registerSimpleDataType(
         name,
         [name, creator](const ASTPtr & ast) {
             if (ast)
-                throw Exception(
-                    "Data type " + name + " cannot have arguments",
-                    ErrorCodes::DATA_TYPE_CANNOT_HAVE_ARGUMENTS);
+                throw Exception("Data type " + name + " cannot have arguments", ErrorCodes::DATA_TYPE_CANNOT_HAVE_ARGUMENTS);
             return creator();
         },
         case_sensitiveness);

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Storages/Page/Page.h>
-#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/V2/PageEntries.h>
 
 #include <optional>
@@ -36,7 +36,7 @@ public:
 
     std::optional<PageEntry> find(PageId page_id) const;
 
-    PageEntry at(PageId page_id) const;
+    const PageEntry at(PageId page_id) const;
 
     std::pair<bool, PageId> isRefId(PageId page_id) const;
 

@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <Storages/Transaction/Types.h>
+
 #include <atomic>
 #include <ostream>
 
@@ -22,34 +24,24 @@ namespace DB
 class FieldVisitorToDebugString;
 }
 
-enum class RedactMode
-{
-    Disable,
-    Enable,
-    Marker,
-};
-
 class Redact
 {
 public:
-    static void setRedactLog(RedactMode v);
+    static void setRedactLog(bool v);
 
-    static std::string handleToDebugString(int64_t handle);
+    static std::string handleToDebugString(DB::HandleID handle);
     static std::string keyToDebugString(const char * key, size_t size);
 
     static std::string keyToHexString(const char * key, size_t size);
 
     static void keyToDebugString(const char * key, size_t size, std::ostream & oss);
-    static std::string hexStringToKey(const char * start, size_t len);
 
     friend class DB::FieldVisitorToDebugString;
-
-    static std::string toMarkerString(const std::string & raw, bool ignore_escape = false);
 
 protected:
     Redact() = default;
 
 private:
     // Log user data to log only when this flag is set to false.
-    static std::atomic<RedactMode> REDACT_LOG;
+    static std::atomic<bool> REDACT_LOG;
 };
