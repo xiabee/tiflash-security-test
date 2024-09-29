@@ -17,7 +17,10 @@
 #include <Common/Logger.h>
 #include <Common/nocopyable.h>
 #include <Core/Types.h>
-#include <Storages/Page/PageDefines.h>
+#include <IO/FileProvider/FileProvider_fwd.h>
+#include <Storages/KVStore/Types.h>
+#include <Storages/Page/PageDefinesBase.h>
+#include <Storages/PathPool_fwd.h>
 
 #include <mutex>
 #include <unordered_map>
@@ -26,20 +29,7 @@ namespace DB
 {
 class PathCapacityMetrics;
 using PathCapacityMetricsPtr = std::shared_ptr<PathCapacityMetrics>;
-class FileProvider;
-using FileProviderPtr = std::shared_ptr<FileProvider>;
 
-/// A class to manage global paths.
-class PathPool;
-/// A class to manage paths for the specified storage.
-class StoragePathPool;
-
-/// ===== Delegators to StoragePathPool ===== ///
-/// Delegators to StoragePathPool. Use for managing the path of DTFiles.
-class StableDiskDelegator;
-/// Delegators to StoragePathPool. Use by PageStorage for managing the path of PageFiles.
-class PSDiskDelegator;
-using PSDiskDelegatorPtr = std::shared_ptr<PSDiskDelegator>;
 class PSDiskDelegatorMulti;
 class PSDiskDelegatorSingle;
 class PSDiskDelegatorRaft;
@@ -56,14 +46,10 @@ public:
         const Strings & latest_data_paths,
         const Strings & kvstore_paths,
         PathCapacityMetricsPtr global_capacity_,
-        FileProviderPtr file_provider_,
-        bool enable_raft_compatible_mode_ = false);
+        FileProviderPtr file_provider_);
 
     // Constructor to create PathPool for one Storage
     StoragePathPool withTable(const String & database_, const String & table_, bool path_need_database_name_) const;
-
-    // TODO: remove this outdated code
-    bool isRaftCompatibleModeEnabled() const { return enable_raft_compatible_mode; }
 
     // Generate a delegator for managing the paths of `RegionPersister`.
     // Those paths are generated from `kvstore_paths`.
@@ -73,6 +59,8 @@ public:
     PSDiskDelegatorPtr getPSDiskDelegatorGlobalMulti(const String & prefix) const;
     PSDiskDelegatorPtr getPSDiskDelegatorGlobalSingle(const String & prefix) const;
 
+    PSDiskDelegatorPtr getPSDiskDelegatorFixedDirectory(const String & dir) const;
+
 public:
     /// Methods for the root PathPool ///
     Strings listPaths() const;
@@ -80,6 +68,13 @@ public:
     const Strings & listKVStorePaths() const { return kvstore_paths; }
 
     const Strings & listGlobalPagePaths() const { return global_page_paths; }
+
+    static const String log_path_prefix;
+    static const String data_path_prefix;
+    static const String meta_path_prefix;
+    static const String kvstore_path_prefix;
+    static const String write_uni_path_prefix;
+    static const String read_node_cache_path_prefix;
 
 public:
     // A thread safe wrapper for storing a map of <page data file id, path index>
@@ -106,8 +101,7 @@ public:
         inline void eraseIfExist(const PageFileIdAndLevel & id_lvl)
         {
             std::lock_guard gurad(mtx);
-            if (auto iter = page_id_to_index.find(id_lvl);
-                iter != page_id_to_index.end())
+            if (auto iter = page_id_to_index.find(id_lvl); iter != page_id_to_index.end())
                 page_id_to_index.erase(iter);
         }
 
@@ -126,14 +120,13 @@ public:
     friend class PSDiskDelegatorRaft;
     friend class PSDiskDelegatorGlobalSingle;
     friend class PSDiskDelegatorGlobalMulti;
+    friend class PSDiskDelegatorFixedDirectory;
 
 private:
     Strings main_data_paths;
     Strings latest_data_paths;
     Strings kvstore_paths;
     Strings global_page_paths;
-
-    bool enable_raft_compatible_mode;
 
     PathCapacityMetricsPtr global_capacity;
 
@@ -159,7 +152,29 @@ public:
 
     void addDTFile(UInt64 file_id, size_t file_size, std::string_view path);
 
-    void removeDTFile(UInt64 file_id);
+    // Update the file size of the DTFile with file_id.
+    // Return true if the file size is updated.
+    // Return false if the file size is not updated because the file_id is not in StableDiskDelegator.
+    bool updateDTFileSize(UInt64 file_id, size_t file_size);
+
+    void removeDTFile(UInt64 file_id, bool throw_on_not_exist = true);
+
+    // Used to add reference to remote DTFile at restart or after the local_page_id is applied to PageDirectory.
+    void addRemoteDTFileIfNotExists(UInt64 local_external_id, size_t file_size);
+
+    // The following two methods is for adding new reference to remote DTFile.
+    // Main usage is following:
+    //   addRemoteDTFileWithGCDisabled
+    //   apply local_page_id to PageDirectory
+    //   enableGCForRemoteDTFile
+    void addRemoteDTFileWithGCDisabled(UInt64 local_external_id, size_t file_size);
+    // local_page_id may be an external id or a ref id, and ref id will just be ignored.
+    void enableGCForRemoteDTFile(UInt64 local_page_id);
+
+    void removeRemoteDTFile(UInt64 local_external_id, bool throw_on_not_exist = true);
+
+    // Return all remote DTFiles that can be GCed.
+    std::set<UInt64> getAllRemoteDTFilesForGC();
 
     DISALLOW_COPY_AND_MOVE(StableDiskDelegator);
 
@@ -202,7 +217,12 @@ public:
 
     virtual String getPageFilePath(const PageFileIdAndLevel & id_lvl) const = 0;
 
-    virtual void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) = 0;
+    virtual void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path)
+        = 0;
 
     DISALLOW_COPY_AND_MOVE(PSDiskDelegator);
 };
@@ -231,14 +251,16 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
-        const PageFileIdAndLevel & id_lvl,
-        size_t size_to_free,
-        const String & pf_parent_path) override;
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
 
     String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
 
-    void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
 
 private:
     StoragePathPool & pool;
@@ -272,14 +294,16 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
-        const PageFileIdAndLevel & id_lvl,
-        size_t size_to_free,
-        const String & pf_parent_path) override;
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
 
     String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
 
-    void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
 
 private:
     StoragePathPool & pool;
@@ -307,14 +331,16 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
-        const PageFileIdAndLevel & id_lvl,
-        size_t size_to_free,
-        const String & pf_parent_path) override;
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
 
     String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
 
-    void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
 
 private:
     struct RaftPathInfo
@@ -354,14 +380,16 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
-        const PageFileIdAndLevel & id_lvl,
-        size_t size_to_free,
-        const String & pf_parent_path) override;
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
 
     String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
 
-    void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
 
 private:
     const PathPool & pool;
@@ -395,14 +423,16 @@ public:
         const String & pf_parent_path,
         bool need_insert_location) override;
 
-    void freePageFileUsedSize(
-        const PageFileIdAndLevel & id_lvl,
-        size_t size_to_free,
-        const String & pf_parent_path) override;
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
 
     String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
 
-    void removePageFile(const PageFileIdAndLevel & id_lvl, size_t file_size, bool meta_left, bool remove_from_default_path) override;
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
 
 private:
     const PathPool & pool;
@@ -417,13 +447,14 @@ class StoragePathPool
 public:
     static constexpr const char * STABLE_FOLDER_NAME = "stable";
 
-    StoragePathPool(const Strings & main_data_paths,
-                    const Strings & latest_data_paths,
-                    String database_,
-                    String table_,
-                    bool path_need_database_name_,
-                    PathCapacityMetricsPtr global_capacity_,
-                    FileProviderPtr file_provider_);
+    StoragePathPool(
+        const Strings & main_data_paths,
+        const Strings & latest_data_paths,
+        String database_,
+        String table_,
+        bool path_need_database_name_,
+        PathCapacityMetricsPtr global_capacity_,
+        FileProviderPtr file_provider_);
 
     // Generate a lightweight delegator for managing stable data, such as choosing path for DTFile or getting DTFile path by ID and so on.
     // Those paths are generated from `main_path_infos` and `STABLE_FOLDER_NAME`
@@ -432,11 +463,17 @@ public:
     // Generate a delegator for managing the paths of `StoragePool`.
     // Those paths are generated from `latest_path_infos` and `prefix`.
     // User should keep the pointer to track the PageFileID -> path index mapping.
-    PSDiskDelegatorPtr getPSDiskDelegatorMulti(const String & prefix) { return std::make_shared<PSDiskDelegatorMulti>(*this, prefix); }
+    PSDiskDelegatorPtr getPSDiskDelegatorMulti(const String & prefix)
+    {
+        return std::make_shared<PSDiskDelegatorMulti>(*this, prefix);
+    }
 
     // Generate a delegator for managing the paths of `StoragePool`.
     // Those paths are generated from the first path of `latest_path_infos` and `prefix`
-    PSDiskDelegatorPtr getPSDiskDelegatorSingle(const String & prefix) { return std::make_shared<PSDiskDelegatorSingle>(*this, prefix); }
+    PSDiskDelegatorPtr getPSDiskDelegatorSingle(const String & prefix)
+    {
+        return std::make_shared<PSDiskDelegatorSingle>(*this, prefix);
+    }
 
     bool createPSV2DeleteMarkFile();
 
@@ -451,6 +488,8 @@ public:
     void shutdown() { shutdown_called.store(true); }
 
     bool isShutdown() const { return shutdown_called.load(); }
+
+    KeyspaceID getKeyspaceID() const { return keyspace_id; }
 
     DISALLOW_COPY(StoragePathPool);
 
@@ -479,6 +518,9 @@ private:
     };
     using LatestPathInfos = std::vector<LatestPathInfo>;
 
+    // A map of DMFileID -> { isGCEnabled, FileSize }
+    using RemoteDMFileSizeMap = std::unordered_map<UInt64, std::pair<bool, UInt64>>;
+
     friend class StableDiskDelegator;
     friend class PSDiskDelegatorMulti;
     friend class PSDiskDelegatorSingle;
@@ -493,10 +535,14 @@ private:
     String database;
     String table;
 
-    // This mutex mainly used to protect the `dt_file_path_map`
+    KeyspaceID keyspace_id = NullspaceID;
+
+    // This mutex mainly used to protect the `dt_file_path_map` and `remote_dt_file_size_map`.
     mutable std::mutex mutex;
     // DMFileID -> path index
     DMFilePathMap dt_file_path_map;
+    // local page id -> std::pair<can_gc, file_size>
+    RemoteDMFileSizeMap remote_dt_file_size_map;
 
     bool path_need_database_name = false;
 
@@ -508,5 +554,44 @@ private:
 
     LoggerPtr log;
 };
+
+class PSDiskDelegatorFixedDirectory : public PSDiskDelegator
+{
+public:
+    explicit PSDiskDelegatorFixedDirectory(const PathPool & pool_, const String & path_);
+
+    bool fileExist(const PageFileIdAndLevel & id_lvl) const override;
+
+    size_t numPaths() const override;
+
+    String defaultPath() const override;
+
+    Strings listPaths() const override;
+
+    String choosePath(const PageFileIdAndLevel & id_lvl) override;
+
+    size_t addPageFileUsedSize(
+        const PageFileIdAndLevel & id_lvl,
+        size_t size_to_add,
+        const String & pf_parent_path,
+        bool need_insert_location) override;
+
+    void freePageFileUsedSize(const PageFileIdAndLevel & id_lvl, size_t size_to_free, const String & pf_parent_path)
+        override;
+
+    String getPageFilePath(const PageFileIdAndLevel & id_lvl) const override;
+
+    void removePageFile(
+        const PageFileIdAndLevel & id_lvl,
+        size_t file_size,
+        bool meta_left,
+        bool remove_from_default_path) override;
+
+private:
+    String path;
+    const PathPool & pool;
+    PathPool::PageFilePathMap page_path_map;
+};
+
 
 } // namespace DB

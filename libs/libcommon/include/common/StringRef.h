@@ -15,6 +15,7 @@
 #pragma once
 
 #include <city.h>
+#include <common/defines.h>
 #include <common/mem_utils.h>
 #include <common/mem_utils_opt.h>
 #include <common/types.h>
@@ -23,6 +24,7 @@
 #include <cassert>
 #include <functional>
 #include <iosfwd>
+#include <stdexcept> // for std::logic_error
 #include <string>
 #include <vector>
 
@@ -59,7 +61,7 @@ struct StringRef
         : data(s.data())
         , size(s.size())
     {}
-    constexpr explicit StringRef(std::string_view s)
+    constexpr StringRef(std::string_view s) // NOLINT(google-explicit-constructor)
         : data(s.data())
         , size(s.size())
     {}
@@ -69,14 +71,12 @@ struct StringRef
     constexpr StringRef() = default;
 
     std::string toString() const { return std::string(data, size); }
+    std::string_view toStringView() const { return std::string_view(data, size); }
 
     explicit operator std::string() const { return toString(); }
     constexpr explicit operator std::string_view() const { return {data, size}; }
 
-    ALWAYS_INLINE inline int compare(const StringRef & tar) const
-    {
-        return mem_utils::CompareStrView({*this}, {tar});
-    }
+    ALWAYS_INLINE inline int compare(const StringRef & tar) const { return mem_utils::CompareStrView({*this}, {tar}); }
 };
 
 /// Here constexpr doesn't implicate inline, see https://www.viva64.com/en/w/v1043/
@@ -171,8 +171,8 @@ inline size_t hashLessThan8(const char * data, size_t size)
 {
     if (size > 8)
     {
-        auto a = unalignedLoad<UInt64>(data);
-        auto b = unalignedLoad<UInt64>(data + size - 8);
+        UInt64 a = unalignedLoad<UInt64>(data);
+        UInt64 b = unalignedLoad<UInt64>(data + size - 8);
         return hashLen16(a, rotateByAtLeast1(b + size, size)) ^ b;
     }
 
@@ -199,13 +199,13 @@ struct CRC32Hash
 
         do
         {
-            auto word = unalignedLoad<UInt64>(pos);
+            UInt64 word = unalignedLoad<UInt64>(pos);
             res = _mm_crc32_u64(res, word);
 
             pos += 8;
         } while (pos + 8 < end);
 
-        auto word = unalignedLoad<UInt64>(end - 8); /// I'm not sure if this is normal.
+        UInt64 word = unalignedLoad<UInt64>(end - 8); /// I'm not sure if this is normal.
         res = _mm_crc32_u64(res, word);
 
         return res;
@@ -253,3 +253,8 @@ inline void set(StringRef & x)
 
 
 std::ostream & operator<<(std::ostream & os, const StringRef & str);
+
+ALWAYS_INLINE inline auto format_as(StringRef ref)
+{
+    return ref.toStringView();
+}

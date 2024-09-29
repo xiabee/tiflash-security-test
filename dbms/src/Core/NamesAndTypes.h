@@ -42,10 +42,7 @@ struct NameAndTypePair
         return std::forward_as_tuple(name, type->getName()) < std::forward_as_tuple(rhs.name, rhs.type->getName());
     }
 
-    bool operator==(const NameAndTypePair & rhs) const
-    {
-        return name == rhs.name && type->equals(*rhs.type);
-    }
+    bool operator==(const NameAndTypePair & rhs) const { return name == rhs.name && type->equals(*rhs.type); }
 };
 
 using NamesAndTypes = std::vector<NameAndTypePair>;
@@ -69,7 +66,6 @@ public:
     NamesAndTypesList(Iterator begin, Iterator end)
         : std::list<NameAndTypePair>(begin, end)
     {}
-
 
     void readText(ReadBuffer & buf);
     void writeText(WriteBuffer & buf) const;

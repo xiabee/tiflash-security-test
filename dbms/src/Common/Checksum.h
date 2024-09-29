@@ -14,9 +14,10 @@
 
 #pragma once
 #include <Common/Exception.h>
-#include <IO/HashingWriteBuffer.h>
+#include <Common/ProfileEvents.h>
 #include <Poco/Base64Decoder.h>
 #include <Poco/Base64Encoder.h>
+#include <city.h>
 #include <common/crc64.h>
 #ifdef __x86_64__
 #include <xxh_x86dispatch.h>
@@ -54,7 +55,10 @@ public:
     using HashType = std::byte;
     static constexpr size_t hash_size = sizeof(HashType);
     static constexpr auto algorithm = ::DB::ChecksumAlgo::None;
-    static void update(const void *, size_t length) { ProfileEvents::increment(ProfileEvents::ChecksumDigestBytes, length); }
+    static void update(const void *, size_t length)
+    {
+        ProfileEvents::increment(ProfileEvents::ChecksumDigestBytes, length);
+    }
     [[nodiscard]] static HashType checksum() { return std::byte{0}; }
 };
 
@@ -136,12 +140,18 @@ struct ChecksumFrame
 {
     size_t bytes;
     typename Algorithm::HashType checksum;
-    uint8_t pad[alignof(size_t) > alignof(typename Algorithm::HashType) ? alignof(size_t) - sizeof(typename Algorithm::HashType) : 0];
+    // clang-format off
+    uint8_t pad[alignof(size_t) > alignof(typename Algorithm::HashType)
+                ? alignof(size_t) - sizeof(typename Algorithm::HashType)
+                : 0];
+    // clang-format on
     uint8_t data[0];
 };
 
-#define BASIC_CHECK_FOR_FRAME(ALGO)                                                                                      \
-    static_assert(std::is_standard_layout_v<ChecksumFrame<Digest::ALGO>>, "DMChecksumFrame must be in standard-layout"); \
+#define BASIC_CHECK_FOR_FRAME(ALGO)                             \
+    static_assert(                                              \
+        std::is_standard_layout_v<ChecksumFrame<Digest::ALGO>>, \
+        "DMChecksumFrame must be in standard-layout");          \
     static_assert(std::is_trivial_v<ChecksumFrame<Digest::ALGO>>, "DMChecksumFrame must be trivial");
 
 BASIC_CHECK_FOR_FRAME(CRC32)
@@ -163,11 +173,9 @@ using FrameUnion = std::aligned_union_t<
 struct UnifiedDigestBase
 {
     virtual void update(const void * data, size_t length) = 0;
-    virtual bool compareB64(const std::string & data) = 0;
     virtual bool compareRaw(std::string_view data) = 0;
     virtual bool compareRaw(const void * data) = 0;
     virtual bool compareFrame(const FrameUnion & frame) = 0;
-    [[nodiscard]] virtual std::string base64() const = 0;
     [[nodiscard]] virtual std::string raw() const = 0;
     virtual ~UnifiedDigestBase() = default;
     virtual size_t hashSize() const = 0;
@@ -185,16 +193,6 @@ class UnifiedDigest : public UnifiedDigestBase
 {
 public:
     void update(const void * data, size_t length) override { backend.update(data, length); }
-
-    bool compareB64(const std::string & data) override
-    {
-        auto checksum = backend.checksum();
-        auto input = std::istringstream{data};
-        auto decoder = Poco::Base64Decoder{input};
-        decltype(checksum) target = {};
-        decoder.read(reinterpret_cast<char *>(&target), sizeof(target));
-        return checksum == target;
-    }
 
     bool compareRaw(const void * data) override
     {
@@ -218,20 +216,9 @@ public:
     [[nodiscard]] std::string raw() const override
     {
         auto checksum = backend.checksum();
-        std::string data(sizeof(checksum), ' ');
+        std::string data(sizeof(checksum), '\0');
         ::memcpy(data.data(), &checksum, sizeof(checksum));
         return data;
-    }
-
-    [[nodiscard]] std::string base64() const override
-    {
-        auto output = std::ostringstream{};
-        {
-            auto encoder = Poco::Base64Encoder{output};
-            auto checksum = backend.checksum();
-            encoder.write(reinterpret_cast<char *>(&checksum), sizeof(checksum));
-        }
-        return output.str();
     }
 
     [[nodiscard]] size_t hashSize() const override { return Backend::hash_size; }

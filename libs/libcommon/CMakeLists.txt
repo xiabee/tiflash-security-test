@@ -112,7 +112,9 @@ if (GLIBC_COMPATIBILITY)
     set (GLIBC_COMPATIBILITY_LIBRARIES glibc-compatibility)
 endif ()
 
-if (USE_INTERNAL_MEMCPY)
+if (ARCH_AARCH64 AND OS_LINUX)
+    target_link_libraries (common PUBLIC aor)
+elseif (USE_INTERNAL_MEMCPY)
     set (MEMCPY_LIBRARIES memcpy)
 endif ()
 
@@ -159,21 +161,17 @@ endif ()
 # Region for specialized CPU flags tuning
 
 check_then_add_sources_compile_flag (
-    TIFLASH_ENABLE_AVX_SUPPORT
-    "-mavx2"
-    src/mem_utils_avx2.cpp
-    src/crc64_avx2.cpp
-    src/avx2_mem_utils_impl.cpp
-)
-check_then_add_sources_compile_flag (
     TIFLASH_COMPILER_VPCLMULQDQ_SUPPORT
     "-mvpclmulqdq;-Wno-ignored-attributes"
     src/crc64_avx2.cpp
     src/crc64_avx512.cpp
 )
+
 check_then_add_sources_compile_flag (
-    TIFLASH_COMPILER_MOVBE_SUPPORT
-    "-mmovbe" 
+    TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT
+    "${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}"
+    src/mem_utils_avx2.cpp
+    src/crc64_avx2.cpp
     src/avx2_mem_utils_impl.cpp
 )
 
@@ -202,7 +200,3 @@ if (TIFLASH_ENABLE_SVE_SUPPORT)
     # https://gcc.gnu.org/onlinedocs/gcc/ARM-Options.html
     # set_source_files_properties(<SOURCE_FILE> APPEND COMPILE_FLAGS "-march=armv8.6-a+sve")
 endif ()
-
-if (ARCH_AARCH64 AND OS_LINUX)
-    target_link_libraries (common PUBLIC tiflash-aarch64-string tiflash-aarch64-math)
-endif()

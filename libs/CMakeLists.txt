@@ -17,10 +17,12 @@ if (NOT NO_WERROR)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
 endif ()
 
+# Optimized routines under arm
+add_subdirectory (libarm-optimized-routines)
 add_subdirectory (libcommon)
 add_subdirectory (libpocoext)
 add_subdirectory (libdaemon)
-
+# Optimized memcpy under x86_64
 add_subdirectory (libmemcpy)
 
 if (GLIBC_COMPATIBILITY)
@@ -28,3 +30,4 @@ if (GLIBC_COMPATIBILITY)
 endif ()
 
 add_subdirectory (libsymbolization)
+add_subdirectory (libprocess_metrics)

@@ -13,12 +13,14 @@
 // limitations under the License.
 
 #include <Functions/FunctionHelpers.h>
-#include <IO/MemoryReadWriteBuffer.h>
+#include <IO/Buffer/MemoryReadWriteBuffer.h>
 #include <IO/ReadHelpers.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/ColumnFilePersistedSet.h>
 #include <Storages/DeltaMerge/DeltaIndexManager.h>
-#include <Storages/DeltaMerge/WriteBatches.h>
+#include <Storages/DeltaMerge/WriteBatchesImpl.h>
+#include <Storages/Page/V3/Universal/UniversalPageStorage.h>
 #include <Storages/PathPool.h>
 
 #include <ext/scope_guard.h>
@@ -27,11 +29,19 @@ namespace DB
 {
 namespace DM
 {
-inline void serializeColumnFilePersisteds(WriteBatches & wbs, PageId id, const ColumnFilePersisteds & persisted_files)
+inline UInt64 serializeColumnFilePersisteds(WriteBuffer & buf, const ColumnFilePersisteds & persisted_files)
+{
+    serializeSavedColumnFiles(buf, persisted_files);
+    return buf.count();
+}
+
+inline void serializeColumnFilePersisteds(
+    WriteBatches & wbs,
+    PageIdU64 id,
+    const ColumnFilePersisteds & persisted_files)
 {
     MemoryWriteBuffer buf(0, COLUMN_FILE_SERIALIZE_BUFFER_SIZE);
-    serializeSavedColumnFiles(buf, persisted_files);
-    auto data_size = buf.count();
+    auto data_size = serializeColumnFilePersisteds(buf, persisted_files);
     wbs.meta.putPage(id, 0, buf.tryGetReadBuffer(), data_size);
 }
 
@@ -64,18 +74,20 @@ void ColumnFilePersistedSet::checkColumnFiles(const ColumnFilePersisteds & new_c
         new_deletes += file->isDeleteRange();
     }
 
-    RUNTIME_CHECK_MSG(new_rows == rows && new_deletes == deletes,
-                      "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Current column files: {}, new column files: {}.", //
-                      new_rows,
-                      new_deletes,
-                      rows.load(),
-                      deletes.load(),
-                      columnFilesToString(persisted_files),
-                      columnFilesToString(new_column_files));
+    RUNTIME_CHECK_MSG(
+        new_rows == rows && new_deletes == deletes,
+        "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}]. Current column "
+        "files: {}, new column files: {}.", //
+        new_rows,
+        new_deletes,
+        rows.load(),
+        deletes.load(),
+        columnFilesToString(persisted_files),
+        columnFilesToString(new_column_files));
 }
 
 ColumnFilePersistedSet::ColumnFilePersistedSet( //
-    PageId metadata_id_,
+    PageIdU64 metadata_id_,
     const ColumnFilePersisteds & persisted_column_files)
     : metadata_id(metadata_id_)
     , persisted_files(persisted_column_files)
@@ -87,12 +99,39 @@ ColumnFilePersistedSet::ColumnFilePersistedSet( //
 ColumnFilePersistedSetPtr ColumnFilePersistedSet::restore( //
     DMContext & context,
     const RowKeyRange & segment_range,
-    PageId id)
+    PageIdU64 id)
 {
-    Page page = context.storage_pool.metaReader()->read(id);
+    Page page = context.storage_pool->metaReader()->read(id);
     ReadBufferFromMemory buf(page.data.begin(), page.data.size());
+    return ColumnFilePersistedSet::restore(context, segment_range, buf, id);
+}
+
+ColumnFilePersistedSetPtr ColumnFilePersistedSet::restore( //
+    DMContext & context,
+    const RowKeyRange & segment_range,
+    ReadBuffer & buf,
+    PageIdU64 id)
+{
     auto column_files = deserializeSavedColumnFiles(context, segment_range, buf);
     return std::make_shared<ColumnFilePersistedSet>(id, column_files);
+}
+
+ColumnFilePersistedSetPtr ColumnFilePersistedSet::createFromCheckpoint( //
+    const LoggerPtr & parent_log,
+    DMContext & context,
+    UniversalPageStoragePtr temp_ps,
+    const RowKeyRange & segment_range,
+    PageIdU64 delta_id,
+    WriteBatches & wbs)
+{
+    auto delta_page_id = UniversalPageIdFormat::toFullPageId(
+        UniversalPageIdFormat::toFullPrefix(context.keyspace_id, StorageType::Meta, context.physical_table_id),
+        delta_id);
+    auto meta_page = temp_ps->read(delta_page_id);
+    ReadBufferFromMemory meta_buf(meta_page.data.begin(), meta_page.data.size());
+    auto column_files = createColumnFilesFromCheckpoint(parent_log, context, segment_range, meta_buf, temp_ps, wbs);
+    auto new_persisted_set = std::make_shared<ColumnFilePersistedSet>(delta_id, column_files);
+    return new_persisted_set;
 }
 
 void ColumnFilePersistedSet::saveMeta(WriteBatches & wbs) const
@@ -100,22 +139,16 @@ void ColumnFilePersistedSet::saveMeta(WriteBatches & wbs) const
     serializeColumnFilePersisteds(wbs, metadata_id, persisted_files);
 }
 
+void ColumnFilePersistedSet::saveMeta(WriteBuffer & buf) const
+{
+    serializeColumnFilePersisteds(buf, persisted_files);
+}
+
 void ColumnFilePersistedSet::recordRemoveColumnFilesPages(WriteBatches & wbs) const
 {
     for (const auto & file : persisted_files)
         file->removeData(wbs);
 }
-
-BlockPtr ColumnFilePersistedSet::getLastSchema()
-{
-    for (auto it = persisted_files.rbegin(); it != persisted_files.rend(); ++it)
-    {
-        if (auto * t_file = (*it)->tryToTinyFile(); t_file)
-            return t_file->getSchema();
-    }
-    return {};
-}
-
 
 ColumnFilePersisteds ColumnFilePersistedSet::diffColumnFiles(const ColumnFiles & previous_column_files) const
 {
@@ -156,7 +189,12 @@ ColumnFilePersisteds ColumnFilePersistedSet::diffColumnFiles(const ColumnFiles &
 
     if (unlikely(!check_success))
     {
-        LOG_ERROR(log, "{}, Delta Check head failed, unexpected size. head column files: {}, persisted column files: {}", info(), columnFilesToString(previous_column_files), detailInfo());
+        LOG_ERROR(
+            log,
+            "{}, Delta Check head failed, unexpected size. head column files: {}, persisted column files: {}",
+            info(),
+            columnFilesToString(previous_column_files),
+            detailInfo());
         throw Exception("Check head failed, unexpected size", ErrorCodes::LOGICAL_ERROR);
     }
 
@@ -242,7 +280,12 @@ bool ColumnFilePersistedSet::appendPersistedColumnFiles(const ColumnFilePersiste
     /// Commit updates in memory.
     persisted_files.swap(new_persisted_files);
     updateColumnFileStats();
-    LOG_DEBUG(log, "{}, after append {} column files, persisted column files: {}", info(), column_files.size(), detailInfo());
+    LOG_DEBUG(
+        log,
+        "{}, after append {} column files, persisted column files: {}",
+        info(),
+        column_files.size(),
+        detailInfo());
 
     return true;
 }
@@ -321,9 +364,10 @@ bool ColumnFilePersistedSet::installCompactionResults(const MinorCompactionPtr &
     {
         for (const auto & file : task.to_compact)
         {
-            if (unlikely(old_persisted_files_iter == persisted_files.end()
-                         || (file->getId() != (*old_persisted_files_iter)->getId())
-                         || (file->getRows() != (*old_persisted_files_iter)->getRows())))
+            if (unlikely(
+                    old_persisted_files_iter == persisted_files.end()
+                    || (file->getId() != (*old_persisted_files_iter)->getId())
+                    || (file->getRows() != (*old_persisted_files_iter)->getRows())))
             {
                 throw Exception("Compaction algorithm broken", ErrorCodes::LOGICAL_ERROR);
             }
@@ -350,9 +394,9 @@ bool ColumnFilePersistedSet::installCompactionResults(const MinorCompactionPtr &
     return true;
 }
 
-ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const StorageSnapshotPtr & storage_snap)
+ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const IColumnFileDataProviderPtr & data_provider)
 {
-    auto snap = std::make_shared<ColumnFileSetSnapshot>(storage_snap);
+    auto snap = std::make_shared<ColumnFileSetSnapshot>(data_provider);
     snap->rows = rows;
     snap->bytes = bytes;
     snap->deletes = deletes;
@@ -377,7 +421,13 @@ ColumnFileSetSnapshotPtr ColumnFilePersistedSet::createSnapshot(const StorageSna
 
     if (unlikely(total_rows != rows || total_deletes != deletes))
     {
-        LOG_ERROR(log, "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}].", total_rows, total_deletes, rows.load(), deletes.load());
+        LOG_ERROR(
+            log,
+            "Rows and deletes check failed. Actual: rows[{}], deletes[{}]. Expected: rows[{}], deletes[{}].",
+            total_rows,
+            total_deletes,
+            rows.load(),
+            deletes.load());
         throw Exception("Rows and deletes check failed.", ErrorCodes::LOGICAL_ERROR);
     }
 

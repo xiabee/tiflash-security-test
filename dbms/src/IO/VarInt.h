@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Core/Types.h>
-#include <IO/ReadBuffer.h>
-#include <IO/WriteBuffer.h>
+#include <IO/Buffer/ReadBuffer.h>
+#include <IO/Buffer/WriteBuffer.h>
 
 #include <iostream>
 
@@ -153,8 +153,7 @@ inline void readVarInt(Int16 & x, ReadBuffer & istr)
 }
 
 template <typename T>
-inline std::enable_if_t<!std::is_same_v<T, UInt64>, void>
-readVarUInt(T & x, ReadBuffer & istr)
+inline std::enable_if_t<!std::is_same_v<T, UInt64>, void> readVarUInt(T & x, ReadBuffer & istr)
 {
     UInt64 tmp;
     readVarUInt(tmp, istr);

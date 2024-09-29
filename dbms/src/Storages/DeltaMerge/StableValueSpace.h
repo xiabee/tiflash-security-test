@@ -14,21 +14,22 @@
 
 #pragma once
 
+#include <Storages/DeltaMerge/DMContext_fwd.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
-#include <Storages/DeltaMerge/File/DMFile.h>
+#include <Storages/DeltaMerge/File/DMFilePackFilter_fwd.h>
+#include <Storages/DeltaMerge/File/DMFile_fwd.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
-#include <Storages/Page/Page.h>
-#include <Storages/Page/PageStorage.h>
-#include <Storages/Page/WriteBatch.h>
+#include <Storages/Page/PageStorage_fwd.h>
 
 namespace DB
 {
 namespace DM
 {
+
 struct WriteBatches;
-struct DMContext;
+
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
@@ -38,30 +39,36 @@ using StableValueSpacePtr = std::shared_ptr<StableValueSpace>;
 class StableValueSpace : public std::enable_shared_from_this<StableValueSpace>
 {
 public:
-    StableValueSpace(PageId id_)
+    explicit StableValueSpace(PageIdU64 id_)
         : id(id_)
         , log(Logger::get())
     {}
 
-    static StableValueSpacePtr restore(DMContext & context, PageId id);
+    static StableValueSpacePtr restore(DMContext & context, PageIdU64 id);
+    static StableValueSpacePtr restore(DMContext & context, ReadBuffer & buf, PageIdU64 id);
+
+    static StableValueSpacePtr createFromCheckpoint( //
+        const LoggerPtr & parent_log,
+        DMContext & context,
+        UniversalPageStoragePtr temp_ps,
+        PageIdU64 stable_id,
+        WriteBatches & wbs);
 
     /**
      * Resets the logger by using the one from the segment.
      * Segment_log is not available when constructing, because usually
      * at that time the segment has not been constructed yet.
      */
-    void resetLogger(const LoggerPtr & segment_log)
-    {
-        log = segment_log;
-    }
+    void resetLogger(const LoggerPtr & segment_log) { log = segment_log; }
 
     // Set DMFiles for this value space.
     // If this value space is logical split, specify `range` and `dm_context` so that we can get more precise
     // bytes and rows.
-    void setFiles(const DMFiles & files_, const RowKeyRange & range, DMContext * dm_context = nullptr);
+    void setFiles(const DMFiles & files_, const RowKeyRange & range, const DMContext * dm_context = nullptr);
 
-    PageId getId() const { return id; }
-    void saveMeta(WriteBatch & meta_wb);
+    PageIdU64 getId() const { return id; }
+    void saveMeta(WriteBatchWrapper & meta_wb);
+    std::string serializeMeta() const;
 
     size_t getRows() const;
     size_t getBytes() const;
@@ -103,7 +110,7 @@ public:
      */
     size_t getDMFilesBytes() const;
 
-    void enableDMFilesGC();
+    void enableDMFilesGC(DMContext & context);
 
     void recordRemovePacksPages(WriteBatches & wbs) const;
 
@@ -120,7 +127,7 @@ public:
         // number of rows having at least one version(include delete)
         UInt64 num_rows;
 
-        const String toDebugString() const
+        String toDebugString() const
         {
             return "StableProperty: gc_hint_version [" + std::to_string(this->gc_hint_version) + "] num_versions ["
                 + std::to_string(this->num_versions) + "] num_puts[" + std::to_string(this->num_puts) + "] num_rows["
@@ -135,23 +142,24 @@ public:
     struct Snapshot;
     using SnapshotPtr = std::shared_ptr<Snapshot>;
 
-    struct Snapshot : public std::enable_shared_from_this<Snapshot>
+    struct Snapshot
+        : public std::enable_shared_from_this<Snapshot>
         , private boost::noncopyable
     {
         StableValueSpacePtr stable;
 
-        PageId id;
-        UInt64 valid_rows;
-        UInt64 valid_bytes;
+        PageIdU64 id{};
+        UInt64 valid_rows{};
+        UInt64 valid_bytes{};
 
-        bool is_common_handle;
-        size_t rowkey_column_size;
+        bool is_common_handle{};
+        size_t rowkey_column_size{};
 
         /// TODO: The members below are not actually snapshots, they should not be here.
 
         ColumnCachePtrs column_caches;
 
-        Snapshot(StableValueSpacePtr stable_)
+        explicit Snapshot(StableValueSpacePtr stable_)
             : stable(stable_)
             , log(stable->log)
         {}
@@ -171,7 +179,7 @@ public:
             return c;
         }
 
-        PageId getId() const { return id; }
+        PageIdU64 getId() const { return id; }
 
         size_t getRows() const { return valid_rows; }
         size_t getBytes() const { return valid_bytes; }
@@ -206,15 +214,27 @@ public:
 
         ColumnCachePtrs & getColumnCaches() { return column_caches; }
 
-        SkippableBlockInputStreamPtr getInputStream(const DMContext & context, //
-                                                    const ColumnDefines & read_columns,
-                                                    const RowKeyRanges & rowkey_ranges,
-                                                    const RSOperatorPtr & filter,
-                                                    UInt64 max_data_version,
-                                                    size_t expected_block_size,
-                                                    bool enable_handle_clean_read,
-                                                    bool is_fast_scan = false,
-                                                    bool enable_del_clean_read = false);
+        void clearColumnCaches()
+        {
+            for (auto & col_cache : column_caches)
+            {
+                col_cache->clear();
+            }
+        }
+
+        SkippableBlockInputStreamPtr getInputStream(
+            const DMContext & context, //
+            const ColumnDefines & read_columns,
+            const RowKeyRanges & rowkey_ranges,
+            const RSOperatorPtr & filter,
+            UInt64 max_data_version,
+            size_t expected_block_size,
+            bool enable_handle_clean_read,
+            ReadTag read_tag,
+            bool is_fast_scan = false,
+            bool enable_del_clean_read = false,
+            const std::vector<IdSetPtr> & read_packs = {},
+            bool need_row_id = false);
 
         RowsAndBytes getApproxRowsAndBytes(const DMContext & context, const RowKeyRange & range) const;
 
@@ -240,17 +260,22 @@ public:
 
     void drop(const FileProviderPtr & file_provider);
 
+    size_t avgRowBytes(const ColumnDefines & read_columns);
+
 private:
-    const PageId id;
+    UInt64 serializeMetaToBuf(WriteBuffer & buf) const;
+
+private:
+    const PageIdU64 id;
 
     // Valid rows is not always the sum of rows in file,
     // because after logical split, two segments could reference to a same file.
-    UInt64 valid_rows; /* At most. The actual valid rows may be lower than this value. */
-    UInt64 valid_bytes; /* At most. The actual valid bytes may be lower than this value. */
+    UInt64 valid_rows{}; /* At most. The actual valid rows may be lower than this value. */
+    UInt64 valid_bytes{}; /* At most. The actual valid bytes may be lower than this value. */
 
     DMFiles files;
 
-    StableProperty property;
+    StableProperty property{};
     std::atomic<bool> is_property_cached = false;
 
     LoggerPtr log;

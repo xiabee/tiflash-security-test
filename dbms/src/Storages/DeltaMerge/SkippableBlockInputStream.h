@@ -14,8 +14,13 @@
 
 #pragma once
 
+#include <Columns/ColumnsNumber.h>
 #include <Core/Block.h>
 #include <DataStreams/IBlockInputStream.h>
+#include <Flash/ResourceControl/LocalAdmissionController.h>
+#include <Storages/DeltaMerge/DeltaMergeDefines.h>
+#include <Storages/DeltaMerge/DeltaMergeHelpers.h>
+#include <Storages/DeltaMerge/ScanContext_fwd.h>
 
 namespace DB
 {
@@ -24,10 +29,21 @@ namespace DM
 class SkippableBlockInputStream : public IBlockInputStream
 {
 public:
-    virtual ~SkippableBlockInputStream() = default;
+    ~SkippableBlockInputStream() override = default;
 
     /// Return false if it is the end of stream.
     virtual bool getSkippedRows(size_t & skip_rows) = 0;
+
+    /// Skip next block in the stream.
+    /// Return the number of rows of the next block.
+    /// Return 0 if failed to skip or the end of stream.
+    virtual size_t skipNextBlock() = 0;
+
+    /// Read specific rows of next block in the stream according to the filter.
+    /// Return empty block if failed to read or the end of stream.
+    /// Note: filter can not be all false.
+    /// Only used in Late Materialization.
+    virtual Block readWithFilter(const IColumn::Filter & filter) = 0;
 };
 
 using SkippableBlockInputStreamPtr = std::shared_ptr<SkippableBlockInputStream>;
@@ -36,7 +52,7 @@ using SkippableBlockInputStreams = std::vector<SkippableBlockInputStreamPtr>;
 class EmptySkippableBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    EmptySkippableBlockInputStream(const ColumnDefines & read_columns_)
+    explicit EmptySkippableBlockInputStream(const ColumnDefines & read_columns_)
         : read_columns(read_columns_)
     {}
 
@@ -46,72 +62,49 @@ public:
 
     bool getSkippedRows(size_t &) override { return false; }
 
+    size_t skipNextBlock() override { return 0; }
+
+    Block readWithFilter(const IColumn::Filter &) override { return {}; }
+
     Block read() override { return {}; }
 
 private:
-    ColumnDefines read_columns;
+    ColumnDefines read_columns{};
 };
 
+template <bool need_row_id = false>
 class ConcatSkippableBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    ConcatSkippableBlockInputStream(SkippableBlockInputStreams inputs_)
-    {
-        children.insert(children.end(), inputs_.begin(), inputs_.end());
-        current_stream = children.begin();
-    }
+    ConcatSkippableBlockInputStream(SkippableBlockInputStreams inputs_, const ScanContextPtr & scan_context_);
+
+    ConcatSkippableBlockInputStream(
+        SkippableBlockInputStreams inputs_,
+        std::vector<size_t> && rows_,
+        const ScanContextPtr & scan_context_);
 
     String getName() const override { return "ConcatSkippable"; }
 
     Block getHeader() const override { return children.at(0)->getHeader(); }
 
-    bool getSkippedRows(size_t & skip_rows) override
-    {
-        skip_rows = 0;
-        while (current_stream != children.end())
-        {
-            auto skippable_stream = dynamic_cast<SkippableBlockInputStream *>((*current_stream).get());
+    bool getSkippedRows(size_t & skip_rows) override;
 
-            size_t skip;
-            bool has_next_block = skippable_stream->getSkippedRows(skip);
-            skip_rows += skip;
+    size_t skipNextBlock() override;
 
-            if (has_next_block)
-            {
-                return true;
-            }
-            else
-            {
-                (*current_stream)->readSuffix();
-                ++current_stream;
-            }
-        }
+    Block readWithFilter(const IColumn::Filter & filter) override;
 
-        return false;
-    }
-
-    Block read() override
-    {
-        Block res;
-
-        while (current_stream != children.end())
-        {
-            res = (*current_stream)->read();
-
-            if (res)
-                break;
-            else
-            {
-                (*current_stream)->readSuffix();
-                ++current_stream;
-            }
-        }
-
-        return res;
-    }
+    Block read() override;
 
 private:
+    ColumnPtr createSegmentRowIdCol(UInt64 start, UInt64 limit);
+
+    void addReadBytes(UInt64 bytes);
+
     BlockInputStreams::iterator current_stream;
+    std::vector<size_t> rows;
+    size_t precede_stream_rows;
+    const ScanContextPtr scan_context;
+    LACBytesCollector lac_bytes_collector;
 };
 
 } // namespace DM

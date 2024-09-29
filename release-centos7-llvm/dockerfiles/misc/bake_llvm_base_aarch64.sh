@@ -30,23 +30,27 @@ function bake_llvm_base_aarch64() {
     
     # CMake
     source $SCRIPTPATH/install_cmake.sh
-    install_cmake "3.22.1" "aarch64"
+    install_cmake "3.24.2" "aarch64"
 
     # LLVM
     source $SCRIPTPATH/bootstrap_llvm.sh
-    bootstrap_llvm "13.0.0"
+    bootstrap_llvm "17.0.6"
     export CC=clang
     export CXX=clang++
     export LD=ld.lld
 
     # OpenSSL
     source $SCRIPTPATH/install_openssl.sh
-    install_openssl "1_1_1l"
+    install_openssl "1_1_1w"
     export OPENSSL_ROOT_DIR="/usr/local/opt/openssl"
+
+    # Git
+    source $SCRIPTPATH/install_git.sh
+    install_git "2.40.1"
 
     # Go
     source $SCRIPTPATH/install_go.sh
-    install_go "1.17" "arm64"
+    install_go "1.20" "arm64"
     export PATH="$PATH:/usr/local/go/bin"
 
     # Rust

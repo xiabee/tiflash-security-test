@@ -14,15 +14,15 @@
 
 #include "Progress.h"
 
-#include <IO/ReadBuffer.h>
+#include <IO/Buffer/ReadBuffer.h>
+#include <IO/Buffer/WriteBuffer.h>
 #include <IO/ReadHelpers.h>
-#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 
 
 namespace DB
 {
-void ProgressValues::read(ReadBuffer & in, UInt64 /*server_revision*/)
+void ProgressValues::read(ReadBuffer & in)
 {
     size_t new_rows = 0;
     size_t new_bytes = 0;
@@ -38,7 +38,7 @@ void ProgressValues::read(ReadBuffer & in, UInt64 /*server_revision*/)
 }
 
 
-void ProgressValues::write(WriteBuffer & out, UInt64 /*client_revision*/) const
+void ProgressValues::write(WriteBuffer & out) const
 {
     writeVarUInt(rows, out);
     writeVarUInt(bytes, out);
@@ -46,25 +46,10 @@ void ProgressValues::write(WriteBuffer & out, UInt64 /*client_revision*/) const
 }
 
 
-void ProgressValues::writeJSON(WriteBuffer & out) const
+void Progress::read(ReadBuffer & in)
 {
-    /// Numbers are written in double quotes (as strings) to avoid loss of precision
-    ///  of 64-bit integers after interpretation by JavaScript.
-
-    writeCString("{\"read_rows\":\"", out);
-    writeText(rows, out);
-    writeCString("\",\"read_bytes\":\"", out);
-    writeText(bytes, out);
-    writeCString("\",\"total_rows\":\"", out);
-    writeText(total_rows, out);
-    writeCString("\"}", out);
-}
-
-
-void Progress::read(ReadBuffer & in, UInt64 server_revision)
-{
-    ProgressValues values;
-    values.read(in, server_revision);
+    ProgressValues values{};
+    values.read(in);
 
     rows.store(values.rows, std::memory_order_relaxed);
     bytes.store(values.bytes, std::memory_order_relaxed);
@@ -72,15 +57,9 @@ void Progress::read(ReadBuffer & in, UInt64 server_revision)
 }
 
 
-void Progress::write(WriteBuffer & out, UInt64 client_revision) const
+void Progress::write(WriteBuffer & out) const
 {
-    getValues().write(out, client_revision);
-}
-
-
-void Progress::writeJSON(WriteBuffer & out) const
-{
-    getValues().writeJSON(out);
+    getValues().write(out);
 }
 
 } // namespace DB

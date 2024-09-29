@@ -21,30 +21,28 @@
 
 namespace DB
 {
-namespace DM
+struct DAGQueryInfo;
+}
+
+namespace DB::DM
 {
+
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 using RSOperators = std::vector<RSOperatorPtr>;
 using Fields = std::vector<Field>;
 
-inline static const RSOperatorPtr EMPTY_FILTER{};
+inline static const RSOperatorPtr EMPTY_RS_OPERATOR{};
 
 struct RSCheckParam
 {
     ColumnIndexes indexes;
 };
 
-
-class RSOperator : public std::enable_shared_from_this<RSOperator>
+class RSOperator
 {
 protected:
-    RSOperators children;
-
     RSOperator() = default;
-    explicit RSOperator(const RSOperators & children_)
-        : children(children_)
-    {}
 
 public:
     virtual ~RSOperator() = default;
@@ -52,14 +50,16 @@ public:
     virtual String name() = 0;
     virtual String toDebugString() = 0;
 
-    // TODO: implement a batch check version
+    virtual RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) = 0;
 
-    virtual RSResult roughCheck(size_t pack_id, const RSCheckParam & param) = 0;
+    virtual ColIds getColumnIDs() = 0;
 
-    virtual Attrs getAttrs() = 0;
-
-    virtual RSOperatorPtr optimize() { return shared_from_this(); };
-    virtual RSOperatorPtr switchDirection() { return shared_from_this(); };
+    static RSOperatorPtr build(
+        const std::unique_ptr<DAGQueryInfo> & dag_query,
+        const ColumnDefines & columns_to_read,
+        const ColumnDefines & table_column_defines,
+        bool enable_rs_filter,
+        const LoggerPtr & tracing_logger);
 };
 
 class ColCmpVal : public RSOperator
@@ -67,63 +67,83 @@ class ColCmpVal : public RSOperator
 protected:
     Attr attr;
     Field value;
-    int null_direction;
 
 public:
-    ColCmpVal(const Attr & attr_, const Field & value_, int null_direction_)
+    ColCmpVal(const Attr & attr_, const Field & value_)
         : attr(attr_)
         , value(value_)
-        , null_direction(null_direction_)
-    {
-    }
+    {}
 
-    Attrs getAttrs() override { return {attr}; }
+    ColIds getColumnIDs() override { return {attr.col_id}; }
 
     String toDebugString() override
     {
-        return R"({"op":")" + name() + //
-            R"(","col":")" + attr.col_name + //
-            R"(","value":")" + applyVisitor(FieldVisitorToDebugString(), value) + "\"}";
+        return fmt::format(
+            R"({{"op":"{}","col":"{}","value":"{}"}})",
+            name(),
+            attr.col_name,
+            applyVisitor(FieldVisitorToDebugString(), value));
     }
 };
 
 
 class LogicalOp : public RSOperator
 {
+protected:
+    RSOperators children;
+
 public:
     explicit LogicalOp(const RSOperators & children_)
-        : RSOperator(children_)
+        : children(children_)
     {}
 
-    Attrs getAttrs() override
+    ColIds getColumnIDs() override
     {
-        Attrs attrs;
-        for (auto & child : children)
+        ColIds col_ids;
+        for (const auto & child : children)
         {
-            auto child_attrs = child->getAttrs();
-            attrs.insert(attrs.end(), child_attrs.begin(), child_attrs.end());
+            auto child_col_ids = child->getColumnIDs();
+            col_ids.insert(col_ids.end(), child_col_ids.begin(), child_col_ids.end());
         }
-        return attrs;
+        return col_ids;
     }
 
     String toDebugString() override
     {
-        String s = R"({"op":")" + name() + R"(","children":[)";
-        for (auto & child : children)
-            s += child->toDebugString() + ",";
-        s.pop_back();
-        return s + "]}";
+        FmtBuffer buf;
+        buf.fmtAppend(R"({{"op":"{}","children":[)", name());
+        buf.joinStr(
+            children.cbegin(),
+            children.cend(),
+            [](const auto & child, FmtBuffer & fb) { fb.append(child->toDebugString()); },
+            ",");
+        buf.append("]}");
+        return buf.toString();
     }
 };
 
-#define GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_SOME(param, attr, rsindex) \
-    auto it = param.indexes.find(attr.col_id);                             \
-    if (it == param.indexes.end())                                         \
-        return Some;                                                       \
-    auto rsindex = it->second;                                             \
-    if (!rsindex.type->equals(*attr.type))                                 \
-        return Some;
+inline std::optional<RSIndex> getRSIndex(const RSCheckParam & param, const Attr & attr)
+{
+    auto it = param.indexes.find(attr.col_id);
+    if (it != param.indexes.end() && it->second.type->equals(*attr.type))
+    {
+        return it->second;
+    }
+    return std::nullopt;
+}
 
+template <typename Op>
+RSResults minMaxCheckCmp(
+    size_t start_pack,
+    size_t pack_count,
+    const RSCheckParam & param,
+    const Attr & attr,
+    const Field & value)
+{
+    auto rs_index = getRSIndex(param, attr);
+    return rs_index ? rs_index->minmax->checkCmp<Op>(start_pack, pack_count, value, rs_index->type)
+                    : RSResults(pack_count, RSResult::Some);
+}
 
 // logical
 RSOperatorPtr createNot(const RSOperatorPtr & op);
@@ -132,22 +152,17 @@ RSOperatorPtr createAnd(const RSOperators & children);
 // compare
 RSOperatorPtr createEqual(const Attr & attr, const Field & value);
 RSOperatorPtr createNotEqual(const Attr & attr, const Field & value);
-RSOperatorPtr createGreater(const Attr & attr, const Field & value, int null_direction);
-RSOperatorPtr createGreaterEqual(const Attr & attr, const Field & value, int null_direction);
-RSOperatorPtr createLess(const Attr & attr, const Field & value, int null_direction);
-RSOperatorPtr createLessEqual(const Attr & attr, const Field & value, int null_direction);
+RSOperatorPtr createGreater(const Attr & attr, const Field & value);
+RSOperatorPtr createGreaterEqual(const Attr & attr, const Field & value);
+RSOperatorPtr createLess(const Attr & attr, const Field & value);
+RSOperatorPtr createLessEqual(const Attr & attr, const Field & value);
 // set
 RSOperatorPtr createIn(const Attr & attr, const Fields & values);
-RSOperatorPtr createNotIn(const Attr & attr, const Fields & values);
 //
 RSOperatorPtr createLike(const Attr & attr, const Field & value);
-RSOperatorPtr createNotLike(const Attr & attr, const Field & values);
 //
 RSOperatorPtr createIsNull(const Attr & attr);
 //
-RSOperatorPtr createUnsupported(const String & content, const String & reason, bool is_not);
+RSOperatorPtr createUnsupported(const String & reason);
 
-
-} // namespace DM
-
-} // namespace DB
+} // namespace DB::DM

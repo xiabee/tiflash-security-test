@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Flash/ResourceControl/LocalAdmissionController.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileBig.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileInMemory.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSetReader.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/DeltaMerge/DMContext.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB
 {
@@ -39,10 +41,12 @@ std::pair<size_t, size_t> findColumnFile(const ColumnFiles & column_files, size_
             if (deletes_count == deletes_offset)
             {
                 if (unlikely(rows_count != rows_offset))
-                    throw Exception("rows_count and rows_offset are expected to be equal. column_file_index: " + DB::toString(column_file_index)
-                                    + ", column_file_size: " + DB::toString(column_files.size()) + ", rows_count: " + DB::toString(rows_count)
-                                    + ", rows_offset: " + DB::toString(rows_offset) + ", deletes_count: " + DB::toString(deletes_count)
-                                    + ", deletes_offset: " + DB::toString(deletes_offset));
+                    throw Exception(
+                        "rows_count and rows_offset are expected to be equal. column_file_index: "
+                        + DB::toString(column_file_index) + ", column_file_size: " + DB::toString(column_files.size())
+                        + ", rows_count: " + DB::toString(rows_count) + ", rows_offset: " + DB::toString(rows_offset)
+                        + ", deletes_count: " + DB::toString(deletes_count)
+                        + ", deletes_offset: " + DB::toString(deletes_offset));
                 return {column_file_index, 0};
             }
             ++deletes_count;
@@ -54,33 +58,45 @@ std::pair<size_t, size_t> findColumnFile(const ColumnFiles & column_files, size_
             if (rows_count > rows_offset)
             {
                 if (unlikely(deletes_count != deletes_offset))
-                    throw Exception("deletes_count and deletes_offset are expected to be equal. column_file_index: " + DB::toString(column_file_index)
-                                        + ", column_file_size: " + DB::toString(column_files.size()) + ", rows_count: " + DB::toString(rows_count)
-                                        + ", rows_offset: " + DB::toString(rows_offset) + ", deletes_count: " + DB::toString(deletes_count)
-                                        + ", deletes_offset: " + DB::toString(deletes_offset),
-                                    ErrorCodes::LOGICAL_ERROR);
+                    throw Exception(
+                        "deletes_count and deletes_offset are expected to be equal. column_file_index: "
+                            + DB::toString(column_file_index) + ", column_file_size: "
+                            + DB::toString(column_files.size()) + ", rows_count: " + DB::toString(rows_count)
+                            + ", rows_offset: " + DB::toString(rows_offset) + ", deletes_count: "
+                            + DB::toString(deletes_count) + ", deletes_offset: " + DB::toString(deletes_offset),
+                        ErrorCodes::LOGICAL_ERROR);
 
                 return {column_file_index, column_file_rows - (rows_count - rows_offset)};
             }
         }
     }
     if (rows_count != rows_offset || deletes_count != deletes_offset)
-        throw Exception("illegal rows_offset and deletes_offset. column_file_size: " + DB::toString(column_files.size())
-                            + ", rows_count: " + DB::toString(rows_count) + ", rows_offset: " + DB::toString(rows_offset)
-                            + ", deletes_count: " + DB::toString(deletes_count) + ", deletes_offset: " + DB::toString(deletes_offset),
-                        ErrorCodes::LOGICAL_ERROR);
+        throw Exception(
+            "illegal rows_offset and deletes_offset. column_file_size: " + DB::toString(column_files.size())
+                + ", rows_count: " + DB::toString(rows_count) + ", rows_offset: " + DB::toString(rows_offset)
+                + ", deletes_count: " + DB::toString(deletes_count)
+                + ", deletes_offset: " + DB::toString(deletes_offset),
+            ErrorCodes::LOGICAL_ERROR);
 
     return {column_file_index, 0};
 }
 
+ColumnFileSetReader::ColumnFileSetReader(const DMContext & context_)
+    : context(context_)
+    , lac_bytes_collector(context_.scan_context ? context_.scan_context->resource_group_name : "")
+{}
+
 ColumnFileSetReader::ColumnFileSetReader(
-    const DMContext & context,
+    const DMContext & context_,
     const ColumnFileSetSnapshotPtr & snapshot_,
     const ColumnDefinesPtr & col_defs_,
-    const RowKeyRange & segment_range_)
-    : snapshot(snapshot_)
+    const RowKeyRange & segment_range_,
+    ReadTag read_tag_)
+    : context(context_)
+    , snapshot(snapshot_)
     , col_defs(col_defs_)
     , segment_range(segment_range_)
+    , lac_bytes_collector(context_.scan_context ? context_.scan_context->resource_group_name : "")
 {
     size_t total_rows = 0;
     for (auto & f : snapshot->getColumnFiles())
@@ -88,13 +104,14 @@ ColumnFileSetReader::ColumnFileSetReader(
         total_rows += f->getRows();
         column_file_rows.push_back(f->getRows());
         column_file_rows_end.push_back(total_rows);
-        column_file_readers.push_back(f->getReader(context, snapshot->getStorageSnapshot(), col_defs));
+        column_file_readers.push_back(f->getReader(context, snapshot->getDataProvider(), col_defs));
+        column_file_readers.back()->setReadTag(read_tag_);
     }
 }
 
-ColumnFileSetReaderPtr ColumnFileSetReader::createNewReader(const ColumnDefinesPtr & new_col_defs)
+ColumnFileSetReaderPtr ColumnFileSetReader::createNewReader(const ColumnDefinesPtr & new_col_defs, ReadTag read_tag)
 {
-    auto * new_reader = new ColumnFileSetReader();
+    auto * new_reader = new ColumnFileSetReader(context);
     new_reader->snapshot = snapshot;
     new_reader->col_defs = new_col_defs;
     new_reader->segment_range = segment_range;
@@ -102,7 +119,10 @@ ColumnFileSetReaderPtr ColumnFileSetReader::createNewReader(const ColumnDefinesP
     new_reader->column_file_rows_end = column_file_rows_end;
 
     for (auto & fr : column_file_readers)
+    {
         new_reader->column_file_readers.push_back(fr->createNewReader(new_col_defs));
+        new_reader->column_file_readers.back()->setReadTag(read_tag);
+    }
 
     return std::shared_ptr<ColumnFileSetReader>(new_reader);
 }
@@ -122,7 +142,20 @@ Block ColumnFileSetReader::readPKVersion(size_t offset, size_t limit)
     return block;
 }
 
-size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t offset, size_t limit, const RowKeyRange * range)
+static Int64 columnsSize(MutableColumns & columns)
+{
+    Int64 bytes = 0;
+    for (const auto & col : columns)
+        bytes += col->byteSize();
+    return bytes;
+}
+
+size_t ColumnFileSetReader::readRows(
+    MutableColumns & output_columns,
+    size_t offset,
+    size_t limit,
+    const RowKeyRange * range,
+    std::vector<UInt32> * row_ids)
 {
     // Note that DeltaMergeBlockInputStream could ask for rows with larger index than total_delta_rows,
     // because DeltaIndex::placed_rows could be larger than total_delta_rows.
@@ -142,6 +175,7 @@ size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t off
     if (end == start)
         return 0;
 
+    auto bytes_before_read = columnsSize(output_columns);
     auto [start_file_index, rows_start_in_start_file] = locatePosByAccumulation(column_file_rows_end, start);
     auto [end_file_index, rows_end_in_end_file] = locatePosByAccumulation(column_file_rows_end, end);
 
@@ -157,12 +191,40 @@ size_t ColumnFileSetReader::readRows(MutableColumns & output_columns, size_t off
             continue;
 
         auto & column_file_reader = column_file_readers[file_index];
-        actual_read += column_file_reader->readRows(output_columns, rows_start_in_file, rows_in_file_limit, range);
+        auto [read_offset, read_rows]
+            = column_file_reader->readRows(output_columns, rows_start_in_file, rows_in_file_limit, range);
+        actual_read += read_rows;
+        if (row_ids != nullptr)
+        {
+            auto rows_before_cur_file = file_index == 0 ? 0 : column_file_rows_end[file_index - 1];
+            auto start_row_id = read_offset + rows_before_cur_file;
+            auto row_ids_offset = row_ids->size();
+            row_ids->resize(row_ids->size() + read_rows);
+            for (size_t i = 0; i < read_rows; ++i)
+            {
+                (*row_ids)[row_ids_offset + i] = start_row_id + i;
+            }
+        }
     }
+
+    if (auto delta_bytes = columnsSize(output_columns) - bytes_before_read; delta_bytes > 0)
+    {
+        if (row_ids == nullptr)
+            lac_bytes_collector.collect(delta_bytes);
+        if (likely(context.scan_context))
+            context.scan_context->user_read_bytes += delta_bytes;
+    }
+
     return actual_read;
 }
 
-void ColumnFileSetReader::getPlaceItems(BlockOrDeletes & place_items, size_t rows_begin, size_t deletes_begin, size_t rows_end, size_t deletes_end, size_t place_rows_offset)
+void ColumnFileSetReader::getPlaceItems(
+    BlockOrDeletes & place_items,
+    size_t rows_begin,
+    size_t deletes_begin,
+    size_t rows_end,
+    size_t deletes_end,
+    size_t place_rows_offset)
 {
     /// Note that we merge the consecutive ColumnFileInMemory or ColumnFileTiny together, which are seperated in groups by ColumnFileDeleteRange and ColumnFileBig.
     auto & column_files = snapshot->getColumnFiles();
@@ -173,7 +235,8 @@ void ColumnFileSetReader::getPlaceItems(BlockOrDeletes & place_items, size_t row
     size_t block_rows_start = rows_begin;
     size_t block_rows_end = rows_begin;
 
-    for (size_t file_index = start_file_index; file_index < column_files.size() && file_index <= end_file_index; ++file_index)
+    for (size_t file_index = start_file_index; file_index < column_files.size() && file_index <= end_file_index;
+         ++file_index)
     {
         auto & column_file = *column_files[file_index];
 
@@ -222,10 +285,11 @@ void ColumnFileSetReader::getPlaceItems(BlockOrDeletes & place_items, size_t row
     }
 }
 
-bool ColumnFileSetReader::shouldPlace(const DMContext & context,
-                                      const RowKeyRange & relevant_range,
-                                      UInt64 max_version,
-                                      size_t placed_rows)
+bool ColumnFileSetReader::shouldPlace(
+    const DMContext & context,
+    const RowKeyRange & relevant_range,
+    UInt64 start_ts,
+    size_t placed_rows)
 {
     auto & column_files = snapshot->getColumnFiles();
     auto [start_file_index, rows_start_in_start_file] = locatePosByAccumulation(column_file_rows_end, placed_rows);
@@ -255,7 +319,7 @@ bool ColumnFileSetReader::shouldPlace(const DMContext & context,
 
             for (auto i = rows_start_in_file; i < rows_end_in_file; ++i)
             {
-                if (version_col_data[i] <= max_version && relevant_range.check(rkcc.getRowKeyValue(i)))
+                if (version_col_data[i] <= start_ts && relevant_range.check(rkcc.getRowKeyValue(i)))
                     return true;
             }
         }
@@ -270,18 +334,19 @@ bool ColumnFileSetReader::shouldPlace(const DMContext & context,
 
             for (auto i = rows_start_in_file; i < rows_end_in_file; ++i)
             {
-                if (version_col_data[i] <= max_version && relevant_range.check(rkcc.getRowKeyValue(i)))
+                if (version_col_data[i] <= start_ts && relevant_range.check(rkcc.getRowKeyValue(i)))
                     return true;
             }
         }
         else
         {
-            throw Exception("Unknown column file: " + column_file->toString(), ErrorCodes::LOGICAL_ERROR);
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Unknown column file: {}", column_file->toString());
         }
     }
 
     return false;
 }
+
 
 } // namespace DM
 } // namespace DB

@@ -16,7 +16,7 @@
 
 #include <Core/SortDescription.h>
 #include <Flash/Coprocessor/FineGrainedShuffle.h>
-#include <Flash/Planner/plans/PhysicalUnary.h>
+#include <Flash/Planner/Plans/PhysicalUnary.h>
 #include <tipb/executor.pb.h>
 
 namespace DB
@@ -35,24 +35,28 @@ public:
     PhysicalWindowSort(
         const String & executor_id_,
         const NamesAndTypes & schema_,
+        const FineGrainedShuffle & fine_grained_shuffle_,
         const String & req_id,
         const PhysicalPlanNodePtr & child_,
-        const SortDescription & order_descr_,
-        const FineGrainedShuffle & fine_grained_shuffle_)
-        : PhysicalUnary(executor_id_, PlanType::WindowSort, schema_, req_id, child_)
+        const SortDescription & order_descr_)
+        : PhysicalUnary(executor_id_, PlanType::WindowSort, schema_, fine_grained_shuffle_, req_id, child_)
         , order_descr(order_descr_)
-        , fine_grained_shuffle(fine_grained_shuffle_)
     {}
 
-    void finalize(const Names & parent_require) override;
+    void finalizeImpl(const Names & parent_require) override;
 
     const Block & getSampleBlock() const override;
 
 private:
-    void transformImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+    void buildBlockInputStreamImpl(DAGPipeline & pipeline, Context & context, size_t max_streams) override;
+
+    void buildPipelineExecGroupImpl(
+        PipelineExecutorContext & exec_context,
+        PipelineExecGroupBuilder & group_builder,
+        Context & context,
+        size_t /*concurrency*/) override;
 
 private:
     SortDescription order_descr;
-    FineGrainedShuffle fine_grained_shuffle;
 };
 } // namespace DB

@@ -21,7 +21,11 @@ namespace DB
 {
 namespace
 {
-AggregateFunctionPtr createAggregateFunctionCount(const std::string & name, const DataTypes & /*argument_types*/, const Array & parameters)
+AggregateFunctionPtr createAggregateFunctionCount(
+    const Context & /* context not used */,
+    const std::string & name,
+    const DataTypes & /*argument_types*/,
+    const Array & parameters)
 {
     assertNoParameters(name, parameters);
 

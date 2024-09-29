@@ -15,21 +15,31 @@
 #pragma once
 
 #include <Common/Logger.h>
+#include <Common/UniThreadPool.h>
 #include <Core/Defines.h>
 #include <Core/SortDescription.h>
+#include <Flash/Coprocessor/RuntimeFilterMgr.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
-#include <Storages/DeltaMerge/Filter/RSOperator.h>
-#include <Storages/DeltaMerge/ScanContext.h>
+#include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
+#include <Storages/DeltaMerge/DeltaMergeStore.h>
+#include <Storages/DeltaMerge/Filter/PushDownFilter.h>
+#include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
+#include <Storages/DeltaMerge/ScanContext_fwd.h>
+#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
-#include <Storages/Transaction/DecodingStorageSchemaSnapshot.h>
-#include <Storages/Transaction/TiDB.h>
+#include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
+#include <TiDB/Schema/TiDB.h>
 
 #include <ext/shared_ptr_helper.h>
 
 namespace DB
 {
+struct CheckpointInfo;
+using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
+struct CheckpointIngestInfo;
+using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 namespace DM
 {
 struct RowKeyRange;
@@ -53,6 +63,7 @@ public:
     String getName() const override;
     String getTableName() const override;
     String getDatabaseName() const override;
+    KeyspaceID getKeyspaceID() const { return _store->getKeyspaceID(); }
 
     void clearData() override;
 
@@ -66,20 +77,25 @@ public:
         size_t max_block_size,
         unsigned num_streams) override;
 
-    /// use scan_context to record the performance metrics during read.
-    BlockInputStreams read(
+    void read(
+        PipelineExecutorContext & exec_context_,
+        PipelineExecGroupBuilder & group_builder,
         const Names & column_names,
         const SelectQueryInfo & query_info,
         const Context & context,
-        QueryProcessingStage::Enum & processed_stage,
         size_t max_block_size,
-        unsigned num_streams,
-        const DM::ScanContextPtr & scan_context);
+        unsigned num_streams) override;
+
+    DM::Remote::DisaggPhysicalTableReadSnapshotPtr writeNodeBuildRemoteReadSnapshot(
+        const Names & column_names,
+        const SelectQueryInfo & query_info,
+        const Context & context,
+        unsigned num_streams);
 
     BlockOutputStreamPtr write(const ASTPtr & query, const Settings & settings) override;
 
     /// Write from raft layer.
-    void write(Block & block, const Settings & settings);
+    DM::WriteResult write(Block & block, const Settings & settings, const RegionAppliedStatus & applied_status = {});
 
     void flushCache(const Context & context) override;
 
@@ -99,10 +115,25 @@ public:
 
     void deleteRange(const DM::RowKeyRange & range_to_delete, const Settings & settings);
 
-    void ingestFiles(
+    // If the "ingest" has been aborted, we use this method to
+    // clean the generated external files on the fly.
+    void cleanPreIngestFiles(const std::vector<DM::ExternalDTFileInfo> & external_files, const Settings & settings);
+
+    /// Return the 'ingtested bytes'.
+    UInt64 ingestFiles(
         const DM::RowKeyRange & range,
         const std::vector<DM::ExternalDTFileInfo> & external_files,
         bool clear_data_in_range,
+        const Settings & settings);
+
+    DM::Segments buildSegmentsFromCheckpointInfo(
+        const DM::RowKeyRange & range,
+        CheckpointInfoPtr checkpoint_info,
+        const Settings & settings);
+
+    UInt64 ingestSegmentsFromCheckpointInfo(
+        const DM::RowKeyRange & range,
+        const CheckpointIngestInfoPtr & checkpoint_info,
         const Settings & settings);
 
     UInt64 onSyncGc(Int64, const DM::GCOptions &) override;
@@ -122,13 +153,19 @@ public:
         const String & table_name,
         const Context & context) override;
 
-    // Apply AlterCommands synced from TiDB should use `alterFromTiDB` instead of `alter(...)`
-    void alterFromTiDB(
+    void updateTombstone(
         const TableLockHolder &,
         const AlterCommands & commands,
         const String & database_name,
         const TiDB::TableInfo & table_info,
         const SchemaNameMapper & name_mapper,
+        const Context & context) override;
+
+    void alterSchemaChange(
+        const TableLockHolder &,
+        TiDB::TableInfo & table_info,
+        const String & database_name,
+        const String & table_name,
         const Context & context) override;
 
     void setTableInfo(const TiDB::TableInfo & table_info_) override { tidb_table_info = table_info_; }
@@ -152,27 +189,24 @@ public:
     void checkStatus(const Context & context) override;
     void deleteRows(const Context &, size_t rows) override;
 
-    const DM::DeltaMergeStorePtr & getStore()
-    {
-        return getAndMaybeInitStore();
-    }
+    const DM::DeltaMergeStorePtr & getStore() { return getAndMaybeInitStore(); }
 
-    DM::DeltaMergeStorePtr getStoreIfInited();
+    DM::DeltaMergeStorePtr getStoreIfInited() const;
 
     bool isCommonHandle() const override { return is_common_handle; }
 
     size_t getRowKeyColumnSize() const override { return rowkey_column_size; }
 
-    std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(const TableStructureLockHolder & table_structure_lock, bool /* need_block */) override;
+    std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
+        const TableStructureLockHolder & table_structure_lock,
+        bool need_block,
+        bool with_version_column) override;
 
-    void releaseDecodingBlock(Int64 block_decoding_schema_version, BlockUPtr block) override;
+    void releaseDecodingBlock(Int64 block_decoding_schema_epoch, BlockUPtr block) override;
 
-    bool initStoreIfDataDirExist() override;
+    bool initStoreIfDataDirExist(ThreadPool * thread_pool) override;
 
-    DM::DMConfigurationOpt createChecksumConfig(bool is_single_file) const
-    {
-        return DM::DMChecksumConfig::fromDBContext(global_context, is_single_file);
-    }
+    DM::DMConfigurationOpt createChecksumConfig() const { return DM::DMChecksumConfig::fromDBContext(global_context); }
 
 #ifndef DBMS_PUBLIC_GTEST
 protected:
@@ -182,7 +216,7 @@ protected:
         const String & db_engine,
         const String & db_name_,
         const String & name_,
-        const DM::OptionTableInfoConstRef table_info_,
+        DM::OptionTableInfoConstRef table_info_,
         const ColumnsDescription & columns_,
         const ASTPtr & primary_expr_ast_,
         Timestamp tombstone,
@@ -196,33 +230,20 @@ private:
 
     void alterImpl(
         const AlterCommands & commands,
-        const String & database_name_,
-        const String & table_name_,
-        DB::DM::OptionTableInfoConstRef table_info_,
+        const String & database_name,
+        const String & table_name,
         const Context & context);
 
     DataTypePtr getPKTypeImpl() const override;
 
-    DM::DeltaMergeStorePtr & getAndMaybeInitStore();
-    bool storeInited() const
-    {
-        return store_inited.load(std::memory_order_acquire);
-    }
+    DM::DeltaMergeStorePtr & getAndMaybeInitStore(ThreadPool * thread_pool = nullptr);
+    bool storeInited() const { return store_inited.load(std::memory_order_acquire); }
     void updateTableColumnInfo();
-    DM::ColumnDefines getStoreColumnDefines() const;
+    ColumnsDescription getNewColumnsDescription(const TiDB::TableInfo & table_info);
+    DM::ColumnDefines getStoreColumnDefines() const override;
     bool dataDirExist();
     void shutdownImpl();
 
-    /// Get Rough set filter from query
-    DM::RSOperatorPtr parseRoughSetFilter(const SelectQueryInfo & query_info,
-                                          const DM::ColumnDefines & columns_to_read,
-                                          const Context & context,
-                                          const LoggerPtr & tracing_logger);
-
-    DM::RowKeyRanges parseMvccQueryInfo(const DB::MvccQueryInfo & mvcc_query_info,
-                                        unsigned num_streams,
-                                        const Context & context,
-                                        const LoggerPtr & tracing_logger);
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #endif
@@ -247,7 +268,7 @@ private:
 
     std::unique_ptr<TableColumnInfo> table_column_info; // After create DeltaMergeStore object, it is deprecated.
     std::atomic<bool> store_inited;
-    DM::DeltaMergeStorePtr _store;
+    DM::DeltaMergeStorePtr _store; // NOLINT(readability-identifier-naming)
 
     Strings pk_column_names; // TODO: remove it. Only use for debug from ch-client.
     bool is_common_handle = false;
@@ -262,8 +283,8 @@ private:
     DecodingStorageSchemaSnapshotPtr decoding_schema_snapshot;
     // The following two members must be used under the protection of table structure lock
     bool decoding_schema_changed = false;
-    // internal version for `decoding_schema_snapshot`
-    Int64 decoding_schema_version = 1;
+    // internal epoch for `decoding_schema_snapshot`
+    Int64 decoding_schema_epoch = 1;
 
     // avoid creating block every time when decoding row
     std::vector<BlockUPtr> cache_blocks;

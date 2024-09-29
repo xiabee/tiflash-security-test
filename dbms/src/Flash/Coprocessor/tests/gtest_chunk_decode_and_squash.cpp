@@ -15,15 +15,15 @@
 #include <DataStreams/SquashingTransform.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
-#include <Interpreters/Context.h>
-#include <Storages/Transaction/TiDB.h>
+#include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
+#include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
 #include <TestUtils/ColumnGenerator.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <TestUtils/TiFlashTestEnv.h>
+#include <TiDB/Schema/TiDB.h>
 #include <gtest/gtest.h>
 
-#include <Flash/Coprocessor/ChunkDecodeAndSquash.cpp>
 namespace DB
 {
 namespace tests
@@ -31,14 +31,10 @@ namespace tests
 class TestChunkDecodeAndSquash : public testing::Test
 {
 protected:
-    void SetUp() override
-    {
-    }
+    void SetUp() override {}
 
 public:
-    TestChunkDecodeAndSquash()
-        : context(TiFlashTestEnv::getContext())
-    {}
+    TestChunkDecodeAndSquash() {}
 
     static Block squashBlocks(std::vector<Block> & blocks)
     {
@@ -83,18 +79,16 @@ public:
         {
             DataTypePtr int64_data_type = std::make_shared<DataTypeInt64>();
             auto int64_column = ColumnGenerator::instance().generate({rows, "Int64", RANDOM}).column;
-            block.insert(ColumnWithTypeAndName{
-                std::move(int64_column),
-                int64_data_type,
-                String("col") + std::to_string(i)});
+            block.insert(
+                ColumnWithTypeAndName{std::move(int64_column), int64_data_type, String("col") + std::to_string(i)});
         }
         return block;
     }
 
     void doTestWork(bool flush_something)
     {
-        const size_t block_rows = 1024;
-        const size_t block_num = 256;
+        const size_t block_rows = 256;
+        const size_t block_num = 64;
         std::mt19937_64 rand_gen;
         // 1. Build Blocks.
         std::vector<Block> blocks;
@@ -103,18 +97,37 @@ public:
             UInt64 rows = flush_something ? static_cast<UInt64>(rand_gen()) % (block_rows * 4) : block_rows;
             blocks.emplace_back(prepareBlock(rows));
             if (flush_something)
-                blocks.emplace_back(prepareBlock(0)); /// Adds this empty block, so even unluckily, total_rows % rows_limit == 0, it would flush an empty block with header
+                blocks.emplace_back(prepareBlock(
+                    0)); /// Adds this empty block, so even unluckily, total_rows % rows_limit == 0, it would flush an empty block with header
         }
 
         // 2. encode all blocks
-        std::unique_ptr<ChunkCodecStream> codec_stream = std::make_unique<CHBlockChunkCodec>()->newCodecStream(makeFields());
+        std::unique_ptr<ChunkCodecStream> codec_stream
+            = std::make_unique<CHBlockChunkCodec>()->newCodecStream(makeFields());
         std::vector<String> encode_str_vec(block_num);
+        std::vector<int> encode_str_use_compression(block_num, true);
+        size_t round_index = 0;
         for (const auto & block : blocks)
         {
-            codec_stream->encode(block, 0, block.rows());
-            encode_str_vec.push_back(codec_stream->getString());
-            codec_stream->clear();
+            if (round_index % 3 == 0)
+            {
+                codec_stream->encode(block, 0, block.rows());
+                encode_str_vec.push_back(codec_stream->getString());
+                codec_stream->clear();
+                encode_str_use_compression.emplace_back(false);
+            }
+            else
+            {
+                auto codec = CHBlockChunkCodecV1{block};
+                auto && str = codec.encode(block, CompressionMethod::LZ4);
+                if (!str.empty())
+                    assert(static_cast<CompressionMethodByte>(str[0]) == CompressionMethodByte::LZ4);
+                encode_str_vec.push_back(std::move(str));
+                encode_str_use_compression.emplace_back(true);
+            }
+            round_index++;
         }
+        round_index = 0;
 
         // 3. DecodeAndSquash all these blocks
         Block header = blocks.back();
@@ -122,7 +135,17 @@ public:
         CHBlockChunkDecodeAndSquash decoder(header, block_rows * 4);
         for (const auto & str : encode_str_vec)
         {
-            auto result = decoder.decodeAndSquash(str);
+            std::optional<Block> result{};
+            if (!encode_str_use_compression[round_index])
+            {
+                result = decoder.decodeAndSquash(str);
+            }
+            else
+            {
+                result = decoder.decodeAndSquashV1(str);
+            }
+            round_index++;
+
             if (result)
                 decoded_blocks.push_back(std::move(result.value()));
         }
@@ -137,7 +160,6 @@ public:
         Block decoded_block = squashBlocks(decoded_blocks);
         ASSERT_BLOCK_EQ(reference_block, decoded_block);
     }
-    Context context;
 };
 
 TEST_F(TestChunkDecodeAndSquash, testDecodeAndSquash)

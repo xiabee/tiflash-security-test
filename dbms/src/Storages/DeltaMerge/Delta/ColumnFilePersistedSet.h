@@ -32,10 +32,8 @@
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/DeltaTree.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
-#include <Storages/DeltaMerge/StoragePool.h>
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/PageDefinesBase.h>
 #include <fmt/format.h>
-
 
 namespace DB
 {
@@ -46,11 +44,12 @@ using ColumnFilePersistedSetPtr = std::shared_ptr<ColumnFilePersistedSet>;
 
 /// This class is mostly not thread safe, manipulate on it requires acquire extra synchronization on the DeltaValueSpace
 /// Only the method that just access atomic variable can be called without extra synchronization
-class ColumnFilePersistedSet : public std::enable_shared_from_this<ColumnFilePersistedSet>
+class ColumnFilePersistedSet
+    : public std::enable_shared_from_this<ColumnFilePersistedSet>
     , private boost::noncopyable
 {
 private:
-    PageId metadata_id;
+    PageIdU64 metadata_id;
     ColumnFilePersisteds persisted_files;
     // TODO: check the proper memory_order when use this atomic variable
     std::atomic<size_t> persisted_files_count = 0;
@@ -71,44 +70,55 @@ private:
     void checkColumnFiles(const ColumnFilePersisteds & new_column_files);
 
 public:
-    explicit ColumnFilePersistedSet(PageId metadata_id_, const ColumnFilePersisteds & persisted_column_files = {});
+    explicit ColumnFilePersistedSet(PageIdU64 metadata_id_, const ColumnFilePersisteds & persisted_column_files = {});
 
     /// Restore the metadata of this instance.
     /// Only called after reboot.
-    static ColumnFilePersistedSetPtr restore(DMContext & context, const RowKeyRange & segment_range, PageId id);
+    static ColumnFilePersistedSetPtr restore(DMContext & context, const RowKeyRange & segment_range, PageIdU64 id);
+    /// Restore from a checkpoint from other peer.
+    /// Only used in FAP.
+    static ColumnFilePersistedSetPtr restore( //
+        DMContext & context,
+        const RowKeyRange & segment_range,
+        ReadBuffer & buf,
+        PageIdU64 id);
+
+    static ColumnFilePersistedSetPtr createFromCheckpoint( //
+        const LoggerPtr & parent_log,
+        DMContext & context,
+        UniversalPageStoragePtr temp_ps,
+        const RowKeyRange & segment_range,
+        PageIdU64 delta_id,
+        WriteBatches & wbs);
 
     /**
      * Resets the logger by using the one from the segment.
      * Segment_log is not available when constructing, because usually
      * at that time the segment has not been constructed yet.
      */
-    void resetLogger(const LoggerPtr & segment_log)
-    {
-        log = segment_log;
-    }
+    void resetLogger(const LoggerPtr & segment_log) { log = segment_log; }
 
     /// Thread safe part start
     String simpleInfo() const { return "ColumnFilePersistedSet [" + DB::toString(metadata_id) + "]"; }
     String info() const
     {
-        return fmt::format("ColumnFilePersistedSet [{}]: {} column files, {} rows, {} bytes, {} deletes.",
-                           metadata_id,
-                           persisted_files_count.load(),
-                           rows.load(),
-                           bytes.load(),
-                           deletes.load());
+        return fmt::format(
+            "ColumnFilePersistedSet [{}]: {} column files, {} rows, {} bytes, {} deletes.",
+            metadata_id,
+            persisted_files_count.load(),
+            rows.load(),
+            bytes.load(),
+            deletes.load());
     }
     /// Thread safe part end
-    String detailInfo() const
-    {
-        return columnFilesToString(persisted_files);
-    }
+    String detailInfo() const { return columnFilesToString(persisted_files); }
 
+    const ColumnFilePersisteds & getFiles() const { return persisted_files; }
+
+    void saveMeta(WriteBuffer & buf) const;
     void saveMeta(WriteBatches & wbs) const;
 
     void recordRemoveColumnFilesPages(WriteBatches & wbs) const;
-
-    BlockPtr getLastSchema();
 
     /**
      * Return newly appended column files compared to `previous_column_files`.
@@ -126,7 +136,7 @@ public:
     ColumnFilePersisteds diffColumnFiles(const ColumnFiles & previous_column_files) const;
 
     /// Thread safe part start
-    PageId getId() const { return metadata_id; }
+    PageIdU64 getId() const { return metadata_id; }
 
     size_t getColumnFileCount() const { return persisted_files_count.load(); }
     size_t getRows() const { return rows.load(); }
@@ -152,7 +162,7 @@ public:
     /// Update the metadata to commit the compaction results
     bool installCompactionResults(const MinorCompactionPtr & compaction, WriteBatches & wbs);
 
-    ColumnFileSetSnapshotPtr createSnapshot(const StorageSnapshotPtr & storage_snap);
+    ColumnFileSetSnapshotPtr createSnapshot(const IColumnFileDataProviderPtr & data_provider);
 };
 
 } // namespace DM

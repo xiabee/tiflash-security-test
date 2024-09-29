@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <Common/FailPoint.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
@@ -24,7 +25,7 @@
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <Storages/StorageDeltaMerge.h>
-#include <Storages/tests/TiFlashStorageTestBasic.h>
+#include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 #include <gtest/gtest.h>
 
@@ -65,10 +66,7 @@ public:
         FailPointHelper::enableFailPoint(FailPoints::skip_check_segment_update);
     }
 
-    ~MultiSegmentTestUtil()
-    {
-        FailPointHelper::disableFailPoint(FailPoints::skip_check_segment_update);
-    }
+    ~MultiSegmentTestUtil() { FailPointHelper::disableFailPoint(FailPoints::skip_check_segment_update); }
 
     void resetExpectedRows()
     {
@@ -167,8 +165,10 @@ public:
         for (auto & [_key, seg] : store->segments)
         {
             (void)_key;
-            ASSERT_EQ(seg->getDelta()->getRows(), expected_delta_rows[segment_idx]) << "Assert failed for segment #" << segment_idx;
-            ASSERT_EQ(seg->getStable()->getRows(), expected_stable_rows[segment_idx]) << "Assert failed for segment #" << segment_idx;
+            ASSERT_EQ(seg->getDelta()->getRows(), expected_delta_rows[segment_idx])
+                << "Assert failed for segment #" << segment_idx;
+            ASSERT_EQ(seg->getStable()->getRows(), expected_stable_rows[segment_idx])
+                << "Assert failed for segment #" << segment_idx;
             segment_idx++;
         }
     }

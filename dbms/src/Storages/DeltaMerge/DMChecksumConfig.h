@@ -15,8 +15,8 @@
 #pragma once
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/TiFlashException.h>
-#include <IO/ChecksumBuffer.h>
-#include <Interpreters/Context.h>
+#include <IO/Checksum/ChecksumBuffer.h>
+#include <Interpreters/Context_fwd.h>
 
 #include <map>
 #include <string>
@@ -28,20 +28,21 @@ class DMChecksumConfig
 public:
     explicit DMChecksumConfig(std::istream & input);
 
-    explicit DMChecksumConfig(std::map<std::string, std::string> embedded_checksum_ = {},
-                              size_t checksum_frame_length_ = TIFLASH_DEFAULT_CHECKSUM_FRAME_SIZE,
-                              DB::ChecksumAlgo checksum_algorithm_ = DB::ChecksumAlgo::XXH3,
-                              std::map<std::string, std::string> debug_info_ = {{"creation_commit_hash", TiFlashBuildInfo::getGitHash()},
-                                                                                {"creation_edition", TiFlashBuildInfo::getEdition()},
-                                                                                {"creation_version", TiFlashBuildInfo::getVersion()},
-                                                                                {"creation_release_version", TiFlashBuildInfo::getReleaseVersion()},
-                                                                                {"creation_build_time", TiFlashBuildInfo::getUTCBuildTime()}})
+    explicit DMChecksumConfig(
+        std::map<std::string, std::string> embedded_checksum_ = {},
+        size_t checksum_frame_length_ = TIFLASH_DEFAULT_CHECKSUM_FRAME_SIZE,
+        DB::ChecksumAlgo checksum_algorithm_ = DB::ChecksumAlgo::XXH3,
+        std::map<std::string, std::string> debug_info_
+        = {{"creation_commit_hash", TiFlashBuildInfo::getGitHash()},
+           {"creation_edition", TiFlashBuildInfo::getEdition()},
+           {"creation_version", TiFlashBuildInfo::getVersion()},
+           {"creation_release_version", TiFlashBuildInfo::getReleaseVersion()},
+           {"creation_build_time", TiFlashBuildInfo::getUTCBuildTime()}})
         : checksum_frame_length(checksum_frame_length_)
         , checksum_algorithm(checksum_algorithm_)
         , embedded_checksum(std::move(embedded_checksum_))
         , debug_info(std::move(debug_info_))
-    {
-    }
+    {}
 
     friend std::ostream & operator<<(std::ostream &, const DMChecksumConfig &);
 
@@ -64,7 +65,7 @@ public:
         throw TiFlashException("unrecognized checksum algorithm", Errors::Checksum::Internal);
     }
     [[nodiscard]] DB::ChecksumAlgo getChecksumAlgorithm() const { return checksum_algorithm; }
-    [[nodiscard]] std::map<std::string, std::string> & getEmbeddedChecksum() { return embedded_checksum; }
+    [[nodiscard]] const std::map<std::string, std::string> & getEmbeddedChecksum() const { return embedded_checksum; }
     [[nodiscard]] const std::map<std::string, std::string> & getDebugInfo() const { return debug_info; }
 
     void addChecksum(std::string name, std::string value) { embedded_checksum[std::move(name)] = std::move(value); }
@@ -88,7 +89,7 @@ public:
         }
     }
 
-    [[maybe_unused]] static std::optional<DMChecksumConfig> fromDBContext(const DB::Context & context, bool is_single_file);
+    [[maybe_unused]] static std::optional<DMChecksumConfig> fromDBContext(const DB::Context & context);
 
 private:
     size_t checksum_frame_length; ///< the length of checksum frame
@@ -96,10 +97,7 @@ private:
     std::map<std::string, std::string> embedded_checksum; ///< special checksums for meta files
     std::map<std::string, std::string> debug_info; ///< debugging information
 
-    explicit DMChecksumConfig(const DB::Context & context)
-        : DMChecksumConfig({}, context.getSettingsRef().dt_checksum_frame_size.get(), context.getSettingsRef().dt_checksum_algorithm.get())
-    {
-    }
+    explicit DMChecksumConfig(const DB::Context & context);
 };
 
 

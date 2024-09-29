@@ -14,16 +14,12 @@
 
 #pragma once
 
-#include <Storages/Page/PageDefines.h>
+#include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/PageStorage.h>
 #include <fmt/format.h>
 
 #include <atomic>
 
-namespace Poco
-{
-class Logger;
-}
 
 namespace DB::PS::tests
 {
@@ -54,26 +50,18 @@ public:
         return instance;
     }
 
-    bool isRunning() const
-    {
-        return status == STATUS_LOOP;
-    }
+    bool isRunning() const { return status == STATUS_LOOP; }
     int isSuccess() const
     {
         auto code = status.load();
         return code > 0 ? 0 : static_cast<int>(code);
     }
 
-    void setStat(enum StressEnvStat status_)
-    {
-        status = status_;
-    }
+    void setStat(enum StressEnvStat status_) { status = status_; }
 };
 
 struct StressEnv
 {
-    static Poco::Logger * logger;
-
     size_t num_writers = 1;
     size_t num_readers = 4;
     bool init_pages = false;
@@ -121,10 +109,13 @@ struct StressEnv
         );
     }
 
-    static void initGlobalLogger();
+    LoggerPtr logger;
+
 
     static StressEnv parse(int argc, char ** argv);
 
     void setup();
+
+    static LoggerPtr buildLogger(bool enable_color);
 };
 } // namespace DB::PS::tests

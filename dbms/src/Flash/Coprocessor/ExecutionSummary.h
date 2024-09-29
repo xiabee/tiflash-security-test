@@ -14,13 +14,17 @@
 
 #pragma once
 
-#include <Storages/DeltaMerge/ScanContext.h>
+#include <Storages/DeltaMerge/ScanContext_fwd.h>
 #include <common/types.h>
+#include <kvproto/resource_manager.pb.h>
+#include <tipb/select.pb.h>
 
 #include <memory>
 
 namespace DB
 {
+
+struct BaseRuntimeStatistics;
 /// do not need be thread safe since it is only used in single thread env
 struct ExecutionSummary
 {
@@ -28,12 +32,20 @@ struct ExecutionSummary
     UInt64 num_produced_rows = 0;
     UInt64 num_iterations = 0;
     UInt64 concurrency = 0;
+    resource_manager::Consumption ru_consumption{};
 
-    std::unique_ptr<DB::DM::ScanContext> scan_context = std::make_unique<DB::DM::ScanContext>();
+    DM::ScanContextPtr scan_context;
 
-    ExecutionSummary() = default;
+    ExecutionSummary();
 
-    void merge(const ExecutionSummary & other, bool streaming_call);
+    void merge(const ExecutionSummary & other);
+    void merge(const tipb::ExecutorExecutionSummary & other);
+    void fill(const BaseRuntimeStatistics & other);
+    void init(const tipb::ExecutorExecutionSummary & other);
 };
 
+resource_manager::Consumption mergeRUConsumption(
+    const resource_manager::Consumption & left,
+    const resource_manager::Consumption & right);
+resource_manager::Consumption parseRUConsumption(const tipb::ExecutorExecutionSummary & pb);
 } // namespace DB

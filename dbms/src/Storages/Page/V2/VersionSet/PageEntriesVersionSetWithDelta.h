@@ -20,8 +20,8 @@
 #include <Poco/Ext/ThreadNumber.h>
 #include <Storages/BackgroundProcessingPool.h>
 #include <Storages/Page/Config.h>
-#include <Storages/Page/PageDefines.h>
 #include <Storages/Page/Snapshot.h>
+#include <Storages/Page/V2/PageDefines.h>
 #include <Storages/Page/V2/PageEntries.h>
 #include <Storages/Page/V2/VersionSet/PageEntriesBuilder.h>
 #include <Storages/Page/V2/VersionSet/PageEntriesEdit.h>
@@ -54,13 +54,12 @@ public:
     using VersionPtr = std::shared_ptr<VersionType>;
 
 public:
-    explicit PageEntriesVersionSetWithDelta(String name_, const MVCC::VersionSetConfig & config_, Poco::Logger * log_)
+    explicit PageEntriesVersionSetWithDelta(String name_, const MVCC::VersionSetConfig & config_, LoggerPtr log_)
         : current(VersionType::createBase())
         , config(config_)
         , name(std::move(name_))
         , log(log_)
-    {
-    }
+    {}
 
     ~PageEntriesVersionSetWithDelta()
     {
@@ -154,7 +153,11 @@ public:
         std::weak_ptr<BackgroundProcessingPool::TaskInfo> compact_handle;
 
     public:
-        Snapshot(PageEntriesVersionSetWithDelta * vset_, VersionPtr tail_, const String & tracing_id_, BackgroundProcessingPool::TaskHandle handle)
+        Snapshot(
+            PageEntriesVersionSetWithDelta * vset_,
+            VersionPtr tail_,
+            const String & tracing_id_,
+            BackgroundProcessingPool::TaskHandle handle)
             : vset(vset_)
             , view(std::move(tail_))
             , create_thread(Poco::ThreadNumber::get())
@@ -203,7 +206,9 @@ public:
 
     SnapshotPtr getSnapshot(const String & tracing_id, BackgroundProcessingPool::TaskHandle handle);
 
-    std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> gcApply(PageEntriesEdit & edit, bool need_scan_page_ids = true);
+    std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> gcApply(
+        PageEntriesEdit & edit,
+        bool need_scan_page_ids = true);
 
     /// List all PageFile that are used by any version
     std::pair<std::set<PageFileIdAndLevel>, std::set<PageId>> //
@@ -269,26 +274,28 @@ private:
     mutable std::list<SnapshotWeakPtr> snapshots;
     const MVCC::VersionSetConfig config;
     const String name;
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 /// Read old entries state from `view_` and apply new edit to `view_->tail`
 class DeltaVersionEditAcceptor
 {
 public:
-    explicit DeltaVersionEditAcceptor(const PageEntriesView * view_, //
-                                      const String & name_,
-                                      bool ignore_invalid_ref_ = false,
-                                      Poco::Logger * log_ = nullptr);
+    explicit DeltaVersionEditAcceptor(
+        const PageEntriesView * view_, //
+        const String & name_,
+        bool ignore_invalid_ref_ = false,
+        LoggerPtr log_ = nullptr);
 
     ~DeltaVersionEditAcceptor();
 
     void apply(PageEntriesEdit & edit);
 
-    static void applyInplace(const String & name,
-                             const PageEntriesVersionSetWithDelta::VersionPtr & current,
-                             const PageEntriesEdit & edit,
-                             Poco::Logger * log);
+    static void applyInplace(
+        const String & name,
+        const PageEntriesVersionSetWithDelta::VersionPtr & current,
+        const PageEntriesEdit & edit,
+        LoggerPtr log);
 
     void gcApply(PageEntriesEdit & edit) { PageEntriesBuilder::gcApplyTemplate(view, edit, current_version); }
 
@@ -315,7 +322,7 @@ private:
     bool ignore_invalid_ref;
 
     const String & name;
-    Poco::Logger * log;
+    LoggerPtr log;
 };
 
 } // namespace DB::PS::V2

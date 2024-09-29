@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <Common/ThresholdUtils.h>
 #include <Common/TiFlashException.h>
 #include <Core/ColumnNumbers.h>
 #include <Flash/Coprocessor/AggregationInterpreterHelper.h>
@@ -28,7 +29,8 @@ bool isFinalAggMode(const tipb::Expr & expr)
         /// set default value to true to make it compatible with old version of TiDB since before this
         /// change, all the aggregation in TiFlash is treated as final aggregation
         return true;
-    return expr.aggfuncmode() == tipb::AggFunctionMode::FinalMode || expr.aggfuncmode() == tipb::AggFunctionMode::CompleteMode;
+    return expr.aggfuncmode() == tipb::AggFunctionMode::FinalMode
+        || expr.aggfuncmode() == tipb::AggFunctionMode::CompleteMode;
 }
 
 bool isAllowToUseTwoLevelGroupBy(size_t before_agg_streams_size, const Settings & settings)
@@ -45,7 +47,9 @@ bool isSumOnPartialResults(const tipb::Expr & expr)
 {
     if (!expr.has_aggfuncmode())
         return false;
-    return getAggFunctionName(expr) == "sum" && (expr.aggfuncmode() == tipb::AggFunctionMode::FinalMode || expr.aggfuncmode() == tipb::AggFunctionMode::Partial2Mode);
+    return getAggFunctionName(expr) == "sum"
+        && (expr.aggfuncmode() == tipb::AggFunctionMode::FinalMode
+            || expr.aggfuncmode() == tipb::AggFunctionMode::Partial2Mode);
 }
 
 bool isFinalAgg(const tipb::Aggregation & aggregation)
@@ -72,40 +76,77 @@ bool isGroupByCollationSensitive(const Context & context)
     return context.getSettingsRef().group_by_collation_sensitive || context.getDAGContext()->isMPPTask();
 }
 
-Aggregator::Params buildParams(
+std::unique_ptr<Aggregator::Params> buildParams(
     const Context & context,
     const Block & before_agg_header,
     size_t before_agg_streams_size,
+    size_t agg_streams_size,
     const Names & key_names,
-    const TiDB::TiDBCollators & collators,
+    const KeyRefAggFuncMap & key_ref_agg_func,
+    const AggFuncRefKeyMap & agg_func_ref_key,
+    const std::unordered_map<String, TiDB::TiDBCollatorPtr> & collators,
     const AggregateDescriptions & aggregate_descriptions,
-    bool is_final_agg)
+    bool is_final_agg,
+    const SpillConfig & spill_config)
 {
-    ColumnNumbers keys;
-    for (const auto & name : key_names)
+    ColumnNumbers keys(key_names.size(), 0);
+    size_t normal_key_idx = 0;
+    size_t agg_func_as_key_idx = key_names.size() - key_ref_agg_func.size();
+    // For columns with collation, key_ref_agg_func optimization will be enabled.
+    // Need to reorder these columns after normal columns.
+    // For example:
+    // select sum(c0), first_row(c1), first_row(c3) group by c1, c2, c3; (c1 and c3 has collation while c2 doesn't)
+    // Before: keys: c1 | c2 | c3
+    // After:  keys: c2 | c1 | c3
+    // When converting HashMap, only copy c2 from HashMap to column.
+    // c1/c3 will be skipped copying and a CopyColumn action will be added after agg,
+    // so c1/c3 will reference to agg func first_row(c1)/first_row(c2) directly.
+    assert(key_names.size() == collators.size());
+    TiDB::TiDBCollators reordered_collators(collators.size(), nullptr);
+    for (const auto & key_name : key_names)
     {
-        keys.push_back(before_agg_header.getPositionByName(name));
+        auto col_idx = before_agg_header.getPositionByName(key_name);
+        const auto & collator_iter = collators.find(key_name);
+        RUNTIME_CHECK(collator_iter != collators.end());
+        if (key_ref_agg_func.find(key_name) == key_ref_agg_func.end())
+        {
+            keys[normal_key_idx] = col_idx;
+            reordered_collators[normal_key_idx++] = collator_iter->second;
+        }
+        else
+        {
+            keys[agg_func_as_key_idx] = col_idx;
+            reordered_collators[agg_func_as_key_idx++] = collator_iter->second;
+        }
     }
+    assert(normal_key_idx == key_names.size() - key_ref_agg_func.size());
+    assert(agg_func_as_key_idx == key_names.size());
 
     const Settings & settings = context.getSettingsRef();
 
     bool allow_to_use_two_level_group_by = isAllowToUseTwoLevelGroupBy(before_agg_streams_size, settings);
+    auto total_two_level_threshold_bytes
+        = allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0);
 
-    bool has_collator = std::any_of(begin(collators), end(collators), [](const auto & p) { return p != nullptr; });
+    bool has_collator = std::any_of(begin(reordered_collators), end(reordered_collators), [](const auto & p) {
+        return p != nullptr;
+    });
 
-    return Aggregator::Params(
+    return std::make_unique<Aggregator::Params>(
         before_agg_header,
         keys,
+        key_ref_agg_func,
+        agg_func_ref_key,
         aggregate_descriptions,
-        false,
-        settings.max_rows_to_group_by,
-        settings.group_by_overflow_mode,
+        /// do not use the average value for key count threshold, because for a random distributed data, the key count
+        /// in every threads should almost be the same
         allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold : SettingUInt64(0),
-        allow_to_use_two_level_group_by ? settings.group_by_two_level_threshold_bytes : SettingUInt64(0),
-        settings.max_bytes_before_external_group_by,
+        getAverageThreshold(total_two_level_threshold_bytes, agg_streams_size),
+        getAverageThreshold(settings.max_bytes_before_external_group_by, agg_streams_size),
         !is_final_agg,
-        context.getTemporaryPath(),
-        has_collator ? collators : TiDB::dummy_collators);
+        spill_config,
+        context.getSettingsRef().max_block_size,
+        has_collator ? reordered_collators : TiDB::dummy_collators);
 }
 
 void fillArgColumnNumbers(AggregateDescriptions & aggregate_descriptions, const Block & before_agg_header)

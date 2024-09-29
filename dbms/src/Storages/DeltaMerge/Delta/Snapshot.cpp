@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/MemoryReadWriteBuffer.h>
+#include <IO/Buffer/MemoryReadWriteBuffer.h>
+#include <Storages/DeltaMerge/ColumnFile/ColumnFileDataProvider.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/DeltaValueSpace.h>
 #include <Storages/DeltaMerge/RowKeyFilter.h>
-#include <Storages/DeltaMerge/StoragePool.h>
+#include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/convertColumnTypeHelpers.h>
 
 namespace DB::DM
@@ -25,7 +26,10 @@ namespace DB::DM
 // DeltaValueSpace
 // ================================================
 
-DeltaSnapshotPtr DeltaValueSpace::createSnapshot(const DMContext & context, bool for_update, CurrentMetrics::Metric type)
+DeltaSnapshotPtr DeltaValueSpace::createSnapshot(
+    const DMContext & context,
+    bool for_update,
+    CurrentMetrics::Metric type)
 {
     if (for_update && !tryLockUpdating())
         return {};
@@ -34,14 +38,19 @@ DeltaSnapshotPtr DeltaValueSpace::createSnapshot(const DMContext & context, bool
     if (abandoned.load(std::memory_order_relaxed))
         return {};
 
-    auto snap = std::make_shared<DeltaValueSnapshot>(type);
-    snap->is_update = for_update;
-    snap->_delta = this->shared_from_this();
+    auto snap = std::make_shared<DeltaValueSnapshot>(type, for_update);
+    snap->delta = this->shared_from_this();
 
-    auto storage_snap = std::make_shared<StorageSnapshot>(context.storage_pool, context.getReadLimiter(), context.tracing_id, /*snapshot_read*/ true);
-    snap->persisted_files_snap = persisted_file_set->createSnapshot(storage_snap);
+    auto storage_snap = std::make_shared<StorageSnapshot>(
+        *context.storage_pool,
+        context.getReadLimiter(),
+        context.tracing_id,
+        /*snapshot_read*/ true);
+    auto data_from_storage_snap = ColumnFileDataProviderLocalStoragePool::create(storage_snap);
+    snap->persisted_files_snap = persisted_file_set->createSnapshot(data_from_storage_snap);
+    snap->mem_table_snap = mem_table_set->createSnapshot(data_from_storage_snap, for_update);
     snap->shared_delta_index = delta_index;
-    snap->mem_table_snap = mem_table_set->createSnapshot(storage_snap, for_update);
+    snap->delta_index_epoch = delta_index_epoch;
 
     return snap;
 }
@@ -61,28 +70,44 @@ DeltaValueReader::DeltaValueReader(
     const DMContext & context,
     const DeltaSnapshotPtr & delta_snap_,
     const ColumnDefinesPtr & col_defs_,
-    const RowKeyRange & segment_range_)
+    const RowKeyRange & segment_range_,
+    ReadTag read_tag_)
     : delta_snap(delta_snap_)
-    , mem_table_reader(std::make_shared<ColumnFileSetReader>(context, delta_snap_->getMemTableSetSnapshot(), col_defs_, segment_range_))
-    , persisted_files_reader(std::make_shared<ColumnFileSetReader>(context, delta_snap_->getPersistedFileSetSnapshot(), col_defs_, segment_range_))
+    , mem_table_reader(std::make_shared<ColumnFileSetReader>(
+          context,
+          delta_snap_->getMemTableSetSnapshot(),
+          col_defs_,
+          segment_range_,
+          read_tag_))
+    , persisted_files_reader(std::make_shared<ColumnFileSetReader>(
+          context,
+          delta_snap_->getPersistedFileSetSnapshot(),
+          col_defs_,
+          segment_range_,
+          read_tag_))
     , col_defs(col_defs_)
     , segment_range(segment_range_)
 {}
 
-DeltaValueReaderPtr DeltaValueReader::createNewReader(const ColumnDefinesPtr & new_col_defs)
+DeltaValueReaderPtr DeltaValueReader::createNewReader(const ColumnDefinesPtr & new_col_defs, ReadTag read_tag)
 {
     auto * new_reader = new DeltaValueReader();
     new_reader->delta_snap = delta_snap;
-    new_reader->_compacted_delta_index = _compacted_delta_index;
-    new_reader->persisted_files_reader = persisted_files_reader->createNewReader(new_col_defs);
-    new_reader->mem_table_reader = mem_table_reader->createNewReader(new_col_defs);
+    new_reader->compacted_delta_index = compacted_delta_index;
+    new_reader->persisted_files_reader = persisted_files_reader->createNewReader(new_col_defs, read_tag);
+    new_reader->mem_table_reader = mem_table_reader->createNewReader(new_col_defs, read_tag);
     new_reader->col_defs = new_col_defs;
     new_reader->segment_range = segment_range;
 
     return std::shared_ptr<DeltaValueReader>(new_reader);
 }
 
-size_t DeltaValueReader::readRows(MutableColumns & output_cols, size_t offset, size_t limit, const RowKeyRange * range)
+size_t DeltaValueReader::readRows(
+    MutableColumns & output_cols,
+    size_t offset,
+    size_t limit,
+    const RowKeyRange * range,
+    std::vector<UInt32> * row_ids)
 {
     // Note that DeltaMergeBlockInputStream could ask for rows with larger index than total_delta_rows,
     // because DeltaIndex::placed_rows could be larger than total_delta_rows.
@@ -98,21 +123,54 @@ size_t DeltaValueReader::readRows(MutableColumns & output_cols, size_t offset, s
     const auto mem_table_rows_offset = delta_snap->getMemTableSetRowsOffset();
     const auto total_delta_rows = delta_snap->getRows();
 
-    auto persisted_files_start = std::min(offset, mem_table_rows_offset);
-    auto persisted_files_end = std::min(offset + limit, mem_table_rows_offset);
-    auto mem_table_start = offset <= mem_table_rows_offset ? 0 : std::min(offset - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
-    auto mem_table_end = offset + limit <= mem_table_rows_offset ? 0 : std::min(offset + limit - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
+    const auto persisted_files_start = std::min(offset, mem_table_rows_offset);
+    const auto persisted_files_end = std::min(offset + limit, mem_table_rows_offset);
+    const auto mem_table_start = offset <= mem_table_rows_offset
+        ? 0
+        : std::min(offset - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
+    const auto mem_table_end = offset + limit <= mem_table_rows_offset
+        ? 0
+        : std::min(offset + limit - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
 
     size_t actual_read = 0;
+    size_t persisted_read_rows = 0;
     if (persisted_files_start < persisted_files_end)
-        actual_read += persisted_files_reader->readRows(output_cols, persisted_files_start, persisted_files_end - persisted_files_start, range);
+    {
+        persisted_read_rows = persisted_files_reader->readRows(
+            output_cols,
+            persisted_files_start,
+            persisted_files_end - persisted_files_start,
+            range,
+            row_ids);
+        actual_read += persisted_read_rows;
+    }
     if (mem_table_start < mem_table_end)
-        actual_read += mem_table_reader->readRows(output_cols, mem_table_start, mem_table_end - mem_table_start, range);
+    {
+        actual_read += mem_table_reader->readRows( //
+            output_cols,
+            mem_table_start,
+            mem_table_end - mem_table_start,
+            range,
+            row_ids);
+    }
+
+    if (row_ids != nullptr)
+    {
+        std::transform(
+            row_ids->cbegin() + persisted_read_rows,
+            row_ids->cend(),
+            row_ids->begin() + persisted_read_rows, // write to the same location
+            [mem_table_rows_offset](UInt32 id) { return id + mem_table_rows_offset; });
+    }
 
     return actual_read;
 }
 
-BlockOrDeletes DeltaValueReader::getPlaceItems(size_t rows_begin, size_t deletes_begin, size_t rows_end, size_t deletes_end)
+BlockOrDeletes DeltaValueReader::getPlaceItems(
+    size_t rows_begin,
+    size_t deletes_begin,
+    size_t rows_end,
+    size_t deletes_end)
 {
     /// Note that we merge the consecutive ColumnFileInMemory or ColumnFileTiny together, which are seperated in groups by ColumnFileDeleteRange and ColumnFileBig.
     BlockOrDeletes res;
@@ -126,37 +184,62 @@ BlockOrDeletes DeltaValueReader::getPlaceItems(size_t rows_begin, size_t deletes
     auto persisted_files_rows_end = std::min(rows_end, mem_table_rows_offset);
     auto persisted_files_deletes_end = std::min(deletes_end, mem_table_deletes_offset);
 
-    auto mem_table_rows_begin = rows_begin <= mem_table_rows_offset ? 0 : std::min(rows_begin - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
-    auto mem_table_deletes_begin = deletes_begin <= mem_table_deletes_offset ? 0 : std::min(deletes_begin - mem_table_deletes_offset, total_delta_deletes - mem_table_deletes_offset);
-    auto mem_table_rows_end = rows_end <= mem_table_rows_offset ? 0 : std::min(rows_end - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
-    auto mem_table_deletes_end = deletes_end <= mem_table_deletes_offset ? 0 : std::min(deletes_end - mem_table_deletes_offset, total_delta_deletes - mem_table_deletes_offset);
+    auto mem_table_rows_begin = rows_begin <= mem_table_rows_offset
+        ? 0
+        : std::min(rows_begin - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
+    auto mem_table_deletes_begin = deletes_begin <= mem_table_deletes_offset
+        ? 0
+        : std::min(deletes_begin - mem_table_deletes_offset, total_delta_deletes - mem_table_deletes_offset);
+    auto mem_table_rows_end = rows_end <= mem_table_rows_offset
+        ? 0
+        : std::min(rows_end - mem_table_rows_offset, total_delta_rows - mem_table_rows_offset);
+    auto mem_table_deletes_end = deletes_end <= mem_table_deletes_offset
+        ? 0
+        : std::min(deletes_end - mem_table_deletes_offset, total_delta_deletes - mem_table_deletes_offset);
 
-    persisted_files_reader->getPlaceItems(res, persisted_files_rows_begin, persisted_files_deletes_begin, persisted_files_rows_end, persisted_files_deletes_end);
-    mem_table_reader->getPlaceItems(res, mem_table_rows_begin, mem_table_deletes_begin, mem_table_rows_end, mem_table_deletes_end, mem_table_rows_offset);
+    persisted_files_reader->getPlaceItems(
+        res,
+        persisted_files_rows_begin,
+        persisted_files_deletes_begin,
+        persisted_files_rows_end,
+        persisted_files_deletes_end);
+    mem_table_reader->getPlaceItems(
+        res,
+        mem_table_rows_begin,
+        mem_table_deletes_begin,
+        mem_table_rows_end,
+        mem_table_deletes_end,
+        mem_table_rows_offset);
 
     return res;
 }
 
-bool DeltaValueReader::shouldPlace(const DMContext & context,
-                                   DeltaIndexPtr my_delta_index,
-                                   const RowKeyRange & segment_range_,
-                                   const RowKeyRange & relevant_range,
-                                   UInt64 max_version)
+bool DeltaValueReader::shouldPlace(
+    const DMContext & context,
+    const size_t placed_rows,
+    const size_t placed_delete_ranges,
+    const RowKeyRange & segment_range_,
+    const RowKeyRange & relevant_range,
+    UInt64 start_ts)
 {
-    auto [placed_rows, placed_delete_ranges] = my_delta_index->getPlacedStatus();
-
-    // Already placed.
+    // The placed_rows, placed_delete_range already contains the data in delta_snap
     if (placed_rows >= delta_snap->getRows() && placed_delete_ranges == delta_snap->getDeletes())
         return false;
 
-    if (relevant_range.all() || relevant_range == segment_range_ //
+    if (relevant_range.all() || relevant_range == segment_range_ // read all the data in this segment
         || delta_snap->getRows() - placed_rows > context.delta_cache_limit_rows //
-        || placed_delete_ranges != delta_snap->getDeletes())
+        || placed_delete_ranges != delta_snap->getDeletes() // new delete_range appended, must place it
+    )
         return true;
 
-    size_t rows_in_persisted_file_snap = delta_snap->getMemTableSetRowsOffset();
-    return persisted_files_reader->shouldPlace(context, relevant_range, max_version, placed_rows)
-        || mem_table_reader->shouldPlace(context, relevant_range, max_version, placed_rows <= rows_in_persisted_file_snap ? 0 : placed_rows - rows_in_persisted_file_snap);
+    // otherwise check persisted_files and mem_tables
+    const size_t rows_in_persisted_file_snap = delta_snap->getMemTableSetRowsOffset();
+    return persisted_files_reader->shouldPlace(context, relevant_range, start_ts, placed_rows)
+        || mem_table_reader->shouldPlace(
+            context,
+            relevant_range,
+            start_ts,
+            placed_rows <= rows_in_persisted_file_snap ? 0 : placed_rows - rows_in_persisted_file_snap);
 }
 
 } // namespace DB::DM

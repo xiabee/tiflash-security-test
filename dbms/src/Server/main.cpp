@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/ClickHouseRevision.h>
 #include <Common/ErrorExporter.h>
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/config.h>
-#include <IO/WriteBufferFromFile.h>
+#include <IO/Buffer/WriteBufferFromFile.h>
 #include <common/config_common.h>
 #include <config_tools.h>
 
@@ -25,7 +24,7 @@
 #include <utility> /// pair
 #include <vector>
 
-#if ENABLE_CLICKHOUSE_SERVER
+#if ENABLE_TIFLASH_SERVER
 #include "Server.h"
 #endif
 #if ENABLE_TIFLASH_DTTOOL
@@ -40,14 +39,17 @@
 #if ENABLE_TIFLASH_PAGECTL
 #include <Storages/Page/tools/PageCtl/PageStorageCtl.h>
 #endif
+#if ENABLE_TIFLASH_CHECKPOINTTOOL
+#include <Storages/Page/tools/Checkpoint/CheckpointTool.h>
+#endif
 #include <Common/StringUtils/StringUtils.h>
 #include <Server/DTTool/DTTool.h>
 
 /// Universal executable for various clickhouse applications
-#if ENABLE_CLICKHOUSE_SERVER
+#if ENABLE_TIFLASH_SERVER
 int mainEntryClickHouseServer(int argc, char ** argv);
 #endif
-#if ENABLE_CLICKHOUSE_CLIENT
+#if ENABLE_TIFLASH_CLIENT
 int mainEntryClickHouseClient(int argc, char ** argv);
 #endif
 
@@ -94,10 +96,10 @@ using MainFunc = int (*)(int, char **);
 
 /// Add an item here to register new application
 std::pair<const char *, MainFunc> clickhouse_applications[] = {
-#if ENABLE_CLICKHOUSE_CLIENT
+#if ENABLE_TIFLASH_CLIENT
     {"client", mainEntryClickHouseClient},
 #endif
-#if ENABLE_CLICKHOUSE_SERVER
+#if ENABLE_TIFLASH_SERVER
     {"server", mainEntryClickHouseServer},
 #endif
 #if ENABLE_TIFLASH_DTTOOL
@@ -111,6 +113,9 @@ std::pair<const char *, MainFunc> clickhouse_applications[] = {
 #endif
 #if ENABLE_TIFLASH_PAGECTL
     {"pagectl", DB::PageStorageCtl::mainEntry},
+#endif
+#if ENABLE_TIFLASH_CHECKPOINTTOOL
+    {"pagecheckpoint", DB::PS::CheckpointTool::mainEntry},
 #endif
     {"version", mainEntryVersion},
     {"errgen", mainExportError}};
