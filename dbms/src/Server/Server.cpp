@@ -1404,9 +1404,7 @@ int Server::main(const std::vector<std::string> & /*args*/)
             }
             {
                 // update TiFlashSecurity and related config in client for ssl certificate reload.
-                bool updated
-                    = global_context->getSecurityConfig()->update(*config); // Whether the cert path or file is updated.
-                if (updated)
+                if (bool updated = global_context->getSecurityConfig()->update(*config); updated)
                 {
                     auto raft_config = TiFlashRaftConfig::parseSettings(*config, log);
                     auto cluster_config
@@ -1503,7 +1501,8 @@ int Server::main(const std::vector<std::string> & /*args*/)
             S3::ClientFactory::instance().setKVCluster(tmt.getKVCluster());
         }
     }
-
+    LOG_INFO(log, "Init S3 GC Manager");
+    global_context->getTMTContext().initS3GCManager(tiflash_instance_wrap.proxy_helper);
     // Initialize the thread pool of storage before the storage engine is initialized.
     LOG_INFO(log, "dt_enable_read_thread {}", global_context->getSettingsRef().dt_enable_read_thread);
     // `DMFileReaderPool` should be constructed before and destructed after `SegmentReaderPoolManager`.
