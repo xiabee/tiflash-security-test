@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Common/Stopwatch.h>
-#include <IO/Buffer/WriteBufferFromString.h>
-#include <IO/FileProvider/FileProvider_fwd.h>
+#include <Encryption/FileProvider_fwd.h>
+#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/Page/Config.h>
@@ -227,7 +227,7 @@ public:
         UInt64 max_edit_records_per_part = 100000;
     };
 
-    std::optional<PS::V3::CPDataDumpStats> dumpIncrementalCheckpoint(const DumpCheckpointOptions & options);
+    PS::V3::CPDataDumpStats dumpIncrementalCheckpoint(const DumpCheckpointOptions & options);
 
     PS::V3::CPDataFilesStatCache::CacheMap getRemoteDataFilesStatCache() const
     {

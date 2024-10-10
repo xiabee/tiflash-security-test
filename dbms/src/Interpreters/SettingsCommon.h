@@ -21,8 +21,8 @@
 #include <Core/Field.h>
 #include <DataStreams/SizeLimits.h>
 #include <Flash/Pipeline/Schedule/TaskQueues/TaskQueueType.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Compression/CompressionMethod.h>
+#include <IO/CompressedStream.h>
+#include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/String.h>
@@ -56,12 +56,12 @@ struct SettingInt
 public:
     bool changed = false;
 
-    SettingInt(IntType x = 0) // NOLINT(google-explicit-constructor)
+    SettingInt(IntType x = 0)
         : value(x)
     {}
     SettingInt(const SettingInt & setting);
 
-    operator IntType() const { return value.load(); } // NOLINT(google-explicit-constructor)
+    operator IntType() const { return value.load(); }
     SettingInt & operator=(IntType x)
     {
         set(x);
@@ -91,12 +91,6 @@ private:
     std::atomic<IntType> value;
 };
 
-// Make SettingInt formatable by fmtlib
-template <typename IntType>
-ALWAYS_INLINE inline auto format_as(SettingInt<IntType> s)
-{
-    return s.get();
-}
 
 using SettingUInt64 = SettingInt<UInt64>;
 using SettingInt64 = SettingInt<Int64>;
@@ -113,12 +107,12 @@ public:
     bool is_auto;
     bool changed = false;
 
-    SettingMaxThreads(UInt64 x = 0) // NOLINT(google-explicit-constructor)
+    SettingMaxThreads(UInt64 x = 0)
         : is_auto(x == 0)
         , value(x ? x : getAutoValue())
     {}
 
-    operator UInt64() const { return value; } // NOLINT(google-explicit-constructor)
+    operator UInt64() const { return value; }
     SettingMaxThreads & operator=(UInt64 x)
     {
         set(x);
@@ -187,11 +181,11 @@ struct SettingSeconds
 public:
     bool changed = false;
 
-    SettingSeconds(UInt64 seconds = 0) // NOLINT(google-explicit-constructor)
+    SettingSeconds(UInt64 seconds = 0)
         : value(seconds, 0)
     {}
 
-    operator Poco::Timespan() const { return value; } // NOLINT(google-explicit-constructor)
+    operator Poco::Timespan() const { return value; }
     SettingSeconds & operator=(const Poco::Timespan & x)
     {
         set(x);
@@ -235,11 +229,11 @@ struct SettingMilliseconds
 public:
     bool changed = false;
 
-    SettingMilliseconds(UInt64 milliseconds = 0) // NOLINT(google-explicit-constructor)
+    SettingMilliseconds(UInt64 milliseconds = 0)
         : value(milliseconds * 1000)
     {}
 
-    operator Poco::Timespan() const { return value; } // NOLINT(google-explicit-constructor)
+    operator Poco::Timespan() const { return value; }
     SettingMilliseconds & operator=(const Poco::Timespan & x)
     {
         set(x);
@@ -283,11 +277,11 @@ struct SettingFloat
 public:
     bool changed = false;
 
-    SettingFloat(float x = 0) // NOLINT(google-explicit-constructor)
+    SettingFloat(float x = 0)
         : value(x)
     {}
     SettingFloat(const SettingFloat & setting) { value.store(setting.value.load()); }
-    operator float() const { return value.load(); } // NOLINT(google-explicit-constructor)
+    operator float() const { return value.load(); }
     SettingFloat & operator=(float x)
     {
         set(x);
@@ -344,12 +338,6 @@ private:
     std::atomic<float> value;
 };
 
-// Make SettingFloat formatable by fmtlib
-ALWAYS_INLINE inline auto format_as(SettingFloat s)
-{
-    return s.get();
-}
-
 /// MemoryLimit can either be an UInt64 (means memory limit in bytes),
 /// or be a float-point number (means memory limit ratio of total RAM, from 0.0 to 1.0).
 /// 0 or 0.0 means unlimited.
@@ -390,11 +378,11 @@ struct SettingDouble
 public:
     bool changed = false;
 
-    SettingDouble(double x = 0) // NOLINT(google-explicit-constructor)
+    SettingDouble(double x = 0)
         : value(x)
     {}
     SettingDouble(const SettingDouble & setting) { value.store(setting.value.load()); }
-    operator double() const { return value.load(); } // NOLINT(google-explicit-constructor)
+    operator double() const { return value.load(); }
     SettingDouble & operator=(double x)
     {
         set(x);
@@ -451,12 +439,6 @@ private:
     std::atomic<double> value;
 };
 
-// Make SettingDouble formatable by fmtlib
-ALWAYS_INLINE inline auto format_as(SettingDouble s)
-{
-    return s.get();
-}
-
 enum class LoadBalancing
 {
     /// among replicas with a minimum number of errors selected randomly
@@ -473,11 +455,11 @@ struct SettingLoadBalancing
 public:
     bool changed = false;
 
-    explicit SettingLoadBalancing(LoadBalancing x)
+    SettingLoadBalancing(LoadBalancing x)
         : value(x)
     {}
 
-    operator LoadBalancing() const { return value; } // NOLINT(google-explicit-constructor)
+    operator LoadBalancing() const { return value; }
     SettingLoadBalancing & operator=(LoadBalancing x)
     {
         set(x);
@@ -537,11 +519,11 @@ struct SettingOverflowMode
 public:
     bool changed = false;
 
-    explicit SettingOverflowMode(OverflowMode x = OverflowMode::THROW)
+    SettingOverflowMode(OverflowMode x = OverflowMode::THROW)
         : value(x)
     {}
 
-    operator OverflowMode() const { return value; } // NOLINT(google-explicit-constructor)
+    operator OverflowMode() const { return value; }
     SettingOverflowMode & operator=(OverflowMode x)
     {
         set(x);
@@ -602,7 +584,7 @@ struct SettingChecksumAlgorithm
 public:
     bool changed = false;
 
-    explicit SettingChecksumAlgorithm(ChecksumAlgo x = ChecksumAlgo::XXH3)
+    SettingChecksumAlgorithm(ChecksumAlgo x = ChecksumAlgo::XXH3) // NOLINT(google-explicit-constructor)
         : value(x)
     {}
 
@@ -678,11 +660,11 @@ struct SettingCompressionMethod
 public:
     bool changed = false;
 
-    explicit SettingCompressionMethod(CompressionMethod x = CompressionMethod::LZ4)
+    SettingCompressionMethod(CompressionMethod x = CompressionMethod::LZ4)
         : value(x)
     {}
 
-    operator CompressionMethod() const { return value; } // NOLINT(google-explicit-constructor)
+    operator CompressionMethod() const { return value; }
     SettingCompressionMethod & operator=(CompressionMethod x)
     {
         set(x);
@@ -701,35 +683,28 @@ public:
 #if USE_QPL
         if (lower_str == "qpl")
             return CompressionMethod::QPL;
-#endif
-        if (lower_str == "none")
-            return CompressionMethod::NONE;
-        if (lower_str == "lightweight")
-            return CompressionMethod::Lightweight;
-#if USE_QPL
         throw Exception(
-            ErrorCodes::UNKNOWN_COMPRESSION_METHOD,
-            "Unknown compression method: '{}', must be one of 'lz4', 'lz4hc', 'zstd', 'qpl', 'none', 'lightweight'",
-            s);
+            "Unknown compression method: '" + s + "', must be one of 'lz4', 'lz4hc', 'zstd', 'qpl'",
+            ErrorCodes::UNKNOWN_COMPRESSION_METHOD);
 #else
         throw Exception(
-            ErrorCodes::UNKNOWN_COMPRESSION_METHOD,
-            "Unknown compression method: '{}', must be one of 'lz4', 'lz4hc', 'zstd', 'none', 'lightweight'",
-            s);
+            "Unknown compression method: '" + s + "', must be one of 'lz4', 'lz4hc', 'zstd'",
+            ErrorCodes::UNKNOWN_COMPRESSION_METHOD);
 #endif
     }
 
     String toString() const
     {
-        const char * strings[] = {nullptr, "lz4", "lz4hc", "zstd", "qpl", "none", "lightweight"};
-        auto compression_method_last = CompressionMethod::Lightweight;
+#if USE_QPL
+        const char * strings[] = {nullptr, "lz4", "lz4hc", "zstd", "qpl"};
+        auto compression_method_last = CompressionMethod::QPL;
+#else
+        const char * strings[] = {nullptr, "lz4", "lz4hc", "zstd"};
+        auto compression_method_last = CompressionMethod::ZSTD;
+#endif
 
         if (value < CompressionMethod::LZ4 || value > compression_method_last)
             throw Exception("Unknown compression method", ErrorCodes::UNKNOWN_COMPRESSION_METHOD);
-#if !USE_QPL
-        if (unlikely(value == CompressionMethod::QPL))
-            throw Exception("Unknown compression method", ErrorCodes::UNKNOWN_COMPRESSION_METHOD);
-#endif
 
         return strings[static_cast<size_t>(value)];
     }
@@ -764,11 +739,11 @@ struct SettingTaskQueueType
 public:
     bool changed = false;
 
-    explicit SettingTaskQueueType(TaskQueueType x = TaskQueueType::DEFAULT)
+    SettingTaskQueueType(TaskQueueType x = TaskQueueType::DEFAULT)
         : value(x)
     {}
 
-    operator TaskQueueType() const { return value; } // NOLINT(google-explicit-constructor)
+    operator TaskQueueType() const { return value; }
     SettingTaskQueueType & operator=(TaskQueueType x)
     {
         set(x);
@@ -818,11 +793,11 @@ struct SettingString
 public:
     bool changed = false;
 
-    explicit SettingString(const String & x = String{})
+    SettingString(const String & x = String{})
         : value(x)
     {}
 
-    operator String() const { return value; } // NOLINT(google-explicit-constructor)
+    operator String() const { return value; }
     SettingString & operator=(const String & x)
     {
         set(x);

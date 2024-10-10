@@ -18,7 +18,6 @@
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
-#include <Storages/DeltaMerge/File/DMFileIndexWriter.h>
 #include <Storages/DeltaMerge/Segment.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
@@ -50,7 +49,7 @@ extern DMFilePtr writeIntoNewDMFile(
 namespace DB::DM::tests
 {
 
-void SegmentTestBasic::reloadWithOptions(SegmentTestOptions config)
+void SegmentTestBasic::buildFirstSegmentWithOptions(SegmentTestOptions config)
 {
     {
         auto const seed = std::random_device{}();
@@ -64,7 +63,7 @@ void SegmentTestBasic::reloadWithOptions(SegmentTestOptions config)
     options = config;
     table_columns = std::make_shared<ColumnDefines>();
 
-    root_segment = reload(config.is_common_handle, nullptr, std::move(config.db_settings));
+    root_segment = buildFirstSegment(config.is_common_handle, nullptr, std::move(config.db_settings));
     ASSERT_EQ(root_segment->segmentId(), DELTA_MERGE_FIRST_SEGMENT_ID);
     segments.clear();
     segments[DELTA_MERGE_FIRST_SEGMENT_ID] = root_segment;
@@ -350,7 +349,7 @@ std::pair<Int64, Int64> SegmentTestBasic::getSegmentKeyRange(PageIdU64 segment_i
     return {start_key, end_key};
 }
 
-Block SegmentTestBasic::prepareWriteBlockImpl(Int64 start_key, Int64 end_key, bool is_deleted)
+Block SegmentTestBasic::prepareWriteBlock(Int64 start_key, Int64 end_key, bool is_deleted)
 {
     RUNTIME_CHECK(start_key <= end_key);
     if (end_key == start_key)
@@ -368,11 +367,6 @@ Block SegmentTestBasic::prepareWriteBlockImpl(Int64 start_key, Int64 end_key, bo
         1,
         true,
         is_deleted);
-}
-
-Block SegmentTestBasic::prepareWriteBlock(Int64 start_key, Int64 end_key, bool is_deleted)
-{
-    return prepareWriteBlockImpl(start_key, end_key, is_deleted);
 }
 
 Block sortvstackBlocks(std::vector<Block> && blocks)
@@ -528,11 +522,11 @@ void SegmentTestBasic::ingestDTFileIntoDelta(
         auto ref_id = storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
         wbs.data.putRefPage(ref_id, dm_file->pageId());
         auto ref_file = DMFile::restore(
-            dm_context->global_context.getFileProvider(),
+            dm_context->db_context.getFileProvider(),
             file_id,
             ref_id,
             parent_path,
-            DMFileMeta::ReadMode::all());
+            DMFile::ReadMetaMode::all());
         wbs.writeLogAndData();
         ASSERT_TRUE(segment->ingestDataToDelta(
             *dm_context,
@@ -587,11 +581,11 @@ void SegmentTestBasic::ingestDTFileByReplace(
         auto ref_id = storage_pool->newDataPageIdForDTFile(delegator, __PRETTY_FUNCTION__);
         wbs.data.putRefPage(ref_id, dm_file->pageId());
         auto ref_file = DMFile::restore(
-            dm_context->global_context.getFileProvider(),
+            dm_context->db_context.getFileProvider(),
             file_id,
             ref_id,
             parent_path,
-            DMFileMeta::ReadMode::all());
+            DMFile::ReadMetaMode::all());
         wbs.writeLogAndData();
 
         auto apply_result = segment->ingestDataForTest(*dm_context, ref_file, clear);
@@ -709,63 +703,6 @@ void SegmentTestBasic::replaceSegmentData(PageIdU64 segment_id, const DMFilePtr 
         operation_statistics["replaceData"]++;
 }
 
-bool SegmentTestBasic::replaceSegmentStableData(PageIdU64 segment_id, const DMFilePtr & file)
-{
-    LOG_INFO(
-        logger_op,
-        "replaceSegmentStableData, segment_id={} file=dmf_{}(v={})",
-        segment_id,
-        file->fileId(),
-        file->metaVersion());
-
-    RUNTIME_CHECK(segments.find(segment_id) != segments.end());
-
-    bool success = false;
-    auto segment = segments[segment_id];
-    {
-        auto lock = segment->mustGetUpdateLock();
-        auto new_segment = segment->replaceStableMetaVersion(lock, *dm_context, {file});
-        if (new_segment != nullptr)
-        {
-            segments[new_segment->segmentId()] = new_segment;
-            success = true;
-        }
-    }
-
-    operation_statistics["replaceStableData"]++;
-    return success;
-}
-
-bool SegmentTestBasic::ensureSegmentStableIndex(PageIdU64 segment_id, const LocalIndexInfosPtr & local_index_infos)
-{
-    LOG_INFO(logger_op, "EnsureSegmentStableIndex, segment_id={}", segment_id);
-
-    RUNTIME_CHECK(segments.find(segment_id) != segments.end());
-
-    bool success = false;
-    auto segment = segments[segment_id];
-    auto dm_files = segment->getStable()->getDMFiles();
-    auto build_info = DMFileIndexWriter::getLocalIndexBuildInfo(local_index_infos, dm_files);
-
-    // Build index
-    DMFileIndexWriter iw(DMFileIndexWriter::Options{
-        .path_pool = storage_path_pool,
-        .index_infos = build_info.indexes_to_build,
-        .dm_files = dm_files,
-        .dm_context = *dm_context,
-    });
-    auto new_dmfiles = iw.build();
-    RUNTIME_CHECK(new_dmfiles.size() == 1);
-
-    LOG_INFO(logger_op, "EnsureSegmentStableIndex, build index done, segment_id={}", segment_id);
-
-    // Replace stable data
-    success = replaceSegmentStableData(segment_id, new_dmfiles[0]);
-
-    operation_statistics["ensureStableIndex"]++;
-    return success;
-}
-
 bool SegmentTestBasic::areSegmentsSharingStable(const std::vector<PageIdU64> & segments_id) const
 {
     RUNTIME_CHECK(segments_id.size() >= 2);
@@ -881,7 +818,7 @@ std::set<PageIdU64> SegmentTestBasic::getAliveExternalPageIdsAfterGC(NamespaceID
     }
 }
 
-SegmentPtr SegmentTestBasic::reload(
+SegmentPtr SegmentTestBasic::buildFirstSegment(
     bool is_common_handle,
     const ColumnDefinesPtr & pre_define_columns,
     DB::Settings && db_settings)
@@ -893,7 +830,6 @@ SegmentPtr SegmentTestBasic::reload(
     ColumnDefinesPtr cols = (!pre_define_columns) ? DMTestEnv::getDefaultColumns(
                                 is_common_handle ? DMTestEnv::PkType::CommonHandle : DMTestEnv::PkType::HiddenTiDBRowID)
                                                   : pre_define_columns;
-    prepareColumns(cols);
     setColumns(cols);
 
     // Always return the first segment
@@ -913,14 +849,13 @@ void SegmentTestBasic::reloadDMContext()
 
 std::unique_ptr<DMContext> SegmentTestBasic::createDMContext()
 {
-    return DMContext::createUnique(
+    return std::make_unique<DMContext>(
         *db_context,
         storage_path_pool,
         storage_pool,
         /*min_version_*/ 0,
         NullspaceID,
         /*physical_table_id*/ 100,
-        /*pk_col_id*/ options.pk_col_id,
         options.is_common_handle,
         1,
         db_context->getSettingsRef());
@@ -1049,7 +984,7 @@ class SegmentFrameworkTest : public SegmentTestBasic
 TEST_F(SegmentFrameworkTest, PrepareWriteBlock)
 try
 {
-    reloadWithOptions({.is_common_handle = false});
+    buildFirstSegmentWithOptions({.is_common_handle = false});
 
     auto s1_id = splitSegmentAt(DELTA_MERGE_FIRST_SEGMENT_ID, 10);
     ASSERT_TRUE(s1_id.has_value());

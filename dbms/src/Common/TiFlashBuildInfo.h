@@ -14,25 +14,21 @@
 
 #pragma once
 
-#include <common/types.h>
-
 #include <ostream>
+#include <string>
 
 namespace TiFlashBuildInfo
 {
-String getName();
+std::string getName();
 /// Semantic version.
-String getVersion();
+std::string getVersion();
 /// Release version that follows PD/TiKV/TiDB convention.
-String getReleaseVersion();
-String getEdition();
-String getGitHash();
-String getGitBranch();
-String getUTCBuildTime();
-String getProfile();
-UInt32 getMajorVersion();
-UInt32 getMinorVersion();
-UInt32 getPatchVersion();
+std::string getReleaseVersion();
+std::string getEdition();
+std::string getGitHash();
+std::string getGitBranch();
+std::string getUTCBuildTime();
+std::string getProfile();
 
 void outputDetail(std::ostream & os);
 } // namespace TiFlashBuildInfo

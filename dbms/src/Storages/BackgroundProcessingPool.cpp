@@ -21,10 +21,8 @@
 #include <Interpreters/Context.h>
 #include <Poco/Timespan.h>
 #include <Storages/BackgroundProcessingPool.h>
-#include <Storages/KVStore/FFI/ProxyFFI.h>
 #include <common/logger_useful.h>
 
-#include <ext/scope_guard.h>
 #include <pcg_random.hpp>
 #include <random>
 
@@ -84,14 +82,10 @@ void BackgroundProcessingPool::TaskInfo::wake()
 }
 
 
-BackgroundProcessingPool::BackgroundProcessingPool(
-    int size_,
-    std::string thread_prefix_,
-    JointThreadInfoJeallocMapPtr joint_memory_allocation_map_)
+BackgroundProcessingPool::BackgroundProcessingPool(int size_, std::string thread_prefix_)
     : size(size_)
     , thread_prefix(thread_prefix_)
     , thread_ids_counter(size_)
-    , joint_memory_allocation_map(joint_memory_allocation_map_)
 {
     LOG_INFO(Logger::get(), "Create BackgroundProcessingPool, prefix={} n_threads={}", thread_prefix, size);
 
@@ -211,29 +205,12 @@ BackgroundProcessingPool::TaskHandle BackgroundProcessingPool::tryPopTask(pcg64 
 
 void BackgroundProcessingPool::threadFunction(size_t thread_idx) noexcept
 {
-    const auto name = thread_prefix + std::to_string(thread_idx);
     {
+        const auto name = thread_prefix + std::to_string(thread_idx);
         setThreadName(name.data());
         is_background_thread = true;
         addThreadId(getTid());
-        auto ptrs = JointThreadInfoJeallocMap::getPtrs();
-        joint_memory_allocation_map->reportThreadAllocInfoForStorage(name, ReportThreadAllocateInfoType::Reset, 0, '-');
-        joint_memory_allocation_map->reportThreadAllocInfoForStorage(
-            name,
-            ReportThreadAllocateInfoType::AllocPtr,
-            reinterpret_cast<uint64_t>(std::get<0>(ptrs)),
-            '-');
-        joint_memory_allocation_map->reportThreadAllocInfoForStorage(
-            name,
-            ReportThreadAllocateInfoType::DeallocPtr,
-            reinterpret_cast<uint64_t>(std::get<1>(ptrs)),
-            '-');
     }
-
-    SCOPE_EXIT({
-        joint_memory_allocation_map
-            ->reportThreadAllocInfoForStorage(name, ReportThreadAllocateInfoType::Remove, 0, '-');
-    });
 
     // set up the thread local memory tracker
     auto memory_tracker = MemoryTracker::create(0, root_of_non_query_mem_trackers.get());

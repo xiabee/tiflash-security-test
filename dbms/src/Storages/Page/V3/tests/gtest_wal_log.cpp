@@ -15,14 +15,16 @@
 #include <Common/FailPoint.h>
 #include <Common/RedactHelpers.h>
 #include <Core/Defines.h>
-#include <IO/BaseFile/WriteReadableFile.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Buffer/WriteBuffer.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
-#include <IO/Buffer/WriteBufferFromFileBase.h>
-#include <IO/FileProvider/EncryptionPath.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
+#include <Encryption/EncryptionPath.h>
+#include <Encryption/ReadBufferFromFileProvider.h>
+#include <Encryption/createReadBufferFromFileBaseByFileProvider.h>
+#include <Encryption/createWriteBufferFromFileBaseByFileProvider.h>
+#include <IO/ReadBufferFromString.h>
+#include <IO/WriteBuffer.h>
+#include <IO/WriteBufferFromFile.h>
+#include <IO/WriteBufferFromFileBase.h>
 #include <IO/WriteHelpers.h>
+#include <IO/createReadBufferFromFileBase.h>
 #include <Storages/Page/PageUtil.h>
 #include <Storages/Page/V3/LogFile/LogFormat.h>
 #include <Storages/Page/V3/LogFile/LogReader.h>
@@ -84,7 +86,7 @@ private:
     {
     public:
         size_t dropped_bytes;
-        String message{};
+        String message;
 
         ReportCollector()
             : dropped_bytes(0)
@@ -97,13 +99,13 @@ private:
     };
 
     ReportCollector report;
-    std::unique_ptr<LogWriter> writer{};
-    std::unique_ptr<LogReader> reader{};
-    LoggerPtr log{};
+    std::unique_ptr<LogWriter> writer;
+    std::unique_ptr<LogReader> reader;
+    LoggerPtr log;
 
 protected:
-    String path{};
-    String file_name{};
+    String path;
+    String file_name;
     FileProviderPtr provider;
     WriteReadableFilePtr wr_file;
 
@@ -148,12 +150,16 @@ public:
         const WALRecoveryMode wal_recovery_mode = WALRecoveryMode::TolerateCorruptedTailRecords,
         size_t log_num = 0)
     {
-        auto read_buf = ReadBufferFromRandomAccessFileBuilder::buildPtr(
+        auto read_buf = createReadBufferFromFileBaseByFileProvider(
             provider,
             file_name,
             EncryptionPath{file_name, ""},
-            Format::BLOCK_SIZE // Must be `Format::BLOCK_SIZE`
+            /*estimated_size*/ Format::BLOCK_SIZE,
+            /*aio_threshold*/ 0,
+            /*read_limiter*/ nullptr,
+            /*buffer_size*/ Format::BLOCK_SIZE // Must be `Format::BLOCK_SIZE`
         );
+
         return std::make_unique<LogReader>(
             std::move(read_buf),
             &report,
@@ -305,7 +311,7 @@ TEST_P(LogFileRWTest, Fragmentation)
 }
 
 // This test may take a lot of time
-TEST_P(LogFileRWTest, DISABLED_DifferentPayloadSize)
+TEST_P(LogFileRWTest, DISABLED__DifferentPayloadSize)
 {
     for (size_t i = 0; i < 40000; i += 1)
     {
@@ -833,11 +839,14 @@ TEST(LogFileRWTest2, ManuallySync)
     }
     writer->sync();
 
-    auto read_buf = ReadBufferFromRandomAccessFileBuilder::buildPtr(
+    auto read_buf = createReadBufferFromFileBaseByFileProvider(
         provider,
         file_name,
         EncryptionPath{file_name, ""},
-        Format::BLOCK_SIZE // Must be `Format::BLOCK_SIZE`
+        /*estimated_size*/ Format::BLOCK_SIZE,
+        /*aio_threshold*/ 0,
+        /*read_limiter*/ nullptr,
+        /*buffer_size*/ Format::BLOCK_SIZE // Must be `Format::BLOCK_SIZE`
     );
 
     DB::PS::V3::ReportCollector reporter;
@@ -858,5 +867,4 @@ TEST(LogFileRWTest2, ManuallySync)
         ASSERT_EQ(scratch, payload);
     }
 }
-
 } // namespace DB::PS::V3::tests

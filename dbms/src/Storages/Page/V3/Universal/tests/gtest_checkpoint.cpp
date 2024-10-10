@@ -13,10 +13,10 @@
 // limitations under the License.
 
 #include <Common/SyncPoint/SyncPoint.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/PosixRandomAccessFile.h>
 #include <Flash/Disaggregated/MockS3LockClient.h>
-#include <IO/BaseFile/PosixRandomAccessFile.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <IO/ReadBufferFromFile.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStoreS3.h>
 #include <Storages/Page/V3/CheckpointFile/CPManifestFileReader.h>
@@ -1015,7 +1015,7 @@ protected:
     UInt64 tag = 0;
     UInt64 store_id = 2;
 
-    bool old_remote_checkpoint_only_upload_manifest = false;
+    bool old_remote_checkpoint_only_upload_manifest;
 
     LoggerPtr log;
 };
@@ -1093,7 +1093,7 @@ try
         S3::uploadEmptyFile(*s3_client, ingest_from_data_file.toFullKey());
         S3::uploadEmptyFile(
             *s3_client,
-            fmt::format("{}/{}", ingest_from_dtfile.toFullKey(), DM::DMFileMetaV2::metaFileName()));
+            fmt::format("{}/{}", ingest_from_dtfile.toFullKey(), DM::DMFile::metav2FileName()));
 
         UniversalWriteBatch batch;
 

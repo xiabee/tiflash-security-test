@@ -47,6 +47,7 @@ struct TiKVRangeKey : boost::noncopyable
     TiKVKey key;
 };
 
+using DecodedTiKVKeyPtr = std::shared_ptr<DecodedTiKVKey>;
 class RegionRangeKeys : boost::noncopyable
 {
 public:
@@ -63,23 +64,6 @@ public:
     TableID getMappedTableID() const;
     KeyspaceID getKeyspaceID() const;
     std::string toDebugString() const;
-
-    static bool isRangeOverlapped(const RegionRange & a, const RegionRange & b)
-    {
-        auto start = a.first.compare(b.first);
-        if (start == 0)
-        {
-            return true;
-        }
-        else if (start < 0)
-        {
-            return a.second.compare(b.first) > 0;
-        }
-        else
-        {
-            return b.second.compare(a.first) > 0;
-        }
-    }
 
 private:
     RegionRange ori;

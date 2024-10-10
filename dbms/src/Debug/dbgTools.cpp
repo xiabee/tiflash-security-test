@@ -13,9 +13,8 @@
 // limitations under the License.
 
 #include <Common/typeid_cast.h>
-#include <Debug/MockKVStore/MockTiKV.h>
 #include <Debug/MockTiDB.h>
-#include <Debug/dbgKVStore/dbgKVStore.h>
+#include <Debug/MockTiKV.h>
 #include <Debug/dbgTools.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTLiteral.h>
@@ -67,7 +66,7 @@ RegionPtr createRegion(
     if (index_)
         index = *index_;
     region_meta.setApplied(index, RAFT_INIT_LOG_TERM);
-    return makeRegion(std::move(region_meta));
+    return std::make_shared<Region>(std::move(region_meta));
 }
 
 Regions createRegions(
@@ -105,7 +104,7 @@ RegionPtr createRegion(
 
     RegionMeta region_meta(std::move(peer), std::move(region), initialApplyState());
     region_meta.setApplied(MockTiKV::instance().getRaftIndex(region_id), RAFT_INIT_LOG_TERM);
-    return RegionBench::makeRegion(std::move(region_meta));
+    return std::make_shared<Region>(std::move(region_meta));
 }
 
 void setupPutRequest(raft_cmdpb::Request * req, const std::string & cf, const TiKVKey & key, const TiKVValue & value)
@@ -357,9 +356,10 @@ void insert( //
     if (table_info.is_common_handle)
     {
         std::vector<Field> keys;
-        const auto & pk_index = table_info.getPrimaryIndexInfo();
-        for (const auto & idx_col : pk_index.idx_cols)
+
+        for (size_t i = 0; i < table_info.getPrimaryIndexInfo().idx_cols.size(); i++)
         {
+            const auto & idx_col = table_info.getPrimaryIndexInfo().idx_cols[i];
             const auto & column_info = table_info.columns[idx_col.offset];
             auto start_field = RegionBench::convertField(column_info, fields[idx_col.offset]);
             TiDB::DatumBumpy start_datum = TiDB::DatumBumpy(start_field, column_info.tp);
@@ -469,10 +469,6 @@ struct BatchCtrl
             throw Exception(
                 "Not implented yet: BatchCtrl::encodeDatum, TiDB::CodecFlagJson",
                 ErrorCodes::LOGICAL_ERROR);
-        case TiDB::CodecFlagVectorFloat32:
-            throw Exception(
-                "Not implented yet: BatchCtrl::encodeDatum, TiDB::CodecFlagVectorFloat32",
-                ErrorCodes::LOGICAL_ERROR);
         case TiDB::CodecFlagMax:
             throw Exception("Not implented yet: BatchCtrl::encodeDatum, TiDB::CodecFlagMax", ErrorCodes::LOGICAL_ERROR);
         case TiDB::CodecFlagDuration:
@@ -576,12 +572,10 @@ void concurrentBatchInsert(
     Int64 key_num_each_region = flush_num * batch_num;
     HandleID handle_begin = curr_max_handle_id;
 
-
-    auto debug_kvstore = RegionBench::DebugKVStore(*tmt.getKVStore());
     Regions regions
         = createRegions(table_info.id, concurrent_num, key_num_each_region, handle_begin, curr_max_region_id + 1);
     for (const RegionPtr & region : regions)
-        debug_kvstore.onSnapshot<RegionPtrWithBlock>(region, nullptr, 0, tmt);
+        tmt.getKVStore()->onSnapshot<RegionPtrWithBlock>(region, nullptr, 0, tmt);
 
     std::list<std::thread> threads;
     for (Int64 i = 0; i < concurrent_num; i++, handle_begin += key_num_each_region)

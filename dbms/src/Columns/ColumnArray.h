@@ -85,8 +85,6 @@ public:
     void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
         const override;
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
-        const override;
     void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;
     void insert(const Field & x) override;
     void insertFrom(const IColumn & src_, size_t n) override;
@@ -103,7 +101,11 @@ public:
     }
 
     void insertDefault() override;
-    void insertManyDefaults(size_t length) override;
+    void insertManyDefaults(size_t length) override
+    {
+        for (size_t i = 0; i < length; ++i)
+            insertDefault();
+    }
     void popBack(size_t n) override;
     /// TODO: If result_size_hint < 0, makes reserve() using size of filtered column, not source column to avoid some OOM issues.
     ColumnPtr filter(const Filter & filt, ssize_t result_size_hint) const override;
@@ -142,18 +144,9 @@ public:
     {
         return scatterImpl<ColumnArray>(num_columns, selector);
     }
-    MutableColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
-        const override
-    {
-        return scatterImpl<ColumnArray>(num_columns, selector, selective);
-    }
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override
     {
         scatterToImpl<ColumnArray>(columns, selector);
-    }
-    void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const override
-    {
-        scatterToImpl<ColumnArray>(columns, selector, selective);
     }
     void gather(ColumnGathererStream & gatherer_stream) override;
 
@@ -163,25 +156,16 @@ public:
         callback(data);
     }
 
-    bool canBeInsideNullable() const override { return true; }
-
-    bool decodeTiDBRowV2Datum(size_t cursor, const String & raw_value, size_t /* length */, bool /* force_decode */)
-        override;
-
-    void insertFromDatumData(const char * data, size_t length) override;
-
-    std::pair<UInt32, StringRef> getElementRef(size_t element_idx) const;
-
-    size_t ALWAYS_INLINE sizeAt(size_t i) const
-    {
-        return i == 0 ? getOffsets()[0] : (getOffsets()[i] - getOffsets()[i - 1]);
-    }
-
 private:
     ColumnPtr data;
     ColumnPtr offsets;
 
     size_t ALWAYS_INLINE offsetAt(size_t i) const { return i == 0 ? 0 : getOffsets()[i - 1]; }
+    size_t ALWAYS_INLINE sizeAt(size_t i) const
+    {
+        return i == 0 ? getOffsets()[0] : (getOffsets()[i] - getOffsets()[i - 1]);
+    }
+
 
     /// Multiply values if the nested column is ColumnVector<T>.
     template <typename T>
@@ -212,13 +196,6 @@ private:
     ColumnPtr filterTuple(const Filter & filt, ssize_t result_size_hint) const;
     ColumnPtr filterNullable(const Filter & filt, ssize_t result_size_hint) const;
     ColumnPtr filterGeneric(const Filter & filt, ssize_t result_size_hint) const;
-
-    template <bool selective_block>
-    void updateWeakHash32Impl(
-        WeakHash32 & hash,
-        const TiDB::TiDBCollatorPtr & collator,
-        String & sort_key_container,
-        const BlockSelective & selective) const;
 };
 
 

@@ -41,7 +41,7 @@ protected:
     }
 
 public:
-    TestStreamingWriter() = default;
+    TestStreamingWriter() {}
 
     // Return 10 Int64 column.
     static std::vector<tipb::FieldType> makeFields()
@@ -61,7 +61,7 @@ public:
         DAGSchema schema;
         for (size_t i = 0; i < fields.size(); ++i)
         {
-            TiDB::ColumnInfo info = TiDB::fieldTypeToColumnInfo(fields[i]);
+            ColumnInfo info = TiDB::fieldTypeToColumnInfo(fields[i]);
             schema.emplace_back(String("col") + std::to_string(i), std::move(info));
         }
         return schema;
@@ -93,8 +93,7 @@ struct MockStreamWriter
     {}
 
     void write(tipb::SelectResponse & response) { checker(response); }
-    static WaitResult waitForWritable() { throw Exception("Unsupport async write"); }
-    static void notifyNextPipelineWriter() {}
+    bool isWritable() const { throw Exception("Unsupport async write"); }
 
 private:
     MockStreamWriterChecker checker;

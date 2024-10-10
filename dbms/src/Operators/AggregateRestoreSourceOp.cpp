@@ -32,6 +32,13 @@ AggregateRestoreSourceOp::AggregateRestoreSourceOp(
 
 OperatorStatus AggregateRestoreSourceOp::readImpl(Block & block)
 {
-    return restorer->tryPop(block) ? OperatorStatus::HAS_OUTPUT : OperatorStatus::WAIT_FOR_NOTIFY;
+    return restorer->tryPop(block) ? OperatorStatus::HAS_OUTPUT : OperatorStatus::WAITING;
 }
+
+OperatorStatus AggregateRestoreSourceOp::awaitImpl()
+{
+    return restorer->tryLoadBucketData() == SharedLoadResult::RETRY ? OperatorStatus::WAITING
+                                                                    : OperatorStatus::HAS_OUTPUT;
+}
+
 } // namespace DB

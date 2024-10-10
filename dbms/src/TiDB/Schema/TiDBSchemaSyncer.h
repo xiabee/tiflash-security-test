@@ -19,6 +19,7 @@
 #include <Debug/MockSchemaNameMapper.h>
 #include <TiDB/Schema/DatabaseInfoCache.h>
 #include <TiDB/Schema/TableIDMap.h>
+#include <TiDB/Schema/TiDB.h>
 #include <pingcap/kv/Cluster.h>
 
 #include <ext/scope_guard.h>

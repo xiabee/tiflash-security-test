@@ -20,7 +20,6 @@
 
 #include <ext/shared_ptr_helper.h>
 #include <map>
-#include <tuple>
 
 namespace DB
 {
@@ -154,11 +153,6 @@ protected:
 
     bool markUsedImpl(UInt64 offset, size_t length) override
     {
-        // An empty data, we can simply consider it is stored and return true
-        // Do not let it split the space into smaller pieces.
-        if (length == 0)
-            return true;
-
         auto it = MapUtils::findLessEQ(free_map, offset); // first free block <= `offset`
         if (it == free_map.end())
         {
@@ -223,15 +217,8 @@ protected:
         return true;
     }
 
-    // return value is <insert_offset, max_cap, is_expansion>
     std::tuple<UInt64, UInt64, bool> searchInsertOffset(size_t size) override
     {
-        if (unlikely(size == 0))
-        {
-            // The returned `max_cap` is 0 under this case, user should not use it.
-            return std::make_tuple(0, 0, false);
-        }
-
         if (unlikely(free_map.empty()))
         {
             LOG_ERROR(Logger::get(), "Current space map is full");
@@ -268,19 +255,20 @@ protected:
 
     bool markFreeImpl(UInt64 offset, size_t length) override
     {
-        // for an empty blob, no new free block is created, just skip
-        if (length == 0)
-        {
-            return true;
-        }
+        auto it = free_map.find(offset);
 
         /**
          * already unmarked.
          * The `offset` won't be mid of free space.
          * Because we alloc space from left to right.
          */
-        auto it = free_map.find(offset);
         if (it != free_map.end())
+        {
+            return true;
+        }
+
+        // for an empty blob, no new free block is created, just skip
+        if (length == 0)
         {
             return true;
         }

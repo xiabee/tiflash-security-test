@@ -17,8 +17,8 @@
 #include <Common/FieldVisitors.h>
 #include <Common/typeid_cast.h>
 #include <Core/Block.h>
-#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/Operators.h>
+#include <IO/WriteBufferFromString.h>
 
 #include <iterator>
 #include <memory>
@@ -531,7 +531,7 @@ static ReturnType checkBlockStructure(const Block & lhs, const Block & rhs, cons
         }
     }
 
-    return static_cast<ReturnType>(true);
+    return ReturnType(true);
 }
 
 /// join blocks by columns
@@ -541,9 +541,10 @@ Block hstackBlocks(Blocks && blocks, const Block & header)
         return {};
 
     Block res = header.cloneEmpty();
-    auto rs_result = DM::RSResult::All;
+    size_t num_rows = blocks.front().rows();
     for (const auto & block : blocks)
     {
+        RUNTIME_CHECK_MSG(block.rows() == num_rows, "Cannot hstack blocks with different number of rows");
         for (const auto & elem : block)
         {
             if (likely(res.has(elem.name)))
@@ -551,10 +552,7 @@ Block hstackBlocks(Blocks && blocks, const Block & header)
                 res.getByName(elem.name).column = std::move(elem.column);
             }
         }
-        rs_result = rs_result && block.getRSResult();
     }
-    res.setRSResult(rs_result);
-    res.checkNumberOfRows();
 
     return res;
 }
@@ -581,7 +579,7 @@ Block vstackBlocks(Blocks && blocks)
 
     auto & first_block = blocks.front();
     MutableColumns dst_columns(first_block.columns());
-    auto rs_result = first_block.getRSResult();
+
     for (size_t i = 0; i < first_block.columns(); ++i)
     {
         dst_columns[i] = (*std::move(first_block.getByPosition(i).column)).mutate();
@@ -613,7 +611,6 @@ Block vstackBlocks(Blocks && blocks)
             {
                 dst_columns[idx]->insertRangeFrom(*blocks[i].getByPosition(idx).column, 0, blocks[i].rows());
             }
-            rs_result = rs_result && blocks[i].getRSResult();
         }
     }
 
@@ -626,9 +623,7 @@ Block vstackBlocks(Blocks && blocks)
             total_allocated_bytes == updated_total_allocated_bytes,
             "vstackBlock's reserve does not reserve enough bytes");
     }
-    auto res = first_block.cloneWithColumns(std::move(dst_columns));
-    res.setRSResult(rs_result);
-    return res;
+    return first_block.cloneWithColumns(std::move(dst_columns));
 }
 
 Block popBlocksListFront(BlocksList & blocks)
@@ -732,7 +727,6 @@ void Block::swap(Block & other) noexcept
     std::swap(info, other.info);
     data.swap(other.data);
     index_by_name.swap(other.index_by_name);
-    std::swap(rs_result, other.rs_result);
 }
 
 

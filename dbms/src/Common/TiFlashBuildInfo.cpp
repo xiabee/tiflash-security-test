@@ -12,66 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/TiFlashBuildInfo.h>
 #include <Common/config.h>
 #include <Common/config_version.h>
-#include <VectorSearch/DistanceSIMDFeatures.h>
-#include <VectorSearch/SIMDFeatures.h>
 #include <common/config_common.h>
-#include <common/logger_useful.h>
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <openssl/opensslconf.h>
 #include <openssl/opensslv.h>
 
+#include <ostream>
+#include <string>
 #include <vector>
 
 namespace TiFlashBuildInfo
 {
-String getName()
+std::string getName()
 {
     return TIFLASH_NAME;
 }
-String getVersion()
+std::string getVersion()
 {
     return TIFLASH_VERSION;
 }
-String getReleaseVersion()
+std::string getReleaseVersion()
 {
     return TIFLASH_RELEASE_VERSION;
 }
-String getEdition()
+std::string getEdition()
 {
     return TIFLASH_EDITION;
 }
-String getGitHash()
+std::string getGitHash()
 {
     return TIFLASH_GIT_HASH;
 }
-String getGitBranch()
+std::string getGitBranch()
 {
     return TIFLASH_GIT_BRANCH;
 }
-String getUTCBuildTime()
+std::string getUTCBuildTime()
 {
     return TIFLASH_UTC_BUILD_TIME;
 }
-UInt32 getMajorVersion()
-{
-    return TIFLASH_VERSION_MAJOR;
-}
-UInt32 getMinorVersion()
-{
-    return TIFLASH_VERSION_MINOR;
-}
-UInt32 getPatchVersion()
-{
-    return TIFLASH_VERSION_PATCH;
-}
 // clang-format off
-String getEnabledFeatures()
+std::string getEnabledFeatures()
 {
-    std::vector<String> features
+    std::vector<std::string> features
     {
 // allocator
 #if USE_JEMALLOC
@@ -142,33 +128,12 @@ String getEnabledFeatures()
             "fdo",
 #endif
     };
-    {
-        auto f = DB::DM::VectorIndexHNSWSIMDFeatures::get();
-        for (const auto & feature : f)
-            features.push_back(feature);
-    }
-    {
-        auto f = DB::VectorDistanceSIMDFeatures::get();
-        for (const auto & feature : f)
-            features.push_back(feature);
-    }
-
     return fmt::format("{}", fmt::join(features.begin(), features.end(), " "));
 }
 // clang-format on
-String getProfile()
+std::string getProfile()
 {
     return TIFLASH_PROFILE;
-}
-
-String getCompilerVersion()
-{
-    return fmt::format(
-        "{} {}",
-        // TIFLASH_CXX_COMPILER is some strings like "/tiflash-env-17/sysroot/bin/clang++",
-        // use `LogFmtDetails::getFileNameOffset` to get the compiler name
-        &TIFLASH_CXX_COMPILER[LogFmtDetails::getFileNameOffset(TIFLASH_CXX_COMPILER)],
-        TIFLASH_CXX_COMPILER_VERSION);
 }
 
 void outputDetail(std::ostream & os)
@@ -180,7 +145,6 @@ void outputDetail(std::ostream & os)
        << "Git Branch:      " << getGitBranch() << std::endl
        << "UTC Build Time:  " << getUTCBuildTime() << std::endl
        << "Enable Features: " << getEnabledFeatures() << std::endl
-       << "Profile:         " << getProfile() << std::endl
-       << "Compiler:        " << getCompilerVersion() << std::endl;
+       << "Profile:         " << getProfile() << std::endl;
 }
 } // namespace TiFlashBuildInfo

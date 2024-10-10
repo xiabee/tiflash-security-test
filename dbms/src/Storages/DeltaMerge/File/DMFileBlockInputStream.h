@@ -14,25 +14,22 @@
 
 #pragma once
 
-#include <Interpreters/Context_fwd.h>
-#include <Interpreters/Settings.h>
-#include <Storages/DeltaMerge/BitmapFilter/BitmapFilterView.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
-#include <Storages/DeltaMerge/File/ColumnCacheLongTerm_fwd.h>
 #include <Storages/DeltaMerge/File/DMFileReader.h>
-#include <Storages/DeltaMerge/File/DMFileWithVectorIndexBlockInputStream_fwd.h>
-#include <Storages/DeltaMerge/Index/VectorIndex_fwd.h>
 #include <Storages/DeltaMerge/ReadThread/SegmentReader.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
 
 
-namespace DB::DM
+namespace DB
 {
-inline static constexpr size_t DMFILE_READ_ROWS_THRESHOLD = DEFAULT_MERGE_BLOCK_SIZE * 3;
-
+class Context;
+class Logger;
+using LoggerPtr = std::shared_ptr<Logger>;
+namespace DM
+{
 class DMFileBlockInputStream : public SkippableBlockInputStream
 {
 public:
@@ -65,11 +62,11 @@ public:
     Block read() override { return reader.read(); }
 
     Block readWithFilter(const IColumn::Filter & filter) override { return reader.readWithFilter(filter); }
-
+#ifndef DBMS_PUBLIC_GTEST
 private:
-    friend class tests::DMFileMetaV2Test;
+#endif
     DMFileReader reader;
-    const bool enable_data_sharing;
+    bool enable_data_sharing;
 };
 
 using DMFileBlockInputStreamPtr = std::shared_ptr<DMFileBlockInputStream>;
@@ -83,26 +80,12 @@ public:
     // - current settings from this context
     // - current read limiter form this context
     // - current file provider from this context
-    explicit DMFileBlockInputStreamBuilder(const Context & context);
+    explicit DMFileBlockInputStreamBuilder(const Context & dm_context);
 
     // Build the final stream ptr.
     // Empty `rowkey_ranges` means not filter by rowkey
     // Should not use the builder again after `build` is called.
     DMFileBlockInputStreamPtr build(
-        const DMFilePtr & dmfile,
-        const ColumnDefines & read_columns,
-        const RowKeyRanges & rowkey_ranges,
-        const ScanContextPtr & scan_context);
-
-    // Build the final stream ptr. The return value could be DMFileBlockInputStreamPtr or DMFileWithVectorIndexBlockInputStream.
-    // Empty `rowkey_ranges` means not filter by rowkey
-    // Should not use the builder again after `build` is called.
-    // In the following conditions DMFileWithVectorIndexBlockInputStream will be returned:
-    // 1. BitmapFilter is provided
-    // 2. ANNQueryInfo is available in the RSFilter
-    // 3. The vector column mentioned by ANNQueryInfo is in the read_columns
-    // 4. The vector column mentioned by ANNQueryInfo exists vector index file
-    SkippableBlockInputStreamPtr tryBuildWithVectorIndex(
         const DMFilePtr & dmfile,
         const ColumnDefines & read_columns,
         const RowKeyRanges & rowkey_ranges,
@@ -129,12 +112,6 @@ public:
         enable_del_clean_read = enable_del_clean_read_;
         is_fast_scan = is_fast_scan_;
         max_data_version = max_data_version_;
-        return *this;
-    }
-
-    DMFileBlockInputStreamBuilder & setBitmapFilter(const BitmapFilterView & bitmap_filter_)
-    {
-        bitmap_filter.emplace(bitmap_filter_);
         return *this;
     }
 
@@ -180,31 +157,23 @@ public:
         return *this;
     }
 
-    /**
-     * @note To really enable the long term cache, you also need to ensure
-     * ColumnCacheLongTerm is initialized in the global context.
-     */
-    DMFileBlockInputStreamBuilder & enableColumnCacheLongTerm(ColumnID pk_col_id_)
-    {
-        pk_col_id = pk_col_id_;
-        return *this;
-    }
-
 private:
     // These methods are called by the ctor
 
-    DMFileBlockInputStreamBuilder & setFromSettings(const Settings & settings);
-
+    DMFileBlockInputStreamBuilder & setFromSettings(const Settings & settings)
+    {
+        enable_column_cache = settings.dt_enable_stable_column_cache;
+        aio_threshold = settings.min_bytes_to_use_direct_io;
+        max_read_buffer_size = settings.max_read_buffer_size;
+        max_sharing_column_bytes_for_all = settings.dt_max_sharing_column_bytes_for_all;
+        return *this;
+    }
     DMFileBlockInputStreamBuilder & setCaches(
         const MarkCachePtr & mark_cache_,
-        const MinMaxIndexCachePtr & index_cache_,
-        const VectorIndexCachePtr & vector_index_cache_,
-        const ColumnCacheLongTermPtr & column_cache_long_term_)
+        const MinMaxIndexCachePtr & index_cache_)
     {
         mark_cache = mark_cache_;
         index_cache = index_cache_;
-        vector_index_cache = vector_index_cache_;
-        column_cache_long_term = column_cache_long_term_;
         return *this;
     }
 
@@ -220,27 +189,20 @@ private:
     // Rough set filter
     RSOperatorPtr rs_filter;
     // packs filter (filter by pack index)
-    IdSetPtr read_packs;
+    IdSetPtr read_packs{};
     MarkCachePtr mark_cache;
     MinMaxIndexCachePtr index_cache;
     // column cache
     bool enable_column_cache = false;
     ColumnCachePtr column_cache;
     ReadLimiterPtr read_limiter;
+    size_t aio_threshold{};
     size_t max_read_buffer_size{};
     size_t rows_threshold_per_read = DMFILE_READ_ROWS_THRESHOLD;
     bool read_one_pack_every_time = false;
     size_t max_sharing_column_bytes_for_all = 0;
     String tracing_id;
     ReadTag read_tag = ReadTag::Internal;
-
-    VectorIndexCachePtr vector_index_cache;
-    // Note: Currently thie field is assigned only for Stable streams, not available for ColumnFileBig
-    std::optional<BitmapFilterView> bitmap_filter;
-
-    // Note: column_cache_long_term is currently only filled when performing Vector Search.
-    ColumnCacheLongTermPtr column_cache_long_term = nullptr;
-    ColumnID pk_col_id = 0;
 };
 
 /**
@@ -251,9 +213,23 @@ private:
  * @param cols The columns to read. Empty means read all columns.
  * @return A shared pointer of an input stream
  */
-DMFileBlockInputStreamPtr createSimpleBlockInputStream(
+inline DMFileBlockInputStreamPtr createSimpleBlockInputStream(
     const DB::Context & context,
     const DMFilePtr & file,
-    ColumnDefines cols = {});
+    ColumnDefines cols = {})
+{
+    // disable clean read is needed, since we just want to read all data from the file, and we do not know about the column handle
+    // enable read_one_pack_every_time_ is needed to preserve same block structure as the original file
+    DMFileBlockInputStreamBuilder builder(context);
+    if (cols.empty())
+    {
+        // turn into read all columns from file
+        cols = file->getColumnDefines();
+    }
+    return builder.setRowsThreshold(DMFILE_READ_ROWS_THRESHOLD)
+        .onlyReadOnePackEveryTime()
+        .build(file, cols, DB::DM::RowKeyRanges{}, std::make_shared<ScanContext>());
+}
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

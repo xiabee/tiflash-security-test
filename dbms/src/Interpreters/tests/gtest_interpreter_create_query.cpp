@@ -108,6 +108,7 @@ public:
 
         TiDB::DBInfo db_info(db_info_json, NullspaceID);
         TiDB::TableInfo table_info(table_info_json, NullspaceID);
+        table_info.engine_type = ::TiDB::StorageEngine::DT;
 
         ParserCreateQuery parser;
         ASTPtr ast

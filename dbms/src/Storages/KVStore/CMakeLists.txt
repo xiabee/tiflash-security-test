@@ -16,17 +16,13 @@ add_headers_and_sources(kvstore .)
 add_headers_and_sources(kvstore ./FFI)
 add_headers_and_sources(kvstore ./MultiRaft)
 add_headers_and_sources(kvstore ./MultiRaft/Disagg)
-add_headers_and_sources(kvstore ./MultiRaft/Spill)
 add_headers_and_sources(kvstore ./Utils)
 add_headers_and_sources(kvstore ./TiKVHelpers)
 add_headers_and_sources(kvstore ./Decode)
 add_headers_and_sources(kvstore ./Read)
 
-add_subdirectory (./MultiRaft/Disagg)
-
 add_library(kvstore ${kvstore_headers} ${kvstore_sources})
-target_include_directories(kvstore PRIVATE ${TiFlash_SOURCE_DIR}/contrib/GmSSL/include)
-target_link_libraries(kvstore PRIVATE dbms page KVStoreFastAddPeerProto)
+target_link_libraries(kvstore PRIVATE dbms page)
 
 if (ENABLE_TESTS)
     add_headers_and_sources(kvstore tests)

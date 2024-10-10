@@ -262,7 +262,7 @@ void serializeWindow(const String & executor_id, const tipb::Window & window [[m
         {
             buf.fmtAppend(
                 "start<{}, {}, {}>",
-                tipb::WindowBoundType_Name(window.frame().start().type()),
+                window.frame().start().type(),
                 window.frame().start().unbounded(),
                 window.frame().start().offset());
         }
@@ -270,7 +270,7 @@ void serializeWindow(const String & executor_id, const tipb::Window & window [[m
         {
             buf.fmtAppend(
                 ", end<{}, {}, {}>",
-                tipb::WindowBoundType_Name(window.frame().end().type()),
+                window.frame().end().type(),
                 window.frame().end().unbounded(),
                 window.frame().end().offset());
         }

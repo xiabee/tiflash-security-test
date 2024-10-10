@@ -64,8 +64,7 @@ UniversalPageStorageServicePtr UniversalPageStorageService::create(
         // TODO: make this interval reloadable
         auto interval_s = context.getSettingsRef().remote_checkpoint_interval_seconds;
         // Only upload checkpoint when S3 is enabled
-        service->checkpoint_pool
-            = std::make_unique<BackgroundProcessingPool>(1, "ps-checkpoint", context.getJointThreadInfoJeallocMap());
+        service->checkpoint_pool = std::make_unique<BackgroundProcessingPool>(1, "ps-checkpoint");
         service->remote_checkpoint_handle = service->checkpoint_pool->addTask(
             [srv_weak = std::weak_ptr<UniversalPageStorageService>(service)] {
                 auto service = srv_weak.lock();
@@ -142,7 +141,7 @@ bool UniversalPageStorageService::uploadCheckpoint()
 
     auto & tmt = global_context.getTMTContext();
 
-    auto store_info = tmt.getKVStore()->clonedStoreMeta();
+    auto store_info = tmt.getKVStore()->getStoreMeta();
     if (store_info.id() == InvalidStoreID)
     {
         LOG_INFO(log, "Skip checkpoint because store meta is not initialized");
@@ -282,20 +281,16 @@ bool UniversalPageStorageService::uploadCheckpointImpl(
     };
 
     const auto write_stats = uni_page_storage->dumpIncrementalCheckpoint(opts);
-    if (write_stats.has_value())
-    {
-        GET_METRIC(tiflash_storage_checkpoint_flow, type_incremental)
-            .Increment(write_stats.value().incremental_data_bytes);
-        GET_METRIC(tiflash_storage_checkpoint_flow, type_compaction).Increment(write_stats.value().compact_data_bytes);
+    GET_METRIC(tiflash_storage_checkpoint_flow, type_incremental).Increment(write_stats.incremental_data_bytes);
+    GET_METRIC(tiflash_storage_checkpoint_flow, type_compaction).Increment(write_stats.compact_data_bytes);
 
-        LOG_INFO(
-            log,
-            "Upload checkpoint success,{} upload_sequence={} incremental_bytes={} compact_bytes={}",
-            force_sync_data ? " sync_all=true" : "",
-            upload_info.upload_sequence,
-            write_stats->incremental_data_bytes,
-            write_stats->compact_data_bytes);
-    }
+    LOG_INFO(
+        log,
+        "Upload checkpoint success,{} upload_sequence={} incremental_bytes={} compact_bytes={}",
+        force_sync_data ? " sync_all=true" : "",
+        upload_info.upload_sequence,
+        write_stats.incremental_data_bytes,
+        write_stats.compact_data_bytes);
 
     return true;
 }

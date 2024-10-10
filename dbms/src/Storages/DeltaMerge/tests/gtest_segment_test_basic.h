@@ -27,29 +27,29 @@
 #include <random>
 #include <vector>
 
-namespace DB::DM::tests
+namespace DB
 {
-
+namespace DM
+{
+namespace tests
+{
 class SegmentTestBasic : public DB::base::TiFlashStorageTestBasic
 {
 public:
     struct SegmentTestOptions
     {
         bool is_common_handle = false;
-        ColumnID pk_col_id = 0;
         DB::Settings db_settings;
     };
 
-    void SetUp() override { SetUp({}); }
-
-    void SetUp(const SegmentTestOptions & options)
+    void SetUp() override
     {
         TiFlashStorageTestBasic::SetUp();
-        reloadWithOptions(options);
+        buildFirstSegmentWithOptions({});
     }
 
 public:
-    void reloadWithOptions(SegmentTestOptions config);
+    void buildFirstSegmentWithOptions(SegmentTestOptions config);
 
     /**
      * When `check_rows` is true, it will compare the rows num before and after the segment update.
@@ -94,17 +94,6 @@ public:
      */
     void replaceSegmentData(PageIdU64 segment_id, const DMFilePtr & file, SegmentSnapshotPtr snapshot = nullptr);
     void replaceSegmentData(PageIdU64 segment_id, const Block & block, SegmentSnapshotPtr snapshot = nullptr);
-
-    /**
-     * This function does not check rows.
-     * Returns whether replace is successful.
-     */
-    bool replaceSegmentStableData(PageIdU64 segment_id, const DMFilePtr & file);
-
-    /**
-     * Returns whether segment stable index is created.
-     */
-    bool ensureSegmentStableIndex(PageIdU64 segment_id, const LocalIndexInfosPtr & local_index_infos);
 
     Block prepareWriteBlock(Int64 start_key, Int64 end_key, bool is_deleted = false);
     Block prepareWriteBlockInSegmentRange(
@@ -154,10 +143,6 @@ protected:
 
     const ColumnDefinesPtr & tableColumns() const { return table_columns; }
 
-    virtual Block prepareWriteBlockImpl(Int64 start_key, Int64 end_key, bool is_deleted);
-
-    virtual void prepareColumns(const ColumnDefinesPtr &) {}
-
     /**
      * Reload a new DMContext according to latest storage status.
      * For example, if you have changed the settings, you should grab a new DMContext.
@@ -168,7 +153,10 @@ protected:
     std::pair<SegmentPtr, SegmentSnapshotPtr> getSegmentForRead(PageIdU64 segment_id);
 
 private:
-    SegmentPtr reload(bool is_common_handle, const ColumnDefinesPtr & pre_define_columns, DB::Settings && db_settings);
+    SegmentPtr buildFirstSegment(
+        bool is_common_handle,
+        const ColumnDefinesPtr & pre_define_columns,
+        DB::Settings && db_settings);
 
 protected:
     inline static constexpr PageIdU64 NAMESPACE_ID = 100;
@@ -188,5 +176,6 @@ protected:
     LoggerPtr logger_op;
     LoggerPtr logger;
 };
-
-} // namespace DB::DM::tests
+} // namespace tests
+} // namespace DM
+} // namespace DB

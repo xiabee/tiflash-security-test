@@ -52,7 +52,7 @@ int inspectServiceMain(DB::Context & context, const InspectArgs & args);
 struct DTToolTest : public DB::base::TiFlashStorageTestBasic
 {
     DB::DM::DMFilePtr dmfile = nullptr;
-    DB::DM::DMFilePtr dmfile_v3 = nullptr;
+    DB::DM::DMFilePtr dmfileV3 = nullptr;
     static constexpr size_t column = 64;
     static constexpr size_t size = 128;
     static constexpr size_t field = 512;
@@ -84,20 +84,19 @@ struct DTToolTest : public DB::base::TiFlashStorageTestBasic
         auto storage_pool
             = std::make_shared<DB::DM::StoragePool>(*db_context, NullspaceID, /*ns_id*/ 1, *path_pool, "test.t1");
         auto dm_settings = DB::DM::DeltaMergeStore::Settings{};
-        auto dm_context = DB::DM::DMContext::createUnique(
+        auto dm_context = std::make_unique<DB::DM::DMContext>( //
             *db_context,
             path_pool,
             storage_pool,
             /*min_version_*/ 0,
             NullspaceID,
             /*physical_table_id*/ 1,
-            /*pk_col_id*/ 0,
             false,
             1,
             db_context->getSettingsRef());
         // Write
         {
-            dmfile = DB::DM::DMFile::create(1, getTemporaryPath(), std::nullopt, 0, 0, NullspaceID, DMFileFormat::V0);
+            dmfile = DB::DM::DMFile::create(1, getTemporaryPath(), std::nullopt, 0, 0, DMFileFormat::V0);
             {
                 auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfile, *defines);
                 stream.writePrefix();
@@ -111,16 +110,15 @@ struct DTToolTest : public DB::base::TiFlashStorageTestBasic
 
         // Write DMFile::V3
         {
-            dmfile_v3 = DB::DM::DMFile::create(
+            dmfileV3 = DB::DM::DMFile::create(
                 2,
                 getTemporaryPath(),
                 std::make_optional<DMChecksumConfig>(),
                 128 * 1024,
                 16 * 1024 * 1024,
-                NullspaceID,
                 DMFileFormat::V3);
             {
-                auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfile_v3, *defines);
+                auto stream = DB::DM::DMFileBlockOutputStream(*db_context, dmfileV3, *defines);
                 stream.writePrefix();
                 for (size_t j = 0; j < blocks.size(); ++j)
                 {
@@ -142,10 +140,10 @@ TEST_F(DTToolTest, MigrationAllFileRecognizableOnDefault)
         EXPECT_TRUE(DTTool::Migrate::isRecognizable(*dmfile, i)) << " file: " << i;
     }
 
-    Poco::File(dmfile_v3->path()).list(sub_files);
+    Poco::File(dmfileV3->path()).list(sub_files);
     for (auto & i : sub_files)
     {
-        EXPECT_TRUE(DTTool::Migrate::isRecognizable(*dmfile_v3, i)) << " file: " << i;
+        EXPECT_TRUE(DTTool::Migrate::isRecognizable(*dmfileV3, i)) << " file: " << i;
     }
 }
 
@@ -161,7 +159,7 @@ TEST_F(DTToolTest, MigrationSuccess)
             .algorithm = DB::ChecksumAlgo::XXH3,
             .workdir = getTemporaryPath(),
             .compression_method = DB::CompressionMethod::LZ4,
-            .compression_level = DB::CompressionSetting::getDefaultLevel(DB::CompressionMethod::LZ4),
+            .compression_level = DB::CompressionSettings::getDefaultLevel(DB::CompressionMethod::LZ4),
         };
 
         EXPECT_EQ(DTTool::Migrate::migrateServiceMain(*db_context, args), 0);
@@ -185,7 +183,7 @@ TEST_F(DTToolTest, MigrationV3toV2Success)
             .algorithm = DB::ChecksumAlgo::XXH3,
             .workdir = getTemporaryPath(),
             .compression_method = DB::CompressionMethod::LZ4,
-            .compression_level = DB::CompressionSetting::getDefaultLevel(DB::CompressionMethod::LZ4),
+            .compression_level = DB::CompressionSettings::getDefaultLevel(DB::CompressionMethod::LZ4),
         };
 
         EXPECT_EQ(DTTool::Migrate::migrateServiceMain(*db_context, args), 0);
@@ -234,7 +232,7 @@ TEST_F(DTToolTest, ConsecutiveMigration)
         .algorithm = DB::ChecksumAlgo::XXH3,
         .workdir = getTemporaryPath(),
         .compression_method = DB::CompressionMethod::LZ4,
-        .compression_level = DB::CompressionSetting::getDefaultLevel(DB::CompressionMethod::LZ4),
+        .compression_level = DB::CompressionSettings::getDefaultLevel(DB::CompressionMethod::LZ4),
     };
 
     EXPECT_EQ(DTTool::Migrate::migrateServiceMain(*db_context, args), 0);
@@ -320,7 +318,7 @@ TEST_F(DTToolTest, BlockwiseInvariant)
             1,
             0,
             getTemporaryPath(),
-            DB::DM::DMFileMeta::ReadMode::all());
+            DB::DM::DMFile::ReadMetaMode::all());
         if (version == 2)
         {
             EXPECT_EQ(refreshed_file->getConfiguration()->getChecksumFrameLength(), frame_size);

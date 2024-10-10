@@ -13,18 +13,15 @@
 // limitations under the License.
 
 #include <Interpreters/Context.h>
+#include <Storages/DeltaMerge/Remote/RNReadTask.h>
 #include <Storages/DeltaMerge/Remote/RNWorkers.h>
 namespace DB::DM::Remote
 {
 
-RNWorkers::RNWorkers(
-    const Context & context,
-    SegmentReadTasks && read_tasks,
-    const Options & options,
-    size_t num_streams)
+RNWorkers::RNWorkers(const Context & context, const Options & options, size_t num_streams)
 {
     RUNTIME_CHECK(num_streams > 0, num_streams);
-    size_t n = read_tasks.size();
+    size_t n = options.read_task->segment_read_tasks.size();
     if (n == 0)
     {
         empty_channel = std::make_shared<Channel>(0);
@@ -52,6 +49,7 @@ RNWorkers::RNWorkers(
         .result_queue = std::make_shared<Channel>(n),
         .log = options.log,
         .concurrency = fetch_pages_concurrency,
+        .cluster = options.cluster,
     });
 
     worker_prepare_streams = RNWorkerPrepareStreams::create({
@@ -60,13 +58,13 @@ RNWorkers::RNWorkers(
         .log = options.log,
         .concurrency = prepare_streams_concurrency,
         .columns_to_read = options.columns_to_read,
-        .start_ts = options.start_ts,
+        .read_tso = options.read_tso,
         .push_down_filter = options.push_down_filter,
         .read_mode = options.read_mode,
     });
 
     // TODO: Can we push the task that all delta/stable data hit local cache first?
-    for (auto const & seg_task : read_tasks)
+    for (auto const & seg_task : options.read_task->segment_read_tasks)
     {
         auto push_result = worker_fetch_pages->source_queue->tryPush(seg_task);
         RUNTIME_CHECK(push_result == MPMCQueueResult::OK, magic_enum::enum_name(push_result));

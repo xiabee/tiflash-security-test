@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/Buffer/MemoryReadWriteBuffer.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Compression/CompressedReadBuffer.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/MemoryReadWriteBuffer.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileBig.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDeleteRange.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileInMemory.h>
@@ -23,10 +22,10 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileTiny.h>
 #include <Storages/Page/Page.h>
 
-
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 void serializeSchema(WriteBuffer & buf, const Block & schema)
 {
     if (schema)
@@ -65,33 +64,6 @@ BlockPtr deserializeSchema(ReadBuffer & buf)
     return schema;
 }
 
-void serializeSchema(dtpb::ColumnFileTiny * tiny_pb, const Block & schema)
-{
-    for (const auto & col : schema)
-    {
-        auto * col_pb = tiny_pb->add_columns();
-        col_pb->set_column_id(col.column_id);
-        col_pb->set_column_name(col.name);
-        col_pb->set_column_type(col.type->getName());
-    }
-}
-
-BlockPtr deserializeSchema(const ::google::protobuf::RepeatedPtrField<::dtpb::ColumnSchema> & schema_pb)
-{
-    if (schema_pb.empty())
-        return {};
-    auto schema = std::make_shared<Block>();
-    for (const auto & col : schema_pb)
-    {
-        schema->insert(ColumnWithTypeAndName(
-            {},
-            DataTypeFactory::instance().getOrSet(col.column_type()),
-            col.column_name(),
-            col.column_id()));
-    }
-    return schema;
-}
-
 void serializeColumn(
     WriteBuffer & buf,
     const IColumn & column,
@@ -101,16 +73,7 @@ void serializeColumn(
     CompressionMethod compression_method,
     Int64 compression_level)
 {
-#ifdef NDEBUG
-    // Do not use lightweight compression in ColumnFile whose write performance is the bottleneck.
-    auto settings = compression_method == CompressionMethod::Lightweight
-        ? CompressionSettings(CompressionMethod::LZ4)
-        : CompressionSettings(compression_method, compression_level);
-#else
-    // In debug mode, still support lightweight compression for testing.
-    auto settings = CompressionSettings(compression_method, compression_level);
-#endif
-    CompressedWriteBuffer compressed(buf, settings);
+    CompressedWriteBuffer compressed(buf, CompressionSettings(compression_method, compression_level));
     type->serializeBinaryBulkWithMultipleStreams(
         column,
         [&](const IDataType::SubstreamPath &) { return &compressed; },
@@ -147,16 +110,10 @@ void serializeSavedColumnFiles(WriteBuffer & buf, const ColumnFilePersisteds & c
     case DeltaFormat::V3:
         serializeSavedColumnFilesInV3Format(buf, column_files);
         break;
-    case DeltaFormat::V4:
-    {
-        dtpb::DeltaLayerMeta meta;
-        serializeSavedColumnFilesInV4Format(meta, column_files);
-        auto data = meta.SerializeAsString();
-        writeStringBinary(data, buf);
-        break;
-    }
     default:
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected delta value version: {}", STORAGE_FORMAT_CURRENT.delta);
+        throw Exception(
+            "Unexpected delta value version: " + DB::toString(STORAGE_FORMAT_CURRENT.delta),
+            ErrorCodes::LOGICAL_ERROR);
     }
 }
 
@@ -169,36 +126,27 @@ ColumnFilePersisteds deserializeSavedColumnFiles(
     DeltaFormat::Version version;
     readIntBinary(version, buf);
 
+    ColumnFilePersisteds column_files;
     switch (version)
     {
         // V1 and V2 share the same deserializer.
     case DeltaFormat::V1:
     case DeltaFormat::V2:
-        return deserializeSavedColumnFilesInV2Format(context, buf, version);
+        column_files = deserializeSavedColumnFilesInV2Format(context, buf, version);
+        break;
     case DeltaFormat::V3:
-        return deserializeSavedColumnFilesInV3Format(context, segment_range, buf);
-    case DeltaFormat::V4:
-    {
-        dtpb::DeltaLayerMeta meta;
-        String data;
-        readStringBinary(data, buf);
-        RUNTIME_CHECK_MSG(
-            meta.ParseFromString(data),
-            "Failed to parse DeltaLayerMeta from string: {}",
-            Redact::keyToHexString(data.data(), data.size()));
-        return deserializeSavedColumnFilesInV4Format(context, segment_range, meta);
-    }
+        column_files = deserializeSavedColumnFilesInV3Format(context, segment_range, buf);
+        break;
     default:
         throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "Unexpected delta value version: {}, latest version: {}",
-            version,
-            DeltaFormat::V4);
+            "Unexpected delta value version: " + DB::toString(version)
+                + ", latest version: " + DB::toString(DeltaFormat::V3),
+            ErrorCodes::LOGICAL_ERROR);
     }
+    return column_files;
 }
 
 ColumnFilePersisteds createColumnFilesFromCheckpoint( //
-    const LoggerPtr & parent_log,
     DMContext & context,
     const RowKeyRange & segment_range,
     ReadBuffer & buf,
@@ -209,28 +157,19 @@ ColumnFilePersisteds createColumnFilesFromCheckpoint( //
     DeltaFormat::Version version;
     readIntBinary(version, buf);
 
+    ColumnFilePersisteds column_files;
     switch (version)
     {
     case DeltaFormat::V3:
-        return createColumnFilesInV3FormatFromCheckpoint(parent_log, context, segment_range, buf, temp_ps, wbs);
-    case DeltaFormat::V4:
-    {
-        dtpb::DeltaLayerMeta meta;
-        String data;
-        readStringBinary(data, buf);
-        RUNTIME_CHECK_MSG(
-            meta.ParseFromString(data),
-            "Failed to parse DeltaLayerMeta from string: {}",
-            Redact::keyToHexString(data.data(), data.size()));
-        return createColumnFilesInV4FormatFromCheckpoint(parent_log, context, segment_range, meta, temp_ps, wbs);
-    }
+        column_files = createColumnFilesInV3FormatFromCheckpoint(context, segment_range, buf, temp_ps, wbs);
+        break;
     default:
         throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "Unexpected delta value version: {}, latest version: {}",
-            version,
-            DeltaFormat::V4);
+            "Unexpected delta value version: " + DB::toString(version)
+                + ", latest version: " + DB::toString(DeltaFormat::V3),
+            ErrorCodes::LOGICAL_ERROR);
     }
+    return column_files;
 }
-
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

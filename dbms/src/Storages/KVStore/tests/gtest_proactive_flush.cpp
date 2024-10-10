@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Storages/KVStore/tests/region_kvstore_test.h>
+#include "kvstore_helper.h"
+
 
 namespace DB
 {
 namespace tests
 {
-
 TEST_F(RegionKVStoreTest, KVStorePassivePersistence)
 try
 {
@@ -43,7 +43,6 @@ try
                       ->normalWrite(region_id, {33}, {"v1"}, {WriteCmdType::Put}, {ColumnFamilyType::Default});
             proxy_instance->doApply(kvs, ctx.getTMTContext(), cond, region_id, index);
             ASSERT_EQ(r1->getLatestAppliedIndex(), applied_index + 1);
-            ASSERT_EQ(r1->getPersistedAppliedIndex(), applied_index + 1);
             ASSERT_EQ(kvr1->appliedIndex(), applied_index + 1);
 
             kvs.setRegionCompactLogConfig(0, 0, 0, 0);
@@ -54,7 +53,6 @@ try
             ASSERT_TRUE(kvs.tryFlushRegionData(region_id, false, true, ctx.getTMTContext(), index2, term, 0, 0));
             proxy_instance->doApply(kvs, ctx.getTMTContext(), cond, region_id, index2);
             ASSERT_EQ(r1->getLatestAppliedIndex(), applied_index + 2);
-            ASSERT_EQ(r1->getPersistedAppliedIndex(), applied_index + 2);
             ASSERT_EQ(kvr1->appliedIndex(), applied_index + 2);
         }
         {

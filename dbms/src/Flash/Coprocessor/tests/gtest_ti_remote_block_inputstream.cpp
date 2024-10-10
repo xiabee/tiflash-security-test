@@ -18,6 +18,7 @@
 #include <Flash/Mpp/MPPTunnelSetHelper.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ScanContext.h>
+#include <Storages/StorageDisaggregated.h>
 #include <TestUtils/ColumnGenerator.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/TiFlashTestBasic.h>
@@ -78,7 +79,7 @@ struct MockWriter
         summary.scan_context->dmfile_mvcc_skipped_rows = 15000;
         summary.scan_context->dmfile_lm_filter_scanned_rows = 8000;
         summary.scan_context->dmfile_lm_filter_skipped_rows = 15000;
-        summary.scan_context->total_rs_pack_filter_check_time_ns = 10;
+        summary.scan_context->total_dmfile_rough_set_index_check_time_ns = 10;
         summary.scan_context->total_dmfile_read_time_ns = 200;
         summary.scan_context->create_snapshot_time_ns = 5;
         summary.scan_context->total_local_region_num = 10;
@@ -147,8 +148,7 @@ struct MockWriter
         queue->push(tracked_packet);
     }
     static uint16_t getPartitionNum() { return 1; }
-    static WaitResult waitForWritable() { throw Exception("Unsupport async write"); }
-    static void notifyNextPipelineWriter() {}
+    static bool isWritable() { throw Exception("Unsupport async write"); }
 
     std::vector<tipb::FieldType> result_field_types;
 
@@ -225,7 +225,7 @@ struct MockReceiverContext
         for (size_t i = 0; i < field_types.size(); ++i)
         {
             String name = "exchange_receiver_" + std::to_string(i);
-            TiDB::ColumnInfo info = TiDB::fieldTypeToColumnInfo(field_types[i]);
+            ColumnInfo info = TiDB::fieldTypeToColumnInfo(field_types[i]);
             schema.emplace_back(std::move(name), std::move(info));
         }
     }
@@ -233,6 +233,16 @@ struct MockReceiverContext
     static Request makeRequest(int index) { return {index, index, -1}; }
 
     std::unique_ptr<Reader> makeSyncReader(const Request &) { return std::make_unique<Reader>(queue); }
+
+    static void cancelMPPTaskOnTiFlashStorageNode(LoggerPtr)
+    {
+        throw Exception("cancelMPPTaskOnTiFlashStorageNode not implemented for MockReceiverContext");
+    }
+
+    static void sendMPPTaskToTiFlashStorageNode(LoggerPtr, const std::vector<RequestAndRegionIDs> &)
+    {
+        throw Exception("sendMPPTaskToTiFlashStorageNode not implemented for MockReceiverContext");
+    }
 
     static Status getStatusOK() { return ::grpc::Status(); }
 
@@ -307,7 +317,7 @@ public:
         DAGSchema schema;
         for (size_t i = 0; i < fields.size(); ++i)
         {
-            TiDB::ColumnInfo info = TiDB::fieldTypeToColumnInfo(fields[i]);
+            ColumnInfo info = TiDB::fieldTypeToColumnInfo(fields[i]);
             schema.emplace_back(String("col") + std::to_string(i), std::move(info));
         }
         return schema;

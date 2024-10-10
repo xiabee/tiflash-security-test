@@ -18,7 +18,6 @@
 #include <Storages/KVStore/Types.h>
 
 #include <shared_mutex>
-#include <unordered_map>
 
 namespace DB
 {

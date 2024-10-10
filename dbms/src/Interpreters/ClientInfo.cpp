@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/TiFlashBuildInfo.h>
+#include <Common/ClickHouseRevision.h>
 #include <Common/getFQDNOrHostName.h>
 #include <Core/Defines.h>
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/ClientInfo.h>
 #include <port/unistd.h>
@@ -31,9 +31,14 @@ extern const int LOGICAL_ERROR;
 }
 
 
-void ClientInfo::write(WriteBuffer & out) const
+void ClientInfo::write(WriteBuffer & out, const UInt64 server_protocol_revision) const
 {
-    writeBinary(static_cast<UInt8>(query_kind), out);
+    if (server_protocol_revision < DBMS_MIN_REVISION_WITH_CLIENT_INFO)
+        throw Exception(
+            "Logical error: method ClientInfo::write is called for unsupported server revision",
+            ErrorCodes::LOGICAL_ERROR);
+
+    writeBinary(UInt8(query_kind), out);
     if (empty())
         return;
 
@@ -41,7 +46,7 @@ void ClientInfo::write(WriteBuffer & out) const
     writeBinary(initial_query_id, out);
     writeBinary(initial_address.toString(), out);
 
-    writeBinary(static_cast<UInt8>(interface), out);
+    writeBinary(UInt8(interface), out);
 
     if (interface == Interface::TCP)
     {
@@ -50,18 +55,24 @@ void ClientInfo::write(WriteBuffer & out) const
         writeBinary(client_name, out);
         writeVarUInt(client_version_major, out);
         writeVarUInt(client_version_minor, out);
-        writeVarUInt(client_version_patch, out);
+        writeVarUInt(client_revision, out);
     }
 
-    writeBinary(quota_key, out);
+    if (server_protocol_revision >= DBMS_MIN_REVISION_WITH_QUOTA_KEY_IN_CLIENT_INFO)
+        writeBinary(quota_key, out);
 }
 
 
-void ClientInfo::read(ReadBuffer & in)
+void ClientInfo::read(ReadBuffer & in, const UInt64 client_protocol_revision)
 {
+    if (client_protocol_revision < DBMS_MIN_REVISION_WITH_CLIENT_INFO)
+        throw Exception(
+            "Logical error: method ClientInfo::read is called for unsupported client revision",
+            ErrorCodes::LOGICAL_ERROR);
+
     UInt8 read_query_kind = 0;
     readBinary(read_query_kind, in);
-    query_kind = static_cast<QueryKind>(read_query_kind);
+    query_kind = QueryKind(read_query_kind);
     if (empty())
         return;
 
@@ -74,7 +85,7 @@ void ClientInfo::read(ReadBuffer & in)
 
     UInt8 read_interface = 0;
     readBinary(read_interface, in);
-    interface = static_cast<Interface>(read_interface);
+    interface = Interface(read_interface);
 
     if (interface == Interface::TCP)
     {
@@ -83,10 +94,11 @@ void ClientInfo::read(ReadBuffer & in)
         readBinary(client_name, in);
         readVarUInt(client_version_major, in);
         readVarUInt(client_version_minor, in);
-        readVarUInt(client_version_patch, in);
+        readVarUInt(client_revision, in);
     }
 
-    readBinary(quota_key, in);
+    if (client_protocol_revision >= DBMS_MIN_REVISION_WITH_QUOTA_KEY_IN_CLIENT_INFO)
+        readBinary(quota_key, in);
 }
 
 
@@ -100,9 +112,9 @@ void ClientInfo::fillOSUserHostNameAndVersionInfo()
 
     client_hostname = getFQDNOrHostName();
 
-    client_version_major = TiFlashBuildInfo::getMajorVersion();
-    client_version_minor = TiFlashBuildInfo::getMinorVersion();
-    client_version_patch = TiFlashBuildInfo::getPatchVersion();
+    client_version_major = DBMS_VERSION_MAJOR;
+    client_version_minor = DBMS_VERSION_MINOR;
+    client_revision = ClickHouseRevision::get();
 }
 
 

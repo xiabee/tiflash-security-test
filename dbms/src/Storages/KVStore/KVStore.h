@@ -15,11 +15,9 @@
 #pragma once
 
 #include <Interpreters/Context_fwd.h>
-#include <Parsers/IAST_fwd.h>
 #include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/KVStore/Decode/RegionDataRead.h>
-#include <Storages/KVStore/FFI/JointThreadAllocInfo.h>
 #include <Storages/KVStore/MultiRaft/Disagg/RaftLogManager.h>
 #include <Storages/KVStore/MultiRaft/PreHandlingTrace.h>
 #include <Storages/KVStore/MultiRaft/RegionManager.h>
@@ -36,7 +34,7 @@ namespace DB
 {
 namespace RegionBench
 {
-struct DebugKVStore;
+extern void concurrentBatchInsert(const TiDB::TableInfo &, Int64, Int64, Int64, UInt64, UInt64, Context &);
 } // namespace RegionBench
 namespace DM
 {
@@ -46,8 +44,12 @@ struct ExternalDTFileInfo;
 
 namespace tests
 {
-class KVStoreTestBase;
-} // namespace tests
+class RegionKVStoreTest;
+}
+
+class IAST;
+using ASTPtr = std::shared_ptr<IAST>;
+using ASTs = std::vector<ASTPtr>;
 
 class KVStore;
 using KVStorePtr = std::shared_ptr<KVStore>;
@@ -70,6 +72,8 @@ struct WriteCmdsView;
 enum class EngineStoreApplyRes : uint32_t;
 
 struct TiFlashRaftProxyHelper;
+struct RegionPreDecodeBlockData;
+using RegionPreDecodeBlockDataPtr = std::unique_ptr<RegionPreDecodeBlockData>;
 class ReadIndexWorkerManager;
 using BatchReadIndexRes = std::vector<std::pair<kvrpcpb::ReadIndexResponse, uint64_t>>;
 class ReadIndexStressTest;
@@ -78,8 +82,6 @@ class PathPool;
 class RegionPersister;
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 class UniversalPageStorage;
 using UniversalPageStoragePtr = std::shared_ptr<UniversalPageStorage>;
 
@@ -114,52 +116,32 @@ struct ProxyConfigSummary
 {
     bool valid = false;
     size_t snap_handle_pool_size = 0;
-    std::string engine_addr;
 };
 
-/// KVStore manages raft replication and transactions.
-/// - Holds all regions in this TiFlash store.
-/// - Manages region -> table mapping.
-/// - Manages persistence of all regions.
-/// - Implements learner read.
-/// - Wraps FFI interfaces.
-/// - Use `Decoder` to transform row format into col format.
+/// TODO: brief design document.
 class KVStore final : private boost::noncopyable
 {
 public:
+    explicit KVStore(Context & context);
+    void restore(PathPool & path_pool, const TiFlashRaftProxyHelper *);
+
+    RegionPtr getRegion(RegionID region_id) const;
+
     using RegionRange = RegionRangeKeys::RegionRange;
 
-    explicit KVStore(Context & context);
-    ~KVStore();
+    RegionMap getRegionsByRangeOverlap(const RegionRange & range) const;
+
+    void traverseRegions(std::function<void(RegionID, const RegionPtr &)> && callback) const;
+
+    void gcPersistedRegion(Seconds gc_persist_period = Seconds(60 * 5));
+
+    static bool tryFlushRegionCacheInStorage(
+        TMTContext & tmt,
+        const Region & region,
+        const LoggerPtr & log,
+        bool try_until_succeed = true);
 
     size_t regionSize() const;
-    const TiFlashRaftProxyHelper * getProxyHelper() const { return proxy_helper; }
-    // Exported only for tests.
-    TiFlashRaftProxyHelper * mutProxyHelperUnsafe() { return const_cast<TiFlashRaftProxyHelper *>(proxy_helper); }
-    void setStore(metapb::Store);
-    // May return 0 if uninitialized
-    StoreID getStoreID(std::memory_order = std::memory_order_relaxed) const;
-    metapb::Store clonedStoreMeta() const;
-    const metapb::Store & getStoreMeta() const;
-    metapb::Store & debugMutStoreMeta();
-    FileUsageStatistics getFileUsageStatistics() const;
-    // Proxy will validate and refit the config items from the toml file.
-    const ProxyConfigSummary & getProxyConfigSummay() const { return proxy_config_summary; }
-    void reportThreadAllocInfo(std::string_view, ReportThreadAllocateInfoType type, uint64_t value);
-    static void reportThreadAllocBatch(std::string_view, ReportThreadAllocateInfoBatch data);
-    JointThreadInfoJeallocMapPtr getJointThreadInfoJeallocMap() const { return joint_memory_allocation_map; }
-    void fetchProxyConfig(const TiFlashRaftProxyHelper * proxy_helper);
-
-public: // Region Management
-    void restore(PathPool & path_pool, const TiFlashRaftProxyHelper *);
-    void gcPersistedRegion(Seconds gc_persist_period = Seconds(60 * 5));
-    RegionPtr getRegion(RegionID region_id) const;
-    RegionMap getRegionsByRangeOverlap(const RegionRange & range) const;
-    void traverseRegions(std::function<void(RegionID, const RegionPtr &)> && callback) const;
-    RegionPtr genRegionPtr(metapb::Region && region, UInt64 peer_id, UInt64 index, UInt64 term);
-    void handleDestroy(UInt64 region_id, TMTContext & tmt);
-
-public: // Raft Read and Write
     EngineStoreApplyRes handleAdminRaftCmd(
         raft_cmdpb::AdminRequest && request,
         raft_cmdpb::AdminResponse && response,
@@ -181,12 +163,6 @@ public: // Raft Read and Write
         TMTContext & tmt,
         DM::WriteResult & write_result);
 
-public: // Flush
-    static bool tryFlushRegionCacheInStorage(
-        TMTContext & tmt,
-        const Region & region,
-        const LoggerPtr & log,
-        bool try_until_succeed = true);
     bool needFlushRegionData(UInt64 region_id, TMTContext & tmt);
     bool tryFlushRegionData(
         UInt64 region_id,
@@ -197,21 +173,9 @@ public: // Flush
         UInt64 term,
         uint64_t truncated_index,
         uint64_t truncated_term);
-    void setRegionCompactLogConfig(UInt64 rows, UInt64 bytes, UInt64 gap, UInt64 eager_gc_gap);
-    UInt64 getRaftLogEagerGCRows() const { return region_eager_gc_log_gap.load(); }
-    // TODO(proactive flush)
-    // void proactiveFlushCacheAndRegion(TMTContext & tmt, const DM::RowKeyRange & rowkey_range, KeyspaceID keyspace_id, TableID table_id, bool is_background);
-    void notifyCompactLog(
-        RegionID region_id,
-        UInt64 compact_index,
-        UInt64 compact_term,
-        bool is_background,
-        bool lock_held = true);
-    RaftLogEagerGcTasks::Hints getRaftLogGcHints();
-    void applyRaftLogGcTaskRes(const RaftLogGcTasksRes & res) const;
 
-public: // Raft Snapshot
-    void handleIngestCheckpoint(RegionPtr region, CheckpointIngestInfoPtr checkpoint_info, TMTContext & tmt);
+    void handleIngestCheckpoint(RegionPtr region, CheckpointInfoPtr checkpoint_info, TMTContext & tmt);
+
     // For Raftstore V2, there could be some orphan keys in the write column family being left to `new_region` after pre-handled.
     // All orphan write keys are asserted to be replayed before reaching `deadline_index`.
     PrehandleResult preHandleSnapshotToFiles(
@@ -227,14 +191,30 @@ public: // Raft Snapshot
     void releasePreHandledSnapshot(const RegionPtrWrap &, TMTContext & tmt);
     void abortPreHandleSnapshot(uint64_t region_id, TMTContext & tmt);
     size_t getOngoingPrehandleTaskCount() const;
-    size_t getOngoingPrehandleSubtaskCount() const;
-    EngineStoreApplyRes handleIngestSST(UInt64 region_id, SSTViewVec, UInt64 index, UInt64 term, TMTContext & tmt);
-    size_t getMaxParallelPrehandleSize() const;
 
-public: // Raft Read
+    void handleDestroy(UInt64 region_id, TMTContext & tmt);
+
+    void setRegionCompactLogConfig(UInt64 rows, UInt64 bytes, UInt64 gap, UInt64 eager_gc_gap);
+    UInt64 getRaftLogEagerGCRows() const { return region_eager_gc_log_gap.load(); }
+
+    EngineStoreApplyRes handleIngestSST(UInt64 region_id, SSTViewVec, UInt64 index, UInt64 term, TMTContext & tmt);
+    RegionPtr genRegionPtr(metapb::Region && region, UInt64 peer_id, UInt64 index, UInt64 term);
+    const TiFlashRaftProxyHelper * getProxyHelper() const { return proxy_helper; }
+    // Exported only for tests.
+    TiFlashRaftProxyHelper * mutProxyHelperUnsafe() { return const_cast<TiFlashRaftProxyHelper *>(proxy_helper); }
+
     void addReadIndexEvent(Int64 f) { read_index_event_flag += f; }
     Int64 getReadIndexEvent() const { return read_index_event_flag; }
+
+    void setStore(metapb::Store);
+
+    // May return 0 if uninitialized
+    StoreID getStoreID(std::memory_order = std::memory_order_relaxed) const;
+
+    metapb::Store getStoreMeta() const;
+
     BatchReadIndexRes batchReadIndex(const std::vector<kvrpcpb::ReadIndexRequest> & req, uint64_t timeout_ms) const;
+
     /// Initialize read-index worker context. It only can be invoked once.
     /// `worker_coefficient` means `worker_coefficient * runner_cnt` workers will be created.
     /// `runner_cnt` means number of runner which controls behavior of worker.
@@ -242,13 +222,33 @@ public: // Raft Read
         std::function<std::chrono::milliseconds()> && fn_min_dur_handle_region,
         size_t runner_cnt,
         size_t worker_coefficient = 64);
+
     /// Create `runner_cnt` threads to run ReadIndexWorker asynchronously and automatically.
     /// If there is other runtime framework, DO NOT invoke it.
     void asyncRunReadIndexWorkers() const;
+
     /// Stop workers after there is no more read-index task.
     void stopReadIndexWorkers() const;
+
     /// TODO: if supported by runtime framework, run one round for specific runner by `id`.
     void runOneRoundOfReadIndexRunner(size_t runner_id);
+
+    ~KVStore();
+
+    FileUsageStatistics getFileUsageStatistics() const;
+
+    // TODO(proactive flush)
+    // void proactiveFlushCacheAndRegion(TMTContext & tmt, const DM::RowKeyRange & rowkey_range, KeyspaceID keyspace_id, TableID table_id, bool is_background);
+    void notifyCompactLog(
+        RegionID region_id,
+        UInt64 compact_index,
+        UInt64 compact_term,
+        bool is_background,
+        bool lock_held = true);
+
+    RaftLogEagerGcTasks::Hints getRaftLogGcHints();
+    void applyRaftLogGcTaskRes(const RaftLogGcTasksRes & res) const;
+    const ProxyConfigSummary & getProxyConfigSummay() const { return proxy_config_summary; }
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -259,12 +259,19 @@ private:
     friend struct MockRaftCommand;
     friend class RegionMockTest;
     friend class NaturalDag;
+    friend void RegionBench::concurrentBatchInsert(
+        const TiDB::TableInfo &,
+        Int64,
+        Int64,
+        Int64,
+        UInt64,
+        UInt64,
+        Context &);
     using DBGInvokerPrinter = std::function<void(const std::string &)>;
     friend void dbgFuncRemoveRegion(Context &, const ASTs &, DBGInvokerPrinter);
     friend void dbgFuncPutRegion(Context &, const ASTs &, DBGInvokerPrinter);
-    friend class tests::KVStoreTestBase;
+    friend class tests::RegionKVStoreTest;
     friend class ReadIndexStressTest;
-    friend struct RegionBench::DebugKVStore;
     struct StoreMeta
     {
         mutable std::mutex mu;
@@ -278,8 +285,6 @@ private:
     };
     StoreMeta & getStore();
     const StoreMeta & getStore() const;
-
-    //  ---- Raft Snapshot ----  //
 
     PrehandleResult preHandleSSTsToDTFiles(
         RegionPtr new_region,
@@ -301,8 +306,6 @@ private:
         UInt64 term,
         TMTContext & tmt);
 
-    //  ---- Region Management ----  //
-
     // Remove region from this TiFlash node.
     // If region is destroy or moved to another node(change peer),
     // set `remove_data` true to remove obsolete data from storage.
@@ -312,13 +315,12 @@ private:
         RegionTable & region_table,
         const KVStoreTaskLock & task_lock,
         const RegionTaskLock & region_lock);
+    void mockRemoveRegion(RegionID region_id, RegionTable & region_table);
     KVStoreTaskLock genTaskLock() const;
-    RegionManager::RegionReadLock genRegionMgrReadLock() const;
-    RegionManager::RegionWriteLock genRegionMgrWriteLock(const KVStoreTaskLock &);
-    void handleDestroy(UInt64 region_id, TMTContext & tmt, const KVStoreTaskLock &);
-    RegionTaskLock genRegionTaskLock(UInt64 region_id) const;
 
-    //  ---- Region Write ----  //
+    RegionManager::RegionReadLock genRegionMgrReadLock() const;
+
+    RegionManager::RegionWriteLock genRegionMgrWriteLock(const KVStoreTaskLock &);
 
     EngineStoreApplyRes handleUselessAdminRaftCmd(
         raft_cmdpb::AdminCmdType cmd_type,
@@ -326,8 +328,6 @@ private:
         UInt64 index,
         UInt64 term,
         TMTContext & tmt) const;
-
-    //  ---- Region Persistence ----  //
 
     /// Notice that if flush_if_possible is set to false, we only check if a flush is allowed by rowsize/size/interval.
     /// It will not check if a flush will eventually succeed.
@@ -359,9 +359,8 @@ private:
 
     bool tryRegisterEagerRaftLogGCTask(const RegionPtr & region, RegionTaskLock &);
 
-    //  ---- Raft Read ----  //
-
     void releaseReadIndexWorkers();
+    void handleDestroy(UInt64 region_id, TMTContext & tmt, const KVStoreTaskLock &);
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -411,10 +410,7 @@ private:
     // Relates to `queue_size` in `can_apply_snapshot`,
     // we can't have access to these codes though.
     std::atomic<int64_t> ongoing_prehandle_task_count{0};
-    std::atomic<int64_t> ongoing_prehandle_subtask_count{0};
     ProxyConfigSummary proxy_config_summary;
-
-    JointThreadInfoJeallocMapPtr joint_memory_allocation_map;
 };
 
 /// Encapsulation of lock guard of task mutex in KVStore
@@ -428,12 +424,6 @@ class KVStoreTaskLock : private boost::noncopyable
 };
 
 void WaitCheckRegionReady(const TMTContext &, KVStore & kvstore, const std::atomic_size_t & terminate_signals_counter);
-void WaitCheckRegionReadyImpl(
-    const TMTContext &,
-    KVStore & kvstore,
-    const std::atomic_size_t &,
-    double,
-    double,
-    double);
+void WaitCheckRegionReady(const TMTContext &, KVStore & kvstore, const std::atomic_size_t &, double, double, double);
 
 } // namespace DB

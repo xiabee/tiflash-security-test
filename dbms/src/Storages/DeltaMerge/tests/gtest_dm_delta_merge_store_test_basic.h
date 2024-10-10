@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#pragma once
 
 #include <Common/Exception.h>
 #include <Common/FailPoint.h>
@@ -68,20 +67,18 @@ public:
 
         ColumnDefine handle_column_define = (*cols)[0];
 
-        DeltaMergeStorePtr s = DeltaMergeStore::create(
+        DeltaMergeStorePtr s = std::make_shared<DeltaMergeStore>(
             *db_context,
             false,
             "test",
             "t_100",
             NullspaceID,
             100,
-            /*pk_col_id*/ 0,
             true,
             *cols,
             handle_column_define,
             is_common_handle,
             rowkey_column_size,
-            nullptr,
             DeltaMergeStore::Settings());
         return s;
     }
@@ -90,30 +87,6 @@ public:
     {
         auto path_delegate = store->path_pool->getStableDiskDelegator();
         return path_delegate.listPaths();
-    }
-
-    std::pair<RowKeyRange, std::vector<ExternalDTFileInfo>> genDMFile(DMContext & context, const Block & block)
-    {
-        auto input_stream = std::make_shared<OneBlockInputStream>(block);
-        auto [store_path, file_id] = store->preAllocateIngestFile();
-
-        auto dmfile = writeIntoNewDMFile(
-            context,
-            std::make_shared<ColumnDefines>(store->getTableColumns()),
-            input_stream,
-            file_id,
-            store_path);
-
-        store->preIngestFile(store_path, file_id, dmfile->getBytesOnDisk());
-
-        const auto & pk_column = block.getByPosition(0).column;
-        auto min_pk = pk_column->getInt(0);
-        auto max_pk = pk_column->getInt(block.rows() - 1);
-        HandleRange range(min_pk, max_pk + 1);
-        auto handle_range = RowKeyRange::fromHandleRange(range);
-        auto external_file = ExternalDTFileInfo{.id = file_id, .range = handle_range};
-        // There are some duplicated info. This is to minimize the change to our test code.
-        return {handle_range, {external_file}};
     }
 
 protected:
@@ -140,7 +113,6 @@ class DeltaMergeStoreRWTest
 {
 public:
     DeltaMergeStoreRWTest()
-        : current_version(STORAGE_FORMAT_CURRENT)
     {
         mode = GetParam();
 
@@ -161,8 +133,6 @@ public:
             break;
         }
     }
-
-    ~DeltaMergeStoreRWTest() override { setStorageFormat(current_version); }
 
     void SetUp() override
     {
@@ -186,20 +156,18 @@ public:
 
         ColumnDefine handle_column_define = (*cols)[0];
 
-        DeltaMergeStorePtr s = DeltaMergeStore::create(
+        DeltaMergeStorePtr s = std::make_shared<DeltaMergeStore>(
             *db_context,
             false,
             "test",
             "t_101",
             NullspaceID,
             101,
-            /*pk_col_id*/ 0,
             true,
             *cols,
             handle_column_define,
             is_common_handle,
             rowkey_column_size,
-            nullptr,
             DeltaMergeStore::Settings());
         return s;
     }
@@ -233,7 +201,6 @@ protected:
     TestMode mode;
     DeltaMergeStorePtr store;
     DMContextPtr dm_context;
-    StorageFormatVersion current_version;
 
     constexpr static const char * TRACING_NAME = "DeltaMergeStoreRWTest";
 

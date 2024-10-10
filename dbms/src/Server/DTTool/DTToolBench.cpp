@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/RandomData.h>
 #include <Common/TiFlashMetrics.h>
-#include <IO/Checksum/ChecksumBuffer.h>
-#include <IO/Encryption/MockKeyManager.h>
+#include <Encryption/MockKeyManager.h>
+#include <IO/ChecksumBuffer.h>
 #include <Poco/Path.h>
 #include <Server/DTTool/DTTool.h>
 #include <Server/RaftConfigParser.h>
@@ -25,7 +24,6 @@
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFileBlockInputStream.h>
 #include <Storages/DeltaMerge/File/DMFileBlockOutputStream.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/FormatVersion.h>
 #include <Storages/KVStore/TMTContext.h>
@@ -92,6 +90,21 @@ ColumnDefinesPtr createColumnDefines(size_t column_number)
             DB::DataTypeFactory::instance().get("String")});
     }
     return primitive;
+}
+
+String createRandomString(std::size_t limit, std::mt19937_64 & eng, size_t & acc)
+{
+    // libc++-15 forbids instantiate `std::uniform_int_distribution<char>`.
+    // see https://github.com/llvm/llvm-project/blob/bfcd536a8ef6b1d6e9dd211925be3b078d06fe77/libcxx/include/__random/is_valid.h#L28
+    // and https://github.com/llvm/llvm-project/blob/bfcd536a8ef6b1d6e9dd211925be3b078d06fe77/libcxx/include/__random/uniform_int_distribution.h#L162
+    std::uniform_int_distribution<uint8_t> dist('a', 'z');
+    std::string buffer((eng() % limit) + 1, 0);
+    for (auto & i : buffer)
+    {
+        i = dist(eng);
+    }
+    acc += buffer.size();
+    return buffer;
 }
 
 DB::Block createBlock(
@@ -178,7 +191,7 @@ DB::Block createBlock(
         IColumn::MutablePtr m_col = str_col.type->createColumn();
         for (size_t j = 0; j < row_number; j++)
         {
-            Field field = DB::random::randomString(limit);
+            Field field = createRandomString(limit, eng, acc);
             m_col->insert(field);
         }
         str_col.column = std::move(m_col);
@@ -352,14 +365,13 @@ int benchEntry(const std::vector<std::string> & opts)
         auto storage_pool
             = std::make_shared<DB::DM::StoragePool>(*db_context, NullspaceID, /*ns_id*/ 1, *path_pool, "test.t1");
         auto dm_settings = DB::DM::DeltaMergeStore::Settings{};
-        auto dm_context = DB::DM::DMContext::createUnique(
+        auto dm_context = std::make_unique<DB::DM::DMContext>( //
             *db_context,
             path_pool,
             storage_pool,
             /*min_version_*/ 0,
             NullspaceID,
             /*physical_table_id*/ 1,
-            /*pk_col_id*/ 0,
             false,
             1,
             db_context->getSettingsRef());

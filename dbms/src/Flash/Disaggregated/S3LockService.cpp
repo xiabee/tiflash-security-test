@@ -176,7 +176,7 @@ bool S3LockService::tryAddLockImpl(
     const String & data_file_key,
     UInt64 lock_store_id,
     UInt64 lock_seq,
-    disaggregated::TryAddLockResponse * response) NO_THREAD_SAFETY_ANALYSIS
+    disaggregated::TryAddLockResponse * response)
 {
     GET_METRIC(tiflash_disaggregated_object_lock_request_count, type_lock).Increment();
     const S3FilenameView key_view = S3FilenameView::fromKey(data_file_key);
@@ -206,7 +206,7 @@ bool S3LockService::tryAddLockImpl(
     auto s3_client = S3::ClientFactory::instance().sharedTiFlashClient();
     // make sure data file exists
     auto object_key
-        = key_view.isDMFile() ? fmt::format("{}/{}", data_file_key, DM::DMFileMetaV2::metaFileName()) : data_file_key;
+        = key_view.isDMFile() ? fmt::format("{}/{}", data_file_key, DM::DMFile::metav2FileName()) : data_file_key;
     if (!DB::S3::objectExists(*s3_client, object_key))
     {
         auto * e = response->mutable_result()->mutable_conflict();

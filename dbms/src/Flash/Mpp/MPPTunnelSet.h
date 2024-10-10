@@ -17,6 +17,7 @@
 #include <Flash/Mpp/MPPTaskId.h>
 #include <Flash/Mpp/MPPTunnel.h>
 #include <Flash/Mpp/MppVersion.h>
+#include <IO/CompressedStream.h>
 
 namespace DB
 {
@@ -60,8 +61,7 @@ public:
 
     const std::vector<TunnelPtr> & getTunnels() const { return tunnels; }
 
-    WaitResult waitForWritable() const;
-    void notifyNextPipelineWriter() const;
+    bool isWritable() const;
 
     bool isLocal(size_t index) const;
 

@@ -12,15 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include <Columns/ColumnNullable.h>
-#include <Common/Exception.h>
-#include <Common/RandomData.h>
-#include <Core/Types.h>
-#include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeEnum.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <TestUtils/ColumnGenerator.h>
-
-#include <magic_enum.hpp>
 
 namespace DB::tests
 {
@@ -37,7 +31,7 @@ ColumnWithTypeAndName ColumnGenerator::generateNullMapColumn(const ColumnGenerat
 
 ColumnWithTypeAndName ColumnGenerator::generate(const ColumnGeneratorOpts & opts)
 {
-    RUNTIME_CHECK(opts.distribution == DataDistribution::RANDOM);
+    int_rand_gen = std::uniform_int_distribution<Int64>(0, opts.string_max_size);
     DataTypePtr type;
     if (opts.type_name == "Decimal")
         type = createDecimalType();
@@ -103,19 +97,9 @@ ColumnWithTypeAndName ColumnGenerator::generate(const ColumnGeneratorOpts & opts
             genFloat(col);
         break;
     case TypeIndex::String:
-    {
-        auto int_rand_gen = std::uniform_int_distribution<Int64>(0, opts.string_max_size);
         for (size_t i = 0; i < opts.size; ++i)
-            genString(col, int_rand_gen(rand_gen));
+            genString(col);
         break;
-    }
-    case TypeIndex::FixedString:
-    {
-        auto int_rand_gen = std::uniform_int_distribution<Int64>(0, opts.string_max_size);
-        for (size_t i = 0; i < opts.size; ++i)
-            genString(col, int_rand_gen(rand_gen));
-        break;
-    }
     case TypeIndex::Decimal32:
     case TypeIndex::Decimal64:
     case TypeIndex::Decimal128:
@@ -140,23 +124,10 @@ ColumnWithTypeAndName ColumnGenerator::generate(const ColumnGeneratorOpts & opts
         for (size_t i = 0; i < opts.size; ++i)
             genEnumValue(col, type);
         break;
-    case TypeIndex::Array:
-    {
-        auto nested_type = typeid_cast<const DataTypeArray *>(type.get())->getNestedType();
-        size_t elems_size = opts.array_elems_max_size;
-        for (size_t i = 0; i < opts.size; ++i)
         {
-            if (opts.array_elems_distribution == DataDistribution::RANDOM)
-                elems_size = static_cast<UInt64>(rand_gen()) % opts.array_elems_max_size;
-            genVector(col, nested_type, elems_size);
         }
-        break;
-    }
     default:
-        throw DB::Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "RandomColumnGenerator invalid type, type_id={}",
-            magic_enum::enum_name(type_id));
+        throw std::invalid_argument("RandomColumnGenerator invalid type");
     }
 
     return {std::move(col), type, opts.name};
@@ -168,6 +139,73 @@ DataTypePtr ColumnGenerator::createDecimalType()
     int prec = rand_gen() % max_precision + 1;
     int scale = rand_gen() % prec;
     return DB::createDecimal(prec, scale);
+}
+
+String ColumnGenerator::randomString()
+{
+    String str(int_rand_gen(rand_gen), 0);
+    std::generate_n(str.begin(), str.size(), [this]() { return charset[rand_gen() % charset.size()]; });
+    return str;
+}
+
+int ColumnGenerator::randomTimeOffset()
+{
+    static constexpr int max_offset = 24 * 3600 * 10000; // 10000 days for test
+    return (rand_gen() % max_offset) * (rand_gen() % 2 == 0 ? 1 : -1);
+}
+
+time_t ColumnGenerator::randomUTCTimestamp()
+{
+    return ::time(nullptr) + randomTimeOffset();
+}
+
+struct tm ColumnGenerator::randomLocalTime()
+{
+    time_t t = randomUTCTimestamp();
+    struct tm res
+    {
+    };
+
+    if (localtime_r(&t, &res) == nullptr)
+    {
+        throw std::invalid_argument(fmt::format("localtime_r({}) ret {}", t, strerror(errno)));
+    }
+    return res;
+}
+
+String ColumnGenerator::randomDate()
+{
+    auto res = randomLocalTime();
+    return fmt::format("{}-{}-{}", res.tm_year + 1900, res.tm_mon + 1, res.tm_mday);
+}
+
+String ColumnGenerator::randomDuration()
+{
+    auto res = randomLocalTime();
+    return fmt::format("{}:{}:{}", res.tm_hour, res.tm_min, res.tm_sec);
+}
+
+String ColumnGenerator::randomDateTime()
+{
+    auto res = randomLocalTime();
+    return fmt::format(
+        "{}-{}-{} {}:{}:{}",
+        res.tm_year + 1900,
+        res.tm_mon + 1,
+        res.tm_mday,
+        res.tm_hour,
+        res.tm_min,
+        res.tm_sec);
+}
+
+String ColumnGenerator::randomDecimal(uint64_t prec, uint64_t scale)
+{
+    auto s = std::to_string(rand_gen());
+    if (s.size() < prec)
+        s += String(prec - s.size(), '0');
+    else if (s.size() > prec)
+        s = s.substr(0, prec);
+    return s.substr(0, prec - scale) + "." + s.substr(prec - scale);
 }
 
 template <typename IntegerType>
@@ -226,27 +264,27 @@ void ColumnGenerator::genFloat(MutableColumnPtr & col)
     col->insert(f);
 }
 
-void ColumnGenerator::genString(MutableColumnPtr & col, UInt64 max_size)
+void ColumnGenerator::genString(MutableColumnPtr & col)
 {
-    Field f = DB::random::randomString(max_size);
+    Field f = randomString();
     col->insert(f);
 }
 
 void ColumnGenerator::genDate(MutableColumnPtr & col)
 {
-    Field f = parseMyDateTime(DB::random::randomDate());
+    Field f = parseMyDateTime(randomDate());
     col->insert(f);
 }
 
 void ColumnGenerator::genDateTime(MutableColumnPtr & col)
 {
-    Field f = parseMyDateTime(DB::random::randomDateTime());
+    Field f = parseMyDateTime(randomDateTime());
     col->insert(f);
 }
 
 void ColumnGenerator::genDuration(MutableColumnPtr & col)
 {
-    Field f = parseMyDuration(DB::random::randomDuration());
+    Field f = parseMyDuration(randomDuration());
     col->insert(f);
 }
 
@@ -254,7 +292,7 @@ void ColumnGenerator::genDecimal(MutableColumnPtr & col, DataTypePtr & data_type
 {
     auto prec = getDecimalPrecision(*data_type, 0);
     auto scale = getDecimalScale(*data_type, 0);
-    auto s = DB::random::randomDecimal(prec, scale);
+    auto s = randomDecimal(prec, scale);
     bool negative = rand_gen() % 2 == 0;
     Field f;
     if (parseDecimal(s.data(), s.size(), negative, f))
@@ -263,38 +301,8 @@ void ColumnGenerator::genDecimal(MutableColumnPtr & col, DataTypePtr & data_type
     }
     else
     {
-        throw DB::Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "RandomColumnGenerator parseDecimal({}, {}) prec {} scale {} fail",
-            s,
-            negative,
-            prec,
-            scale);
+        throw std::invalid_argument(
+            fmt::format("RandomColumnGenerator parseDecimal({}, {}) prec {} scale {} fail", s, negative, prec, scale));
     }
 }
-
-void ColumnGenerator::genVector(MutableColumnPtr & col, DataTypePtr & nested_type, size_t num_vals)
-{
-    switch (nested_type->getTypeId())
-    {
-    case TypeIndex::Float32:
-    case TypeIndex::Float64:
-    {
-        Array arr;
-        for (size_t i = 0; i < num_vals; ++i)
-        {
-            arr.push_back(static_cast<Float64>(real_rand_gen(rand_gen)));
-            // arr.push_back(static_cast<Float64>(2.5));
-        }
-        col->insert(arr);
-        break;
-    }
-    default:
-        throw DB::Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "RandomColumnGenerator invalid nested type in Array(...), type_id={}",
-            magic_enum::enum_name(nested_type->getTypeId()));
-    }
-}
-
 } // namespace DB::tests

@@ -31,18 +31,16 @@ public:
     ALWAYS_INLINE UInt64 getIOExecuteTimeNs() const { return io_execute_time_ns; }
     ALWAYS_INLINE UInt64 getIOPendingTimeNs() const { return io_pending_time_ns; }
     ALWAYS_INLINE UInt64 getAwaitTimeNs() const { return await_time_ns; }
-    ALWAYS_INLINE UInt64 getWaitForNotifyTimeNs() const { return wait_for_notify_time_ns; }
 
     ALWAYS_INLINE String toJson() const
     {
         return fmt::format(
-            R"({{"cpu_execute_time_ns":{},"cpu_pending_time_ns":{},"io_execute_time_ns":{},"io_pending_time_ns":{},"await_time_ns":{},"wait_for_notify_time_ns":{}}})",
+            R"({{"cpu_execute_time_ns":{},"cpu_pending_time_ns":{},"io_execute_time_ns":{},"io_pending_time_ns":{},"await_time_ns":{}}})",
             cpu_execute_time_ns,
             cpu_pending_time_ns,
             io_execute_time_ns,
             io_pending_time_ns,
-            await_time_ns,
-            wait_for_notify_time_ns);
+            await_time_ns);
     }
 
 protected:
@@ -51,12 +49,13 @@ protected:
     UnitType io_execute_time_ns = 0;
     UnitType io_pending_time_ns = 0;
     UnitType await_time_ns = 0;
-    UnitType wait_for_notify_time_ns = 0;
 };
 
 class TaskProfileInfo : public ProfileInfo<UInt64>
 {
 public:
+    ALWAYS_INLINE void startTimer() { stopwatch.start(); }
+
     ALWAYS_INLINE UInt64 elapsedFromPrev() { return stopwatch.elapsedFromLastTime(); }
 
     ALWAYS_INLINE void addCPUExecuteTime(UInt64 value)
@@ -78,8 +77,6 @@ public:
     ALWAYS_INLINE void elapsedIOPendingTime() { io_pending_time_ns += elapsedFromPrev(); }
 
     ALWAYS_INLINE void elapsedAwaitTime() { await_time_ns += elapsedFromPrev(); }
-
-    ALWAYS_INLINE void elapsedWaitForNotifyTime() { wait_for_notify_time_ns += elapsedFromPrev(); }
 
     ALWAYS_INLINE void reportMetrics() const
     {
@@ -114,7 +111,6 @@ public:
         REPORT_DURATION_METRICS(type_io_execute, io_execute_time_ns);
         REPORT_DURATION_METRICS(type_io_queue, io_pending_time_ns);
         REPORT_DURATION_METRICS(type_await, await_time_ns);
-        REPORT_DURATION_METRICS(type_wait_for_notify, wait_for_notify_time_ns);
 
         REPORT_ROUND_METRICS(type_cpu, cpu_execute_max_time_ns_per_round);
         REPORT_ROUND_METRICS(type_io, io_execute_max_time_ns_per_round);
@@ -140,7 +136,6 @@ public:
         io_execute_time_ns += task_profile_info.getIOExecuteTimeNs();
         io_pending_time_ns += task_profile_info.getIOPendingTimeNs();
         await_time_ns += task_profile_info.getAwaitTimeNs();
-        wait_for_notify_time_ns += task_profile_info.getWaitForNotifyTimeNs();
     }
 };
 } // namespace DB

@@ -16,7 +16,6 @@
 #include <Common/Exception.h>
 #include <Common/Logger.h>
 #include <Common/UniThreadPool.h>
-#include <IO/FileProvider/EncryptionPath.h>
 #include <IO/IOThreadPools.h>
 #include <IO/UseSSL.h>
 #include <Interpreters/Context.h>
@@ -84,15 +83,11 @@ void initThreadPool()
         /*max_threads*/ default_num_threads,
         /*max_free_threads*/ default_num_threads / 2,
         /*queue_size*/ default_num_threads * 2);
-    BuildReadTaskForWNPool::initialize(
+    RNRemoteReadTaskPool::initialize(
         /*max_threads*/ default_num_threads,
         /*max_free_threads*/ default_num_threads / 2,
         /*queue_size*/ default_num_threads * 2);
-    BuildReadTaskForWNTablePool::initialize(
-        /*max_threads*/ default_num_threads,
-        /*max_free_threads*/ default_num_threads / 2,
-        /*queue_size*/ default_num_threads * 2);
-    BuildReadTaskPool::initialize(
+    RNPagePreparerPool::initialize(
         /*max_threads*/ default_num_threads,
         /*max_free_threads*/ default_num_threads / 2,
         /*queue_size*/ default_num_threads * 2);
@@ -166,12 +161,10 @@ ContextPtr init(WorkloadOptions & opts)
     if (!opts.s3_bucket.empty())
     {
         auto & kvstore = context->getTMTContext().getKVStore();
-        auto store_meta = kvstore->clonedStoreMeta();
+        auto store_meta = kvstore->getStoreMeta();
         store_meta.set_id(test_store_id);
         kvstore->setStore(store_meta);
-        context->getSharedContextDisagg()->initRemoteDataStore(
-            context->getFileProvider(),
-            /*is_s3_enabled*/ true);
+        context->getSharedContextDisagg()->initRemoteDataStore(context->getFileProvider(), /*is_s3_enabled*/ true);
     }
     return context;
 }
@@ -488,7 +481,7 @@ void putRandomObject(const DB::DM::tests::WorkloadOptions & opts)
     genFile(local_fname, fsize, value);
     auto client = getS3Client(opts);
     Stopwatch sw;
-    S3::uploadFile(*client, local_fname, remote_fname, EncryptionPath("", ""), nullptr);
+    S3::uploadFile(*client, local_fname, remote_fname);
     addRemoteFname(remote_fname, fsize);
     s3_stat.addPutStat(remote_fname, sw.elapsedSeconds());
     std::filesystem::remove(local_fname);

@@ -60,16 +60,14 @@ public:
     const char * getFamilyName() const override { return "Nullable"; }
     std::string getName() const override { return "Nullable(" + nested_column->getName() + ")"; }
     MutableColumnPtr cloneResized(size_t size) const override;
-    size_t size() const override { return static_cast<const ColumnUInt8 &>(*null_map).size(); }
+    size_t size() const override { return nested_column->size(); }
     bool isNullAt(size_t n) const override { return static_cast<const ColumnUInt8 &>(*null_map).getData()[n] != 0; }
     Field operator[](size_t n) const override;
     void get(size_t n, Field & res) const override;
     UInt64 get64(size_t n) const override { return nested_column->get64(n); }
-    StringRef getDataAt(size_t) const override;
-    /// Will insert null value if pos=nullptr
+    StringRef getDataAt(size_t n) const override;
     void insertData(const char * pos, size_t length) override;
     bool decodeTiDBRowV2Datum(size_t cursor, const String & raw_value, size_t length, bool force_decode) override;
-    void insertFromDatumData(const char *, size_t) override;
     StringRef serializeValueIntoArena(
         size_t n,
         Arena & arena,
@@ -105,15 +103,11 @@ public:
     std::tuple<bool, int> compareAtCheckNull(size_t n, size_t m, const ColumnNullable & rhs, int null_direction_hint)
         const;
     int compareAt(size_t n, size_t m, const IColumn & rhs_, int null_direction_hint) const override;
-    int compareAt(
-        size_t n,
-        size_t m,
-        const IColumn & rhs_,
-        int null_direction_hint,
-        const TiDB::ITiDBCollator & collator) const override;
+    int compareAt(size_t n, size_t m, const IColumn & rhs_, int null_direction_hint, const ICollator & collator)
+        const override;
     void getPermutation(bool reverse, size_t limit, int null_direction_hint, Permutation & res) const override;
     void getPermutation(
-        const TiDB::ITiDBCollator & collator,
+        const ICollator & collator,
         bool reverse,
         size_t limit,
         int null_direction_hint,
@@ -131,8 +125,6 @@ public:
     void updateHashWithValues(IColumn::HashValues & hash_values, const TiDB::TiDBCollatorPtr &, String &)
         const override;
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
-        const override;
     void getExtremes(Field & min, Field & max) const override;
 
     MutableColumns scatter(ColumnIndex num_columns, const Selector & selector) const override
@@ -140,20 +132,9 @@ public:
         return scatterImpl<ColumnNullable>(num_columns, selector);
     }
 
-    MutableColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
-        const override
-    {
-        return scatterImpl<ColumnNullable>(num_columns, selector, selective);
-    }
-
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override
     {
         scatterToImpl<ColumnNullable>(columns, selector);
-    }
-
-    void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const override
-    {
-        scatterToImpl<ColumnNullable>(columns, selector, selective);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;
@@ -208,13 +189,6 @@ private:
 
     template <bool negative>
     void applyNullMapImpl(const ColumnUInt8 & map);
-
-    template <bool selective_block>
-    void updateWeakHash32Impl(
-        WeakHash32 & hash,
-        const TiDB::TiDBCollatorPtr & collator,
-        String & sort_key_container,
-        const BlockSelective & selective) const;
 };
 
 

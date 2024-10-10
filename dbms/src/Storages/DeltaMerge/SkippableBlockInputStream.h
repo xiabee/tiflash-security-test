@@ -20,7 +20,7 @@
 #include <Flash/ResourceControl/LocalAdmissionController.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
-#include <Storages/DeltaMerge/ScanContext_fwd.h>
+#include <Storages/DeltaMerge/ScanContext.h>
 
 namespace DB
 {
@@ -69,43 +69,165 @@ public:
     Block read() override { return {}; }
 
 private:
-    ColumnDefines read_columns;
+    ColumnDefines read_columns{};
 };
 
 template <bool need_row_id = false>
 class ConcatSkippableBlockInputStream : public SkippableBlockInputStream
 {
 public:
-    ConcatSkippableBlockInputStream(SkippableBlockInputStreams inputs_, const ScanContextPtr & scan_context_);
+    ConcatSkippableBlockInputStream(SkippableBlockInputStreams inputs_, const ScanContextPtr & scan_context_)
+        : rows(inputs_.size(), 0)
+        , precede_stream_rows(0)
+        , scan_context(scan_context_)
+        , lac_bytes_collector(scan_context_ ? scan_context_->resource_group_name : "")
+    {
+        children.insert(children.end(), inputs_.begin(), inputs_.end());
+        current_stream = children.begin();
+    }
 
     ConcatSkippableBlockInputStream(
         SkippableBlockInputStreams inputs_,
         std::vector<size_t> && rows_,
-        const ScanContextPtr & scan_context_);
+        const ScanContextPtr & scan_context_)
+        : rows(std::move(rows_))
+        , precede_stream_rows(0)
+        , scan_context(scan_context_)
+        , lac_bytes_collector(scan_context_ ? scan_context_->resource_group_name : "")
+    {
+        children.insert(children.end(), inputs_.begin(), inputs_.end());
+        current_stream = children.begin();
+    }
 
     String getName() const override { return "ConcatSkippable"; }
 
     Block getHeader() const override { return children.at(0)->getHeader(); }
 
-    bool getSkippedRows(size_t & skip_rows) override;
+    bool getSkippedRows(size_t & skip_rows) override
+    {
+        skip_rows = 0;
+        while (current_stream != children.end())
+        {
+            auto * skippable_stream = dynamic_cast<SkippableBlockInputStream *>((*current_stream).get());
 
-    size_t skipNextBlock() override;
+            size_t skip;
+            bool has_next_block = skippable_stream->getSkippedRows(skip);
+            skip_rows += skip;
 
-    Block readWithFilter(const IColumn::Filter & filter) override;
+            if (has_next_block)
+            {
+                return true;
+            }
+            else
+            {
+                (*current_stream)->readSuffix();
+                precede_stream_rows += rows[current_stream - children.begin()];
+                ++current_stream;
+            }
+        }
+
+        return false;
+    }
+
+    size_t skipNextBlock() override
+    {
+        while (current_stream != children.end())
+        {
+            auto * skippable_stream = dynamic_cast<SkippableBlockInputStream *>((*current_stream).get());
+
+            size_t skipped_rows = skippable_stream->skipNextBlock();
+
+            if (skipped_rows > 0)
+            {
+                return skipped_rows;
+            }
+            else
+            {
+                (*current_stream)->readSuffix();
+                precede_stream_rows += rows[current_stream - children.begin()];
+                ++current_stream;
+            }
+        }
+        return 0;
+    }
+
+    Block readWithFilter(const IColumn::Filter & filter) override
+    {
+        Block res;
+
+        while (current_stream != children.end())
+        {
+            auto * skippable_stream = dynamic_cast<SkippableBlockInputStream *>((*current_stream).get());
+            res = skippable_stream->readWithFilter(filter);
+
+            if (res)
+            {
+                res.setStartOffset(res.startOffset() + precede_stream_rows);
+                addReadBytes(res.bytes());
+                break;
+            }
+            else
+            {
+                (*current_stream)->readSuffix();
+                precede_stream_rows += rows[current_stream - children.begin()];
+                ++current_stream;
+            }
+        }
+        return res;
+    }
 
     Block read() override
     {
-        FilterPtr filter = nullptr;
-        return read(filter, false);
+        Block res;
+
+        while (current_stream != children.end())
+        {
+            res = (*current_stream)->read();
+
+            if (res)
+            {
+                res.setStartOffset(res.startOffset() + precede_stream_rows);
+                if constexpr (need_row_id)
+                {
+                    res.setSegmentRowIdCol(createSegmentRowIdCol(res.startOffset(), res.rows()));
+                }
+                addReadBytes(res.bytes());
+                break;
+            }
+            else
+            {
+                (*current_stream)->readSuffix();
+                precede_stream_rows += rows[current_stream - children.begin()];
+                ++current_stream;
+            }
+        }
+
+        return res;
     }
 
-    Block read(FilterPtr & res_filter, bool return_filter) override;
-
 private:
-    ColumnPtr createSegmentRowIdCol(UInt64 start, UInt64 limit);
-
-    void addReadBytes(UInt64 bytes);
-
+    ColumnPtr createSegmentRowIdCol(UInt64 start, UInt64 limit)
+    {
+        auto seg_row_id_col = ColumnUInt32::create();
+        ColumnUInt32::Container & res = seg_row_id_col->getData();
+        res.resize(limit);
+        for (UInt64 i = 0; i < limit; ++i)
+        {
+            res[i] = i + start;
+        }
+        return seg_row_id_col;
+    }
+    void addReadBytes(UInt64 bytes)
+    {
+        if (likely(scan_context != nullptr))
+        {
+            scan_context->user_read_bytes += bytes;
+            if constexpr (!need_row_id)
+            {
+                lac_bytes_collector.collect(bytes);
+            }
+        }
+    }
     BlockInputStreams::iterator current_stream;
     std::vector<size_t> rows;
     size_t precede_stream_rows;

@@ -41,7 +41,6 @@ struct TableInfo;
 
 namespace DB
 {
-struct MockRaftCommand;
 struct ColumnsDescription;
 class IStorage;
 using StoragePtr = std::shared_ptr<IStorage>;
@@ -59,8 +58,6 @@ class RegionScanFilter;
 using RegionScanFilterPtr = std::shared_ptr<RegionScanFilter>;
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 
 using SafeTS = UInt64;
 enum : SafeTS
@@ -134,7 +131,7 @@ public:
     /// Will trigger schema sync on read error for only once,
     /// assuming that newer schema can always apply to older data by setting force_decode to true in RegionBlockReader::read.
     /// Note that table schema must be keep unchanged throughout the process of read then write, we take good care of the lock.
-    static DM::WriteResult writeCommittedByRegion(
+    static DM::WriteResult writeBlockByRegion(
         Context & context,
         const RegionPtrWithBlock & region,
         RegionDataReadInfoList & data_list_to_remove,
@@ -142,19 +139,17 @@ public:
         bool lock_region = true);
 
     /// Check transaction locks in region, and write committed data in it into storage engine if check passed. Otherwise throw an LockException.
-    /// The write logic is the same as #writeCommittedByRegion, with some extra checks about region version and conf_version.
+    /// The write logic is the same as #writeBlockByRegion, with some extra checks about region version and conf_version.
     using ResolveLocksAndWriteRegionRes = std::variant<LockInfoPtr, RegionException::RegionReadStatus>;
     static ResolveLocksAndWriteRegionRes resolveLocksAndWriteRegion(
         TMTContext & tmt,
-        const TableID table_id,
+        const TiDB::TableID table_id,
         const RegionPtr & region,
         const Timestamp start_ts,
         const std::unordered_set<UInt64> * bypass_lock_ts,
         RegionVersion region_version,
         RegionVersion conf_version,
         const LoggerPtr & log);
-
-    void clear();
 
 public:
     // safe ts is maintained by check_leader RPC (https://github.com/tikv/tikv/blob/1ea26a2ac8761af356cc5c0825eb89a0b8fc9749/components/resolved_ts/src/advance.rs#L262),
@@ -178,7 +173,7 @@ public:
     static const UInt64 SafeTsDiffThreshold = 2 * 60 * 1000;
     bool isSafeTSLag(UInt64 region_id, UInt64 * leader_safe_ts, UInt64 * self_safe_ts);
 
-    UInt64 getSelfSafeTS(UInt64 region_id) const;
+    UInt64 getSelfSafeTS(UInt64 region_id);
 
 private:
     friend class MockTiDB;
@@ -237,9 +232,10 @@ struct RegionPtrWithBlock
     using Base = RegionPtr;
     using CachePtr = std::unique_ptr<RegionPreDecodeBlockData>;
 
-    RegionPtrWithBlock(const Base & base_)
+    /// can accept const ref of RegionPtr without cache
+    RegionPtrWithBlock(const Base & base_, CachePtr cache = nullptr)
         : base(base_)
-        , pre_decode_cache(nullptr)
+        , pre_decode_cache(std::move(cache))
     {}
 
     /// to be compatible with usage as RegionPtr.
@@ -251,14 +247,6 @@ struct RegionPtrWithBlock
 
     const Base & base;
     CachePtr pre_decode_cache;
-
-private:
-    friend struct MockRaftCommand;
-    /// Can accept const ref of RegionPtr without cache
-    RegionPtrWithBlock(const Base & base_, CachePtr cache)
-        : base(base_)
-        , pre_decode_cache(std::move(cache))
-    {}
 };
 
 
@@ -286,7 +274,7 @@ struct RegionPtrWithCheckpointInfo
 {
     using Base = RegionPtr;
 
-    RegionPtrWithCheckpointInfo(const Base & base_, CheckpointIngestInfoPtr checkpoint_info_);
+    RegionPtrWithCheckpointInfo(const Base & base_, CheckpointInfoPtr checkpoint_info_);
 
     /// to be compatible with usage as RegionPtr.
     Base::element_type * operator->() const { return base.operator->(); }
@@ -296,7 +284,7 @@ struct RegionPtrWithCheckpointInfo
     operator const Base &() const { return base; }
 
     const Base & base;
-    CheckpointIngestInfoPtr checkpoint_info;
+    CheckpointInfoPtr checkpoint_info;
 };
 
 } // namespace DB

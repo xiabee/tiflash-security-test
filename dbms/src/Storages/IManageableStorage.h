@@ -93,7 +93,7 @@ public:
     /// Return true is data dir exist
     virtual bool initStoreIfDataDirExist(ThreadPool * /*thread_pool*/) { throw Exception("Unsupported"); }
 
-    virtual TiDB::StorageEngine engineType() const = 0;
+    virtual ::TiDB::StorageEngine engineType() const = 0;
 
     virtual String getDatabaseName() const = 0;
 
@@ -180,13 +180,12 @@ public:
     /// This method must be called under the protection of table structure lock
     virtual std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
         const TableStructureLockHolder & /* table_structure_lock */,
-        bool /* need_block */,
-        bool /* has_version_block */)
+        bool /* need_block */)
     {
         throw Exception(
             "Method getDecodingSchemaSnapshot is not supported by storage " + getName(),
             ErrorCodes::NOT_IMPLEMENTED);
-    }
+    };
 
     /// The `block_decoding_schema_epoch` is just an internal version for `DecodingStorageSchemaSnapshot`,
     /// And it has no relation with the table schema version.

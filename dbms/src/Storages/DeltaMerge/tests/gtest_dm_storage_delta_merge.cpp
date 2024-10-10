@@ -23,8 +23,8 @@
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Flash/Coprocessor/DAGQueryInfo.h>
-#include <IO/Buffer/ReadBufferFromFile.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
+#include <IO/ReadBufferFromFile.h>
+#include <IO/WriteBufferFromFile.h>
 #include <Interpreters/Context.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTInsertQuery.h>
@@ -124,18 +124,12 @@ try
         ctx->getSettingsRef().resolve_locks,
         std::numeric_limits<UInt64>::max(),
         scan_context);
-    // these field should live long enough because `DAGQueryInfo` only
-    // keep a ref on them
-    const google::protobuf::RepeatedPtrField<tipb::Expr> filters{};
     const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-    TiDB::ColumnInfos source_columns{};
-    const std::vector<int> runtime_filter_ids;
     query_info.dag_query = std::make_unique<DAGQueryInfo>(
-        filters,
-        tipb::ANNQueryInfo{},
+        google::protobuf::RepeatedPtrField<tipb::Expr>(),
         pushed_down_filters, // Not care now
-        source_columns, // Not care now
-        runtime_filter_ids,
+        std::vector<TiDB::ColumnInfo>{}, // Not care now
+        std::vector<int>{},
         0,
         ctx->getTimezoneInfo());
     BlockInputStreams ins = storage->read(column_names, query_info, *ctx, stage2, 8192, 1);
@@ -680,18 +674,12 @@ try
         ctx->getSettingsRef().resolve_locks,
         std::numeric_limits<UInt64>::max(),
         scan_context);
-    // these field should live long enough because `DAGQueryInfo` only
-    // keep a ref on them
-    const google::protobuf::RepeatedPtrField<tipb::Expr> filters{};
     const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-    TiDB::ColumnInfos source_columns{};
-    const std::vector<int> runtime_filter_ids;
     query_info.dag_query = std::make_unique<DAGQueryInfo>(
-        filters,
-        tipb::ANNQueryInfo{},
+        google::protobuf::RepeatedPtrField<tipb::Expr>(),
         pushed_down_filters, // Not care now
-        source_columns, // Not care now
-        runtime_filter_ids,
+        std::vector<TiDB::ColumnInfo>{}, // Not care now
+        std::vector<int>{},
         0,
         ctx->getTimezoneInfo());
     Names read_columns = {"col1", EXTRA_TABLE_ID_COLUMN_NAME, "col2"};
@@ -799,18 +787,12 @@ try
             ctx->getSettingsRef().resolve_locks,
             std::numeric_limits<UInt64>::max(),
             scan_context);
-        // these field should live long enough because `DAGQueryInfo` only
-        // keep a ref on them
-        const google::protobuf::RepeatedPtrField<tipb::Expr> filters{};
         const google::protobuf::RepeatedPtrField<tipb::Expr> pushed_down_filters{};
-        TiDB::ColumnInfos source_columns{};
-        const std::vector<int> runtime_filter_ids;
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
-            filters,
-            tipb::ANNQueryInfo{},
+            google::protobuf::RepeatedPtrField<tipb::Expr>(),
             pushed_down_filters, // Not care now
-            source_columns, // Not care now
-            runtime_filter_ids,
+            std::vector<TiDB::ColumnInfo>{}, // Not care now
+            std::vector<int>{},
             0,
             ctx->getTimezoneInfo());
         Names read_columns = {"col1", EXTRA_TABLE_ID_COLUMN_NAME, "col2"};

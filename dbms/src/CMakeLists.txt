@@ -28,6 +28,14 @@ add_subdirectory (Server)
 add_subdirectory (Client)
 add_subdirectory (TableFunctions)
 add_subdirectory (Flash)
+add_subdirectory (Encryption)
 if (ENABLE_TESTS)
   add_subdirectory (TestUtils EXCLUDE_FROM_ALL)
 endif ()
+
+check_then_add_sources_compile_flag (
+  TIFLASH_ENABLE_ARCH_HASWELL_SUPPORT
+  "${TIFLASH_COMPILER_ARCH_HASWELL_FLAG}"
+  DeltaMerge/BitmapFilter/BitmapFilter.cpp
+  DeltaMerge/DMVersionFilterBlockInputStream.cpp
+)

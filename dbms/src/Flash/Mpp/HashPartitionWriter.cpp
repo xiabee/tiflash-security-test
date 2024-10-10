@@ -19,7 +19,6 @@
 #include <Flash/Mpp/HashBaseWriterHelper.h>
 #include <Flash/Mpp/HashPartitionWriter.h>
 #include <Flash/Mpp/MPPTunnelSetWriter.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {
@@ -52,8 +51,6 @@ HashPartitionWriter<ExchangeWriterPtr>::HashPartitionWriter(
     switch (data_codec_version)
     {
     case MPPDataPacketV0:
-        if (batch_send_min_limit <= 0)
-            batch_send_min_limit = 1;
         break;
     case MPPDataPacketV1:
     default:
@@ -74,10 +71,10 @@ HashPartitionWriter<ExchangeWriterPtr>::HashPartitionWriter(
 }
 
 template <class ExchangeWriterPtr>
-bool HashPartitionWriter<ExchangeWriterPtr>::doFlush()
+void HashPartitionWriter<ExchangeWriterPtr>::flush()
 {
     if (0 == rows_in_blocks)
-        return false;
+        return;
 
     switch (data_codec_version)
     {
@@ -93,30 +90,18 @@ bool HashPartitionWriter<ExchangeWriterPtr>::doFlush()
         break;
     }
     }
-    return true;
 }
 
 template <class ExchangeWriterPtr>
-void HashPartitionWriter<ExchangeWriterPtr>::notifyNextPipelineWriter()
+bool HashPartitionWriter<ExchangeWriterPtr>::isWritable() const
 {
-    writer->notifyNextPipelineWriter();
+    return writer->isWritable();
 }
 
 template <class ExchangeWriterPtr>
-WaitResult HashPartitionWriter<ExchangeWriterPtr>::waitForWritable() const
+void HashPartitionWriter<ExchangeWriterPtr>::writeImplV1(const Block & block)
 {
-    return writer->waitForWritable();
-}
-
-template <class ExchangeWriterPtr>
-bool HashPartitionWriter<ExchangeWriterPtr>::writeImplV1(const Block & block)
-{
-    size_t rows = 0;
-    if (block.info.selective)
-        rows = block.info.selective->size();
-    else
-        rows = block.rows();
-
+    size_t rows = block.rows();
     if (rows > 0)
     {
         rows_in_blocks += rows;
@@ -125,37 +110,24 @@ bool HashPartitionWriter<ExchangeWriterPtr>::writeImplV1(const Block & block)
     }
     if (static_cast<Int64>(rows_in_blocks) >= batch_send_min_limit
         || mem_size_in_blocks >= MAX_BATCH_SEND_MIN_LIMIT_MEM_SIZE)
-    {
         partitionAndWriteBlocksV1();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
-bool HashPartitionWriter<ExchangeWriterPtr>::writeImpl(const Block & block)
+void HashPartitionWriter<ExchangeWriterPtr>::writeImpl(const Block & block)
 {
-    size_t rows = 0;
-    if (block.info.selective)
-        rows = block.info.selective->size();
-    else
-        rows = block.rows();
-
+    size_t rows = block.rows();
     if (rows > 0)
     {
         rows_in_blocks += rows;
         blocks.push_back(block);
     }
-    if (static_cast<Int64>(rows_in_blocks) >= batch_send_min_limit)
-    {
+    if (static_cast<Int64>(rows_in_blocks) > batch_send_min_limit)
         partitionAndWriteBlocks();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
-bool HashPartitionWriter<ExchangeWriterPtr>::doWrite(const Block & block)
+void HashPartitionWriter<ExchangeWriterPtr>::write(const Block & block)
 {
     RUNTIME_CHECK_MSG(
         block.columns() == dag_context.result_field_types.size(),
@@ -196,22 +168,13 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocksV1()
             assertBlockSchema(expected_types, block, HashPartitionWriterLabels[MPPDataPacketV1]);
         }
         auto && dest_tbl_cols = HashBaseWriterHelper::createDestColumns(block, partition_num);
-        if (block.info.selective)
-            HashBaseWriterHelper::scatterColumnsSelectiveBlock(
-                block,
-                partition_col_ids,
-                collators,
-                partition_key_containers,
-                partition_num,
-                dest_tbl_cols);
-        else
-            HashBaseWriterHelper::scatterColumns(
-                block,
-                partition_col_ids,
-                collators,
-                partition_key_containers,
-                partition_num,
-                dest_tbl_cols);
+        HashBaseWriterHelper::scatterColumns(
+            block,
+            partition_col_ids,
+            collators,
+            partition_key_containers,
+            partition_num,
+            dest_tbl_cols);
         block.clear();
 
         for (size_t part_id = 0; part_id < partition_num; ++part_id)
@@ -245,7 +208,8 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocksV1()
 template <class ExchangeWriterPtr>
 void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocks()
 {
-    assert(!blocks.empty());
+    if unlikely (blocks.empty())
+        return;
 
     std::vector<Blocks> partition_blocks;
     partition_blocks.resize(partition_num);
@@ -258,23 +222,13 @@ void HashPartitionWriter<ExchangeWriterPtr>::partitionAndWriteBlocks()
         {
             const auto & block = blocks.back();
             auto dest_tbl_cols = HashBaseWriterHelper::createDestColumns(block, partition_num);
-            if (block.info.selective)
-                HashBaseWriterHelper::scatterColumnsSelectiveBlock(
-                    block,
-                    partition_col_ids,
-                    collators,
-                    partition_key_containers,
-                    partition_num,
-                    dest_tbl_cols);
-            else
-                HashBaseWriterHelper::scatterColumns(
-                    block,
-                    partition_col_ids,
-                    collators,
-                    partition_key_containers,
-                    partition_num,
-                    dest_tbl_cols);
-
+            HashBaseWriterHelper::scatterColumns(
+                block,
+                partition_col_ids,
+                collators,
+                partition_key_containers,
+                partition_num,
+                dest_tbl_cols);
             blocks.pop_back();
 
             for (size_t part_id = 0; part_id < partition_num; ++part_id)
@@ -298,13 +252,15 @@ void HashPartitionWriter<ExchangeWriterPtr>::writePartitionBlocks(std::vector<Bl
     for (size_t part_id = 0; part_id < partition_num; ++part_id)
     {
         auto & blocks = partition_blocks[part_id];
-        writer->partitionWrite(blocks, part_id);
-        blocks.clear();
+        if (likely(!blocks.empty()))
+        {
+            writer->partitionWrite(blocks, part_id);
+            blocks.clear();
+        }
     }
 }
 
 template class HashPartitionWriter<SyncMPPTunnelSetWriterPtr>;
 template class HashPartitionWriter<AsyncMPPTunnelSetWriterPtr>;
-
 
 } // namespace DB

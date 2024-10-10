@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <Flash/Executor/ResultQueue_fwd.h>
+#include <Flash/Executor/ResultQueue.h>
 #include <Flash/Planner/Plans/PhysicalUnary.h>
 
 namespace DB
@@ -40,7 +40,7 @@ public:
         assert(result_queue);
     }
 
-    void finalizeImpl(const Names &) override { throw Exception("Unsupport"); }
+    void finalize(const Names &) override { throw Exception("Unsupport"); }
 
     const Block & getSampleBlock() const override { throw Exception("Unsupport"); }
 

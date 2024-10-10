@@ -39,9 +39,9 @@ void UnorderedInputStream::prepareRuntimeFilter()
     pushDownReadyRFList(ready_rf_list);
 }
 
-void UnorderedInputStream::pushDownReadyRFList(const std::vector<RuntimeFilterPtr> & ready_rf_list)
+void UnorderedInputStream::pushDownReadyRFList(std::vector<RuntimeFilterPtr> readyRFList)
 {
-    for (const RuntimeFilterPtr & rf : ready_rf_list)
+    for (const RuntimeFilterPtr & rf : readyRFList)
     {
         auto rs_operator = rf->parseToRSOperator();
         task_pool->appendRSOperator(rs_operator);

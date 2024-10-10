@@ -16,7 +16,7 @@
 
 #include <Common/Logger.h>
 #include <Common/nocopyable.h>
-#include <IO/BaseFile/fwd.h>
+#include <Encryption/RandomAccessFile.h>
 #include <Interpreters/Settings_fwd.h>
 #include <Poco/Util/AbstractConfiguration.h>
 #include <Server/StorageConfigParser.h>
@@ -26,7 +26,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <filesystem>
 #include <magic_enum.hpp>
 #include <mutex>
@@ -44,15 +43,10 @@ public:
         Failed,
     };
 
-    // The smaller the enum value, the higher the cache priority.
     enum class FileType : UInt64
     {
         Unknow = 0,
         Meta,
-        // Vector index is always stored as a separate file and requires to be read through `mmap`
-        // which must be downloaded to the local disk.
-        // So the priority of caching is relatively high
-        VectorIndex,
         Merged,
         Index,
         Mark, // .mkr, .null.mrk
@@ -77,8 +71,6 @@ public:
         return status == Status::Complete;
     }
 
-    Status waitForNotEmpty();
-
     void setSize(UInt64 size_)
     {
         std::lock_guard lock(mtx);
@@ -89,8 +81,6 @@ public:
     {
         std::lock_guard lock(mtx);
         status = s;
-        if (status != Status::Empty)
-            cv_ready.notify_all();
     }
 
     UInt64 getSize() const
@@ -129,12 +119,6 @@ public:
         return status;
     }
 
-    auto getLastAccessTime() const
-    {
-        std::unique_lock lock(mtx);
-        return last_access_time;
-    }
-
 private:
     mutable std::mutex mtx;
     const String local_fname;
@@ -142,7 +126,6 @@ private:
     UInt64 size;
     const FileType file_type;
     std::chrono::time_point<std::chrono::system_clock> last_access_time;
-    std::condition_variable cv_ready;
 };
 
 using FileSegmentPtr = std::shared_ptr<FileSegment>;
@@ -198,7 +181,6 @@ public:
     std::vector<FileSegmentPtr> getAllFiles() const
     {
         std::vector<FileSegmentPtr> files;
-        files.reserve(table.size());
         for (const auto & pa : table)
         {
             files.push_back(pa.second.first);
@@ -236,13 +218,6 @@ public:
         const S3::S3FilenameView & s3_fname,
         const std::optional<UInt64> & filesize);
 
-    /// Download the file if it is not in the local cache and returns the
-    /// file guard of the local cache file. When file guard is alive,
-    /// local file will not be evicted.
-    FileSegmentPtr downloadFileForLocalRead(
-        const S3::S3FilenameView & s3_fname,
-        const std::optional<UInt64> & filesize);
-
     void updateConfig(const Settings & settings);
 
 #ifndef DBMS_PUBLIC_GTEST
@@ -252,19 +227,13 @@ public:
 #endif
 
     inline static std::atomic<bool> global_file_cache_initialized{false};
-    static std::unique_ptr<FileCache> global_file_cache_instance;
+    inline static std::unique_ptr<FileCache> global_file_cache_instance;
 
     DISALLOW_COPY_AND_MOVE(FileCache);
 
     FileSegmentPtr get(const S3::S3FilenameView & s3_fname, const std::optional<UInt64> & filesize = std::nullopt);
-    /// Try best to wait until the file is available in cache. If the file is not in cache, it will download the file in foreground.
-    /// It may return nullptr after wait. In this case the caller could retry.
-    FileSegmentPtr getOrWait(
-        const S3::S3FilenameView & s3_fname,
-        const std::optional<UInt64> & filesize = std::nullopt);
 
     void bgDownload(const String & s3_key, FileSegmentPtr & file_seg);
-    void fgDownload(const String & s3_key, FileSegmentPtr & file_seg);
     void download(const String & s3_key, FileSegmentPtr & file_seg);
     void downloadImpl(const String & s3_key, FileSegmentPtr & file_seg);
 
@@ -274,7 +243,7 @@ public:
     static void prepareParentDir(const String & local_fname);
     static bool isS3Filename(const String & fname);
     String toLocalFilename(const String & s3_key);
-    String toS3Key(const String & local_fname) const;
+    String toS3Key(const String & local_fname);
 
     void restore();
     void restoreWriteNode(const std::filesystem::directory_entry & write_node_entry);
@@ -298,7 +267,6 @@ public:
     static constexpr UInt64 estimated_size_of_file_type[] = {
         0, // Unknow type, currently never cache it.
         8 * 1024, // Estimated size of meta.
-        12 * 1024 * 1024, // Estimated size of vector index
         1 * 1024 * 1024, // Estimated size of merged.
         8 * 1024, // Estimated size of index.
         8 * 1024, // Estimated size of mark.
@@ -315,23 +283,14 @@ public:
     static FileSegment::FileType getFileType(const String & fname);
     static FileSegment::FileType getFileTypeOfColData(const std::filesystem::path & p);
     bool canCache(FileSegment::FileType file_type) const;
-
-    enum class EvictMode
-    {
-        NoEvict,
-        TryEvict,
-        ForceEvict,
-    };
-
-    bool reserveSpaceImpl(FileSegment::FileType reserve_for, UInt64 size, EvictMode evict);
+    bool reserveSpaceImpl(FileSegment::FileType reserve_for, UInt64 size, bool try_evict);
     void releaseSpaceImpl(UInt64 size);
     void releaseSpace(UInt64 size);
-    bool reserveSpace(FileSegment::FileType reserve_for, UInt64 size, EvictMode evict);
+    bool reserveSpace(FileSegment::FileType reserve_for, UInt64 size, bool try_evict);
     bool finalizeReservedSize(FileSegment::FileType reserve_for, UInt64 reserved_size, UInt64 content_length);
     static std::vector<FileSegment::FileType> getEvictFileTypes(FileSegment::FileType evict_for);
-    void tryEvictFile(FileSegment::FileType evict_for, UInt64 size, EvictMode evict);
+    void tryEvictFile(FileSegment::FileType evict_for, UInt64 size);
     UInt64 tryEvictFrom(FileSegment::FileType evict_for, UInt64 size, FileSegment::FileType evict_from);
-    UInt64 forceEvict(UInt64 size);
 
     // This function is used for test.
     std::vector<FileSegmentPtr> getAll();

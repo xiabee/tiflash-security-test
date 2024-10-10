@@ -87,6 +87,7 @@ ip = "::/0"
 [profiles.default]
 load_balancing = "random"
 max_memory_usage = 0
+use_uncompressed_cache = 1
 [profiles.readonly]
 readonly = 1
 
@@ -139,6 +140,7 @@ dt_enable_rough_set_filter = false
             // `setUser` will check user, password, address, update settings and quota for current user
             ASSERT_NO_THROW(ctx.setUser("default", "", addr, ""));
             const auto & settings = ctx.getSettingsRef();
+            EXPECT_EQ(settings.use_uncompressed_cache, 1U);
             if (i == 2)
             {
                 EXPECT_EQ(settings.max_memory_usage.getActualBytes(0), 123456UL);
@@ -287,16 +289,6 @@ dt_compression_level = 1
 [profiles.default]
 dt_compression_method = "LZ4"
 dt_compression_level = 1
-        )",
-        R"(
-[profiles]
-[profiles.default]
-dt_compression_method = "Lightweight"
-        )",
-        R"(
-[profiles]
-[profiles.default]
-dt_compression_method = "lightweight"
         )"};
 
     auto & global_ctx = TiFlashTestEnv::getGlobalContext();
@@ -355,14 +347,6 @@ dt_compression_method = "lightweight"
         {
             ASSERT_EQ(global_ctx.getSettingsRef().dt_compression_method, CompressionMethod::LZ4);
             ASSERT_EQ(global_ctx.getSettingsRef().dt_compression_level, 1);
-        }
-        if (i == 6)
-        {
-            ASSERT_EQ(global_ctx.getSettingsRef().dt_compression_method, CompressionMethod::Lightweight);
-        }
-        if (i == 7)
-        {
-            ASSERT_EQ(global_ctx.getSettingsRef().dt_compression_method, CompressionMethod::Lightweight);
         }
     }
     global_ctx.setSettings(origin_settings);

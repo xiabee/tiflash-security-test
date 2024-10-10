@@ -19,8 +19,7 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/DAGUtils.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <TiDB/Decode/TypeMapping.h>
+#include <IO/ReadBufferFromString.h>
 
 namespace DB
 {
@@ -98,13 +97,7 @@ void WriteColumnData(const IDataType & type, const ColumnPtr & column, WriteBuff
     IDataType::OutputStreamGetter output_stream_getter = [&](const IDataType::SubstreamPath &) {
         return &ostr;
     };
-    type.serializeBinaryBulkWithMultipleStreams(
-        *full_column,
-        output_stream_getter,
-        offset,
-        limit,
-        /*position_independent_encoding=*/true,
-        {});
+    type.serializeBinaryBulkWithMultipleStreams(*full_column, output_stream_getter, offset, limit, false, {});
 }
 
 void CHBlockChunkCodec::readData(const IDataType & type, IColumn & column, ReadBuffer & istr, size_t rows)
@@ -112,13 +105,7 @@ void CHBlockChunkCodec::readData(const IDataType & type, IColumn & column, ReadB
     IDataType::InputStreamGetter input_stream_getter = [&](const IDataType::SubstreamPath &) {
         return &istr;
     };
-    type.deserializeBinaryBulkWithMultipleStreams(
-        column,
-        input_stream_getter,
-        rows,
-        0,
-        /*position_independent_encoding=*/true,
-        {});
+    type.deserializeBinaryBulkWithMultipleStreams(column, input_stream_getter, rows, 0, false, {});
 }
 
 size_t ApproxBlockBytes(const Block & block)
@@ -206,9 +193,9 @@ void CHBlockChunkCodec::readBlockMeta(ReadBuffer & istr, size_t & columns, size_
     readVarUInt(rows, istr);
 
     if (header)
-        CodecUtils::checkColumnSize("CHBlockChunkCodec", header.columns(), columns);
+        CodecUtils::checkColumnSize(header.columns(), columns);
     else if (!output_names.empty())
-        CodecUtils::checkColumnSize("CHBlockChunkCodec", output_names.size(), columns);
+        CodecUtils::checkColumnSize(output_names.size(), columns);
 }
 
 void CHBlockChunkCodec::readColumnMeta(size_t i, ReadBuffer & istr, ColumnWithTypeAndName & column)
@@ -226,7 +213,7 @@ void CHBlockChunkCodec::readColumnMeta(size_t i, ReadBuffer & istr, ColumnWithTy
     const DataTypeFactory & data_type_factory = DataTypeFactory::instance();
     if (header)
     {
-        CodecUtils::checkDataTypeName("CHBlockChunkCodec", i, header_datatypes[i].name, type_name);
+        CodecUtils::checkDataTypeName(i, header_datatypes[i].name, type_name);
         column.type = header_datatypes[i].type;
     }
     else

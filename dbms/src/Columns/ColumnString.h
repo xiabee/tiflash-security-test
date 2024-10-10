@@ -19,8 +19,11 @@
 #include <Common/PODArray.h>
 #include <Common/SipHash.h>
 #include <Common/memcpySmall.h>
-#include <TiDB/Collation/CollatorUtils.h>
 #include <common/memcpy.h>
+
+
+class ICollator;
+
 
 namespace DB
 {
@@ -31,15 +34,6 @@ class ColumnString final : public COWPtrHelper<IColumn, ColumnString>
 public:
     using Chars_t = PaddedPODArray<UInt8>;
     static const auto APPROX_STRING_SIZE = 64;
-
-    // Used when updating hash for column.
-    struct WeakHash32Info
-    {
-        WeakHash32::Container * hash_data;
-        String sort_key_container;
-        TiDB::TiDBCollatorPtr collator;
-        const BlockSelective * selective_ptr;
-    };
 
 private:
     friend class COWPtrHelper<IColumn, ColumnString>;
@@ -278,12 +272,7 @@ public:
         const TiDB::TiDBCollatorPtr & collator,
         String & sort_key_container) const override;
 
-    template <typename LoopFunc>
-    void updateWeakHash32Impl(WeakHash32Info & info, const LoopFunc & loop_func) const;
-
     void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const override;
-    void updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &, const BlockSelective & selective)
-        const override;
 
     void insertRangeFrom(const IColumn & src, size_t start, size_t length) override;
 
@@ -313,28 +302,23 @@ public:
         return getDataAtWithTerminatingZero(n).compare(rhs.getDataAtWithTerminatingZero(m));
     }
 
-    int compareAt(size_t n, size_t m, const IColumn & rhs_, int, const TiDB::ITiDBCollator & collator) const override
+    int compareAt(size_t n, size_t m, const IColumn & rhs_, int, const ICollator & collator) const override
     {
         return compareAtWithCollationImpl(n, m, rhs_, collator);
     }
     /// Variant of compareAt for string comparison with respect of collation.
-    int compareAtWithCollationImpl(size_t n, size_t m, const IColumn & rhs_, const TiDB::ITiDBCollator & collator)
-        const;
+    int compareAtWithCollationImpl(size_t n, size_t m, const IColumn & rhs_, const ICollator & collator) const;
 
     void getPermutation(bool reverse, size_t limit, int nan_direction_hint, Permutation & res) const override;
 
-    void getPermutation(const TiDB::ITiDBCollator & collator, bool reverse, size_t limit, int, Permutation & res)
-        const override
+    void getPermutation(const ICollator & collator, bool reverse, size_t limit, int, Permutation & res) const override
     {
         getPermutationWithCollationImpl(collator, reverse, limit, res);
     }
 
     /// Sorting with respect of collation.
-    void getPermutationWithCollationImpl(
-        const TiDB::ITiDBCollator & collator,
-        bool reverse,
-        size_t limit,
-        Permutation & res) const;
+    void getPermutationWithCollationImpl(const ICollator & collator, bool reverse, size_t limit, Permutation & res)
+        const;
 
     ColumnPtr replicateRange(size_t start_row, size_t end_row, const IColumn::Offsets & replicate_offsets)
         const override;
@@ -344,20 +328,9 @@ public:
         return scatterImpl<ColumnString>(num_columns, selector);
     }
 
-    MutableColumns scatter(ColumnIndex num_columns, const Selector & selector, const BlockSelective & selective)
-        const override
-    {
-        return scatterImpl<ColumnString>(num_columns, selector, selective);
-    }
-
     void scatterTo(ScatterColumns & columns, const Selector & selector) const override
     {
         scatterToImpl<ColumnString>(columns, selector);
-    }
-
-    void scatterTo(ScatterColumns & columns, const Selector & selector, const BlockSelective & selective) const override
-    {
-        scatterToImpl<ColumnString>(columns, selector, selective);
     }
 
     void gather(ColumnGathererStream & gatherer_stream) override;

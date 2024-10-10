@@ -19,6 +19,11 @@
 #include <Flash/Mpp/TrackedMppDataPacket.h>
 #include <common/types.h>
 
+namespace DB::HashBaseWriterHelper
+{
+struct HashPartitionWriterHelperV1;
+}
+
 namespace DB
 {
 class DAGContext;
@@ -39,12 +44,9 @@ public:
         MPPDataPacketVersion data_codec_version_,
         tipb::CompressionMode compression_mode_);
     void prepare(const Block & sample_block) override;
-    WaitResult waitForWritable() const override;
-
-protected:
-    bool doWrite(const Block & block) override;
-    bool doFlush() override;
-    void notifyNextPipelineWriter() override;
+    void write(const Block & block) override;
+    bool isWritable() const override;
+    void flush() override;
 
 private:
     void batchWriteFineGrainedShuffle();

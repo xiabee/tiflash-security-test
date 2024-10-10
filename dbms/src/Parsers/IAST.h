@@ -16,7 +16,6 @@
 
 #include <Common/Exception.h>
 #include <Core/Types.h>
-#include <Parsers/IAST_fwd.h>
 #include <Parsers/StringRange.h>
 
 #include <memory>
@@ -40,6 +39,9 @@ extern const int LOGICAL_ERROR;
 
 using IdentifierNameSet = std::set<String>;
 
+class IAST;
+using ASTPtr = std::shared_ptr<IAST>;
+using ASTs = std::vector<ASTPtr>;
 
 class WriteBuffer;
 
@@ -206,7 +208,7 @@ public:
             ErrorCodes::UNKNOWN_ELEMENT_IN_AST);
     }
 
-    static void writeAlias(const String & name, std::ostream & s, bool hilite);
+    void writeAlias(const String & name, std::ostream & s, bool hilite) const;
 
 public:
     /// For syntax highlighting.

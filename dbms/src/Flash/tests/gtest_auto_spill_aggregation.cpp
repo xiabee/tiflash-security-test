@@ -17,7 +17,6 @@
 #include <TestUtils/ColumnGenerator.h>
 #include <TestUtils/ExecutorTestUtils.h>
 #include <TestUtils/mockExecutor.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {

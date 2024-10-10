@@ -68,23 +68,14 @@ void MPPTunnelSetBase<Tunnel>::forceWrite(tipb::SelectResponse & response, size_
 }
 
 template <typename Tunnel>
-WaitResult MPPTunnelSetBase<Tunnel>::waitForWritable() const
+bool MPPTunnelSetBase<Tunnel>::isWritable() const
 {
     for (const auto & tunnel : tunnels)
     {
-        if (auto res = tunnel->waitForWritable(); res != WaitResult::Ready)
-            return res;
+        if (!tunnel->isWritable())
+            return false;
     }
-    return WaitResult::Ready;
-}
-
-template <typename Tunnel>
-void MPPTunnelSetBase<Tunnel>::notifyNextPipelineWriter() const
-{
-    for (const auto & tunnel : tunnels)
-    {
-        tunnel->notifyNextPipelineWriter();
-    }
+    return true;
 }
 
 template <typename Tunnel>

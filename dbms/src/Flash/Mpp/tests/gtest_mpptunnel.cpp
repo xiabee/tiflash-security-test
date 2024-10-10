@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+
 namespace DB
 {
 namespace tests
@@ -750,7 +751,8 @@ try
             tunnel->write(std::move(packet));
         }
         catch (...)
-        {}
+        {
+        }
     };
     std::thread thd(tunnelRun<decltype(run_tunnel)>, std::move(run_tunnel));
     thd.join();
@@ -792,7 +794,7 @@ TEST_F(TestMPPTunnel, SyncTunnelForceWrite)
     mpp_tunnel_ptr->connectSync(writer_ptr.get());
     GTEST_ASSERT_EQ(getTunnelConnectedFlag(mpp_tunnel_ptr), true);
 
-    GTEST_ASSERT_EQ(mpp_tunnel_ptr->waitForWritable(), WaitResult::Ready);
+    ASSERT_TRUE(mpp_tunnel_ptr->isWritable());
     mpp_tunnel_ptr->forceWrite(newDataPacket("First"));
     mpp_tunnel_ptr->writeDone();
     GTEST_ASSERT_EQ(getTunnelFinishedFlag(mpp_tunnel_ptr), true);
@@ -809,7 +811,7 @@ TEST_F(TestMPPTunnel, AsyncTunnelForceWrite)
     GTEST_ASSERT_EQ(getTunnelConnectedFlag(mpp_tunnel_ptr), true);
     std::thread t(&MockAsyncCallData::run, call_data.get());
 
-    GTEST_ASSERT_EQ(mpp_tunnel_ptr->waitForWritable(), WaitResult::Ready);
+    ASSERT_TRUE(mpp_tunnel_ptr->isWritable());
     mpp_tunnel_ptr->forceWrite(newDataPacket("First"));
     mpp_tunnel_ptr->writeDone();
     GTEST_ASSERT_EQ(getTunnelFinishedFlag(mpp_tunnel_ptr), true);
@@ -826,7 +828,7 @@ TEST_F(TestMPPTunnel, LocalTunnelForceWrite)
     GTEST_ASSERT_EQ(getTunnelConnectedFlag(mpp_tunnel_ptr), true);
     std::thread t(&MockExchangeReceiver::receiveAll, receiver.get());
 
-    GTEST_ASSERT_EQ(mpp_tunnel_ptr->waitForWritable(), WaitResult::Ready);
+    ASSERT_TRUE(mpp_tunnel_ptr->isWritable());
     mpp_tunnel_ptr->forceWrite(newDataPacket("First"));
     mpp_tunnel_ptr->writeDone();
     GTEST_ASSERT_EQ(getTunnelFinishedFlag(mpp_tunnel_ptr), true);
@@ -844,7 +846,7 @@ try
     Stopwatch stop_watch{CLOCK_MONOTONIC_COARSE};
     while (stop_watch.elapsedSeconds() < 3 * timeout.count())
     {
-        GTEST_ASSERT_EQ(mpp_tunnel_ptr->waitForWritable(), WaitResult::WaitForPolling);
+        ASSERT_FALSE(mpp_tunnel_ptr->isWritable());
     }
     GTEST_FAIL();
 }

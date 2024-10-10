@@ -20,7 +20,6 @@
 #include <Core/ColumnsWithTypeAndName.h>
 #include <Core/Field.h>
 #include <Core/Types.h>
-#include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeDecimal.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeMyDate.h>
@@ -210,12 +209,6 @@ struct InferredDataType<Decimal<T>>
     using Type = DataTypeDecimal<Decimal<T>>;
 };
 
-template <>
-struct InferredDataType<Array>
-{
-    using Type = DataTypeArray;
-};
-
 template <typename T>
 using InferredFieldType = typename TypeTraits<T>::FieldType;
 
@@ -282,16 +275,6 @@ template <typename T>
 ColumnWithTypeAndName createColumn(const InferredDataVector<T> & vec, const String & name = "", Int64 column_id = 0)
 {
     DataTypePtr data_type = makeDataType<T>();
-    return {makeColumn<T>(data_type, vec), data_type, name, column_id};
-}
-
-template <typename T>
-ColumnWithTypeAndName createVecFloat32Column(
-    const InferredDataVector<T> & vec,
-    const String & name = "",
-    Int64 column_id = 0)
-{
-    DataTypePtr data_type = std::make_shared<DataTypeArray>(typeFromString("Float32"));
     return {makeColumn<T>(data_type, vec), data_type, name, column_id};
 }
 
@@ -602,16 +585,14 @@ ColumnsWithTypeAndName createColumns(const ColumnsWithTypeAndName & cols);
 ::testing::AssertionResult columnEqual(
     const ColumnPtr & expected,
     const ColumnPtr & actual,
-    const TiDB::ITiDBCollator * collator = nullptr,
-    bool is_floating_point = false,
-    bool exact_match_for_floating_point = false);
+    const ICollator * collator = nullptr,
+    bool is_floating_point = false);
 
 // ignore name
 ::testing::AssertionResult columnEqual(
     const ColumnWithTypeAndName & expected,
     const ColumnWithTypeAndName & actual,
-    const TiDB::ITiDBCollator * collator = nullptr,
-    bool exact_match_for_floating_point = false);
+    const ICollator * collator = nullptr);
 
 ::testing::AssertionResult blockEqual(const Block & expected, const Block & actual);
 
@@ -858,10 +839,6 @@ public:
         const FuncMetaData & meta,
         const TiDB::TiDBCollatorPtr & collator = nullptr);
 
-    ColumnWithTypeAndName executeCastJsonAsStringFunction(
-        const ColumnWithTypeAndName & input_column,
-        const tipb::FieldType & field_type);
-
     DAGContext & getDAGContext()
     {
         RUNTIME_ASSERT(dag_context_ptr != nullptr);
@@ -874,8 +851,6 @@ protected:
 };
 
 #define ASSERT_COLUMN_EQ(expected, actual) ASSERT_TRUE(DB::tests::columnEqual((expected), (actual)))
-/// ASSERT_COLUMN_EQ_V2 compares floating point using exact match algorithm
-#define ASSERT_COLUMN_EQ_V2(expected, actual) ASSERT_TRUE(DB::tests::columnEqual((expected), (actual), nullptr, true))
 #define ASSERT_BLOCK_EQ(expected, actual) ASSERT_TRUE(DB::tests::blockEqual((expected), (actual)))
 
 /// restrictly checking columns equality, both data set and each row's offset should be the same

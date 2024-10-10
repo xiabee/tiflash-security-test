@@ -31,23 +31,16 @@ protected:
         return std::make_shared<Segment>(Logger::get(), 0, RowKeyRange{}, seg_id, seg_id + 1, nullptr, nullptr);
     }
 
-    SegmentSnapshotPtr createSegmentSnapshot()
+    static SegmentSnapshotPtr createSegmentSnapshot()
     {
-        auto delta = std::make_shared<DeltaValueSpace>(1);
-        auto delta_snap = delta->createSnapshot(*createDMContext(), false, CurrentMetrics::Metric{});
-
-        auto stable = std::make_shared<StableValueSpace>(1);
-        auto stable_snap = stable->createSnapshot();
-        return std::make_shared<SegmentSnapshot>(std::move(delta_snap), std::move(stable_snap), Logger::get());
+        auto delta_snap = std::make_shared<DeltaValueSnapshot>(CurrentMetrics::Metric{});
+        delta_snap->delta = std::make_shared<DeltaValueSpace>(nullptr);
+        return std::make_shared<SegmentSnapshot>(std::move(delta_snap), /*stable*/ nullptr, Logger::get());
     }
 
     SegmentReadTaskPtr createSegmentReadTask(PageIdU64 seg_id)
     {
-        return std::make_shared<SegmentReadTask>(
-            createSegment(seg_id),
-            createSegmentSnapshot(),
-            createDMContext(),
-            RowKeyRanges{});
+        return std::make_shared<SegmentReadTask>(createSegment(seg_id), createSegmentSnapshot(), RowKeyRanges{});
     }
 
     static Block createBlock()
@@ -77,23 +70,13 @@ protected:
         return tasks;
     }
 
-    GlobalSegmentID createGlobalSegmentID(PageIdU64 seg_id)
-    {
-        auto dm_context = createDMContext();
-        return GlobalSegmentID{
-            .store_id = dm_context->global_context.getTMTContext().getKVStore()->getStoreID(),
-            .keyspace_id = dm_context->keyspace_id,
-            .physical_table_id = dm_context->physical_table_id,
-            .segment_id = seg_id,
-            .segment_epoch = 0,
-        };
-    }
-
     SegmentReadTaskPoolPtr createSegmentReadTaskPool(const std::vector<PageIdU64> & seg_ids)
     {
-        auto dm_context = createDMContext();
+        DMContextPtr dm_context{createDMContext()};
         return std::make_shared<SegmentReadTaskPool>(
+            dm_context->physical_table_id,
             /*extra_table_id_index_*/ dm_context->physical_table_id,
+            dm_context,
             /*columns_to_read_*/ ColumnDefines{},
             /*filter_*/ nullptr,
             /*max_version_*/ 0,
@@ -106,7 +89,6 @@ protected:
             /*num_streams_*/ 1,
             /*res_group_name_*/ String{});
     }
-
 
     void schedulerBasic()
     {
@@ -150,7 +132,7 @@ protected:
             ASSERT_FALSE(scheduler.needScheduleToRead(pool));
             auto merged_task = merged_tasks.back();
             ASSERT_EQ(merged_task->units.size(), 1);
-            pool->finishSegment(merged_task->units.front().task);
+            pool->finishSegment(merged_task->units.front().task->segment);
             ASSERT_TRUE(scheduler.needScheduleToRead(pool));
         }
 
@@ -180,7 +162,7 @@ protected:
             {
                 auto merged_task = merged_tasks.back();
                 merged_tasks.pop_back();
-                pool->finishSegment(merged_task->units.front().task);
+                pool->finishSegment(merged_task->units.front().task->segment);
             }
 
             for (;;)
@@ -190,7 +172,7 @@ protected:
                 {
                     break;
                 }
-                pool->finishSegment(merged_task->units.front().task);
+                pool->finishSegment(merged_task->units.front().task->segment);
             }
 
             ASSERT_EQ(pool->q.size(), 0);
@@ -230,11 +212,10 @@ TEST_F(SegmentReadTasksPoolTest, UnorderedWrapper)
     std::shuffle(v.begin(), v.end(), g);
     for (PageIdU64 seg_id : v)
     {
-        auto global_seg_id = createGlobalSegmentID(seg_id);
-        auto task = tasks_wrapper.getTask(global_seg_id);
+        auto task = tasks_wrapper.getTask(seg_id);
         ASSERT_NE(task, nullptr);
         ASSERT_EQ(task->segment->segmentId(), seg_id);
-        task = tasks_wrapper.getTask(global_seg_id);
+        task = tasks_wrapper.getTask(seg_id);
         ASSERT_EQ(task, nullptr);
     }
     ASSERT_TRUE(tasks_wrapper.empty());

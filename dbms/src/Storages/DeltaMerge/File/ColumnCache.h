@@ -14,15 +14,18 @@
 
 #pragma once
 
+#include <Core/Block.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/KVStore/Types.h>
+#include <common/logger_useful.h>
 
 #include <cstddef>
 #include <memory>
 
-namespace DB::DM
+namespace DB
 {
-
+namespace DM
+{
 using ColId = DB::ColumnID;
 using PackId = size_t;
 using PackRange = std::pair<PackId, PackId>;
@@ -43,11 +46,7 @@ public:
 
     using RangeWithStrategy = std::pair<PackRange, ColumnCache::Strategy>;
     using RangeWithStrategys = std::vector<RangeWithStrategy>;
-    RangeWithStrategys getReadStrategy(size_t start_pack_idx, size_t pack_count, ColId column_id);
-    static RangeWithStrategys getReadStrategy(
-        size_t start_pack_idx,
-        size_t pack_count,
-        const std::vector<size_t> & clean_read_pack_idx);
+    RangeWithStrategys getReadStrategy(size_t pack_id, size_t pack_count, ColId column_id);
 
     void tryPutColumn(size_t pack_id, ColId column_id, const ColumnPtr & column, size_t rows_offset, size_t rows_count);
 
@@ -75,5 +74,5 @@ using ColumnCachePtrs = std::vector<ColumnCachePtr>;
 using RangeWithStrategy = ColumnCache::RangeWithStrategy;
 using RangeWithStrategys = ColumnCache::RangeWithStrategys;
 using ColumnCacheElement = ColumnCache::ColumnCacheElement;
-
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

@@ -21,7 +21,6 @@ namespace DB
 namespace FailPoints
 {
 extern const char random_marked_for_auto_spill[];
-extern const char force_thread_0_no_agg_spill[];
 } // namespace FailPoints
 
 AggSpillContext::AggSpillContext(
@@ -56,12 +55,6 @@ bool AggSpillContext::updatePerThreadRevocableMemory(Int64 new_value, size_t thr
     if (new_value == 0)
         // new_value == 0 means no agg data to spill
         return false;
-    fiu_do_on(FailPoints::force_thread_0_no_agg_spill, {
-        if (thread_num == 0)
-        {
-            return false;
-        }
-    });
     if (auto_spill_mode)
     {
         AutoSpillStatus old_value = AutoSpillStatus::NEED_AUTO_SPILL;

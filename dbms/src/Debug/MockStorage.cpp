@@ -25,7 +25,6 @@
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/ASTSelectQuery.h>
-#include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/RegionQueryInfo.h>
 #include <Storages/StorageDeltaMerge.h>
 
@@ -203,14 +202,13 @@ BlockInputStreamPtr MockStorage::getStreamFromDeltaMerge(
         auto scan_column_infos = mockColumnInfosToTiDBColumnInfos(table_schema_for_delta_merge[table_id]);
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
             filter_conditions->conditions,
-            tipb::ANNQueryInfo(),
             empty_pushed_down_filters, // Not care now
             scan_column_infos,
             runtime_filter_ids,
             rf_max_wait_time_ms,
             context.getTimezoneInfo());
         auto [before_where, filter_column_name, project_after_where]
-            = analyzer->buildPushDownFilter(filter_conditions->conditions);
+            = ::DB::buildPushDownFilter(filter_conditions->conditions, *analyzer);
         BlockInputStreams ins = storage->read(
             column_names,
             query_info,
@@ -232,7 +230,6 @@ BlockInputStreamPtr MockStorage::getStreamFromDeltaMerge(
         auto scan_column_infos = mockColumnInfosToTiDBColumnInfos(table_schema_for_delta_merge[table_id]);
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
             empty_filters,
-            tipb::ANNQueryInfo(),
             empty_pushed_down_filters, // Not care now
             scan_column_infos,
             runtime_filter_ids,
@@ -264,14 +261,13 @@ void MockStorage::buildExecFromDeltaMerge(
         auto scan_column_infos = mockColumnInfosToTiDBColumnInfos(table_schema_for_delta_merge[table_id]);
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
             filter_conditions->conditions,
-            tipb::ANNQueryInfo(),
             empty_pushed_down_filters, // Not care now
             scan_column_infos,
             runtime_filter_ids,
             rf_max_wait_time_ms,
             context.getTimezoneInfo());
         // Not using `auto [before_where, filter_column_name, project_after_where]` just to make the compiler happy.
-        auto build_ret = analyzer->buildPushDownFilter(filter_conditions->conditions);
+        auto build_ret = ::DB::buildPushDownFilter(filter_conditions->conditions, *analyzer);
         storage->read(
             exec_context_,
             group_builder,
@@ -298,7 +294,6 @@ void MockStorage::buildExecFromDeltaMerge(
         auto scan_column_infos = mockColumnInfosToTiDBColumnInfos(table_schema_for_delta_merge[table_id]);
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
             empty_filters,
-            tipb::ANNQueryInfo(),
             empty_pushed_down_filters, // Not care now
             scan_column_infos,
             runtime_filter_ids,
@@ -507,9 +502,7 @@ CutColumnInfo getCutColumnInfo(size_t rows, Int64 partition_id, Int64 partition_
     return {start, cur_rows};
 }
 
-ColumnsWithTypeAndName getUsedColumns(
-    const TiDB::ColumnInfos & used_columns,
-    const ColumnsWithTypeAndName & all_columns)
+ColumnsWithTypeAndName getUsedColumns(const ColumnInfos & used_columns, const ColumnsWithTypeAndName & all_columns)
 {
     if (used_columns.empty())
         /// if used columns is not set, just return all the columns
@@ -591,17 +584,16 @@ DM::ColumnDefines MockStorage::getStoreColumnDefines(Int64 table_id)
     return storage_delta_merge_map[table_id]->getStoreColumnDefines();
 }
 
-TiDB::ColumnInfos mockColumnInfosToTiDBColumnInfos(const MockColumnInfoVec & mock_column_infos)
+ColumnInfos mockColumnInfosToTiDBColumnInfos(const MockColumnInfoVec & mock_column_infos)
 {
     ColumnID col_id = 0;
-    TiDB::ColumnInfos ret;
+    ColumnInfos ret;
     ret.reserve(mock_column_infos.size());
     for (const auto & mock_column_info : mock_column_infos)
     {
         TiDB::ColumnInfo column_info;
         column_info.name = mock_column_info.name;
         column_info.tp = mock_column_info.type;
-        column_info.collate = mock_column_info.collate;
         column_info.id = col_id++;
         // TODO: find a way to assign decimal field's flen.
         if (column_info.tp == TiDB::TP::TypeNewDecimal)

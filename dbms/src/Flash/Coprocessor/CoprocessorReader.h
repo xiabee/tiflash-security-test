@@ -23,6 +23,10 @@
 #include <Flash/Coprocessor/DefaultChunkCodec.h>
 #include <common/logger_useful.h>
 
+#include <chrono>
+#include <mutex>
+#include <thread>
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"

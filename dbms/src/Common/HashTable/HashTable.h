@@ -20,10 +20,10 @@
 #include <Common/nocopyable.h>
 #include <Core/Defines.h>
 #include <Core/Types.h>
-#include <IO/Buffer/ReadBuffer.h>
-#include <IO/Buffer/WriteBuffer.h>
+#include <IO/ReadBuffer.h>
 #include <IO/ReadHelpers.h>
 #include <IO/VarInt.h>
+#include <IO/WriteBuffer.h>
 #include <IO/WriteHelpers.h>
 #include <common/likely.h>
 #include <math.h>
@@ -33,6 +33,13 @@
 #include <new>
 #include <utility>
 
+
+#ifdef DBMS_HASH_MAP_DEBUG_RESIZES
+#include <Common/Stopwatch.h>
+
+#include <iomanip>
+#include <iostream>
+#endif
 
 /** NOTE HashTable could only be used for memmoveable (position independent) types.
   * Example: std::string is not position independent in libstdc++ with C++11 ABI or in libc++.
@@ -480,6 +487,9 @@ protected:
             if unlikely (!resize_callback())
                 throw DB::ResizeException("Error in hash table resize");
         }
+#ifdef DBMS_HASH_MAP_DEBUG_RESIZES
+        Stopwatch watch;
+#endif
 
         size_t old_size = grower.bufSize();
 
@@ -558,6 +568,12 @@ protected:
                 if (&buf[i] != &buf[updated_place_value])
                     Cell::move(&buf[i], &buf[updated_place_value]);
         }
+
+#ifdef DBMS_HASH_MAP_DEBUG_RESIZES
+        watch.stop();
+        std::cerr << std::fixed << std::setprecision(3) << "Resize from " << old_size << " to " << grower.bufSize()
+                  << " took " << watch.elapsedSeconds() << " sec." << std::endl;
+#endif
     }
 
 

@@ -82,7 +82,9 @@ mysql> set session tidb_isolation_read_engines='tiflash';select * from test.t;
 | x  |
 +----+
 |  1 |
++----+
 |  8 |
++----+
 | 50 |
 +----+
 

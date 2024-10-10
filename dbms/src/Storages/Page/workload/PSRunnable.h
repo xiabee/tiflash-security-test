@@ -13,12 +13,9 @@
 // limitations under the License.
 
 #pragma once
-
 #include <Poco/Runnable.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/workload/PSStressEnv.h>
-
-#include <random>
 
 namespace DB::PS::tests
 {
@@ -26,10 +23,6 @@ static constexpr PageIdU64 MAX_PAGE_ID_DEFAULT = 1000;
 class PSRunnable : public Poco::Runnable
 {
 public:
-    explicit PSRunnable(LoggerPtr log)
-        : logger(log)
-    {}
-
     void run() override;
 
     size_t getBytesUsed() const;
@@ -40,8 +33,6 @@ public:
 
     size_t bytes_used = 0;
     size_t pages_used = 0;
-
-    LoggerPtr logger;
 };
 
 // The random page id for adding and removing
@@ -81,13 +72,8 @@ struct GlobalStat
 class PSWriter : public PSRunnable
 {
 public:
-    PSWriter(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSRunnable(log)
-        , ps(ps_)
+    PSWriter(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : ps(ps_)
         , index(index_)
         , global_stat(global_stat_)
     {
@@ -128,12 +114,8 @@ protected:
 class PSCommonWriter : public PSWriter
 {
 public:
-    PSCommonWriter(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSWriter(ps_, index_, global_stat_, log)
+    PSCommonWriter(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : PSWriter(ps_, index_, global_stat_)
     {}
 
     DB::ReadBufferPtr getRandomData() override;
@@ -176,12 +158,8 @@ protected:
 class PSWindowWriter : public PSCommonWriter
 {
 public:
-    PSWindowWriter(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSCommonWriter(ps_, index_, global_stat_, log)
+    PSWindowWriter(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : PSCommonWriter(ps_, index_, global_stat_)
     {}
 
     String description() override { return fmt::format("(Stress Test Window Writer {})", index); }
@@ -199,12 +177,8 @@ protected:
 class PSIncreaseWriter : public PSCommonWriter
 {
 public:
-    PSIncreaseWriter(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSCommonWriter(ps_, index_, global_stat_, log)
+    PSIncreaseWriter(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : PSCommonWriter(ps_, index_, global_stat_)
     {}
 
     String description() override { return fmt::format("(Stress Test Increase Writer {})", index); }
@@ -224,13 +198,8 @@ protected:
 class PSReader : public PSRunnable
 {
 public:
-    PSReader(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSRunnable(log)
-        , ps(ps_)
+    PSReader(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : ps(ps_)
         , index(index_)
         , global_stat(global_stat_)
     {
@@ -275,12 +244,8 @@ protected:
 class PSWindowReader : public PSReader
 {
 public:
-    PSWindowReader(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSReader(ps_, index_, global_stat_, log)
+    PSWindowReader(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : PSReader(ps_, index_, global_stat_)
     {}
 
     void setNormalDistributionSigma(size_t sigma);
@@ -299,12 +264,8 @@ protected:
 class PSSnapshotReader : public PSReader
 {
 public:
-    PSSnapshotReader(
-        const PSPtr & ps_,
-        DB::UInt32 index_,
-        const std::unique_ptr<GlobalStat> & global_stat_,
-        const LoggerPtr & log)
-        : PSReader(ps_, index_, global_stat_, log)
+    PSSnapshotReader(const PSPtr & ps_, DB::UInt32 index_, const std::unique_ptr<GlobalStat> & global_stat_)
+        : PSReader(ps_, index_, global_stat_)
     {}
 
     bool runImpl() override;

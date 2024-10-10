@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Flash/Coprocessor/TiDBColumn.h>
+#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {
@@ -31,7 +32,7 @@ const char * arrowColToFlashCol(
     const std::vector<UInt8> & null_bitmap,
     const std::vector<UInt64> & offsets,
     const ColumnWithTypeAndName & flash_col,
-    const TiDB::ColumnInfo & col_info,
+    const ColumnInfo & col_info,
     UInt32 length);
 
 } // namespace DB

@@ -470,9 +470,6 @@ public:
 
     uint64_t estWaitDuraMS(const std::string & name) const
     {
-        if (unlikely(stopped))
-            return 0;
-
         if (name.empty())
             return 0;
 
@@ -487,8 +484,7 @@ public:
 
     std::optional<uint64_t> getPriority(const std::string & name)
     {
-        if (unlikely(stopped))
-            return {HIGHEST_RESOURCE_GROUP_PRIORITY};
+        assert(!stopped);
 
         if (name.empty())
             return {HIGHEST_RESOURCE_GROUP_PRIORITY};
@@ -511,9 +507,7 @@ public:
 
     void registerRefillTokenCallback(const std::function<void()> & cb)
     {
-        if (unlikely(stopped))
-            return;
-
+        assert(!stopped);
         // NOTE: Better not use lock inside refill_token_callback,
         // because LAC needs to lock when calling refill_token_callback,
         // which may introduce dead lock.
@@ -524,9 +518,7 @@ public:
 
     void unregisterRefillTokenCallback()
     {
-        if (unlikely(stopped))
-            return;
-
+        assert(!stopped);
         std::lock_guard lock(mu);
         RUNTIME_CHECK_MSG(refill_token_callback != nullptr, "callback cannot be nullptr before unregistering");
         refill_token_callback = nullptr;
@@ -543,14 +535,36 @@ public:
     static constexpr auto DEFAULT_FETCH_GAC_INTERVAL_MS = 5000;
 
 private:
-    void stop()
+    void consumeResource(const std::string & name, double ru, uint64_t cpu_time_in_ns)
     {
-        if (stopped)
+        assert(!stopped);
+
+        // When tidb_enable_resource_control is disabled, resource group name is empty.
+        if (name.empty())
+            return;
+
+        ResourceGroupPtr group = findResourceGroup(name);
+        if unlikely (!group)
         {
-            LOG_DEBUG(log, "LAC already stopped");
+            LOG_INFO(log, "cannot consume ru for {}, maybe it has been deleted", name);
             return;
         }
 
+        group->consumeResource(ru, cpu_time_in_ns);
+        if (group->lowToken() || group->trickleModeLeaseExpire(SteadyClock::now()))
+        {
+            {
+                std::lock_guard lock(mu);
+                low_token_resource_groups.insert(name);
+            }
+            cv.notify_one();
+        }
+    }
+
+    void stop()
+    {
+        if (stopped)
+            return;
         stopped.store(true);
 
         // TryCancel() is thread safe(https://github.com/grpc/grpc/pull/30416).
@@ -599,34 +613,6 @@ private:
                     unique_client_id,
                     getCurrentExceptionMessage(false));
             }
-        }
-        LOG_INFO(log, "LAC stopped done: final report size: {}", acquire_infos.size());
-    }
-
-    void consumeResource(const std::string & name, double ru, uint64_t cpu_time_in_ns)
-    {
-        if (unlikely(stopped))
-            return;
-
-        // When tidb_enable_resource_control is disabled, resource group name is empty.
-        if (name.empty())
-            return;
-
-        ResourceGroupPtr group = findResourceGroup(name);
-        if unlikely (!group)
-        {
-            LOG_DEBUG(log, "cannot consume ru for {}, maybe it has been deleted", name);
-            return;
-        }
-
-        group->consumeResource(ru, cpu_time_in_ns);
-        if (group->lowToken() || group->trickleModeLeaseExpire(SteadyClock::now()))
-        {
-            {
-                std::lock_guard lock(mu);
-                low_token_resource_groups.insert(name);
-            }
-            cv.notify_one();
         }
     }
 

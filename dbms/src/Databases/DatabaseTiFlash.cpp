@@ -18,9 +18,8 @@
 #include <Common/escapeForFileName.h>
 #include <Common/typeid_cast.h>
 #include <Databases/DatabaseTiFlash.h>
-#include <IO/FileProvider/FileProvider.h>
-#include <IO/FileProvider/ReadBufferFromRandomAccessFileBuilder.h>
-#include <IO/FileProvider/WriteBufferFromWritableFileBuilder.h>
+#include <Encryption/ReadBufferFromFileProvider.h>
+#include <Encryption/WriteBufferFromFileProvider.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
 #include <Parsers/ASTCreateQuery.h>
@@ -240,7 +239,7 @@ void DatabaseTiFlash::createTable(const Context & context, const String & table_
         const String statement = getTableDefinitionFromCreateQuery(query);
 
         /// Exclusive flags guarantees, that table is not created right now in another thread. Otherwise, exception will be thrown.
-        auto out = WriteBufferFromWritableFileBuilder::build(
+        WriteBufferFromFileProvider out(
             context.getFileProvider(),
             table_metadata_tmp_path,
             EncryptionPath(table_metadata_tmp_path, ""),
@@ -350,7 +349,7 @@ void DatabaseTiFlash::renameTable(
         {
             {
                 char in_buf[METADATA_FILE_BUFFER_SIZE];
-                auto in = ReadBufferFromRandomAccessFileBuilder::build(
+                ReadBufferFromFileProvider in(
                     context.getFileProvider(),
                     old_tbl_meta_file,
                     EncryptionPath(old_tbl_meta_file, ""),
@@ -390,7 +389,7 @@ void DatabaseTiFlash::renameTable(
                                                                  : EncryptionPath(new_tbl_meta_file_tmp, "");
         {
             bool create_new_encryption_info = !use_target_encrypt_info && !statement.empty();
-            auto out = WriteBufferFromWritableFileBuilder::build(
+            WriteBufferFromFileProvider out(
                 context.getFileProvider(),
                 new_tbl_meta_file_tmp,
                 encryption_path,
@@ -471,7 +470,7 @@ void DatabaseTiFlash::alterTable(
 
     {
         char in_buf[METADATA_FILE_BUFFER_SIZE];
-        auto in = ReadBufferFromRandomAccessFileBuilder::build(
+        ReadBufferFromFileProvider in(
             context.getFileProvider(),
             table_metadata_path,
             EncryptionPath(table_metadata_path, ""),
@@ -506,7 +505,7 @@ void DatabaseTiFlash::alterTable(
                                                              : EncryptionPath(table_metadata_tmp_path, "");
     {
         bool create_new_encryption_info = !use_target_encrypt_info && !statement.empty();
-        auto out = WriteBufferFromWritableFileBuilder::build(
+        WriteBufferFromFileProvider out(
             context.getFileProvider(),
             table_metadata_tmp_path,
             encryption_path,
@@ -687,7 +686,7 @@ void DatabaseTiFlash::alterTombstone(const Context & context, Timestamp tombston
         EncryptionPath encryption_path = reuse_encrypt_info ? EncryptionPath(database_metadata_path, "")
                                                             : EncryptionPath(database_metadata_tmp_path, "");
         {
-            auto out = WriteBufferFromWritableFileBuilder::build(
+            WriteBufferFromFileProvider out(
                 provider,
                 database_metadata_tmp_path,
                 encryption_path,

@@ -87,7 +87,7 @@ try
     ASSERT_EQ(file_id4, 30);
 
     {
-        std::lock_guard lock(stats.lock_stats);
+        const auto & lock = stats.lock();
         stats.createStatNotChecking(file_id1, config.file_limit_size, lock);
         stats.createStatNotChecking(file_id2, config.file_limit_size, lock);
         stats.createStatNotChecking(file_id3, config.file_limit_size, lock);
@@ -165,7 +165,7 @@ try
 }
 CATCH
 
-TEST_F(BlobStoreStatsTest, RestoreWithEmptyPageSamePosition)
+TEST_F(BlobStoreStatsTest, RestoreWithEmptyPage)
 try
 {
     BlobStats stats(logger, delegator, config);
@@ -173,7 +173,7 @@ try
     BlobFileId file_id1 = 11;
 
     {
-        std::lock_guard lock(stats.lock_stats);
+        const auto & lock = stats.lock();
         stats.createStatNotChecking(file_id1, config.file_limit_size, lock);
     }
 
@@ -221,54 +221,6 @@ try
 }
 CATCH
 
-TEST_F(BlobStoreStatsTest, RestoreWithEmptyPageSplitSpace)
-try
-{
-    BlobStats stats(logger, delegator, config);
-
-    BlobFileId file_id1 = 11;
-
-    {
-        std::lock_guard lock(stats.lock_stats);
-        stats.createStatNotChecking(file_id1, config.file_limit_size, lock);
-    }
-
-    {
-        // an entry at offset=0x15376, size=0
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id1,
-            .size = 0,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 0x15376,
-            .checksum = 0x4567,
-        });
-        // an entry at offset=0x15373, size=15. offset+size > 0x15376, but should be able to insert
-        stats.restoreByEntry(PageEntryV3{
-            .file_id = file_id1,
-            .size = 15,
-            .padded_size = 0,
-            .tag = 0,
-            .offset = 0x15373,
-            .checksum = 0x4567,
-        });
-        stats.restore();
-    }
-
-    auto stats_copy = stats.getStats();
-
-    ASSERT_EQ(stats_copy.size(), std::min(getTotalStatsNum(stats_copy), path_num));
-    ASSERT_EQ(getTotalStatsNum(stats_copy), 1);
-    EXPECT_EQ(stats.cur_max_id, file_id1);
-
-    auto stat = stats.blobIdToStat(file_id1);
-    EXPECT_EQ(stat->sm_total_size, 0x15373 + 15);
-    EXPECT_EQ(stat->sm_valid_size, 15);
-
-    EXPECT_ANY_THROW({ stats.createStat(file_id1, config.file_limit_size, stats.lock()); });
-}
-CATCH
-
 TEST_F(BlobStoreStatsTest, testStats)
 {
     BlobStats stats(logger, delegator, config);
@@ -280,7 +232,7 @@ TEST_F(BlobStoreStatsTest, testStats)
     BlobFileId file_id1 = PageTypeUtils::nextFileID(PageType::Normal, file_id0);
     BlobFileId file_id2 = PageTypeUtils::nextFileID(PageType::Normal, file_id1);
     {
-        std::lock_guard lock(stats.lock_stats);
+        auto lock = stats.lock();
         stats.createStat(file_id1, config.file_limit_size, lock);
         stats.createStat(file_id2, config.file_limit_size, lock);
     }
@@ -391,20 +343,13 @@ TEST_F(BlobStoreStatsTest, StatWithEmptyBlob)
     ASSERT_EQ(offset, 0);
 
     offset = stat->getPosFromStat(0, stat->lock()); // empty
-    ASSERT_EQ(offset, 0); // empty page always "stored" to the beginning of the space
-    offset = stat->getPosFromStat(0, stat->lock()); // empty
-    ASSERT_EQ(offset, 0); // empty page always "stored" to the beginning of the space
-    offset = stat->getPosFromStat(0, stat->lock()); // empty
-    ASSERT_EQ(offset, 0); // empty page always "stored" to the beginning of the space
+    ASSERT_EQ(offset, 10);
 
     offset = stat->getPosFromStat(20, stat->lock());
     ASSERT_EQ(offset, 10);
 
     offset = stat->getPosFromStat(100, stat->lock());
     ASSERT_EQ(offset, 30);
-
-    offset = stat->getPosFromStat(0, stat->lock()); // empty
-    ASSERT_EQ(offset, 0); // empty page always "stored" to the beginning of the space
 
     ASSERT_EQ(stat->sm_total_size, 10 + 20 + 100);
     ASSERT_EQ(stat->sm_valid_size, 10 + 20 + 100);
@@ -426,8 +371,9 @@ TEST_F(BlobStoreStatsTest, testFullStats)
     BlobStats stats(logger, delegator, config);
 
     {
+        auto lock = stats.lock();
         BlobFileId file_id = 10;
-        BlobStats::BlobStatPtr stat = stats.createStat(file_id, config.file_limit_size, stats.lock());
+        BlobStats::BlobStatPtr stat = stats.createStat(file_id, config.file_limit_size, lock);
         auto offset = stat->getPosFromStat(BLOBFILE_LIMIT_SIZE - 1, stat->lock());
         ASSERT_EQ(offset, 0);
         stats.cur_max_id = file_id;

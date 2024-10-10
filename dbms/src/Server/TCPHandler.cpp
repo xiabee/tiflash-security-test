@@ -14,6 +14,7 @@
 
 #include "TCPHandler.h"
 
+#include <Common/ClickHouseRevision.h>
 #include <Common/ExternalTable.h>
 #include <Common/FmtUtils.h>
 #include <Common/NetException.h>
@@ -22,12 +23,12 @@
 #include <DataStreams/AsynchronousBlockInputStream.h>
 #include <DataStreams/NativeBlockInputStream.h>
 #include <DataStreams/NativeBlockOutputStream.h>
-#include <IO/Buffer/ReadBufferFromPocoSocket.h>
-#include <IO/Buffer/WriteBufferFromPocoSocket.h>
-#include <IO/Compression/CompressedReadBuffer.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
-#include <IO/Compression/CompressionSettings.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/CompressionSettings.h>
 #include <IO/Progress.h>
+#include <IO/ReadBufferFromPocoSocket.h>
+#include <IO/WriteBufferFromPocoSocket.h>
 #include <IO/copyData.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/Quota.h>
@@ -41,6 +42,7 @@
 #include <common/logger_useful.h>
 
 #include <ext/scope_guard.h>
+#include <iomanip>
 
 namespace ProfileEvents
 {
@@ -442,7 +444,7 @@ void TCPHandler::processOrdinaryQuery()
 void TCPHandler::processTablesStatusRequest()
 {
     TablesStatusRequest request;
-    request.read(*in);
+    request.read(*in, client_revision);
 
     TablesStatusResponse response;
     for (const QualifiedTableName & table_name : request.tables)
@@ -458,7 +460,7 @@ void TCPHandler::processTablesStatusRequest()
     }
 
     writeVarUInt(Protocol::Server::TablesStatusResponse, *out);
-    response.write(*out);
+    response.write(*out, client_revision);
 }
 
 
@@ -526,7 +528,7 @@ void TCPHandler::receiveHello()
     readStringBinary(client_name, *in);
     readVarUInt(client_version_major, *in);
     readVarUInt(client_version_minor, *in);
-    readVarUInt(client_version_patch, *in);
+    readVarUInt(client_revision, *in);
     readStringBinary(default_database, *in);
     readStringBinary(user, *in);
     readStringBinary(password, *in);
@@ -537,7 +539,7 @@ void TCPHandler::receiveHello()
         client_name,
         client_version_major,
         client_version_minor,
-        client_version_patch);
+        client_revision);
     if (!default_database.empty())
         fmt_buf.fmtAppend(", database: {}", default_database);
     if (!user.empty())
@@ -552,12 +554,18 @@ void TCPHandler::receiveHello()
 void TCPHandler::sendHello()
 {
     writeVarUInt(Protocol::Server::Hello, *out);
-    writeStringBinary(fmt::format("{} {}", TiFlashBuildInfo::getName(), client_name), *out);
-    writeVarUInt(TiFlashBuildInfo::getMajorVersion(), *out);
-    writeVarUInt(TiFlashBuildInfo::getMinorVersion(), *out);
-    writeVarUInt(TiFlashBuildInfo::getPatchVersion(), *out);
-    writeStringBinary(DateLUT::instance().getTimeZone(), *out);
-    writeStringBinary(server_display_name, *out);
+    writeStringBinary(DBMS_NAME, *out);
+    writeVarUInt(DBMS_VERSION_MAJOR, *out);
+    writeVarUInt(DBMS_VERSION_MINOR, *out);
+    writeVarUInt(ClickHouseRevision::get(), *out);
+    if (client_revision >= DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE)
+    {
+        writeStringBinary(DateLUT::instance().getTimeZone(), *out);
+    }
+    if (client_revision >= DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME)
+    {
+        writeStringBinary(server_display_name, *out);
+    }
     out->next();
 }
 
@@ -566,6 +574,8 @@ bool TCPHandler::receivePacket()
 {
     UInt64 packet_type = 0;
     readVarUInt(packet_type, *in);
+
+    //    std::cerr << "Packet: " << packet_type << std::endl;
 
     switch (packet_type)
     {
@@ -627,7 +637,8 @@ void TCPHandler::receiveQuery()
     /// Client info
     {
         ClientInfo & client_info = query_context.getClientInfo();
-        client_info.read(*in);
+        if (client_revision >= DBMS_MIN_REVISION_WITH_CLIENT_INFO)
+            client_info.read(*in, client_revision);
 
         /// For better support of old clients, that does not send ClientInfo.
         if (client_info.query_kind == ClientInfo::QueryKind::NO_QUERY)
@@ -636,7 +647,7 @@ void TCPHandler::receiveQuery()
             client_info.client_name = client_name;
             client_info.client_version_major = client_version_major;
             client_info.client_version_minor = client_version_minor;
-            client_info.client_version_patch = client_version_patch;
+            client_info.client_revision = client_revision;
         }
 
         /// Set fields, that are known apriori.
@@ -662,7 +673,7 @@ void TCPHandler::receiveQuery()
     state.timeout_setter = std::make_unique<TimeoutSetter>(socket(), settings.receive_timeout, settings.send_timeout);
 
     readVarUInt(stage, *in);
-    state.stage = static_cast<QueryProcessingStage::Enum>(stage);
+    state.stage = QueryProcessingStage::Enum(stage);
 
     readVarUInt(compression, *in);
     state.compression = static_cast<Protocol::Compression>(compression);
@@ -720,7 +731,7 @@ void TCPHandler::initBlockInput()
         else
             state.maybe_compressed_in = in;
 
-        state.block_in = std::make_shared<NativeBlockInputStream>(*state.maybe_compressed_in, 1);
+        state.block_in = std::make_shared<NativeBlockInputStream>(*state.maybe_compressed_in, client_revision);
     }
 }
 
@@ -735,7 +746,10 @@ void TCPHandler::initBlockOutput(const Block & block)
         else
             state.maybe_compressed_out = out;
 
-        state.block_out = std::make_shared<NativeBlockOutputStream>(*state.maybe_compressed_out, 1, block.cloneEmpty());
+        state.block_out = std::make_shared<NativeBlockOutputStream>(
+            *state.maybe_compressed_out,
+            client_revision,
+            block.cloneEmpty());
     }
 }
 
@@ -837,7 +851,7 @@ void TCPHandler::sendProgress()
 {
     writeVarUInt(Protocol::Server::Progress, *out);
     auto increment = state.progress.fetchAndResetPiecewiseAtomically();
-    increment.write(*out);
+    increment.write(*out, client_revision);
     out->next();
 }
 

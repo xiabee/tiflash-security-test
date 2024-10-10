@@ -39,22 +39,7 @@ Block ExpressionBlockInputStream::readImpl()
     Block res = children.back()->read();
     if (!res)
         return res;
-
-    if (res.info.selective)
-    {
-        const auto ori_rows = res.rows();
-        auto ori_info = res.info;
-        expression->execute(res);
-        res.info = ori_info;
-        // When block.info.selective is not null, the expression action should be cast/project.
-        // So the rows should not change.
-        RUNTIME_CHECK(ori_rows == res.rows());
-    }
-    else
-    {
-        expression->execute(res);
-    }
+    expression->execute(res);
     return res;
 }
-
 } // namespace DB

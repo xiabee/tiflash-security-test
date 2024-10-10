@@ -34,8 +34,6 @@ bool AggregationBinder::toTiPBExecutor(
     tipb_executor->set_executor_id(name);
     tipb_executor->set_fine_grained_shuffle_stream_count(fine_grained_shuffle_stream_count);
     auto * agg = tipb_executor->mutable_aggregation();
-    if (switcher)
-        agg->set_pre_agg_mode(switcher->mode);
     buildAggExpr(agg, collator_id, context);
     buildGroupBy(agg, collator_id, context);
     auto * child_executor = agg->mutable_child();
@@ -89,7 +87,6 @@ void AggregationBinder::toMPPSubPlan(
     // todo support avg
     if (has_uniq_raw_res)
         throw Exception("uniq raw res not supported in mpp query");
-    // Partial agg cannot be fine grained shuffle. So set fine_grained_shuffle_stream_count as 0.
     std::shared_ptr<AggregationBinder> partial_agg = std::make_shared<AggregationBinder>(
         executor_index,
         output_schema_for_partial_agg,
@@ -98,8 +95,7 @@ void AggregationBinder::toMPPSubPlan(
         std::move(agg_exprs),
         std::move(gby_exprs),
         false,
-        /*fine_grained_shuffle_stream_count*/ 0,
-        switcher);
+        fine_grained_shuffle_stream_count);
     partial_agg->children.push_back(children[0]);
     std::vector<size_t> partition_keys;
     size_t agg_func_num = partial_agg->agg_exprs.size();
@@ -140,8 +136,6 @@ void AggregationBinder::toMPPSubPlan(
         gby_exprs.push_back(std::make_shared<ASTIdentifier>(output_schema_for_partial_agg[agg_func_num + i].first));
     }
     children[0] = exchange_receiver;
-    // Because this aggregation is 2nd agg, so reset auto_pass_through flag.
-    switcher = nullptr;
 }
 
 bool AggregationBinder::needAppendProject() const
@@ -241,8 +235,7 @@ ExecutorBinderPtr compileAggregation(
     size_t & executor_index,
     ASTPtr agg_funcs,
     ASTPtr group_by_exprs,
-    uint64_t fine_grained_shuffle_stream_count,
-    std::shared_ptr<AutoPassThroughSwitcher> switcher)
+    uint64_t fine_grained_shuffle_stream_count)
 {
     std::vector<ASTPtr> agg_exprs;
     std::vector<ASTPtr> gby_exprs;
@@ -274,9 +267,7 @@ ExecutorBinderPtr compileAggregation(
                 ci.tp = TiDB::TypeLongLong;
                 ci.flag = TiDB::ColumnFlagUnsigned | TiDB::ColumnFlagNotNull;
             }
-            else if (
-                func->name == "max" || func->name == "min" || func->name == "first_row" || func->name == "sum"
-                || func->name == "avg")
+            else if (func->name == "max" || func->name == "min" || func->name == "first_row" || func->name == "sum")
             {
                 ci = children_ci[0];
                 ci.flag &= ~TiDB::ColumnFlagNotNull;
@@ -315,8 +306,7 @@ ExecutorBinderPtr compileAggregation(
         std::move(agg_exprs),
         std::move(gby_exprs),
         true,
-        fine_grained_shuffle_stream_count,
-        switcher);
+        fine_grained_shuffle_stream_count);
     aggregation->children.push_back(input);
     return aggregation;
 }

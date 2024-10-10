@@ -19,11 +19,13 @@
 #include <Core/QueryProcessingStage.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <Flash/Coprocessor/DAGContext.h>
+#include <Flash/Coprocessor/DAGQuerySource.h>
 #include <Flash/Executor/DataStreamExecutor.h>
 #include <Flash/Executor/PipelineExecutor.h>
 #include <Flash/Pipeline/Pipeline.h>
 #include <Flash/Pipeline/Schedule/TaskScheduler.h>
-#include <Flash/Planner/Planner.h>
+#include <Flash/Planner/PhysicalPlan.h>
+#include <Flash/Planner/PlanQuerySource.h>
 #include <Flash/executeQuery.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ProcessList.h>
@@ -77,32 +79,7 @@ ProcessList::EntryPtr getProcessListEntry(Context & context, DAGContext & dag_co
     }
 }
 
-MemoryTrackerPtr prepareQueryLevelMemoryTracker(Context & context, DAGContext & dag_context, bool internal)
-{
-    /// query level memory tracker
-    MemoryTrackerPtr memory_tracker = nullptr;
-    if (likely(!internal))
-    {
-        auto process_list_entry = getProcessListEntry(context, dag_context);
-        memory_tracker = (*process_list_entry)->getMemoryTrackerPtr();
-        logQuery(dag_context.dummy_query_string, context, dag_context.log);
-
-        if (memory_tracker != nullptr && memory_tracker->getLimit() > 0
-            && context.getSettingsRef().auto_memory_revoke_trigger_threshold.get() > 0)
-        {
-            dag_context.setAutoSpillMode();
-            auto auto_spill_trigger_threshold = context.getSettingsRef().auto_memory_revoke_trigger_threshold.get();
-            auto auto_spill_trigger = std::make_shared<AutoSpillTrigger>(
-                memory_tracker,
-                dag_context.getQueryOperatorSpillContexts(),
-                auto_spill_trigger_threshold);
-            dag_context.setAutoSpillTrigger(auto_spill_trigger);
-        }
-    }
-    return memory_tracker;
-}
-
-QueryExecutorPtr executeAsBlockIO(Context & context, bool internal)
+QueryExecutorPtr doExecuteAsBlockIO(IQuerySource & dag, Context & context, bool internal)
 {
     RUNTIME_ASSERT(context.getDAGContext());
     auto & dag_context = *context.getDAGContext();
@@ -113,25 +90,46 @@ QueryExecutorPtr executeAsBlockIO(Context & context, bool internal)
 
     prepareForExecute(context);
 
+    ProcessList::EntryPtr process_list_entry;
     /// query level memory tracker
-    auto memory_tracker = prepareQueryLevelMemoryTracker(context, dag_context, internal);
+    MemoryTrackerPtr memory_tracker = nullptr;
+    if (likely(!internal))
+    {
+        process_list_entry = getProcessListEntry(context, dag_context);
+        memory_tracker = (*process_list_entry)->getMemoryTrackerPtr();
+        logQuery(dag.str(context.getSettingsRef().log_queries_cut_to_length), context, logger);
+    }
+
+    if (memory_tracker != nullptr && memory_tracker->getLimit() != 0
+        && context.getSettingsRef().auto_memory_revoke_trigger_threshold > 0)
+    {
+        dag_context.setAutoSpillMode();
+        auto auto_spill_trigger_threshold = context.getSettingsRef().auto_memory_revoke_trigger_threshold.get();
+        auto auto_spill_trigger = std::make_shared<AutoSpillTrigger>(
+            memory_tracker,
+            dag_context.getQueryOperatorSpillContexts(),
+            auto_spill_trigger_threshold);
+        dag_context.setAutoSpillTrigger(auto_spill_trigger);
+    }
 
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_interpreter_failpoint);
-    Planner planner{context};
-    auto res = planner.execute();
+    auto interpreter = dag.interpreter(context, QueryProcessingStage::Complete);
+    BlockIO res = interpreter->execute();
+    /// Hold element of process list till end of query execution.
+    res.process_list_entry = process_list_entry;
 
     /// if query is in auto spill mode, then setup auto spill trigger
     if (dag_context.isInAutoSpillMode())
     {
-        auto * stream = dynamic_cast<IProfilingBlockInputStream *>(res.get());
+        auto * stream = dynamic_cast<IProfilingBlockInputStream *>(res.in.get());
         RUNTIME_ASSERT(stream != nullptr);
         stream->setAutoSpillTrigger(dag_context.getAutoSpillTrigger());
     }
     if (likely(!internal))
-        logQueryPipeline(logger, res);
+        logQueryPipeline(logger, res.in);
 
     dag_context.switchToStreamMode();
-    return std::make_unique<DataStreamExecutor>(memory_tracker, context, logger->identifier(), res);
+    return std::make_unique<DataStreamExecutor>(memory_tracker, context, logger->identifier(), res.in);
 }
 
 std::optional<QueryExecutorPtr> executeAsPipeline(Context & context, bool internal)
@@ -141,15 +139,39 @@ std::optional<QueryExecutorPtr> executeAsPipeline(Context & context, bool intern
     const auto & logger = dag_context.log;
     RUNTIME_ASSERT(logger);
 
-    RUNTIME_ASSERT(
-        TaskScheduler::instance,
-        "The task scheduler of the pipeline model has not been initialized, which is an exception. "
-        "It is necessary to restart the TiFlash node.");
+    if unlikely (!TaskScheduler::instance)
+    {
+        LOG_WARNING(
+            logger,
+            "The task scheduler of the pipeline model has not been initialized, which is an exception. It is necessary "
+            "to restart the TiFlash node.");
+        return {};
+    }
+    if (!Pipeline::isSupported(*dag_context.dag_request, context.getSettingsRef()))
+    {
+        LOG_DEBUG(
+            logger,
+            "Can't executed by pipeline model due to unsupported operator, and then fallback to block inputstream "
+            "model");
+        return {};
+    }
 
     prepareForExecute(context);
 
-    /// query level memory tracker
-    auto memory_tracker = prepareQueryLevelMemoryTracker(context, dag_context, internal);
+    ProcessList::EntryPtr process_list_entry;
+    if (likely(!internal))
+    {
+        process_list_entry = getProcessListEntry(context, dag_context);
+        logQuery(dag_context.dummy_query_string, context, logger);
+    }
+
+    MemoryTrackerPtr memory_tracker;
+    if (likely(process_list_entry))
+        memory_tracker = (*process_list_entry)->getMemoryTrackerPtr();
+
+    if (memory_tracker != nullptr && memory_tracker->getLimit() > 0
+        && context.getSettingsRef().auto_memory_revoke_trigger_threshold.get() > 0)
+        dag_context.setAutoSpillMode();
 
     FAIL_POINT_TRIGGER_EXCEPTION(FailPoints::random_interpreter_failpoint);
     std::unique_ptr<PipelineExecutor> executor;
@@ -159,9 +181,15 @@ std::optional<QueryExecutorPtr> executeAsPipeline(Context & context, bool intern
         auto register_operator_spill_context = [&context](const OperatorSpillContextPtr & operator_spill_context) {
             context.getDAGContext()->registerOperatorSpillContext(operator_spill_context);
         };
+        auto auto_spill_trigger_threshold = context.getSettingsRef().auto_memory_revoke_trigger_threshold.get();
+        auto auto_spill_trigger = std::make_shared<AutoSpillTrigger>(
+            memory_tracker,
+            dag_context.getQueryOperatorSpillContexts(),
+            auto_spill_trigger_threshold);
+        dag_context.setAutoSpillTrigger(auto_spill_trigger);
         executor = std::make_unique<PipelineExecutor>(
             memory_tracker,
-            context.getDAGContext()->getAutoSpillTrigger(),
+            auto_spill_trigger.get(),
             register_operator_spill_context,
             context,
             logger->identifier());
@@ -175,20 +203,40 @@ std::optional<QueryExecutorPtr> executeAsPipeline(Context & context, bool intern
     dag_context.switchToPipelineMode();
     return {std::move(executor)};
 }
+
+QueryExecutorPtr executeAsBlockIO(Context & context, bool internal)
+{
+    if (context.getSettingsRef().enable_planner)
+    {
+        PlanQuerySource plan(context);
+        return doExecuteAsBlockIO(plan, context, internal);
+    }
+    else
+    {
+        DAGQuerySource dag(context);
+        return doExecuteAsBlockIO(dag, context, internal);
+    }
+}
 } // namespace
 
 QueryExecutorPtr queryExecute(Context & context, bool internal)
 {
-    if (!context.getSettingsRef().enable_planner)
+    if (context.getSettingsRef().enforce_enable_resource_control)
     {
-        LOG_INFO(
-            context.getDAGContext()->log,
-            "The setting `profiles.default.enable_planner` has been removed and is no longer effective. "
-            "The planner interpreter will be enabled by default.");
+        RUNTIME_CHECK_MSG(
+            TaskScheduler::instance,
+            "The task scheduler of the pipeline model has not been initialized, which is an exception. It is necessary "
+            "to restart the TiFlash node.");
+        auto res = executeAsPipeline(context, internal);
+        RUNTIME_CHECK_MSG(
+            res,
+            "Failed to execute query using pipeline model, and an error is reported because the setting "
+            "enforce_enable_resource_control is true.");
+        return std::move(*res);
     }
-    if (context.getSettingsRef().enable_resource_control)
+    if (context.getSettingsRef().enable_planner && context.getSettingsRef().enable_resource_control)
     {
-        if (auto res = executeAsPipeline(context, internal); likely(res))
+        if (auto res = executeAsPipeline(context, internal); res)
             return std::move(*res);
     }
     return executeAsBlockIO(context, internal);

@@ -35,8 +35,6 @@ public:
 
     String getName() const override { return "ExpressionTransformOp"; }
 
-    bool canHandleSelectiveBlock() const override { return true; }
-
 protected:
     OperatorStatus transformImpl(Block & block) override;
 

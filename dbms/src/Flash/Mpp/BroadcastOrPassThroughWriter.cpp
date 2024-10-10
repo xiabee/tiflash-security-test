@@ -18,7 +18,6 @@
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Mpp/BroadcastOrPassThroughWriter.h>
 #include <Flash/Mpp/MPPTunnelSetWriter.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {
@@ -44,8 +43,6 @@ BroadcastOrPassThroughWriter<ExchangeWriterPtr>::BroadcastOrPassThroughWriter(
     switch (data_codec_version)
     {
     case MPPDataPacketV0:
-        if (batch_send_min_limit <= 0)
-            batch_send_min_limit = 1;
         break;
     case MPPDataPacketV1:
     default:
@@ -66,32 +63,21 @@ BroadcastOrPassThroughWriter<ExchangeWriterPtr>::BroadcastOrPassThroughWriter(
 }
 
 template <class ExchangeWriterPtr>
-bool BroadcastOrPassThroughWriter<ExchangeWriterPtr>::doFlush()
+void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::flush()
 {
     if (rows_in_blocks > 0)
-    {
         writeBlocks();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
-WaitResult BroadcastOrPassThroughWriter<ExchangeWriterPtr>::waitForWritable() const
+bool BroadcastOrPassThroughWriter<ExchangeWriterPtr>::isWritable() const
 {
-    return writer->waitForWritable();
+    return writer->isWritable();
 }
 
 template <class ExchangeWriterPtr>
-void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::notifyNextPipelineWriter()
+void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::write(const Block & block)
 {
-    writer->notifyNextPipelineWriter();
-}
-
-template <class ExchangeWriterPtr>
-bool BroadcastOrPassThroughWriter<ExchangeWriterPtr>::doWrite(const Block & block)
-{
-    RUNTIME_CHECK(!block.info.selective);
     RUNTIME_CHECK_MSG(
         block.columns() == dag_context.result_field_types.size(),
         "Output column size mismatch with field type size");
@@ -102,18 +88,15 @@ bool BroadcastOrPassThroughWriter<ExchangeWriterPtr>::doWrite(const Block & bloc
         blocks.push_back(block);
     }
 
-    if (static_cast<Int64>(rows_in_blocks) >= batch_send_min_limit)
-    {
+    if (static_cast<Int64>(rows_in_blocks) > batch_send_min_limit)
         writeBlocks();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
 void BroadcastOrPassThroughWriter<ExchangeWriterPtr>::writeBlocks()
 {
-    assert(!blocks.empty());
+    if unlikely (blocks.empty())
+        return;
 
     // check schema
     if (!expected_types.empty())

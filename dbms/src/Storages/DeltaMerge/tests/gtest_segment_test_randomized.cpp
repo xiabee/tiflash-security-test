@@ -383,7 +383,7 @@ protected:
                 auto next_segment = segments[next_segment_id];
                 RUNTIME_CHECK(next_segment->segmentId() == next_segment_id, next_segment->info(), next_segment_id);
                 RUNTIME_CHECK(
-                    last_segment->getRowKeyRange().getEnd() == next_segment->getRowKeyRange().getStart(),
+                    compare(last_segment->getRowKeyRange().getEnd(), next_segment->getRowKeyRange().getStart()) == 0,
                     last_segment->info(),
                     next_segment->info());
                 segments_id.push_back(next_segment_id);
@@ -401,7 +401,7 @@ protected:
 TEST_F(SegmentRandomizedTest, FastCommonHandle)
 try
 {
-    reloadWithOptions({.is_common_handle = true});
+    buildFirstSegmentWithOptions({.is_common_handle = true});
     run(/* n */ 500, /* min key */ -50000, /* max key */ 50000);
 }
 CATCH
@@ -410,7 +410,7 @@ CATCH
 TEST_F(SegmentRandomizedTest, FastIntHandle)
 try
 {
-    reloadWithOptions({.is_common_handle = false});
+    buildFirstSegmentWithOptions({.is_common_handle = false});
     run(/* n */ 500, /* min key */ -50000, /* max key */ 50000);
 }
 CATCH
@@ -420,7 +420,7 @@ CATCH
 TEST_F(SegmentRandomizedTest, DISABLED_ForCI)
 try
 {
-    reloadWithOptions({.is_common_handle = true});
+    buildFirstSegmentWithOptions({.is_common_handle = true});
     run(50000, /* min key */ -50000, /* max key */ 50000);
 }
 CATCH

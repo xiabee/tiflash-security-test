@@ -15,7 +15,6 @@
 #include <Common/FailPoint.h>
 #include <Interpreters/Context.h>
 #include <Operators/DMSegmentThreadSourceOp.h>
-#include <Storages/DeltaMerge/DMContext.h>
 
 namespace DB
 {
@@ -31,7 +30,7 @@ DMSegmentThreadSourceOp::DMSegmentThreadSourceOp(
     DM::AfterSegmentRead after_segment_read_,
     const DM::ColumnDefines & columns_to_read_,
     const DM::PushDownFilterPtr & filter_,
-    UInt64 start_ts_,
+    UInt64 max_version_,
     size_t expected_block_size_,
     DM::ReadMode read_mode_,
     const String & req_id)
@@ -41,7 +40,7 @@ DMSegmentThreadSourceOp::DMSegmentThreadSourceOp(
     , after_segment_read(after_segment_read_)
     , columns_to_read(columns_to_read_)
     , filter(filter_)
-    , start_ts(start_ts_)
+    , max_version(max_version_)
     , expected_block_size(expected_block_size_)
     , read_mode(read_mode_)
 {
@@ -77,7 +76,7 @@ OperatorStatus DMSegmentThreadSourceOp::readImpl(Block & block)
 
 OperatorStatus DMSegmentThreadSourceOp::executeIOImpl()
 {
-    if (unlikely(done))
+    if unlikely (done)
         return OperatorStatus::HAS_OUTPUT;
 
     while (!cur_stream)
@@ -93,7 +92,7 @@ OperatorStatus DMSegmentThreadSourceOp::executeIOImpl()
 
         auto block_size = std::max(
             expected_block_size,
-            static_cast<size_t>(dm_context->global_context.getSettingsRef().dt_segment_stable_pack_rows));
+            static_cast<size_t>(dm_context->db_context.getSettingsRef().dt_segment_stable_pack_rows));
         cur_stream = task->segment->getInputStream(
             read_mode,
             *dm_context,
@@ -101,7 +100,7 @@ OperatorStatus DMSegmentThreadSourceOp::executeIOImpl()
             task->read_snapshot,
             task->ranges,
             filter,
-            start_ts,
+            max_version,
             block_size);
         LOG_TRACE(log, "Start to read segment, segment={}", cur_segment->simpleInfo());
     }

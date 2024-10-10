@@ -303,12 +303,13 @@ MockExchangeSender
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = limit_2>, join_kind = Left
-   Expression: <final projection>
-    SharedQuery: <restore concurrency>
-     Limit, limit = 1
-      Union: <for partial limit>
-       Limit x 10, limit = 1
-        MockTableScan
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     SharedQuery: <restore concurrency>
+      Limit, limit = 1
+       Union: <for partial limit>
+        Limit x 10, limit = 1
+         MockTableScan
  Union: <for test>
   Expression x 10: <final projection>
    HashJoinProbe: <join probe, join_executor_id = Join_3, scan_hash_map_after_probe = false>
@@ -490,8 +491,9 @@ Union: <for test>
 CreatingSets
  Union: <for join>
   HashJoinBuild x 8: <join build, build_side_root_executor_id = exchange_receiver_1 enable fine grained shuffle>, join_kind = Left
-   Expression: <final projection>
-    MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     MockExchangeReceiver
  Union: <for test>
   Expression x 10: <final projection>
    HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
@@ -504,8 +506,9 @@ CreatingSets
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = exchange_receiver_1>, join_kind = Left
-   Expression: <final projection>
-    MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     MockExchangeReceiver
  Union: <for test>
   Expression x 10: <final projection>
    HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
@@ -539,14 +542,16 @@ Union: <for test>
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = table_scan_3>, join_kind = Left
-   Expression: <final projection>
-    MockTableScan
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     MockTableScan
  Union x 2: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = Join_4>, join_kind = Left
-   Expression: <final projection>
-    HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
-     Expression: <final projection>
-      MockTableScan
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
+      Expression: <final projection>
+       MockTableScan
  Union: <for test>
   Expression x 10: <final projection>
    HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
@@ -559,14 +564,16 @@ CreatingSets
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = exchange_receiver_3>, join_kind = Left
-   Expression: <final projection>
-    MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     MockExchangeReceiver
  Union x 2: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = Join_4>, join_kind = Left
-   Expression: <final projection>
-    HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
-     Expression: <final projection>
-      MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
+      Expression: <final projection>
+       MockExchangeReceiver
  Union: <for test>
   Expression x 10: <final projection>
    HashJoinProbe: <join probe, join_executor_id = Join_6, scan_hash_map_after_probe = false>
@@ -579,14 +586,16 @@ CreatingSets
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = exchange_receiver_3>, join_kind = Left
-   Expression: <final projection>
-    MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     MockExchangeReceiver
  Union x 2: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = Join_4>, join_kind = Left
-   Expression: <final projection>
-    HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
-     Expression: <final projection>
-      MockExchangeReceiver
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     HashJoinProbe: <join probe, join_executor_id = Join_4, scan_hash_map_after_probe = false>
+      Expression: <final projection>
+       MockExchangeReceiver
  Union: <for test>
   MockExchangeSender x 10
    Expression: <final projection>
@@ -608,8 +617,8 @@ CreatingSets
    Expression: <expr after aggregation>
     SharedQuery: <restore concurrency>
      ParallelAggregating, max_threads: 10, final: true
-      HashJoinProbe x 10: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
-       Expression: <append join key and join filters for probe side>
+      Expression x 10: <before aggregation>
+       HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = false>
         Expression: <final projection>
          MockTableScan
 @
@@ -627,10 +636,11 @@ CreatingSets
    Expression: <expr after aggregation>
     SharedQuery: <restore concurrency>
      ParallelAggregating, max_threads: 10, final: true
-      HashJoinProbe x 10: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
-       Expression: <append join key and join filters for probe side>
-        Expression: <final projection>
-         MockTableScan
+      Expression x 10: <before aggregation>
+       HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
+        Expression: <append join key and join filters for probe side>
+         Expression: <final projection>
+          MockTableScan
 @
 ~test_suite_name: JoinThenAgg
 ~result_index: 2
@@ -651,10 +661,11 @@ CreatingSets
         Expression: <expr after aggregation>
          SharedQuery: <restore concurrency>
           ParallelAggregating, max_threads: 20, final: true
-           HashJoinProbe x 20: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
-            Expression: <append join key and join filters for probe side>
-             Expression: <final projection>
-              MockExchangeReceiver
+           Expression x 20: <before aggregation>
+            HashJoinProbe: <join probe, join_executor_id = Join_2, scan_hash_map_after_probe = true>
+             Expression: <append join key and join filters for probe side>
+              Expression: <final projection>
+               MockExchangeReceiver
 @
 ~test_suite_name: ListBase
 ~result_index: 0
@@ -692,9 +703,10 @@ Union: <for test>
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = project_4>, join_kind = Inner
-   Expression: <final projection>
-    Expression: <projection>
-     MockTableScan
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <projection>
+      MockTableScan
  Union: <for test>
   Expression x 10: <final projection>
    SharedQuery: <restore concurrency>
@@ -704,7 +716,7 @@ CreatingSets
        Expression: <projection>
         HashJoinProbe: <join probe, join_executor_id = Join_5, scan_hash_map_after_probe = false>
          Expression: <final projection>
-          Expression: <expand, expand_executor_id = expand_2: grouping set [{<count(exchange_receiver_0)_collator_46 >}{<first_row(exchange_receiver_1)_collator_46 >}]>
+          Expression: <expand, expand_executor_id = expand_2: grouping set [{<count(exchange_receiver_0)_collator_46 >}{<any(exchange_receiver_1)_collator_46 >}]>
            Expression: <expr after aggregation>
             SharedQuery: <restore concurrency>
              ParallelAggregating, max_threads: 10, final: true
@@ -717,9 +729,10 @@ CreatingSets
 CreatingSets
  Union: <for join>
   HashJoinBuild x 10: <join build, build_side_root_executor_id = project_4>, join_kind = Inner
-   Expression: <final projection>
-    Expression: <projection>
-     MockTableScan
+   Expression: <append join key and join filters for build side>
+    Expression: <final projection>
+     Expression: <projection>
+      MockTableScan
  Union: <for test>
   Expression x 10: <final projection>
    SharedQuery: <restore concurrency>

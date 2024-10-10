@@ -13,10 +13,10 @@
 // limitations under the License.
 
 #include <Common/TiFlashException.h>
-#include <IO/Checksum/ChecksumBuffer.h>
+#include <IO/ChecksumBuffer.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
-#include <Storages/DeltaMerge/dtpb/dmfile.pb.h>
+#include <Storages/DeltaMerge/File/dtpb/dmfile.pb.h>
 #include <Storages/FormatVersion.h>
 
 namespace DB::DM

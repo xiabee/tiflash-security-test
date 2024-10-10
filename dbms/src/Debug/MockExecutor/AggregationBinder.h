@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Debug/MockExecutor/ExecutorBinder.h>
-#include <Operators/AutoPassThroughHashAggContext.h>
 #include <Parsers/ASTFunction.h>
 
 namespace DB::mock
@@ -34,8 +33,7 @@ public:
         ASTs && agg_exprs_,
         ASTs && gby_exprs_,
         bool is_final_mode_,
-        uint64_t fine_grained_shuffle_stream_count_,
-        std::shared_ptr<AutoPassThroughSwitcher> switcher_)
+        uint64_t fine_grained_shuffle_stream_count_)
         : ExecutorBinder(index_, "aggregation_" + std::to_string(index_), output_schema_)
         , has_uniq_raw_res(has_uniq_raw_res_)
         , need_append_project(need_append_project_)
@@ -43,7 +41,6 @@ public:
         , gby_exprs(std::move(gby_exprs_))
         , is_final_mode(is_final_mode_)
         , fine_grained_shuffle_stream_count(fine_grained_shuffle_stream_count_)
-        , switcher(switcher_)
     {}
 
     bool toTiPBExecutor(
@@ -76,7 +73,6 @@ protected:
     bool is_final_mode;
     DAGSchema output_schema_for_partial_agg;
     uint64_t fine_grained_shuffle_stream_count;
-    std::shared_ptr<AutoPassThroughSwitcher> switcher;
 
 private:
     void buildGroupBy(tipb::Aggregation * agg, int32_t collator_id, const Context & context) const;
@@ -89,7 +85,6 @@ ExecutorBinderPtr compileAggregation(
     size_t & executor_index,
     ASTPtr agg_funcs,
     ASTPtr group_by_exprs,
-    uint64_t fine_grained_shuffle_stream_count = 0,
-    std::shared_ptr<AutoPassThroughSwitcher> switcher = nullptr);
+    uint64_t fine_grained_shuffle_stream_count = 0);
 
 } // namespace DB::mock

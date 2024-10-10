@@ -17,7 +17,9 @@
 #include <Storages/DeltaMerge/ColumnFile/ColumnFile.h>
 #include <Storages/DeltaMerge/Remote/Serializer_fwd.h>
 
-namespace DB::DM
+namespace DB
+{
+namespace DM
 {
 class ColumnFileSetSnapshot;
 using ColumnFileSetSnapshotPtr = std::shared_ptr<ColumnFileSetSnapshot>;
@@ -105,4 +107,5 @@ public:
     const auto & getDataProvider() const { return data_provider; }
 };
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

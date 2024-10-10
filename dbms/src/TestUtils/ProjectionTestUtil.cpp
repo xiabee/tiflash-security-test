@@ -17,7 +17,6 @@
 #include <Interpreters/Context.h>
 #include <TestUtils/ColumnsToTiPBExpr.h>
 #include <TestUtils/ProjectionTestUtil.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 
 namespace DB
@@ -62,7 +61,7 @@ std::pair<ExpressionActionsPtr, std::vector<String>> buildProjection(
     {
         tipb::Expr literal_expr;
         const auto & val_field = val_fields[i];
-        auto ci = reverseGetColumnInfo(
+        ColumnInfo ci = reverseGetColumnInfo(
             {columns[column_literal_numbers[i]].name, columns[column_literal_numbers[i]].type},
             0,
             Field(),
@@ -103,7 +102,7 @@ std::pair<ExpressionActionsPtr, std::vector<String>> buildLiteralProjection(
         const auto & val_field = val_fields[i];
         source_columns.emplace_back(column.name, column.type);
         tipb::Expr literal_expr;
-        auto ci = reverseGetColumnInfo({column.name, column.type}, 0, Field(), true);
+        ColumnInfo ci = reverseGetColumnInfo({column.name, column.type}, 0, Field(), true);
         literalFieldToTiPBExpr(ci, val_field, &literal_expr, 0);
         tipb_exprs.push_back(literal_expr);
     }

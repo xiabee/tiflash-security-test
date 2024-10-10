@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Core/Block.h>
-#include <Flash/Coprocessor/WaitResult.h>
 #include <common/types.h>
 #include <tipb/select.pb.h>
 
@@ -29,40 +28,20 @@ public:
     DAGResponseWriter(Int64 records_per_chunk_, DAGContext & dag_context_);
     /// prepared with sample block
     virtual void prepare(const Block &){};
-    void write(const Block & block)
-    {
-        if (!doWrite(block))
-        {
-            notifyNextPipelineWriter();
-        }
-    }
+    virtual void write(const Block & block) = 0;
 
-    // For async writer, `waitForWritable` need to be called before calling `write`.
+    // For async writer, `isWritable` need to be called before calling `write`.
     // ```
-    // auto res = waitForWritable();
-    // switch (res) case...
+    // while (!isWritable()) {}
     // write(block);
     // ```
-    virtual WaitResult waitForWritable() const { throw Exception("Unsupport"); }
+    virtual bool isWritable() const { throw Exception("Unsupport"); }
 
     /// flush cached blocks for batch writer
-    void flush()
-    {
-        if (!doFlush())
-        {
-            notifyNextPipelineWriter();
-        }
-    }
-
+    virtual void flush() = 0;
     virtual ~DAGResponseWriter() = default;
 
 protected:
-    // return true if write is actually write the data
-    virtual bool doWrite(const Block & block) = 0;
-    // return true if flush is actually flush data
-    virtual bool doFlush() = 0;
-    virtual void notifyNextPipelineWriter() = 0;
-
     Int64 records_per_chunk;
     DAGContext & dag_context;
 };

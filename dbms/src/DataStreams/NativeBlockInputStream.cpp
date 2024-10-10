@@ -16,6 +16,7 @@
 #include <Core/Defines.h>
 #include <DataStreams/NativeBlockInputStream.h>
 #include <DataTypes/DataTypeFactory.h>
+#include <IO/CompressedReadBufferFromFile.h>
 #include <IO/ReadHelpers.h>
 #include <IO/VarInt.h>
 #include <fmt/core.h>
@@ -71,7 +72,7 @@ NativeBlockInputStream::NativeBlockInputStream(
     , index_block_it(index_block_it_)
     , index_block_end(index_block_end_)
 {
-    istr_concrete = typeid_cast<LegacyCompressedReadBufferFromFile *>(&istr);
+    istr_concrete = typeid_cast<CompressedReadBufferFromFile<> *>(&istr);
     if (!istr_concrete)
         throw Exception(
             "When need to use index for NativeBlockInputStream, istr must be CompressedReadBufferFromFile.",
@@ -152,9 +153,9 @@ Block NativeBlockInputStream::readImpl()
     }
 
     if (header)
-        CodecUtils::checkColumnSize("NativeBlockInputStream", header.columns(), columns);
+        CodecUtils::checkColumnSize(header.columns(), columns);
     else if (!output_names.empty())
-        CodecUtils::checkColumnSize("NativeBlockInputStream", output_names.size(), columns);
+        CodecUtils::checkColumnSize(output_names.size(), columns);
 
     for (size_t i = 0; i < columns; ++i)
     {
@@ -181,7 +182,7 @@ Block NativeBlockInputStream::readImpl()
         readBinary(type_name, istr);
         if (header)
         {
-            CodecUtils::checkDataTypeName("NativeBlockInputStream", i, header_datatypes[i].name, type_name);
+            CodecUtils::checkDataTypeName(i, header_datatypes[i].name, type_name);
             column.type = header_datatypes[i].type;
         }
         else

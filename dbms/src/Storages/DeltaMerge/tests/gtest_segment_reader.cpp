@@ -33,6 +33,10 @@
 #include <common/logger_useful.h>
 #include <common/types.h>
 
+#include <algorithm>
+#include <future>
+#include <iterator>
+
 using namespace std::chrono_literals;
 
 namespace DB
@@ -88,7 +92,7 @@ try
             columns,
             {RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize())},
             /* num_streams= */ 1,
-            /* start_ts= */ std::numeric_limits<UInt64>::max(),
+            /* max_version= */ std::numeric_limits<UInt64>::max(),
             EMPTY_FILTER,
             std::vector<RuntimeFilterPtr>{},
             0,
@@ -102,7 +106,7 @@ try
             columns,
             {RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize())},
             /* num_streams= */ 1,
-            /* start_ts= */ std::numeric_limits<UInt64>::max(),
+            /* max_version= */ std::numeric_limits<UInt64>::max(),
             EMPTY_FILTER,
             std::vector<RuntimeFilterPtr>{},
             0,
@@ -147,7 +151,7 @@ try
 
     // Ensure stable is large enough, or this would be unstable.
     const size_t num_rows_write_stable = db_context->getGlobalContext().getSettingsRef().max_block_size;
-    constexpr size_t NUMBER_OF_BLOCK_IN_STABLE = 5; // NOLINT(readability-identifier-naming)
+    constexpr size_t NUMBER_OF_BLOCK_IN_STABLE = 5;
     const size_t stable_rows = num_rows_write_stable * NUMBER_OF_BLOCK_IN_STABLE;
     {
         for (size_t i = 0; i < NUMBER_OF_BLOCK_IN_STABLE; i++)
@@ -173,7 +177,7 @@ try
     }
 
     const size_t num_rows_write_delta = 128; // Avoid DeltaMerge.
-    constexpr size_t NUMBER_OF_BLOCKS_IN_DELTA = 5; // NOLINT(readability-identifier-naming)
+    constexpr size_t NUMBER_OF_BLOCKS_IN_DELTA = 5;
     const size_t delta_rows = num_rows_write_delta * NUMBER_OF_BLOCKS_IN_DELTA;
     // Ensure delta is not empty.
     {
@@ -199,7 +203,7 @@ try
     const auto & dmfiles = store->id_to_segment.begin()->second->getStable()->getDMFiles();
     ASSERT_EQ(dmfiles.size(), 1);
     auto dmfile = dmfiles.front();
-    auto readable_path = getPathByStatus(dmfile->parentPath(), dmfile->fileId(), DMFileStatus::READABLE);
+    auto readable_path = DMFile::getPathByStatus(dmfile->parentPath(), dmfile->fileId(), DMFile::Status::READABLE);
     ASSERT_EQ(dmfile->path(), readable_path);
     ASSERT_EQ(DMFileReaderPool::instance().get(readable_path), nullptr);
 
@@ -211,7 +215,7 @@ try
             columns,
             {RowKeyRange::newAll(store->isCommonHandle(), store->getRowKeyColumnSize())},
             /* num_streams= */ 1,
-            /* start_ts= */ std::numeric_limits<UInt64>::max(),
+            /* max_version= */ std::numeric_limits<UInt64>::max(),
             EMPTY_FILTER,
             std::vector<RuntimeFilterPtr>{},
             0,

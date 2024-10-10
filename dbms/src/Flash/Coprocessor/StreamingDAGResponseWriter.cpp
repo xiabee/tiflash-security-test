@@ -61,30 +61,20 @@ StreamingDAGResponseWriter<StreamWriterPtr>::StreamingDAGResponseWriter(
 }
 
 template <class StreamWriterPtr>
-bool StreamingDAGResponseWriter<StreamWriterPtr>::doFlush()
+void StreamingDAGResponseWriter<StreamWriterPtr>::flush()
 {
     if (rows_in_blocks > 0)
-    {
         encodeThenWriteBlocks();
-        return true;
-    }
-    return false;
 }
 
 template <class StreamWriterPtr>
-WaitResult StreamingDAGResponseWriter<StreamWriterPtr>::waitForWritable() const
+bool StreamingDAGResponseWriter<StreamWriterPtr>::isWritable() const
 {
-    return writer->waitForWritable();
+    return writer->isWritable();
 }
 
 template <class StreamWriterPtr>
-void StreamingDAGResponseWriter<StreamWriterPtr>::notifyNextPipelineWriter()
-{
-    return writer->notifyNextPipelineWriter();
-}
-
-template <class StreamWriterPtr>
-bool StreamingDAGResponseWriter<StreamWriterPtr>::doWrite(const Block & block)
+void StreamingDAGResponseWriter<StreamWriterPtr>::write(const Block & block)
 {
     RUNTIME_CHECK_MSG(
         block.columns() == dag_context.result_field_types.size(),
@@ -97,17 +87,14 @@ bool StreamingDAGResponseWriter<StreamWriterPtr>::doWrite(const Block & block)
     }
 
     if (static_cast<Int64>(rows_in_blocks) > batch_send_min_limit)
-    {
         encodeThenWriteBlocks();
-        return true;
-    }
-    return false;
 }
 
 template <class StreamWriterPtr>
 void StreamingDAGResponseWriter<StreamWriterPtr>::encodeThenWriteBlocks()
 {
-    assert(!blocks.empty());
+    if (unlikely(blocks.empty()))
+        return;
 
     TrackedSelectResp response;
     response.setEncodeType(dag_context.encode_type);

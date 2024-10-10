@@ -16,7 +16,7 @@
 
 #include <Core/Types.h>
 #include <common/types.h>
-#include <pingcap/pd/Types.h>
+#include <pingcap/pd/IClient.h>
 
 #include <chrono>
 #include <unordered_set>
@@ -47,23 +47,13 @@ using ColumnID = Int64;
 
 enum : ColumnID
 {
-    EmptyColumnID = 0,
+    // Prevent conflict with TiDB.
+    TiDBPkColumnID = -1,
+    ExtraTableIDColumnID = -3,
+    VersionColumnID = -1024,
+    DelMarkColumnID = -1025,
+    InvalidColumnID = -10000,
 };
-
-using IndexID = Int64;
-
-enum : IndexID
-{
-    EmptyIndexID = 0,
-};
-
-// Constants for column id, prevent conflict with TiDB.
-static constexpr ColumnID TiDBPkColumnID = -1;
-static constexpr ColumnID ExtraTableIDColumnID = -3;
-static constexpr ColumnID VersionColumnID = -1024;
-static constexpr ColumnID DelMarkColumnID = -1025;
-static constexpr ColumnID InvalidColumnID = -10000;
-
 
 using HandleID = Int64;
 using Timestamp = UInt64;
@@ -86,11 +76,5 @@ using Clock = std::chrono::system_clock;
 using Timepoint = Clock::time_point;
 using Duration = Clock::duration;
 using Seconds = std::chrono::seconds;
-
-struct RegionAppliedStatus
-{
-    RegionID region_id = InvalidRegionID;
-    UInt64 applied_index = 0;
-};
 
 } // namespace DB

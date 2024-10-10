@@ -12,70 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/formatReadable.h>
-#include <Core/Block.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
-#include <Flash/Coprocessor/ChunkDecodeAndSquash.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Compression/CompressionMethod.h>
+#include <IO/ReadBufferFromString.h>
 #include <TestUtils/ColumnGenerator.h>
-#include <TestUtils/FunctionTestUtils.h>
-#include <TestUtils/TiFlashTestBasic.h>
-#include <common/logger_useful.h>
-
-#include <random>
+#include <gtest/gtest.h>
 
 
 namespace DB::tests
 {
 
-// Return a block with **rows**, containing a random elems size array(f32) and 5 Int64 column.
+// Return a block with **rows** and 5 Int64 column.
 static Block prepareBlock(size_t rows)
 {
     Block block;
-    size_t col_idx = 0;
-    block.insert(ColumnGenerator::instance().generate({
-        //
-        rows,
-        "Array(Float32)",
-        RANDOM,
-        fmt::format("col{}", col_idx),
-        128,
-        DataDistribution::RANDOM,
-        3,
-    }));
-    ++col_idx;
-
-    for (; col_idx < 5; ++col_idx)
+    for (size_t i = 0; i < 5; ++i)
     {
         DataTypePtr int64_data_type = std::make_shared<DataTypeInt64>();
-        block.insert(ColumnGenerator::instance().generate({rows, "Int64", RANDOM, fmt::format("col{}", col_idx)}));
-    }
-    return block;
-}
-
-// Return a block with **rows**, containing a fixed elems size array(f32) and 5 Int64 column.
-static Block prepareBlockWithFixedVecF32(size_t rows)
-{
-    Block block;
-    size_t col_idx = 0;
-    block.insert(ColumnGenerator::instance().generate({
-        //
-        rows,
-        "Array(Float32)",
-        RANDOM,
-        fmt::format("col{}", col_idx),
-        128,
-        DataDistribution::FIXED,
-        3,
-    }));
-    ++col_idx;
-
-    for (; col_idx < 5; ++col_idx)
-    {
-        DataTypePtr int64_data_type = std::make_shared<DataTypeInt64>();
-        block.insert(ColumnGenerator::instance().generate({rows, "Int64", RANDOM, fmt::format("col{}", col_idx)}));
+        auto int64_column = ColumnGenerator::instance().generate({rows, "Int64", RANDOM}).column;
+        block.insert(
+            ColumnWithTypeAndName{std::move(int64_column), int64_data_type, String("col") + std::to_string(i)});
     }
     return block;
 }
@@ -112,8 +68,7 @@ void test_enocde_release_data(VecCol && batch_columns, const Block & header, con
     }
 }
 
-TEST(CHBlockChunkCodecTest, ChunkCodecV1)
-try
+TEST(CHBlockChunkCodec, ChunkCodecV1)
 {
     size_t block_num = 10;
     size_t rows = 10;
@@ -141,7 +96,6 @@ try
             ASSERT_EQ(codec.original_size, 0);
         }
         {
-            // test encode one block
             auto codec = CHBlockChunkCodecV1{
                 header,
             };
@@ -184,7 +138,6 @@ try
                     ASSERT_TRUE(col.column);
                 }
             }
-            // test encode moved blocks
             auto codec = CHBlockChunkCodecV1{
                 header,
             };
@@ -264,108 +217,14 @@ try
         ASSERT_FALSE(source_str.empty());
         ASSERT_EQ(static_cast<CompressionMethodByte>(source_str[0]), CompressionMethodByte::NONE);
 
-        for (const auto method : {CompressionMethod::LZ4, CompressionMethod::ZSTD})
+        for (auto mode : {CompressionMethod::LZ4, CompressionMethod::ZSTD})
         {
-            auto compressed_str_a = CHBlockChunkCodecV1::encode({&source_str[1], source_str.size() - 1}, method);
-            auto compressed_str_b = CHBlockChunkCodecV1{header}.encode(blocks.front(), method);
+            auto compressed_str_a = CHBlockChunkCodecV1::encode({&source_str[1], source_str.size() - 1}, mode);
+            auto compressed_str_b = CHBlockChunkCodecV1{header}.encode(blocks.front(), mode);
 
             ASSERT_EQ(compressed_str_a, compressed_str_b);
         }
     }
 }
-CATCH
-
-TEST(CHBlockChunkCodecTest, ChunkDecodeAndSquash)
-try
-{
-    auto header = prepareBlockWithFixedVecF32(0);
-    Blocks blocks = {
-        prepareBlockWithFixedVecF32(11),
-        prepareBlockWithFixedVecF32(17),
-        prepareBlockWithFixedVecF32(23),
-    };
-    size_t num_rows = 0;
-
-    CHBlockChunkCodecV1 codec(header);
-    CHBlockChunkDecodeAndSquash decoder(header, 13);
-    size_t num_rows_decoded = 0;
-    Blocks blocks_decoded;
-    auto check = [&](std::optional<Block> && block_opt) {
-        if (block_opt)
-        {
-            block_opt->checkNumberOfRows();
-            num_rows_decoded += block_opt->rows();
-            blocks_decoded.emplace_back(std::move(*block_opt));
-        }
-    };
-    for (const auto & b : blocks)
-    {
-        num_rows += b.rows();
-        LOG_DEBUG(Logger::get(), "ser/deser block {}", getColumnsContent(b.getColumnsWithTypeAndName()));
-        auto str = codec.encode(b, CompressionMethod::LZ4);
-        check(decoder.decodeAndSquashV1(str));
-    }
-    check(decoder.flush());
-    ASSERT_EQ(num_rows, num_rows_decoded);
-
-    auto input_block = vstackBlocks(std::move(blocks));
-    auto decoded_block = vstackBlocks(std::move(blocks_decoded));
-    ASSERT_BLOCK_EQ(input_block, decoded_block);
-}
-CATCH
-
-
-TEST(CHBlockChunkCodecTest, ChunkDecodeAndSquashRandom)
-try
-{
-    std::mt19937_64 rand_gen;
-
-    auto header = prepareBlockWithFixedVecF32(0);
-    size_t num_blocks = std::uniform_int_distribution<Int32>(1, 64)(rand_gen);
-    size_t num_rows = 0;
-    Blocks blocks;
-    for (size_t i = 0; i < num_blocks; ++i)
-    {
-        auto b = prepareBlockWithFixedVecF32(std::uniform_int_distribution<>(0, 8192)(rand_gen));
-        num_rows += b.rows();
-        blocks.emplace_back(std::move(b));
-    }
-
-    LOG_DEBUG(Logger::get(), "generate blocks, num_blocks={} num_rows={}", num_blocks, num_rows);
-
-    CHBlockChunkCodecV1 codec(header);
-    CHBlockChunkDecodeAndSquash decoder(header, 1024);
-    size_t num_rows_decoded = 0;
-    size_t num_bytes = 0;
-    Blocks blocks_decoded;
-    auto check = [&](std::optional<Block> && block_opt) {
-        if (block_opt)
-        {
-            block_opt->checkNumberOfRows();
-            num_rows_decoded += block_opt->rows();
-            blocks_decoded.emplace_back(std::move(*block_opt));
-        }
-    };
-    for (const auto & b : blocks)
-    {
-        // LOG_DEBUG(Logger::get(), "ser/deser block {}", getColumnsContent(b.getColumnsWithTypeAndName()));
-        auto str = codec.encode(b, CompressionMethod::LZ4);
-        num_bytes += str.size();
-        check(decoder.decodeAndSquashV1(str));
-    }
-    check(decoder.flush());
-    ASSERT_EQ(num_rows, num_rows_decoded);
-    LOG_DEBUG(
-        Logger::get(),
-        "ser/deser done, num_blocks={} num_rows={} num_bytes={}",
-        num_blocks,
-        num_rows,
-        formatReadableSizeWithBinarySuffix(num_bytes));
-
-    auto input_block = vstackBlocks(std::move(blocks));
-    auto decoded_block = vstackBlocks(std::move(blocks_decoded));
-    ASSERT_BLOCK_EQ(input_block, decoded_block);
-}
-CATCH
 
 } // namespace DB::tests

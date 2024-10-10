@@ -13,11 +13,12 @@
 // limitations under the License.
 
 #include <DataTypes/DataTypeFactory.h>
-#include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/getLeastSupertype.h>
 #include <DataTypes/getMostSubtype.h>
 #include <DataTypes/isSupportedDataTypeCast.h>
 #include <TestUtils/TiFlashTestBasic.h>
+
+#include <sstream>
 
 namespace DB
 {
@@ -150,14 +151,10 @@ try
                     ->equals(*typeFromString("Array(Array(UInt8))")));
     ASSERT_TRUE(getLeastSupertype(typesFromString("Array(Array(UInt8)) Array(Array(Int8))"))
                     ->equals(*typeFromString("Array(Array(Int16))")));
-    ASSERT_TRUE(getLeastSupertype(typesFromString("Array(Date) Array(DateTime)")) //
-                    ->equals(*typeFromString("Array(DateTime)")));
+    ASSERT_TRUE(
+        getLeastSupertype(typesFromString("Array(Date) Array(DateTime)"))->equals(*typeFromString("Array(DateTime)")));
     ASSERT_TRUE(getLeastSupertype(typesFromString("Array(String) Array(FixedString(32))"))
                     ->equals(*typeFromString("Array(String)")));
-    ASSERT_TRUE(getLeastSupertype(typesFromString("Array(Float32) Array(Float32)")) //
-                    ->equals(*typeFromString("Array(Float32)")));
-    ASSERT_TRUE(getLeastSupertype(typesFromString("Array(Float32) Nullable(Array(Float32))")) //
-                    ->equals(*typeFromString("Nullable(Array(Float32))")));
 
     ASSERT_TRUE(
         getLeastSupertype(typesFromString("Nullable(Nothing) Nothing"))->equals(*typeFromString("Nullable(Nothing)")));
@@ -218,16 +215,11 @@ try
                     ->equals(*typeFromString("Array(Array(UInt8))")));
     ASSERT_TRUE(getMostSubtype(typesFromString("Array(Array(UInt8)) Array(Array(Int8))"))
                     ->equals(*typeFromString("Array(Array(UInt8))")));
-    ASSERT_TRUE(getMostSubtype(typesFromString("Array(Date) Array(DateTime)")) //
-                    ->equals(*typeFromString("Array(Date)")));
+    ASSERT_TRUE(getMostSubtype(typesFromString("Array(Date) Array(DateTime)"))->equals(*typeFromString("Array(Date)")));
     ASSERT_TRUE(getMostSubtype(typesFromString("Array(String) Array(FixedString(32))"))
                     ->equals(*typeFromString("Array(FixedString(32))")));
     ASSERT_TRUE(getMostSubtype(typesFromString("Array(String) Array(FixedString(32))"))
                     ->equals(*typeFromString("Array(FixedString(32))")));
-    ASSERT_TRUE(getMostSubtype(typesFromString("Array(Float32) Array(Float32)")) //
-                    ->equals(*typeFromString("Array(Float32)")));
-    ASSERT_TRUE(getMostSubtype(typesFromString("Array(Float32) Nullable(Array(Float32))")) //
-                    ->equals(*typeFromString("Array(Float32)")));
 
     ASSERT_TRUE(getMostSubtype(typesFromString("Nullable(Nothing) Nothing"))->equals(*typeFromString("Nothing")));
     ASSERT_TRUE(getMostSubtype(typesFromString("Nullable(UInt8) Int8"))->equals(*typeFromString("UInt8")));
@@ -337,19 +329,6 @@ try
         ASSERT_TRUE(ntype->isNullable()) << "type: " + type->getName();
         // not true for nullable
         ASSERT_FALSE(ntype->isDateOrDateTime()) << "type: " + type->getName();
-    }
-
-    {
-        // array can be wrapped by Nullable
-        auto type = typeFromString("Array(Float32)");
-        ASSERT_NE(type, nullptr);
-        auto ntype = DataTypeNullable(type);
-        ASSERT_TRUE(ntype.isNullable());
-    }
-
-    {
-        auto type = typeFromString("Nullable(Array(Float32))");
-        ASSERT_TRUE(type->isNullable());
     }
 }
 CATCH

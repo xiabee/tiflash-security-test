@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Encryption/FileProvider.h>
 #include <Storages/DeltaMerge/Remote/DataStore/DataStore.h>
 #include <Storages/KVStore/Types.h>
 
@@ -22,7 +23,7 @@ namespace DB::DM::Remote
 class DataStoreS3 final : public IDataStore
 {
 public:
-    explicit DataStoreS3(const FileProviderPtr & file_provider_)
+    explicit DataStoreS3(FileProviderPtr file_provider_)
         : file_provider(file_provider_)
         , log(Logger::get("DataStoreS3"))
     {}
@@ -34,18 +35,6 @@ public:
      * Should be used by a write node.
      */
     void putDMFile(DMFilePtr local_dmfile, const S3::DMFileOID & oid, bool remove_local) override;
-
-    /**
-      * @brief Note: Unlike putDMFile, this function intentionally does not
-      * remove any local files, because it is only a "put".
-      *
-      * @param local_dir The path of the local DMFile
-      * @param local_files File names to upload
-      */
-    void putDMFileLocalFiles(
-        const String & local_dir,
-        const std::vector<String> & local_files,
-        const S3::DMFileOID & oid) override;
 
     /**
      * Blocks until a DMFile in the remote data store is successfully prepared in a local cache.
@@ -90,7 +79,7 @@ public:
 
     ~S3PreparedDMFileToken() override = default;
 
-    DMFilePtr restore(DMFileMeta::ReadMode read_mode, UInt64 meta_version) override;
+    DMFilePtr restore(DMFile::ReadMetaMode read_mode) override;
 };
 
 } // namespace DB::DM::Remote

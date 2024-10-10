@@ -65,4 +65,5 @@ FLATTEN_INLINE static inline void LoopOneColumn(const Chars & a_data, const Offs
         a_prev_offset = a_offsets[i];
     }
 }
+
 } // namespace DB

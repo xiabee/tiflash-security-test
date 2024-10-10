@@ -20,7 +20,6 @@
 #include <fmt/compile.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <fmt/std.h>
 
 #ifndef QUERY_PREVIEW_LENGTH
 #define QUERY_PREVIEW_LENGTH 160
@@ -45,7 +44,7 @@ inline constexpr size_t getFileNameOffset(const T (&str)[S], size_t i = S - 1)
 }
 
 template <typename T>
-inline constexpr size_t getFileNameOffset(T (& /*str*/)[1])
+inline constexpr size_t getFileNameOffset(T (&/*str*/)[1])
 {
     return 0;
 }

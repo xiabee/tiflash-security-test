@@ -14,10 +14,10 @@
 
 #include <Common/FailPoint.h>
 #include <Common/SyncPoint/Ctl.h>
-#include <IO/BaseFile/PosixRandomAccessFile.h>
-#include <IO/BaseFile/RandomAccessFile.h>
-#include <IO/BaseFile/RateLimiter.h>
-#include <IO/Encryption/MockKeyManager.h>
+#include <Encryption/MockKeyManager.h>
+#include <Encryption/PosixRandomAccessFile.h>
+#include <Encryption/RandomAccessFile.h>
+#include <Encryption/RateLimiter.h>
 #include <Interpreters/Context.h>
 #include <Storages/Page/ConfigSettings.h>
 #include <Storages/Page/Page.h>
@@ -41,7 +41,6 @@
 
 #include <ext/scope_guard.h>
 #include <future>
-#include <random>
 
 namespace DB
 {
@@ -547,7 +546,7 @@ TEST_F(PageStorageTest, MultipleWriteRead)
         std::uniform_int_distribution<> dist(0, 3000);
 
         const size_t buff_sz = 2 * DB::MB + dist(size_gen);
-        char * buff = static_cast<char *>(malloc(buff_sz)); // NOLINT(cppcoreguidelines-no-malloc)
+        char * buff = static_cast<char *>(malloc(buff_sz));
         if (buff == nullptr)
         {
             throw DB::Exception("Alloc fix memory failed.", DB::ErrorCodes::LOGICAL_ERROR);
@@ -555,8 +554,7 @@ TEST_F(PageStorageTest, MultipleWriteRead)
 
         const char buff_ch = page_id % 0xFF;
         memset(buff, buff_ch, buff_sz);
-        DB::MemHolder holder
-            = DB::createMemHolder(buff, [&](char * p) { free(p); }); // NOLINT(cppcoreguidelines-no-malloc)
+        DB::MemHolder holder = DB::createMemHolder(buff, [&](char * p) { free(p); });
 
         auto read_buff = std::make_shared<DB::ReadBufferFromMemory>(const_cast<char *>(buff), buff_sz);
 
@@ -811,7 +809,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -828,7 +826,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -897,7 +895,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -914,7 +912,7 @@ try
         ASSERT_EQ(page1.data.size(), buf_sz);
         for (size_t i = 0; i < page1.data.size(); ++i)
         {
-            const auto * p = page1.data.begin();
+            auto * p = page1.data.begin();
             EXPECT_EQ(*p, 0x02);
         }
     }
@@ -1950,7 +1948,6 @@ try
     }
 
     FailPointHelper::enableFailPoint(FailPoints::force_pick_all_blobs_to_full_gc);
-    SCOPE_EXIT({ FailPointHelper::disableFailPoint(FailPoints::force_pick_all_blobs_to_full_gc); });
     auto done_full_gc = page_storage->gc();
     EXPECT_TRUE(done_full_gc);
 

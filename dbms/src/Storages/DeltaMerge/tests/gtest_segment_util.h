@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
-
 #include <common/defines.h>
 #include <common/types.h>
 #include <gtest/gtest.h>

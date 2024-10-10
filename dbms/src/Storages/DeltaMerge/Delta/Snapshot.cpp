@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/Buffer/MemoryReadWriteBuffer.h>
+#include <IO/MemoryReadWriteBuffer.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileDataProvider.h>
 #include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/Delta/DeltaValueSpace.h>
@@ -38,7 +38,8 @@ DeltaSnapshotPtr DeltaValueSpace::createSnapshot(
     if (abandoned.load(std::memory_order_relaxed))
         return {};
 
-    auto snap = std::make_shared<DeltaValueSnapshot>(type, for_update);
+    auto snap = std::make_shared<DeltaValueSnapshot>(type);
+    snap->is_update = for_update;
     snap->delta = this->shared_from_this();
 
     auto storage_snap = std::make_shared<StorageSnapshot>(
@@ -220,25 +221,23 @@ bool DeltaValueReader::shouldPlace(
     const size_t placed_delete_ranges,
     const RowKeyRange & segment_range_,
     const RowKeyRange & relevant_range,
-    UInt64 start_ts)
+    UInt64 max_version)
 {
     // The placed_rows, placed_delete_range already contains the data in delta_snap
     if (placed_rows >= delta_snap->getRows() && placed_delete_ranges == delta_snap->getDeletes())
         return false;
 
-    if (relevant_range.all() || relevant_range == segment_range_ // read all the data in this segment
+    if (relevant_range.all() || relevant_range == segment_range_ //
         || delta_snap->getRows() - placed_rows > context.delta_cache_limit_rows //
-        || placed_delete_ranges != delta_snap->getDeletes() // new delete_range appended, must place it
-    )
+        || placed_delete_ranges != delta_snap->getDeletes())
         return true;
 
-    // otherwise check persisted_files and mem_tables
-    const size_t rows_in_persisted_file_snap = delta_snap->getMemTableSetRowsOffset();
-    return persisted_files_reader->shouldPlace(context, relevant_range, start_ts, placed_rows)
+    size_t rows_in_persisted_file_snap = delta_snap->getMemTableSetRowsOffset();
+    return persisted_files_reader->shouldPlace(context, relevant_range, max_version, placed_rows)
         || mem_table_reader->shouldPlace(
             context,
             relevant_range,
-            start_ts,
+            max_version,
             placed_rows <= rows_in_persisted_file_snap ? 0 : placed_rows - rows_in_persisted_file_snap);
 }
 

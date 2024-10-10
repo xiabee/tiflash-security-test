@@ -76,10 +76,10 @@ void PhysicalPlan::build(const tipb::DAGRequest * dag_request)
 void PhysicalPlan::buildTableScan(const String & executor_id, const tipb::Executor * executor)
 {
     TiDBTableScan table_scan(executor, executor_id, dagContext());
-    if (!table_scan.getPushedDownFilters().empty() && unlikely(!context.getSettingsRef().dt_enable_bitmap_filter))
+    if (!table_scan.getPushedDownFilters().empty() && unlikely(!context.getSettingsRef().dt_enable_read_thread))
         throw Exception(
-            "Running late materialization but bitmap filter is disabled, please set the config "
-            "`profiles.default.dt_enable_bitmap_filter` of TiFlash to true,"
+            "Enable late materialization but disable read thread pool, please set the config `dt_enable_read_thread` "
+            "of TiFlash to true,"
             "or disable late materialization by set tidb variable `tidb_opt_enable_late_materialization` to false.");
     LOG_DEBUG(log, "tidb table scan has runtime filter size:{}", table_scan.getRuntimeFilterIDs().size());
     if (unlikely(context.isTest()))
@@ -93,7 +93,6 @@ void PhysicalPlan::build(const tipb::Executor * executor)
 {
     RUNTIME_CHECK(executor);
     RUNTIME_CHECK(executor->has_executor_id());
-
     const auto & executor_id = executor->executor_id();
     switch (executor->tp())
     {
@@ -233,7 +232,7 @@ void PhysicalPlan::build(const tipb::Executor * executor)
     }
     default:
         throw TiFlashException(
-            fmt::format("{} executor is not supported", fmt::underlying(executor->tp())),
+            fmt::format("{} executor is not supported", executor->tp()),
             Errors::Planner::Unimplemented);
     }
 }
@@ -323,12 +322,9 @@ PipelinePtr PhysicalPlan::toPipeline(PipelineExecutorContext & exec_context, Con
 {
     RUNTIME_CHECK(root_node);
     PipelineBuilder builder{log->identifier()};
-    LOG_DEBUG(log, "Before buildPipeline");
     root_node->buildPipeline(builder, context, exec_context);
-    LOG_DEBUG(log, "After buildPipeline");
     root_node.reset();
     auto pipeline = builder.build();
-    LOG_DEBUG(log, "Before dump pipeline dag");
     LOG_DEBUG(log, "build pipeline dag: \n{}", pipeline->toTreeString());
     return pipeline;
 }

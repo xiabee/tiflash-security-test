@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/File.h>
@@ -42,10 +42,10 @@ namespace DB::PS::V2::tests
 {
 using PSPtr = std::shared_ptr<PageStorage>;
 
-class PageStorageMultiWritersTest : public DB::base::TiFlashStorageTestBasic
+class PageStorageMultiWriters_test : public DB::base::TiFlashStorageTestBasic
 {
 public:
-    PageStorageMultiWritersTest()
+    PageStorageMultiWriters_test()
         : file_provider{DB::tests::TiFlashTestEnv::getDefaultFileProvider()}
     {}
 
@@ -55,10 +55,7 @@ protected:
     void SetUp() override
     {
         TiFlashStorageTestBasic::SetUp();
-        bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(
-            4,
-            "bg-page-",
-            std::make_shared<JointThreadInfoJeallocMap>());
+        bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
         // default test config
         config.file_roll_size = 4 * MB;
         config.gc_max_valid_rate = 0.5;
@@ -133,7 +130,7 @@ public:
     {
         // fill page with random bytes
         const size_t buff_sz = approx_page_kb * 1024 + random() % 300;
-        char * buff = static_cast<char *>(malloc(buff_sz));
+        char * buff = (char *)malloc(buff_sz);
         const char buff_ch = pageId % 0xFF;
         memset(buff, buff_ch, buff_sz);
 
@@ -368,7 +365,7 @@ struct Suit
     StressTimeout cancel_runner;
 };
 
-TEST_F(PageStorageMultiWritersTest, DISABLED_MultiWriteReadRestore)
+TEST_F(PageStorageMultiWriters_test, DISABLED_MultiWriteReadRestore)
 try
 {
     size_t num_writers = 4;

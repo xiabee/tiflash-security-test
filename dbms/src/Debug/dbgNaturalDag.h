@@ -16,11 +16,15 @@
 
 #include <Flash/Coprocessor/RegionInfo.h>
 #include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
+#include <Storages/KVStore/KVStore.h>
 #include <Storages/KVStore/MultiRaft/RegionMeta.h>
 #include <TiDB/Schema/TiDB.h>
 #include <kvproto/coprocessor.pb.h>
 #include <kvproto/mpp.pb.h>
 
+#include <fstream>
+#include <iostream>
+#include <sstream>
 #include <vector>
 
 namespace DB

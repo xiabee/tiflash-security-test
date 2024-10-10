@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <IO/Buffer/ReadBufferFromMemory.h>
-#include <IO/Compression/CompressedReadBuffer.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
+#include <IO/CompressedReadBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/V3/PageDefines.h>
@@ -56,7 +56,7 @@ inline void serializeEntryTo(const PageEntryV3 & entry, WriteBuffer & buf, bool 
         writeIntBinary(off, buf);
         writeIntBinary(checksum, buf);
     }
-    if (has_checkpoint_info && entry.checkpoint_info.data_location.isValid())
+    if (has_checkpoint_info)
     {
         writeIntBinary(entry.checkpoint_info.data_location.offset_in_file, buf);
         writeIntBinary(entry.checkpoint_info.data_location.size_in_file, buf);

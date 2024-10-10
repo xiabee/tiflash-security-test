@@ -15,25 +15,24 @@
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <TestUtils/TiFlashTestBasic.h>
-#include <TiDB/Schema/TiDB.h>
 
-namespace DB::DM::tests
+namespace DB
 {
-
-TEST(HandleRangeTest, Redact)
+namespace DM
+{
+namespace tests
+{
+TEST(HandleRange_test, Redact)
 {
     HandleRange range(20, 400);
 
-    Redact::setRedactLog(RedactMode::Disable);
+    Redact::setRedactLog(false);
     EXPECT_EQ(range.toDebugString(), "[20,400)");
 
-    Redact::setRedactLog(RedactMode::Enable);
+    Redact::setRedactLog(true);
     EXPECT_EQ(range.toDebugString(), "[?,?)");
 
-    Redact::setRedactLog(RedactMode::Marker);
-    EXPECT_EQ(range.toDebugString(), "[‹20›,‹400›)");
-
-    Redact::setRedactLog(RedactMode::Disable); // restore flags
+    Redact::setRedactLog(false); // restore flags
 }
 
 namespace
@@ -54,7 +53,7 @@ std::shared_ptr<RegionRangeKeys> genTestRegionRangeKeys()
 }
 } // namespace
 
-TEST(HandleRangeTest, Basic)
+TEST(RowKeyRange_test, Basic)
 {
     RowKeyRange all_range = RowKeyRange::newAll(true, 3);
     EXPECT_TRUE(all_range.isStartInfinite());
@@ -64,23 +63,20 @@ TEST(HandleRangeTest, Basic)
     EXPECT_TRUE(none_range.none());
 }
 
-TEST(HandleRangeTest, RedactRangeFromHandle)
+TEST(RowKeyRange_test, RedactRangeFromHandle)
 {
     RowKeyRange range = RowKeyRange::fromHandleRange(HandleRange{20, 400});
 
-    Redact::setRedactLog(RedactMode::Disable);
+    Redact::setRedactLog(false);
     EXPECT_EQ(range.toDebugString(), "[20,400)");
 
-    Redact::setRedactLog(RedactMode::Enable);
+    Redact::setRedactLog(true);
     EXPECT_EQ(range.toDebugString(), "[?,?)");
 
-    Redact::setRedactLog(RedactMode::Marker);
-    EXPECT_EQ(range.toDebugString(), "[‹20›,‹400›)");
-
-    Redact::setRedactLog(RedactMode::Disable); // restore flags
+    Redact::setRedactLog(false); // restore flags
 }
 
-TEST(HandleRangeTest, RedactRangeFromCommonHandle)
+TEST(RowKeyRange_test, RedactRangeFromCommonHandle)
 {
     auto region_range = genTestRegionRangeKeys();
     TableID table_id = 49;
@@ -89,24 +85,18 @@ TEST(HandleRangeTest, RedactRangeFromCommonHandle)
     RowKeyRange none_range = RowKeyRange::newNone(true, 3);
 
     // print some values
-    Redact::setRedactLog(RedactMode::Disable);
-    EXPECT_EQ(range.toDebugString(), "[02066161610206616263,02066262620206616263)");
-    EXPECT_EQ(all_range.toDebugString(), "[01,FA)");
-    EXPECT_EQ(none_range.toDebugString(), "[FA,01)");
+    Redact::setRedactLog(false);
+    EXPECT_NE(range.toDebugString(), "[?,?)");
+    EXPECT_NE(all_range.toDebugString(), "[?,?)");
+    EXPECT_NE(none_range.toDebugString(), "[?,?)");
 
     // print placeholder(?) instead of values
-    Redact::setRedactLog(RedactMode::Enable);
+    Redact::setRedactLog(true);
     EXPECT_EQ(range.toDebugString(), "[?,?)");
     EXPECT_EQ(all_range.toDebugString(), "[?,?)");
     EXPECT_EQ(none_range.toDebugString(), "[?,?)");
 
-    // print values with marker
-    Redact::setRedactLog(RedactMode::Marker);
-    EXPECT_EQ(range.toDebugString(), "[‹02066161610206616263›,‹02066262620206616263›)");
-    EXPECT_EQ(all_range.toDebugString(), "[‹01›,‹FA›)");
-    EXPECT_EQ(none_range.toDebugString(), "[‹FA›,‹01›)");
-
-    Redact::setRedactLog(RedactMode::Disable); // restore flags
+    Redact::setRedactLog(false); // restore flags
 }
 
 TEST(RowKey, ToNextKeyIntHandle)
@@ -117,7 +107,7 @@ TEST(RowKey, ToNextKeyIntHandle)
 
     {
         const auto expected_next_int = RowKeyValue::fromHandle(21);
-        EXPECT_EQ(next.toRowKeyValueRef(), expected_next_int.toRowKeyValueRef());
+        EXPECT_EQ(0, compare(next.toRowKeyValueRef(), expected_next_int.toRowKeyValueRef()));
     }
     {
         const auto range_keys
@@ -127,7 +117,7 @@ TEST(RowKey, ToNextKeyIntHandle)
             /* table_id */ 1,
             /* is_common_handle */ false,
             /* row_key_column_size */ 1);
-        EXPECT_EQ(next.toRowKeyValueRef(), range.getEnd());
+        EXPECT_EQ(0, compare(next.toRowKeyValueRef(), range.getEnd()));
     }
     // Note: {20,00} will be regarded as Key=21 in RowKeyRange::fromRegionRange.
     {
@@ -141,7 +131,7 @@ TEST(RowKey, ToNextKeyIntHandle)
             /* table_id */ 1,
             /* is_common_handle */ false,
             /* row_key_column_size */ 1);
-        EXPECT_EQ(next.toRowKeyValueRef(), range.getEnd());
+        EXPECT_EQ(0, compare(next.toRowKeyValueRef(), range.getEnd()));
     }
 }
 
@@ -154,38 +144,40 @@ TEST(RowKey, ToNextKeyCommonHandle)
     EXPECT_EQ("CCAB00", next.toDebugString());
 
     const auto my_next = RowKeyValue(/* is_common_handle */ true, std::make_shared<String>("\xcc\xab\x00"s), 0);
-    EXPECT_EQ(my_next.toRowKeyValueRef(), next.toRowKeyValueRef());
+    EXPECT_EQ(0, compare(my_next.toRowKeyValueRef(), next.toRowKeyValueRef()));
 }
 
 TEST(RowKey, NextIntHandleCompare)
 {
     auto int_max = RowKeyValue::INT_HANDLE_MAX_KEY;
-    auto int_max_i64 = RowKeyValue::fromHandle(static_cast<Handle>(std::numeric_limits<HandleID>::max()));
+    auto int_max_i64 = RowKeyValue::fromHandle(Handle(std::numeric_limits<HandleID>::max()));
 
-    EXPECT_GT(int_max.toRowKeyValueRef(), int_max_i64.toRowKeyValueRef());
+    EXPECT_EQ(1, compare(int_max.toRowKeyValueRef(), int_max_i64.toRowKeyValueRef()));
 
     auto int_max_i64_pnext = int_max_i64.toPrefixNext();
     EXPECT_EQ(int_max, int_max_i64_pnext);
-    EXPECT_EQ(int_max.toRowKeyValueRef(), int_max_i64_pnext.toRowKeyValueRef());
-    EXPECT_EQ(int_max_i64_pnext.toRowKeyValueRef(), int_max.toRowKeyValueRef());
+    EXPECT_EQ(0, compare(int_max.toRowKeyValueRef(), int_max_i64_pnext.toRowKeyValueRef()));
+    EXPECT_EQ(0, compare(int_max_i64_pnext.toRowKeyValueRef(), int_max.toRowKeyValueRef()));
 
     auto int_max_i64_next = int_max_i64.toNext();
     EXPECT_EQ(int_max, int_max_i64_next);
-    EXPECT_EQ(int_max.toRowKeyValueRef(), int_max_i64_next.toRowKeyValueRef());
-    EXPECT_EQ(int_max_i64_next.toRowKeyValueRef(), int_max.toRowKeyValueRef());
+    EXPECT_EQ(0, compare(int_max.toRowKeyValueRef(), int_max_i64_next.toRowKeyValueRef()));
+    EXPECT_EQ(0, compare(int_max_i64_next.toRowKeyValueRef(), int_max.toRowKeyValueRef()));
 }
 
 TEST(RowKey, NextIntHandleMinMax)
 {
-    auto v0 = RowKeyValue::fromHandle(static_cast<Handle>(1178400));
+    auto v0 = RowKeyValue::fromHandle(Handle(1178400));
     auto v0_next = v0.toNext();
-    auto v1 = RowKeyValue::fromHandle(static_cast<Handle>(1178401));
+    auto v1 = RowKeyValue::fromHandle(Handle(1178401));
 
-    EXPECT_EQ(v0, std::min(v0, v1));
-    EXPECT_EQ(v0, std::min(v0, v0_next));
+    EXPECT_EQ(v0, min(v0, v1));
+    EXPECT_EQ(v0, min(v0, v0_next));
 
-    EXPECT_EQ(v1, std::max(v0, v1));
-    EXPECT_EQ(v1, std::max(v0, v0_next));
+    EXPECT_EQ(v1, max(v0, v1));
+    EXPECT_EQ(v1, max(v0, v0_next));
 }
 
-} // namespace DB::DM::tests
+} // namespace tests
+} // namespace DM
+} // namespace DB

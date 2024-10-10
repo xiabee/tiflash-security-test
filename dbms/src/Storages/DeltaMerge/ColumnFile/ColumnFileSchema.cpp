@@ -15,7 +15,6 @@
 #include <Common/TiFlashMetrics.h>
 #include <Interpreters/Context.h>
 #include <Storages/DeltaMerge/ColumnFile/ColumnFileSchema.h>
-#include <Storages/DeltaMerge/DMContext.h>
 
 namespace DB
 {
@@ -130,9 +129,9 @@ ColumnFileSchemaPtr SharedBlockSchemas::getOrCreate(const Block & block)
     return schema;
 }
 
-std::shared_ptr<DB::DM::SharedBlockSchemas> getSharedBlockSchemas(const DMContext & dm_context)
+std::shared_ptr<DB::DM::SharedBlockSchemas> getSharedBlockSchemas(const DMContext & context)
 {
-    return dm_context.global_context.getSharedBlockSchemas();
+    return context.db_context.getSharedBlockSchemas();
 }
 } // namespace DM
 } // namespace DB

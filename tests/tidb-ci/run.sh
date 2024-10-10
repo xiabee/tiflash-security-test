@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 source ../docker/util.sh
 
 set_branch
@@ -60,12 +61,4 @@ wait_env
 docker-compose -f cluster.yaml -f tiflash-dt-force-enable-lm.yaml exec -T tiflash0 bash -c 'cd /tests ; ./run-test.sh tidb-ci/force_enable_lm'
 
 docker-compose -f cluster.yaml -f tiflash-dt-force-enable-lm.yaml down
-clean_data_log
-
-# run lighweight compression tests
-docker-compose -f cluster.yaml -f tiflash-dt-lightweight-compression.yaml up -d
-wait_env
-docker-compose -f cluster.yaml -f tiflash-dt-lightweight-compression.yaml exec -T tiflash0 bash -c 'cd /tests ; ./run-test.sh tidb-ci/lightweight_compression'
-
-docker-compose -f cluster.yaml -f tiflash-dt-lightweight-compression.yaml down
 clean_data_log

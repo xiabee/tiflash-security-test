@@ -35,7 +35,6 @@ PipelineExecutor::PipelineExecutor(
           /*query_id=*/context.getDAGContext()->isMPPTask() ? context.getDAGContext()->getMPPTaskId().toString() : "",
           req_id,
           memory_tracker_,
-          context.getDAGContext(),
           auto_spill_trigger,
           register_operator_spill_context,
           context.getDAGContext()->getResourceGroupName())
@@ -78,7 +77,16 @@ void PipelineExecutor::wait()
 void PipelineExecutor::consume(ResultHandler & result_handler)
 {
     assert(result_handler);
-    exec_context.consume(result_handler);
+    if (unlikely(context.isTest()))
+    {
+        // In test mode, a single query should take no more than 5 minutes to execute.
+        static std::chrono::minutes timeout(5);
+        exec_context.consumeFor(result_handler, timeout);
+    }
+    else
+    {
+        exec_context.consume(result_handler);
+    }
 }
 
 ExecutionResult PipelineExecutor::execute(ResultHandler && result_handler)
@@ -100,7 +108,7 @@ ExecutionResult PipelineExecutor::execute(ResultHandler && result_handler)
         scheduleEvents();
         wait();
     }
-    LOG_DEBUG(log, "query finish with {}", exec_context.getQueryProfileInfo().toJson());
+    LOG_TRACE(log, "query finish with {}", exec_context.getQueryProfileInfo().toJson());
     return exec_context.toExecutionResult();
 }
 
@@ -120,7 +128,7 @@ int PipelineExecutor::estimateNewThreadCount()
     return 0;
 }
 
-UInt64 PipelineExecutor::collectCPUTimeNs()
+RU PipelineExecutor::collectRequestUnit()
 {
     // TODO Get cputime more accurately.
     // Currently, it is assumed that
@@ -131,7 +139,7 @@ UInt64 PipelineExecutor::collectCPUTimeNs()
     // It may be necessary to obtain CPU time using a more accurate method, such as using system call `clock_gettime`.
     const auto & query_profile_info = exec_context.getQueryProfileInfo();
     auto cpu_time_ns = query_profile_info.getCPUExecuteTimeNs();
-    return cpu_time_ns;
+    return cpuTimeToRU(cpu_time_ns);
 }
 
 Block PipelineExecutor::getSampleBlock() const

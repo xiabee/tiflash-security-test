@@ -14,34 +14,55 @@
 
 #pragma once
 
+#include <DataStreams/MarkInCompressedFile.h>
+#include <Encryption/CompressedReadBufferFromFileProvider.h>
+#include <Storages/DeltaMerge/DMContext.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeHelpers.h>
 #include <Storages/DeltaMerge/File/ColumnCache.h>
-#include <Storages/DeltaMerge/File/ColumnCacheLongTerm_fwd.h>
-#include <Storages/DeltaMerge/File/ColumnStream.h>
 #include <Storages/DeltaMerge/File/DMFile.h>
 #include <Storages/DeltaMerge/File/DMFilePackFilter.h>
-#include <Storages/DeltaMerge/ReadMode.h>
 #include <Storages/DeltaMerge/ReadThread/ColumnSharingCache.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
 #include <Storages/MarkCache.h>
 
-namespace DB::DM
+namespace DB
 {
-
-class DMFileWithVectorIndexBlockInputStream;
-
+namespace DM
+{
 class RSOperator;
 using RSOperatorPtr = std::shared_ptr<RSOperator>;
 
+inline static const size_t DMFILE_READ_ROWS_THRESHOLD = DEFAULT_MERGE_BLOCK_SIZE * 3;
 
 class DMFileReader
 {
-    friend class DMFileWithVectorIndexBlockInputStream;
-
 public:
     static bool isCacheableColumn(const ColumnDefine & cd);
+    // Read stream for single column
+    struct Stream
+    {
+        Stream(
+            DMFileReader & reader,
+            ColId col_id,
+            const String & file_name_base,
+            size_t aio_threshold,
+            size_t max_read_buffer_size,
+            const LoggerPtr & log,
+            const ReadLimiterPtr & read_limiter);
+
+        double avg_size_hint;
+        MarksInCompressedFilePtr marks;
+
+        size_t getOffsetInFile(size_t i) const { return (*marks)[i].offset_in_compressed_file; }
+
+        size_t getOffsetInDecompressedBlock(size_t i) const { return (*marks)[i].offset_in_decompressed_block; }
+
+        std::unique_ptr<CompressedSeekableReaderBuffer> buf;
+    };
+    using StreamPtr = std::unique_ptr<Stream>;
+    using ColumnStreams = std::map<String, StreamPtr>;
 
     DMFileReader(
         const DMFilePtr & dmfile_,
@@ -62,6 +83,7 @@ public:
         const MarkCachePtr & mark_cache_,
         bool enable_column_cache_,
         const ColumnCachePtr & column_cache_,
+        size_t aio_threshold,
         size_t max_read_buffer_size,
         const FileProviderPtr & file_provider_,
         const ReadLimiterPtr & read_limiter,
@@ -93,50 +115,35 @@ public:
     {
         // Status of DMFile can be updated when DMFileReader in used and the pathname will be changed.
         // For DMFileReader, always use the readable path.
-        return getPathByStatus(dmfile->parentPath(), dmfile->fileId(), DMFileStatus::READABLE);
+        return DMFile::getPathByStatus(dmfile->parentPath(), dmfile->fileId(), DMFile::Status::READABLE);
     }
     void addCachedPacks(ColId col_id, size_t start_pack_id, size_t pack_count, ColumnPtr & col) const;
 
-    friend class MarkLoader;
-    friend class ColumnReadStream;
-    friend class tests::DMFileMetaV2Test;
-
 private:
-    std::pair<size_t, RSResult> getReadRows();
-    ColumnPtr readExtraColumn(
-        const ColumnDefine & cd,
-        size_t start_pack_id,
-        size_t pack_count,
-        size_t read_rows,
-        const std::vector<size_t> & clean_read_packs);
+    bool shouldSeek(size_t pack_id) const;
+
     void readFromDisk(
         const ColumnDefine & column_define,
         MutableColumnPtr & column,
         size_t start_pack_id,
-        size_t read_rows);
-    void readFromDiskOrSharingCache(
+        size_t read_rows,
+        size_t skip_packs,
+        bool force_seek);
+    void readColumn(
         const ColumnDefine & column_define,
         ColumnPtr & column,
         size_t start_pack_id,
         size_t pack_count,
-        size_t read_rows);
-    ColumnPtr readColumn(const ColumnDefine & cd, size_t start_pack_id, size_t pack_count, size_t read_rows);
-    ColumnPtr cleanRead(
-        const ColumnDefine & cd,
-        size_t rows_count,
-        std::pair<size_t, size_t> range,
-        const DMFileMeta::PackStats & pack_stats);
+        size_t read_rows,
+        size_t skip_packs);
     bool getCachedPacks(ColId col_id, size_t start_pack_id, size_t pack_count, size_t read_rows, ColumnPtr & col) const;
 
     void addScannedRows(UInt64 rows);
     void addSkippedRows(UInt64 rows);
 
-    void initAllMatchBlockInfo();
-    size_t getReadPackLimit(size_t start_pack_id);
-
     DMFilePtr dmfile;
     ColumnDefines read_columns;
-    ColumnReadStreamMap column_streams;
+    ColumnStreams column_streams{};
 
     const bool is_common_handle;
 
@@ -151,16 +158,23 @@ private:
     const bool enable_del_clean_read;
     const bool is_fast_scan;
 
-    const bool enable_column_cache;
-
     const UInt64 max_read_version;
 
-private:
     /// Filters
+#ifdef DBMS_PUBLIC_GTEST
+public:
     DMFilePackFilter pack_filter;
+
+private:
+#else
+    DMFilePackFilter pack_filter;
+#endif
+
+    std::vector<size_t> skip_packs_by_column{};
 
     /// Caches
     MarkCachePtr mark_cache;
+    const bool enable_column_cache;
     ColumnCachePtr column_cache;
 
     const ScanContextPtr scan_context;
@@ -176,25 +190,9 @@ private:
 
     LoggerPtr log;
 
-    // DataSharing
     std::unique_ptr<ColumnSharingCacheMap> col_data_cache{};
-
-    // <start_pack, pack_count>
-    // Each pair object indicates several continuous packs with RSResult::All and will be read as a Block.
-    // It is sorted by start_pack.
-    std::queue<std::pair<size_t, size_t>> all_match_block_infos;
     std::unordered_map<ColId, bool> last_read_from_cache{};
-
-public:
-    void setColumnCacheLongTerm(ColumnCacheLongTermPtr column_cache_long_term_, ColumnID pk_col_id_)
-    {
-        column_cache_long_term = column_cache_long_term_;
-        pk_col_id = pk_col_id_;
-    }
-
-private:
-    ColumnCacheLongTermPtr column_cache_long_term = nullptr;
-    ColumnID pk_col_id = 0;
 };
 
-} // namespace DB::DM
+} // namespace DM
+} // namespace DB

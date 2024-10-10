@@ -14,32 +14,10 @@
 
 if (CMAKE_BUILD_TYPE_UC STREQUAL "DEBUG" OR SAN_DEBUG)
     set(_TIFLASH_PROXY_BUILD_PROFILE "debug")
-    if (ENABLE_JEMALLOC)
-        if (APPLE)
-            message(STATUS "proxy's jemalloc is disabled (AppleOS)")
-            set(_TIFLASH_PROXY_MAKE_COMMAND make debug)
-        else()
-            message(STATUS "proxy's jemalloc is enabled")
-            set(_TIFLASH_PROXY_MAKE_COMMAND ENABLE_FEATURES="external-jemalloc" make debug)
-        endif()
-    else()
-        message(STATUS "proxy's jemalloc is disabled")
-        set(_TIFLASH_PROXY_MAKE_COMMAND make debug)
-    endif()
+    set(_TIFLASH_PROXY_MAKE_COMMAND make debug)
 else()
     set(_TIFLASH_PROXY_BUILD_PROFILE "release")
-    if (ENABLE_JEMALLOC)
-        if (APPLE)
-            message(STATUS "proxy's jemalloc is disabled (AppleOS)")
-            set(_TIFLASH_PROXY_MAKE_COMMAND make release)
-        else()
-            message(STATUS "proxy's jemalloc is enabled")
-            set(_TIFLASH_PROXY_MAKE_COMMAND ENABLE_FEATURES="external-jemalloc" make release)
-        endif()
-    else()
-        message(STATUS "proxy's jemalloc is disabled")
-        set(_TIFLASH_PROXY_MAKE_COMMAND make release)
-    endif()
+    set(_TIFLASH_PROXY_MAKE_COMMAND make release)
 endif()
 
 set(_TIFLASH_PROXY_SOURCE_DIR "${TiFlash_SOURCE_DIR}/contrib/tiflash-proxy")
@@ -87,7 +65,7 @@ add_custom_command(OUTPUT ${_TIFLASH_PROXY_LIBRARY}
     WORKING_DIRECTORY ${_TIFLASH_PROXY_SOURCE_DIR}
     DEPENDS "${_TIFLASH_PROXY_SRCS}"
             "${_TIFLASH_PROXY_SOURCE_DIR}/Cargo.lock"
-            "${TiFlash_SOURCE_DIR}/rust-toolchain.toml")
+            "${TiFlash_SOURCE_DIR}/rust-toolchain")
 
 add_custom_target(tiflash_proxy ALL DEPENDS ${_TIFLASH_PROXY_LIBRARY})
 add_library(libtiflash_proxy SHARED IMPORTED GLOBAL)

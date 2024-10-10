@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <DataStreams/IBlockInputStream.h>
+#include <DataStreams/IProfilingBlockInputStream.h>
 #include <Storages/DeltaMerge/BitmapFilter/BitmapFilter.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/SkippableBlockInputStream.h>
@@ -28,7 +28,7 @@ namespace DB::DM
   * 3. Read one block of the rest columns, join the two block by columns, and assign the filter to the returned block before return.
   * 4. Repeat 1-3 until the filter column stream is empty.
   */
-class LateMaterializationBlockInputStream : public IBlockInputStream
+class LateMaterializationBlockInputStream : public IProfilingBlockInputStream
 {
     static constexpr auto NAME = "LateMaterializationBlockInputStream";
 
@@ -45,7 +45,8 @@ public:
 
     Block getHeader() const override { return header; }
 
-    Block read() override;
+protected:
+    Block readImpl() override;
 
 private:
     Block header;

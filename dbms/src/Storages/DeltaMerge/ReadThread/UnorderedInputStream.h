@@ -140,7 +140,7 @@ protected:
 private:
     void prepareRuntimeFilter();
 
-    void pushDownReadyRFList(const std::vector<RuntimeFilterPtr> & ready_rf_list);
+    void pushDownReadyRFList(std::vector<RuntimeFilterPtr> readyRFList);
 
     SegmentReadTaskPoolPtr task_pool;
     Block header;

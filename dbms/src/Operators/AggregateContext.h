@@ -28,7 +28,7 @@ struct ThreadData
     size_t src_bytes = 0;
 
     Aggregator::AggProcessInfo agg_process_info;
-    explicit ThreadData(Aggregator * aggregator)
+    ThreadData(Aggregator * aggregator)
         : agg_process_info(aggregator)
     {}
 };
@@ -44,7 +44,7 @@ public:
     void initBuild(
         const Aggregator::Params & params,
         size_t max_threads_,
-        CancellationHook && hook,
+        Aggregator::CancellationHook && hook,
         const RegisterOperatorSpillContext & register_operator_spill_context);
 
     size_t getBuildConcurrency() const { return max_threads; }
@@ -84,17 +84,9 @@ public:
 
     size_t getTotalBuildRows(size_t task_index) { return threads_data[task_index]->src_rows; }
 
-    bool hasAtLeastOneTwoLevel();
-    bool isConvertibleToTwoLevel() const { return aggregator->isConvertibleToTwoLevel(); }
-    bool isTwoLevelOrEmpty(size_t task_index) const
-    {
-        return many_data[task_index]->isTwoLevel() || many_data[task_index]->empty();
-    }
-    void convertToTwoLevel(size_t task_index) { many_data[task_index]->convertToTwoLevel(); }
-
 private:
     std::unique_ptr<Aggregator> aggregator;
-    size_t keys_size = 0;
+    bool keys_size = false;
     bool empty_result_for_aggregation_by_empty_set = false;
 
     /**
@@ -112,7 +104,7 @@ private:
     };
     std::atomic<AggStatus> status{AggStatus::init};
 
-    CancellationHook is_cancelled{[]() {
+    Aggregator::CancellationHook is_cancelled{[]() {
         return false;
     }};
 

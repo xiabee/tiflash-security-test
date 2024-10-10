@@ -20,6 +20,7 @@
 #include <Common/typeid_cast.h>
 #include <Core/TiFlashDisaggregatedMode.h>
 #include <Databases/IDatabase.h>
+#include <IO/UncompressedCache.h>
 #include <Interpreters/AsynchronousMetrics.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/SharedContexts/Disagg.h>
@@ -32,7 +33,6 @@
 #include <Storages/Page/FileUsage.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/PageStorage.h>
-#include <Storages/Page/PageStorageMemorySummary.h>
 #include <Storages/Page/V3/Universal/UniversalPageStorageService.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <common/config_common.h>
@@ -207,6 +207,14 @@ void AsynchronousMetrics::update()
     }
 
     {
+        if (auto uncompressed_cache = context.getUncompressedCache())
+        {
+            set("UncompressedCacheBytes", uncompressed_cache->weight());
+            set("UncompressedCacheCells", uncompressed_cache->count());
+        }
+    }
+
+    {
         if (auto rn_delta_index_cache = context.getSharedContextDisagg()->rn_delta_index_cache)
         {
             set("RNDeltaIndexCacheBytes", rn_delta_index_cache->getCacheWeight());
@@ -301,8 +309,6 @@ void AsynchronousMetrics::update()
         set("LogNums", usage.total_log_file_num);
         set("LogDiskBytes", usage.total_log_disk_size);
         set("PagesInMem", usage.num_pages);
-        set("VersionedEntries", DB::PS::PageStorageMemorySummary::versioned_entry_or_delete_count.load());
-        set("UniversalWrite", DB::PS::PageStorageMemorySummary::universal_write_count.load());
     }
 
     if (context.getSharedContextDisagg()->isDisaggregatedStorageMode())
@@ -361,13 +367,13 @@ void AsynchronousMetrics::update()
     M("background_thread.num_runs", uint64_t)  \
     M("background_thread.run_interval", uint64_t)
 
-#define GET_JEMALLOC_METRIC(NAME, TYPE)                       \
-    do                                                        \
-    {                                                         \
-        TYPE value{};                                         \
-        size_t size = sizeof(value);                          \
-        je_mallctl("stats." NAME, &value, &size, nullptr, 0); \
-        set("jemalloc." NAME, value);                         \
+#define GET_JEMALLOC_METRIC(NAME, TYPE)                    \
+    do                                                     \
+    {                                                      \
+        TYPE value{};                                      \
+        size_t size = sizeof(value);                       \
+        mallctl("stats." NAME, &value, &size, nullptr, 0); \
+        set("jemalloc." NAME, value);                      \
     } while (0);
 
         FOR_EACH_METRIC(GET_JEMALLOC_METRIC);

@@ -20,20 +20,7 @@ namespace DB
 OperatorStatus ExpressionTransformOp::transformImpl(Block & block)
 {
     if (likely(block))
-    {
-        if (block.info.selective)
-        {
-            const auto ori_rows = block.rows();
-            auto ori_info = block.info;
-            expression->execute(block);
-            block.info = ori_info;
-            RUNTIME_CHECK(ori_rows == block.rows());
-        }
-        else
-        {
-            expression->execute(block);
-        }
-    }
+        expression->execute(block);
     return OperatorStatus::HAS_OUTPUT;
 }
 
@@ -41,5 +28,4 @@ void ExpressionTransformOp::transformHeaderImpl(Block & header_)
 {
     expression->execute(header_);
 }
-
 } // namespace DB

@@ -16,8 +16,8 @@
 
 #include <Core/Spiller.h>
 #include <DataStreams/NativeBlockOutputStream.h>
-#include <IO/Buffer/WriteBufferFromWritableFile.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
+#include <Encryption/WriteBufferFromFileProvider.h>
+#include <IO/CompressedWriteBuffer.h>
 #include <IO/VarInt.h>
 
 namespace DB
@@ -52,7 +52,7 @@ private:
         void write(const Block & block);
 
     private:
-        WriteBufferFromWritableFile file_buf;
+        WriteBufferFromFileProvider file_buf;
         CompressedWriteBuffer<> compressed_buf;
         std::unique_ptr<IBlockOutputStream> out;
         size_t written_rows = 0;

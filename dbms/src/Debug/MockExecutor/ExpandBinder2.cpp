@@ -16,7 +16,6 @@
 #include <Debug/MockExecutor/ExecutorBinder.h>
 #include <Debug/MockExecutor/ExpandBinder2.h>
 #include <Parsers/ASTAsterisk.h>
-#include <Parsers/IAST_fwd.h>
 
 
 namespace DB::mock
@@ -57,17 +56,17 @@ bool ExpandBinder2::toTiPBExecutor(
 ExecutorBinderPtr compileExpand2(
     ExecutorBinderPtr input,
     size_t & executor_index,
-    ASTs level_select_list,
+    ASTPtrVec level_select_list,
     std::vector<String> output_names,
     std::vector<tipb::FieldType> fts)
 {
     DAGSchema output_schema;
-    std::vector<ASTs> expand_exprs;
+    std::vector<std::vector<ASTPtr>> expand_exprs;
     auto input_col_size = input->output_schema.size();
     for (size_t i = 0; i < level_select_list.size(); i++)
     {
         auto level_proj = level_select_list[i];
-        ASTs level_exprs;
+        std::vector<ASTPtr> level_exprs;
         for (size_t j = 0; j < level_proj->children.size(); j++)
         {
             auto expr = level_proj->children[j];
@@ -86,7 +85,7 @@ ExecutorBinderPtr compileExpand2(
                     // base col ref (since ast can't derive the expression's field type, use the test injected one)
                     if (ft->second.hasNotNullFlag() && (fts[j].flag() & TiDB::ColumnFlagNotNull) == 0)
                     {
-                        TiDB::ColumnInfo ci;
+                        ColumnInfo ci;
                         ci.flag = ft->second.flag;
                         ci.tp = ft->second.tp;
                         ci.name = ft->second.name;

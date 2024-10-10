@@ -13,8 +13,6 @@
 // limitations under the License.
 
 #include <Columns/ColumnArray.h>
-#include <Columns/ColumnsNumber.h>
-#include <Columns/IColumn.h>
 #include <Common/TargetSpecific.h>
 #include <Common/UTF8Helpers.h>
 #include <Common/Volnitsky.h>
@@ -1153,6 +1151,62 @@ public:
                     "Illegal column {} of argument of function {}",
                     block.getByPosition(arguments[0]).column->getName(),
                     getName()),
+                ErrorCodes::ILLEGAL_COLUMN);
+    }
+};
+
+extern UInt64 GetJsonLength(const std::string_view & sv);
+
+class FunctionJsonLength : public IFunction
+{
+public:
+    static constexpr auto name = "jsonLength";
+    static FunctionPtr create(const Context &) { return std::make_shared<FunctionJsonLength>(); }
+
+    String getName() const override { return name; }
+
+    size_t getNumberOfArguments() const override { return 1; }
+
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
+    {
+        if (!arguments[0]->isString())
+            throw Exception(
+                fmt::format("Illegal type {} of argument of function {}", arguments[0]->getName(), getName()),
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
+
+        return std::make_shared<DataTypeUInt64>();
+    }
+
+    bool useDefaultImplementationForConstants() const override { return true; }
+
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
+    {
+        const ColumnPtr column = block.getByPosition(arguments[0]).column;
+        if (const auto * col = checkAndGetColumn<ColumnString>(column.get()))
+        {
+            auto col_res = ColumnUInt64::create();
+            typename ColumnUInt64::Container & vec_col_res = col_res->getData();
+            {
+                const auto & data = col->getChars();
+                const auto & offsets = col->getOffsets();
+                const size_t size = offsets.size();
+                vec_col_res.resize(size);
+
+                ColumnString::Offset prev_offset = 0;
+                for (size_t i = 0; i < size; ++i)
+                {
+                    std::string_view sv(
+                        reinterpret_cast<const char *>(&data[prev_offset]),
+                        offsets[i] - prev_offset - 1);
+                    vec_col_res[i] = GetJsonLength(sv);
+                    prev_offset = offsets[i];
+                }
+            }
+            block.getByPosition(result).column = std::move(col_res);
+        }
+        else
+            throw Exception(
+                fmt::format("Illegal column {} of argument of function {}", column->getName(), getName()),
                 ErrorCodes::ILLEGAL_COLUMN);
     }
 };
@@ -4476,11 +4530,9 @@ public:
     std::string getName() const override { return name; }
     size_t getNumberOfArguments() const override { return 1; }
 
-    bool useDefaultImplementationForConstants() const override { return true; }
-
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
-        if unlikely (arguments.size() != 1)
+        if (arguments.size() != 1)
             throw Exception(
                 fmt::format(
                     "Number of arguments for function {} doesn't match: passed {}, should be 1.",
@@ -4494,25 +4546,30 @@ public:
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
         const IColumn * c0_col = block.getByPosition(arguments[0]).column.get();
+        const auto * c0_const = checkAndGetColumn<ColumnConst>(c0_col);
         const auto * c0_string = checkAndGetColumn<ColumnString>(c0_col);
-        if unlikely (c0_string == nullptr)
+
+        Field res_field;
+        int val_num = c0_col->size();
+        auto col_res = ColumnInt64::create();
+        col_res->reserve(val_num);
+        if (c0_const == nullptr && c0_string == nullptr)
             throw Exception(
                 fmt::format("Illegal argument of function {}", getName()),
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-        auto val_num = static_cast<ssize_t>(c0_col->size());
-        auto col_res = ColumnInt64::create();
-        ColumnInt64::Container & data = col_res->getData();
-        data.resize(val_num);
-
-        const auto & chars = c0_string->getChars();
-        const auto & offsets = c0_string->getOffsets();
-
-        for (ssize_t i = 0; i < val_num; i++)
-            data[i] = chars[offsets[i - 1]];
+        for (int i = 0; i < val_num; i++)
+        {
+            c0_col->get(i, res_field);
+            String handled_str = res_field.get<String>();
+            Int64 res = handled_str.empty() ? 0 : static_cast<Int64>(handled_str[0]);
+            col_res->insert(res);
+        }
 
         block.getByPosition(result).column = std::move(col_res);
     }
+
+private:
 };
 
 class FunctionLength : public IFunction
@@ -4526,11 +4583,9 @@ public:
     std::string getName() const override { return name; }
     size_t getNumberOfArguments() const override { return 1; }
 
-    bool useDefaultImplementationForConstants() const override { return true; }
-
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
     {
-        if unlikely (arguments.size() != 1)
+        if (arguments.size() != 1)
             throw Exception(
                 fmt::format(
                     "Number of arguments for function {} doesn't match: passed {}, should be 1.",
@@ -4544,21 +4599,24 @@ public:
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result) const override
     {
         const IColumn * c0_col = block.getByPosition(arguments[0]).column.get();
+        const auto * c0_const = checkAndGetColumn<ColumnConst>(c0_col);
         const auto * c0_string = checkAndGetColumn<ColumnString>(c0_col);
-        if unlikely (c0_string == nullptr)
+
+        Field res_field;
+        int val_num = c0_col->size();
+        auto col_res = ColumnInt64::create();
+        col_res->reserve(val_num);
+        if (c0_const == nullptr && c0_string == nullptr)
             throw Exception(
                 fmt::format("Illegal argument of function {}", getName()),
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT);
 
-        auto val_num = static_cast<ssize_t>(c0_col->size());
-        auto col_res = ColumnInt64::create();
-        ColumnInt64::Container & data = col_res->getData();
-        data.resize(val_num);
-
-        const auto & offsets = c0_string->getOffsets();
-
-        for (ssize_t i = 0; i < val_num; i++)
-            data[i] = offsets[i] - offsets[i - 1] - 1;
+        for (int i = 0; i < val_num; i++)
+        {
+            c0_col->get(i, res_field);
+            String handled_str = res_field.get<String>();
+            col_res->insert(static_cast<Int64>(handled_str.size()));
+        }
 
         block.getByPosition(result).column = std::move(col_res);
     }
@@ -6560,6 +6618,7 @@ void registerFunctionsString(FunctionFactory & factory)
     factory.registerFunction<FunctionSubstring>();
     factory.registerFunction<FunctionSubstringUTF8>();
     factory.registerFunction<FunctionAppendTrailingCharIfAbsent>();
+    factory.registerFunction<FunctionJsonLength>();
     factory.registerFunction<FunctionRightUTF8>();
     factory.registerFunction<FunctionASCII>();
     factory.registerFunction<FunctionPosition>();

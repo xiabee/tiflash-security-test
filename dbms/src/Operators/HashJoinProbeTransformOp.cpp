@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <Flash/Executor/PipelineExecutorContext.h>
-#include <Flash/Pipeline/Schedule/Tasks/NotifyFuture.h>
 #include <Operators/HashJoinProbeTransformOp.h>
 
 #include <magic_enum.hpp>
@@ -21,7 +20,6 @@
 namespace DB
 {
 #define BREAK                                \
-    assert(!current_notify_future);          \
     if unlikely (exec_context.isCancelled()) \
         return OperatorStatus::CANCELLED;    \
     break
@@ -35,7 +33,7 @@ HashJoinProbeTransformOp::HashJoinProbeTransformOp(
     const Block & input_header)
     : TransformOp(exec_context_, req_id)
     , origin_join(join_)
-    , probe_process_info(max_block_size, join_->getProbeCacheColumnThreshold())
+    , probe_process_info(max_block_size)
 {
     RUNTIME_CHECK_MSG(origin_join != nullptr, "join ptr should not be null.");
     RUNTIME_CHECK_MSG(origin_join->getProbeConcurrency() > 0, "Join probe concurrency must be greater than 0");
@@ -58,7 +56,7 @@ HashJoinProbeTransformOp::HashJoinProbeTransformOp(
 
 void HashJoinProbeTransformOp::transformHeaderImpl(Block & header_)
 {
-    ProbeProcessInfo header_probe_process_info(0, 0);
+    ProbeProcessInfo header_probe_process_info(0);
     header_probe_process_info.resetBlock(std::move(header_));
     header_ = origin_join->joinBlock(header_probe_process_info, true);
 }
@@ -126,22 +124,22 @@ OperatorStatus HashJoinProbeTransformOp::onOutput(Block & block)
             scan_hash_map_rows += block.rows();
             return OperatorStatus::HAS_OUTPUT;
         case ProbeStatus::WAIT_PROBE_FINISH:
-            if (probe_transform->isProbeFinishedForPipeline())
+            if (probe_transform->quickCheckProbeFinished())
             {
                 onWaitProbeFinishDone();
                 BREAK;
             }
-            return OperatorStatus::WAIT_FOR_NOTIFY;
+            return OperatorStatus::WAITING;
         case ProbeStatus::GET_RESTORE_JOIN:
             onGetRestoreJoin();
             BREAK;
         case ProbeStatus::RESTORE_BUILD:
-            if (probe_transform->isBuildFinishedForPipeline())
+            if (probe_transform->quickCheckBuildFinished())
             {
                 onRestoreBuildFinish();
                 BREAK;
             }
-            return OperatorStatus::WAIT_FOR_NOTIFY;
+            return OperatorStatus::WAITING;
         case ProbeStatus::FINISHED:
             block = {};
             return OperatorStatus::HAS_OUTPUT;
@@ -208,6 +206,40 @@ void HashJoinProbeTransformOp::onGetRestoreJoin()
     }
 }
 
+OperatorStatus HashJoinProbeTransformOp::awaitImpl()
+{
+    while (true)
+    {
+        switch (status)
+        {
+        case ProbeStatus::WAIT_PROBE_FINISH:
+            if (probe_transform->quickCheckProbeFinished())
+            {
+                onWaitProbeFinishDone();
+                BREAK;
+            }
+            return OperatorStatus::WAITING;
+        case ProbeStatus::GET_RESTORE_JOIN:
+            onGetRestoreJoin();
+            BREAK;
+        case ProbeStatus::RESTORE_BUILD:
+            if (probe_transform->quickCheckBuildFinished())
+            {
+                onRestoreBuildFinish();
+                BREAK;
+            }
+            return OperatorStatus::WAITING;
+        case ProbeStatus::RESTORE_PROBE:
+            return probe_transform->prepareProbeRestoredBlock() ? OperatorStatus::HAS_OUTPUT : OperatorStatus::WAITING;
+        case ProbeStatus::READ_SCAN_HASH_MAP_DATA:
+        case ProbeStatus::FINISHED:
+            return OperatorStatus::HAS_OUTPUT;
+        default:
+            throw Exception(fmt::format("Unexpected status: {}", magic_enum::enum_name(status)));
+        }
+    }
+}
+
 OperatorStatus HashJoinProbeTransformOp::executeIOImpl()
 {
     switch (status)
@@ -220,7 +252,7 @@ OperatorStatus HashJoinProbeTransformOp::executeIOImpl()
         probe_transform->flushMarkedSpillData();
         probe_transform->finalizeProbe();
         switchStatus(ProbeStatus::WAIT_PROBE_FINISH);
-        return OperatorStatus::HAS_OUTPUT;
+        return OperatorStatus::WAITING;
     default:
         throw Exception(fmt::format("Unexpected status: {}", magic_enum::enum_name(status)));
     }

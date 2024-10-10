@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <IO/Buffer/ReadBuffer.h>
+#include <IO/ReadBuffer.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/V3/Universal/UniversalPageIdFormatImpl.h>
@@ -66,7 +66,7 @@ public:
     }
 
 #ifdef DBMS_PUBLIC_GTEST
-    WriteBatchWrapper(WriteBatch && wb_) // NOLINT(google-explicit-constructor), for gtest
+    WriteBatchWrapper(WriteBatch && wb_)
         : wb(std::make_unique<WriteBatch>(std::move(wb_)))
         , uwb(nullptr)
     {}
@@ -154,14 +154,6 @@ public:
             return wb->empty();
         else
             return uwb->empty();
-    }
-
-    size_t size() const
-    {
-        if (wb)
-            return wb->size();
-        else
-            return uwb->size();
     }
 
     void clear()

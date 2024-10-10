@@ -21,7 +21,6 @@
 #include <Debug/MockStorage.h>
 #include <Debug/dbgQueryCompiler.h>
 #include <Interpreters/Context_fwd.h>
-#include <Operators/AutoPassThroughHashAggContext.h>
 #include <Parsers/ASTFunction.h>
 #include <TiDB/Collation/Collator.h>
 #include <tipb/executor.pb.h>
@@ -171,13 +170,11 @@ public:
     DAGRequestBuilder & aggregation(
         ASTPtr agg_func,
         ASTPtr group_by_expr,
-        uint64_t fine_grained_shuffle_stream_count = 0,
-        std::shared_ptr<AutoPassThroughSwitcher> switcher = nullptr);
+        uint64_t fine_grained_shuffle_stream_count = 0);
     DAGRequestBuilder & aggregation(
         MockAstVec agg_funcs,
         MockAstVec group_by_exprs,
-        uint64_t fine_grained_shuffle_stream_count = 0,
-        std::shared_ptr<AutoPassThroughSwitcher> switcher = nullptr);
+        uint64_t fine_grained_shuffle_stream_count = 0);
 
     // window
     DAGRequestBuilder & window(
@@ -225,8 +222,7 @@ private:
     DAGRequestBuilder & buildAggregation(
         ASTPtr agg_funcs,
         ASTPtr group_by_exprs,
-        uint64_t fine_grained_shuffle_stream_count = 0,
-        std::shared_ptr<AutoPassThroughSwitcher> switcher = nullptr);
+        uint64_t fine_grained_shuffle_stream_count = 0);
     DAGRequestBuilder & buildExchangeReceiver(
         const String & exchange_name,
         const MockColumnInfoVec & columns,
@@ -377,7 +373,6 @@ MockWindowFrame buildDefaultRowsFrame();
 #define Min(expr) makeASTFunction("min", (expr))
 #define Count(expr) makeASTFunction("count", (expr))
 #define Sum(expr) makeASTFunction("sum", (expr))
-#define Avg(expr) makeASTFunction("avg", (expr))
 #define CountDistinct(expr) makeASTFunction("countDistinct", (expr))
 
 /// Window functions

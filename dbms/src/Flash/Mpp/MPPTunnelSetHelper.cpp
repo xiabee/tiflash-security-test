@@ -15,7 +15,6 @@
 #include <Flash/Coprocessor/CHBlockChunkCodec.h>
 #include <Flash/Coprocessor/CHBlockChunkCodecV1.h>
 #include <Flash/Mpp/MPPTunnelSetHelper.h>
-#include <IO/Compression/CompressionInfo.h>
 
 namespace DB::MPPTunnelSetHelper
 {
@@ -34,13 +33,12 @@ TrackedMppDataPacketPtr ToPacket(
     };
 
     auto && res = codec.encode(std::move(part_columns), method);
+    if unlikely (res.empty())
+        return nullptr;
 
     auto tracked_packet = std::make_shared<TrackedMppDataPacket>(version);
-    if likely (!res.empty())
-    {
-        tracked_packet->addChunk(std::move(res));
-        original_size += codec.original_size;
-    }
+    tracked_packet->addChunk(std::move(res));
+    original_size += codec.original_size;
     return tracked_packet;
 }
 
@@ -68,6 +66,9 @@ TrackedMppDataPacketPtr ToPacket(
 
 TrackedMppDataPacketPtr ToPacketV0(Blocks & blocks, const std::vector<tipb::FieldType> & field_types)
 {
+    if (blocks.empty())
+        return nullptr;
+
     CHBlockChunkCodec codec;
     auto codec_stream = codec.newCodecStream(field_types);
     auto tracked_packet = std::make_shared<TrackedMppDataPacket>(MPPDataPacketV0);

@@ -103,14 +103,13 @@ protected:
     {
         *table_columns = *columns;
 
-        dm_context = DMContext::createUnique(
+        dm_context = std::make_unique<DMContext>(
             *db_context,
             storage_path_pool,
             storage_pool,
             /*min_version_*/ 0,
             NullspaceID,
             /*physical_table_id*/ 100,
-            /*pk_col_id*/ 0,
             false,
             1,
             db_context->getSettingsRef());

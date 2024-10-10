@@ -70,7 +70,7 @@ void PhysicalWindow::buildBlockInputStreamImpl(DAGPipeline & pipeline, Context &
     executeExpression(pipeline, window_description.before_window, log, "before window");
     window_description.fillArgColumnNumbers();
 
-    if (fine_grained_shuffle.enabled())
+    if (fine_grained_shuffle.enable())
     {
         /// Window function can be multiple threaded when fine grained shuffle is enabled.
         pipeline.transform([&](auto & stream) {
@@ -105,7 +105,7 @@ void PhysicalWindow::buildPipelineExecGroupImpl(
     executeExpression(exec_context, group_builder, window_description.before_window, log);
     window_description.fillArgColumnNumbers();
 
-    if (!fine_grained_shuffle.enabled())
+    if (!fine_grained_shuffle.enable())
         executeUnion(exec_context, group_builder, context.getSettingsRef().max_buffered_bytes_in_executor, log);
 
     /// Window function can be multiple threaded when fine grained shuffle is enabled.
@@ -114,7 +114,7 @@ void PhysicalWindow::buildPipelineExecGroupImpl(
             std::make_unique<WindowTransformOp>(exec_context, log->identifier(), window_description));
     });
 
-    if (!fine_grained_shuffle.enabled() && is_restore_concurrency)
+    if (!fine_grained_shuffle.enable() && is_restore_concurrency)
         restoreConcurrency(
             exec_context,
             group_builder,
@@ -125,7 +125,7 @@ void PhysicalWindow::buildPipelineExecGroupImpl(
     executeExpression(exec_context, group_builder, window_description.after_window, log);
 }
 
-void PhysicalWindow::finalizeImpl(const Names & parent_require)
+void PhysicalWindow::finalize(const Names & parent_require)
 {
     FinalizeHelper::checkSchemaContainsParentRequire(schema, parent_require);
 

@@ -15,15 +15,10 @@
 #pragma once
 
 #include <Storages/KVStore/TiKVHelpers/KeyspaceSnapshot.h>
-#include <TiDB/Schema/TiDB_fwd.h>
+#include <TiDB/Schema/TiDB.h>
 #include <common/logger_useful.h>
 
 #include <optional>
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#include <Poco/JSON/Object.h>
-#pragma GCC diagnostic pop
 
 namespace DB
 {
@@ -103,13 +98,12 @@ enum class SchemaActionType : Int8
     ActionDropResourceGroup = 70,
     ActionAlterTablePartitioning = 71,
     ActionRemovePartitioning = 72,
-    ActionAddVectorIndex = 73,
 
 
     // If we support new type from TiDB.
     // MaxRecognizedType also needs to be changed.
     // It should always be equal to the maximum supported type + 1
-    MaxRecognizedType = 74,
+    MaxRecognizedType = 73,
 };
 
 struct AffectedOption

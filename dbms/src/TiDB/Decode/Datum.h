@@ -15,8 +15,7 @@
 #pragma once
 
 #include <Core/Field.h>
-#include <TiDB/Schema/TiDBTypes.h>
-#include <TiDB/Schema/TiDB_fwd.h>
+#include <TiDB/Schema/TiDB.h>
 
 #include <optional>
 

@@ -36,6 +36,8 @@ public:
         const BlockInputStreamPtr & probe_stream,
         size_t max_block_size);
 
+    using CancellationHook = std::function<bool()>;
+
     HashJoinProbeExec(
         const String & req_id,
         const JoinPtr & join_,

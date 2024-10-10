@@ -15,8 +15,8 @@
 #pragma once
 
 #include <Common/Exception.h>
-#include <IO/Buffer/WriteBufferFromFile.h>
-#include <IO/Compression/CompressedWriteBuffer.h>
+#include <IO/CompressedWriteBuffer.h>
+#include <IO/WriteBufferFromFile.h>
 #include <Storages/Page/V3/CheckpointFile/Proto/manifest_file.pb.h>
 #include <Storages/Page/V3/CheckpointFile/fwd.h>
 #include <Storages/Page/V3/PageEntriesEdit.h>
@@ -40,9 +40,8 @@ public:
         return std::make_unique<CPManifestFileWriter>(std::move(options));
     }
 
-    explicit CPManifestFileWriter(Options options_)
-        : options(std::move(options_))
-        , file_writer(std::make_unique<WriteBufferFromFile>(options.file_path))
+    explicit CPManifestFileWriter(Options options)
+        : file_writer(std::make_unique<WriteBufferFromFile>(options.file_path))
         , compressed_writer(std::make_unique<CompressedWriteBuffer<true>>(*file_writer, CompressionSettings()))
         , max_edit_records_per_part(options.max_edit_records_per_part)
     {
@@ -66,8 +65,6 @@ public:
 
     void flush();
 
-    void abort();
-
 private:
     void writeEditsPart(const universal::PageEntriesEdit & edit, UInt64 start, UInt64 limit);
 
@@ -81,7 +78,6 @@ private:
         WritingFinished,
     };
 
-    Options options;
     // compressed<plain_file>
     const std::unique_ptr<WriteBufferFromFile> file_writer;
     const WriteBufferPtr compressed_writer;

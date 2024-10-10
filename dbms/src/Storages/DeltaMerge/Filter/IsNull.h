@@ -30,14 +30,15 @@ public:
 
     String name() override { return "isnull"; }
 
-    ColIds getColumnIDs() override { return {attr.col_id}; }
+    Attrs getAttrs() override { return {attr}; }
 
     String toDebugString() override { return fmt::format(R"({{"op":"{}","col":"{}"}})", name(), attr.col_name); }
 
     RSResults roughCheck(size_t start_pack, size_t pack_count, const RSCheckParam & param) override
     {
-        auto rs_index = getRSIndex(param, attr);
-        return rs_index ? rs_index->minmax->checkIsNull(start_pack, pack_count) : RSResults(pack_count, RSResult::Some);
+        RSResults results(pack_count, RSResult::Some);
+        GET_RSINDEX_FROM_PARAM_NOT_FOUND_RETURN_DIRECTLY(param, attr, rsindex, results);
+        return rsindex.minmax->checkIsNull(start_pack, pack_count);
     }
 };
 

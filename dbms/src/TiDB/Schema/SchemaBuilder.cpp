@@ -23,7 +23,6 @@
 #include <Databases/DatabaseTiFlash.h>
 #include <Debug/MockSchemaGetter.h>
 #include <Debug/MockSchemaNameMapper.h>
-#include <IO/FileProvider/FileProvider.h>
 #include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterCreateQuery.h>
@@ -370,7 +369,7 @@ void SchemaBuilder<Getter, NameMapper>::applyDiff(const SchemaDiff & diff)
         {
             // >= SchemaActionType::MaxRecognizedType
             // log down the Int8 value directly
-            LOG_ERROR(log, "Unsupported change type: {}, diff_version={}", fmt::underlying(diff.type), diff.version);
+            LOG_ERROR(log, "Unsupported change type: {}, diff_version={}", static_cast<Int8>(diff.type), diff.version);
         }
 
         break;
@@ -391,6 +390,7 @@ void SchemaBuilder<Getter, NameMapper>::applySetTiFlashReplica(DatabaseID databa
     auto & tmt_context = context.getTMTContext();
     if (table_info->replica_info.count == 0)
     {
+        // Replicat number is to 0, mark the table as tombstone in TiFlash
         auto storage = tmt_context.getStorages().get(keyspace_id, table_info->id);
         if (unlikely(storage == nullptr))
         {
@@ -401,14 +401,9 @@ void SchemaBuilder<Getter, NameMapper>::applySetTiFlashReplica(DatabaseID databa
             return;
         }
 
-        // We can not mark the table is safe to be physically drop from the tiflash instances when
-        // the number of tiflash replica is set to be 0.
-        // There could be a concurrent issue that cause data loss. Check the following link for details:
-        // https://github.com/pingcap/tiflash/issues/9438#issuecomment-2360370761
-        // applyDropTable(database_id, table_id, "SetTiFlashReplica-0");
-
-        // Now only update the replica number to be 0 instead
         updateTiFlashReplicaNumOnStorage(database_id, table_id, storage, table_info);
+        // FIXME: Do not drop the table under release-7.5 branch, need more testing
+        // applyDropTable(database_id, table_id, "SetTiFlashReplica-0");
         return;
     }
 
@@ -486,7 +481,9 @@ void SchemaBuilder<Getter, NameMapper>::updateTiFlashReplicaNumOnStorage(
                 " physical_table_id={} logical_table_id={}",
                 old_replica_count,
                 new_replica_count,
-                table_info->replica_info.available,
+                table_info->replica_info.available.has_value()
+                    ? fmt::format("{}", table_info->replica_info.available.value())
+                    : "<none>",
                 part_def.id,
                 table_id);
         }
@@ -512,7 +509,8 @@ void SchemaBuilder<Getter, NameMapper>::updateTiFlashReplicaNumOnStorage(
         " physical_table_id={} logical_table_id={}",
         old_replica_count,
         new_replica_count,
-        table_info->replica_info.available,
+        table_info->replica_info.available.has_value() ? fmt::format("{}", table_info->replica_info.available.value())
+                                                       : "<none>",
         table_id,
         table_id);
 }
@@ -1095,16 +1093,27 @@ String createTableStmt(
         writeString(columns[i].type->getName(), stmt_buf);
     }
 
-    writeString(") Engine = DeltaMerge((", stmt_buf);
-    for (size_t i = 0; i < pks.size(); i++)
+    // storage engine type
+    if (table_info.engine_type == TiDB::StorageEngine::DT)
     {
-        if (i > 0)
-            writeString(", ", stmt_buf);
-        writeBackQuotedString(pks[i], stmt_buf);
+        writeString(") Engine = DeltaMerge((", stmt_buf);
+        for (size_t i = 0; i < pks.size(); i++)
+        {
+            if (i > 0)
+                writeString(", ", stmt_buf);
+            writeBackQuotedString(pks[i], stmt_buf);
+        }
+        writeString("), '", stmt_buf);
+        writeEscapedString(table_info.serialize(), stmt_buf);
+        writeString(fmt::format("', {})", tombstone), stmt_buf);
     }
-    writeString("), '", stmt_buf);
-    writeEscapedString(table_info.serialize(), stmt_buf);
-    writeString(fmt::format("', {})", tombstone), stmt_buf);
+    else
+    {
+        throw TiFlashException(
+            Errors::DDL::Internal,
+            "Unknown engine type : {}",
+            static_cast<int32_t>(table_info.engine_type));
+    }
 
     return stmt;
 }
@@ -1133,6 +1142,12 @@ void SchemaBuilder<Getter, NameMapper>::applyCreateStorageInstance(
         return;
     }
     // Else the storage instance does not exist, create it.
+    /// Normal CREATE table.
+    if (table_info->engine_type == StorageEngine::UNSPECIFIED)
+    {
+        auto & tmt_context = context.getTMTContext();
+        table_info->engine_type = tmt_context.getEngineType();
+    }
 
     // We need to create a Storage instance to handle its raft log and snapshot when it
     // is "dropped" but not physically removed in TiDB. To handle it porperly, we get a
@@ -1641,8 +1656,8 @@ bool SchemaBuilder<Getter, NameMapper>::applyTable(
         {
             LOG_WARNING(
                 log,
-                "new table info in TiKV is not partition table {}, applyTable need retry"
-                ", database_id={} table_id={}",
+                "new table info in TiKV is not partition table {}, applyTable need retry, database_id={} "
+                "table_id={}",
                 name_mapper.debugCanonicalName(*table_info, database_id, keyspace_id),
                 database_id,
                 table_info->id);
@@ -1746,9 +1761,6 @@ void SchemaBuilder<Getter, NameMapper>::dropAllSchema()
         applyDropDatabaseByName(db.first);
         LOG_INFO(log, "Database {} dropped during drop all schemas", db.first);
     }
-
-    /// Drop keyspace encryption key
-    context.getFileProvider()->dropEncryptionInfo(keyspace_id);
 
     LOG_INFO(log, "Drop all schemas end");
 }

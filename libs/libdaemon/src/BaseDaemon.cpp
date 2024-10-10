@@ -42,14 +42,15 @@
 // ucontext is not available without _XOPEN_SOURCE
 #define _XOPEN_SOURCE
 #endif
+#include <Common/ClickHouseRevision.h>
 #include <Common/Exception.h>
 #include <Common/TiFlashBuildInfo.h>
 #include <Common/UnifiedLogFormatter.h>
 #include <Common/getMultipleKeysFromConfig.h>
 #include <Common/setThreadName.h>
-#include <IO/Buffer/ReadBufferFromFileDescriptor.h>
-#include <IO/Buffer/WriteBufferFromFileDescriptor.h>
+#include <IO/ReadBufferFromFileDescriptor.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBufferFromFileDescriptor.h>
 #include <IO/WriteHelpers.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/Condition.h>
@@ -96,9 +97,11 @@ extern "C" int __llvm_profile_write_file(void);
 
 using Poco::AutoPtr;
 using Poco::ConsoleChannel;
+using Poco::FileChannel;
 using Poco::FormattingChannel;
 using Poco::Logger;
 using Poco::Message;
+using Poco::Path;
 using Poco::Util::AbstractConfiguration;
 
 constexpr char BaseDaemon::DEFAULT_GRAPHITE_CONFIG_NAME[];
@@ -653,7 +656,7 @@ static std::string createDirectory(const std::string & file)
         return "";
     Poco::File(path).createDirectories();
     return path.toString();
-}
+};
 
 static bool tryCreateDirectories(Poco::Logger * logger, const std::string & path)
 {
@@ -1158,7 +1161,7 @@ void BaseDaemon::initialize(Application & self)
     static KillingErrorHandler killing_error_handler;
     Poco::ErrorHandler::set(&killing_error_handler);
 
-    logVersion();
+    logRevision();
 
     signal_listener = std::make_unique<SignalListener>(*this);
     signal_listener_thread.start(*signal_listener);
@@ -1169,10 +1172,11 @@ void BaseDaemon::initialize(Application & self)
     }
 }
 
-void BaseDaemon::logVersion() const
+void BaseDaemon::logRevision() const
 {
     auto * log = &Logger::root();
     LOG_INFO(log, "Welcome to TiFlash");
+    LOG_INFO(log, "Starting daemon with revision " + Poco::NumberFormatter::format(ClickHouseRevision::get()));
     std::stringstream ss;
     TiFlashBuildInfo::outputDetail(ss);
     LOG_INFO(log, "TiFlash build info: {}", ss.str());

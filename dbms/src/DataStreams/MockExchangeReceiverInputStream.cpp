@@ -14,7 +14,6 @@
 
 #include <DataStreams/MockExchangeReceiverInputStream.h>
 #include <Flash/Coprocessor/ChunkCodec.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {

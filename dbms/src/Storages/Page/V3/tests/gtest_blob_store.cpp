@@ -14,8 +14,8 @@
 
 #include <Common/FailPoint.h>
 #include <Common/Logger.h>
-#include <IO/BaseFile/RateLimiter.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
+#include <Encryption/RateLimiter.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Poco/Logger.h>
 #include <Storages/Page/PageConstants.h>
 #include <Storages/Page/PageDefinesBase.h>
@@ -31,12 +31,9 @@
 #include <TestUtils/TiFlashStorageTestBasic.h>
 #include <TestUtils/TiFlashTestBasic.h>
 
-#include <ext/scope_guard.h>
-
 namespace DB::FailPoints
 {
 extern const char exception_after_large_write_exceed[];
-extern const char force_pick_all_blobs_to_full_gc[];
 } // namespace DB::FailPoints
 
 namespace DB::PS::V3::tests
@@ -170,43 +167,38 @@ try
 
     // Generate blob [1,2,3]
     auto write_blob_datas = [](BlobStore & blob_store) {
+        WriteBatch write_batch;
         PageIdU64 page_id = 55;
         size_t buff_size = 1024;
         char c_buff[buff_size];
         memset(c_buff, 0x1, buff_size);
 
         // write blob 1
-        {
-            WriteBatch write_batch;
-            write_batch.putPage(
-                page_id,
-                /* tag */ 0,
-                std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
-                buff_size);
-            blob_store.write(std::move(write_batch));
-        }
+        write_batch.putPage(
+            page_id,
+            /* tag */ 0,
+            std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
+            buff_size);
+        blob_store.write(std::move(write_batch));
+        write_batch.clear();
 
         // write blob 2
-        {
-            WriteBatch write_batch;
-            write_batch.putPage(
-                page_id + 1,
-                /* tag */ 0,
-                std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
-                buff_size);
-            blob_store.write(std::move(write_batch));
-        }
+        write_batch.putPage(
+            page_id + 1,
+            /* tag */ 0,
+            std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
+            buff_size);
+        blob_store.write(std::move(write_batch));
+        write_batch.clear();
 
         // write blob 3
-        {
-            WriteBatch write_batch;
-            write_batch.putPage(
-                page_id + 2,
-                /* tag */ 0,
-                std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
-                buff_size);
-            blob_store.write(std::move(write_batch));
-        }
+        write_batch.putPage(
+            page_id + 2,
+            /* tag */ 0,
+            std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff), buff_size),
+            buff_size);
+        blob_store.write(std::move(write_batch));
+        write_batch.clear();
     };
 
     auto check_in_disk_file = [](const Strings & paths, std::vector<BlobFileId> exited_blobs) -> bool {
@@ -687,8 +679,8 @@ try
 
     PageIdU64 page_id = 50;
     const size_t buff_size = 1024;
+    WriteBatch wb;
     {
-        WriteBatch wb;
         char c_buff1[buff_size] = {0};
         char c_buff2[buff_size] = {0};
 
@@ -725,8 +717,8 @@ try
     }
 
 
+    wb.clear();
     {
-        WriteBatch wb;
         wb.putRefPage(page_id + 1, page_id);
         wb.delPage(page_id + 1);
         wb.delPage(page_id);
@@ -750,8 +742,8 @@ try
         ASSERT_EQ(record.page_id.low, page_id);
     }
 
+    wb.clear();
     {
-        WriteBatch wb;
         char c_buff[buff_size];
 
         for (size_t i = 0; i < buff_size; ++i)
@@ -820,42 +812,38 @@ TEST_F(BlobStoreTest, DISABLED_testWriteOutOfLimitSize)
     {
         auto blob_store = BlobStore(getCurrentTestName(), file_provider, delegator, config, page_type_and_config);
 
+        WriteBatch wb;
         char c_buff1[buf_size];
         char c_buff2[buf_size];
 
         ReadBufferPtr buff1 = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff1), buf_size);
         ReadBufferPtr buff2 = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff2), buf_size);
-        {
-            WriteBatch wb;
 
-            wb.putPage(50, /*tag*/ 0, buff1, buf_size);
+        wb.putPage(50, /*tag*/ 0, buff1, buf_size);
 
-            auto edit = blob_store.write(std::move(wb));
-            ASSERT_EQ(edit.size(), 1);
+        auto edit = blob_store.write(std::move(wb));
+        ASSERT_EQ(edit.size(), 1);
 
-            auto records = edit.getRecords();
-            auto record = records[0];
-            ASSERT_EQ(record.type, EditRecordType::PUT);
-            ASSERT_EQ(record.page_id.low, 50);
-            ASSERT_EQ(record.entry.offset, 0);
-            ASSERT_EQ(record.entry.size, buf_size);
-            ASSERT_EQ(record.entry.file_id, 1);
-        }
+        auto records = edit.getRecords();
+        auto record = records[0];
+        ASSERT_EQ(record.type, EditRecordType::PUT);
+        ASSERT_EQ(record.page_id.low, 50);
+        ASSERT_EQ(record.entry.offset, 0);
+        ASSERT_EQ(record.entry.size, buf_size);
+        ASSERT_EQ(record.entry.file_id, 1);
 
-        {
-            WriteBatch wb;
-            wb.putPage(51, /*tag*/ 0, buff2, buf_size);
-            auto edit = blob_store.write(std::move(wb));
-            ASSERT_EQ(edit.size(), 1);
+        wb.clear();
+        wb.putPage(51, /*tag*/ 0, buff2, buf_size);
+        edit = blob_store.write(std::move(wb));
+        ASSERT_EQ(edit.size(), 1);
 
-            auto records = edit.getRecords();
-            auto record = records[0];
-            ASSERT_EQ(record.type, EditRecordType::PUT);
-            ASSERT_EQ(record.page_id.low, 51);
-            ASSERT_EQ(record.entry.offset, 0);
-            ASSERT_EQ(record.entry.size, buf_size);
-            ASSERT_EQ(record.entry.file_id, 2);
-        }
+        records = edit.getRecords();
+        record = records[0];
+        ASSERT_EQ(record.type, EditRecordType::PUT);
+        ASSERT_EQ(record.page_id.low, 51);
+        ASSERT_EQ(record.entry.offset, 0);
+        ASSERT_EQ(record.entry.size, buf_size);
+        ASSERT_EQ(record.entry.file_id, 2);
     }
 }
 
@@ -920,7 +908,7 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats)
 
     // After remove `entries_del1`.
     // Remain entries index [0, 2, 5, 6, 8]
-    blob_store.removeEntries(entries_del1);
+    blob_store.remove(entries_del1);
     ASSERT_EQ(entries_del1.begin()->file_id, 10);
 
     auto stat = blob_store.blob_stats.blobIdToStat(10);
@@ -932,7 +920,7 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats)
     // After remove `entries_del2`.
     // Remain entries index [0, 2, 5].
     // But file size still is 10 * 1024
-    blob_store.removeEntries(entries_del2);
+    blob_store.remove(entries_del2);
 
     ASSERT_EQ(stat->sm_valid_rate, 0.3);
     ASSERT_EQ(stat->sm_total_size, buff_size * buff_nums);
@@ -952,7 +940,7 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats)
 
     // Check whether the stat can be totally removed
     stat->changeToReadOnly();
-    blob_store.removeEntries(remain_entries);
+    blob_store.remove(remain_entries);
     ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 0);
 }
 
@@ -1000,7 +988,7 @@ TEST_F(BlobStoreTest, testBlobStoreGcStats2)
 
     // After remove `entries_del`.
     // Remain entries index [8, 9].
-    blob_store.removeEntries(entries_del);
+    blob_store.remove(entries_del);
 
     auto stat = blob_store.blob_stats.blobIdToStat(10);
 
@@ -1062,7 +1050,7 @@ TEST_F(BlobStoreTest, testBlobStoreRaftDataGcStats)
 
     // After remove `entries_del`.
     // Remain entries index [8, 9].
-    blob_store.removeEntries(entries_del);
+    blob_store.remove(entries_del);
 
     auto stat = blob_store.blob_stats.blobIdToStat(PageTypeUtils::nextFileID(PageType::RaftData, 1));
     ASSERT_NE(stat, nullptr);
@@ -1163,6 +1151,7 @@ try
         page_type_and_config);
     char c_buff[buff_size * buff_nums];
 
+    WriteBatch wb;
 
     PageDirectory<u128::PageDirectoryTrait>::GcEntriesMap gc_context;
 
@@ -1175,7 +1164,6 @@ try
 
         ReadBufferPtr buff
             = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff + i * buff_size), buff_size);
-        WriteBatch wb;
         wb.putPage(page_id, /* tag */ 0, buff, buff_size);
         PageEntriesEdit edit = blob_store.write(std::move(wb));
 
@@ -1193,6 +1181,7 @@ try
         }
 
         page_id++;
+        wb.clear();
     }
 
     using PageTypeAndGcInfo = typename u128::PageDirectoryType::PageTypeAndGcInfo;
@@ -1222,6 +1211,7 @@ try
         page_type_and_config);
     char c_buff[buff_size * buff_nums];
 
+    WriteBatch wb;
 
     BlobStore::FieldReadInfos read_infos;
     for (size_t i = 0; i < buff_nums; ++i)
@@ -1234,7 +1224,6 @@ try
         ReadBufferPtr buff
             = std::make_shared<ReadBufferFromMemory>(const_cast<char *>(c_buff + i * buff_size), buff_size);
         PageFieldSizes field_sizes{1, 2, 4, 8, (buff_size - 1 - 2 - 4 - 8)};
-        WriteBatch wb;
         wb.putPage(page_id, /* tag */ 0, buff, buff_size, field_sizes);
         PageEntriesEdit edit = blob_store.write(std::move(wb));
 
@@ -1244,6 +1233,7 @@ try
             BlobStore::FieldReadInfo(buildV3Id(TEST_NAMESPACE_ID, page_id), records[0].entry, {0, 1, 2, 3, 4}));
 
         page_id++;
+        wb.clear();
     }
 
     auto page_map = blob_store.read(read_infos);
@@ -1648,7 +1638,7 @@ try
         page_type_and_config);
 
     {
-        const size_t size_500 = 500;
+        size_t size_500 = 500;
         char c_buff[size_500];
 
         WriteBatch wb;
@@ -1659,63 +1649,10 @@ try
         const auto & gc_info = blob_store.getGCStats();
         ASSERT_TRUE(gc_info.empty());
 
-        // only one blob_file for the large write
         ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 1);
         const auto & records = edit.getRecords();
         ASSERT_EQ(records.size(), 1);
-        blob_store.removeEntries({records[0].entry});
-        ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 0);
-    }
-}
-CATCH
-
-TEST_F(BlobStoreTest, ReadEmptyPageAfterAllValidEntriesRmoved)
-try
-{
-    const auto file_provider = DB::tests::TiFlashTestEnv::getMockFileProvider();
-
-    BlobConfig config_with_small_file_limit_size;
-    config_with_small_file_limit_size.file_limit_size = 400;
-    auto blob_store = BlobStore(
-        getCurrentTestName(),
-        file_provider,
-        delegator,
-        config_with_small_file_limit_size,
-        page_type_and_config);
-
-    {
-        const size_t size_500 = 500;
-        char c_buff[size_500];
-
-        WriteBatch wb;
-        ReadBufferPtr buff = std::make_shared<ReadBufferFromMemory>(c_buff, size_500);
-        wb.putPage(50, /* tag */ 0, buff, size_500);
-        wb.putPage(51, 0, std::make_shared<ReadBufferFromMemory>(c_buff, 0), 0);
-        wb.putPage(52, 0, std::make_shared<ReadBufferFromMemory>(c_buff, 20), 20);
-        wb.putPage(53, 0, std::make_shared<ReadBufferFromMemory>(c_buff, 0), 0);
-        PageEntriesEdit edit = blob_store.write(std::move(wb));
-
-        // make the blob_file to be READ_ONLY
-        FailPointHelper::enableFailPoint(FailPoints::force_pick_all_blobs_to_full_gc);
-        SCOPE_EXIT({ FailPointHelper::disableFailPoint(FailPoints::force_pick_all_blobs_to_full_gc); });
-        const auto & gc_info = blob_store.getGCStats();
-        ASSERT_FALSE(gc_info.empty());
-
-        // one blob_file for the large write, another for the other pages
-        ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 2);
-        const auto & records = edit.getRecords();
-        ASSERT_EQ(records.size(), 4);
-        // remove the non-empty entries
-        blob_store.removeEntries({records[0].entry, records[2].entry});
-
-        /// try to read the empty pages after the blob_file get removed, no exception should happen
-        // read-1-entry
-        blob_store.read(PageIDAndEntryV3(51, records[1].entry), nullptr);
-        blob_store.read(PageIDAndEntryV3(53, records[3].entry), nullptr);
-        // read multiple entry
-        PageIDAndEntriesV3 entries{PageIDAndEntryV3(51, records[1].entry), PageIDAndEntryV3(53, records[3].entry)};
-        blob_store.read(entries, nullptr);
-
+        blob_store.remove({records[0].entry});
         ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 0);
     }
 }
@@ -1829,7 +1766,7 @@ try
         ASSERT_EQ(stat->sm_total_size, 700);
         ASSERT_TRUE(stat->isReadOnly());
 
-        blob_store.removeEntries({entry_from_write1});
+        blob_store.remove({entry_from_write1});
 
         // new write will create new blob file
         size_t size_100 = 100;
@@ -1845,7 +1782,7 @@ try
         ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 2);
 
         // remove one shot blob file
-        blob_store.removeEntries({entry_from_write2});
+        blob_store.remove({entry_from_write2});
         ASSERT_EQ(getTotalStatsNum(blob_store.blob_stats.getStats()), 1);
     }
 }
@@ -1904,12 +1841,12 @@ try
         Poco::File file1(blob_store.getBlobFile(10)->getPath());
         ASSERT_EQ(file1.getSize(), 800);
         ASSERT_TRUE(blob_store.blob_stats.blobIdToStat(10)->isNormal()); // BlobStat type doesn't change after reload
-        blob_store.removeEntries({entry_from_write3});
+        blob_store.remove({entry_from_write3});
         auto blob_need_gc = blob_store.getGCStats();
         ASSERT_EQ(blob_need_gc.size(), 0);
         ASSERT_EQ(file1.getSize(), 600);
 
-        blob_store.removeEntries({entry_from_write1});
+        blob_store.remove({entry_from_write1});
 
         const auto & blob_need_gc2 = blob_store.getGCStats();
         ASSERT_EQ(blob_need_gc2.size(), 1);

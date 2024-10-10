@@ -13,13 +13,10 @@
 // limitations under the License.
 
 #include <DataTypes/DataTypeDecimal.h>
-#include <IO/Endian.h>
 #include <IO/Operators.h>
-#include <IO/WriteHelpers.h>
 #include <Storages/KVStore/TiKVHelpers/TiKVVarInt.h>
 #include <TiDB/Decode/DatumCodec.h>
 #include <TiDB/Decode/JsonBinary.h>
-#include <TiDB/Decode/Vector.h>
 #include <TiDB/Schema/TiDB.h>
 
 namespace DB
@@ -183,30 +180,27 @@ inline UInt32 readWord(int binIdx, const String & dec, int size)
     switch (size)
     {
     case 1:
-        v = static_cast<Int32>(static_cast<Int8>(dec[binIdx]));
+        v = Int32(Int8(dec[binIdx]));
         break;
     case 2:
         if ((dec[binIdx] & 128) > 0)
-            v = (255 << 24) | (255 << 16) | (static_cast<UInt8>(dec[binIdx]) << 8)
-                | static_cast<UInt8>(dec[binIdx + 1]);
+            v = (255 << 24) | (255 << 16) | (UInt8(dec[binIdx]) << 8) | UInt8(dec[binIdx + 1]);
         else
-            v = (static_cast<UInt8>(dec[binIdx]) << 8) | static_cast<UInt8>(dec[binIdx + 1]);
+            v = (UInt8(dec[binIdx]) << 8) | UInt8(dec[binIdx + 1]);
         break;
     case 3:
         if ((dec[binIdx] & 128) > 0)
         {
-            v = (255 << 24) | (static_cast<UInt8>(dec[binIdx]) << 16) | (static_cast<UInt8>(dec[binIdx + 1]) << 8)
-                | static_cast<UInt8>(dec[binIdx + 2]);
+            v = (255 << 24) | (UInt8(dec[binIdx]) << 16) | (UInt8(dec[binIdx + 1]) << 8) | UInt8(dec[binIdx + 2]);
         }
         else
         {
-            v = (static_cast<UInt8>(dec[binIdx]) << 16) | (static_cast<UInt8>(dec[binIdx + 1]) << 8)
-                | static_cast<UInt8>(dec[binIdx + 2]);
+            v = (UInt8(dec[binIdx]) << 16) | (UInt8(dec[binIdx + 1]) << 8) | UInt8(dec[binIdx + 2]);
         }
         break;
     case 4:
-        v = (static_cast<UInt8>(dec[binIdx]) << 24) | (static_cast<UInt8>(dec[binIdx + 1]) << 16)
-            | (static_cast<UInt8>(dec[binIdx + 2]) << 8) | static_cast<UInt8>(dec[binIdx + 3]);
+        v = (UInt8(dec[binIdx]) << 24) | (UInt8(dec[binIdx + 1]) << 16) | (UInt8(dec[binIdx + 2]) << 8)
+            | UInt8(dec[binIdx + 3]);
         break;
     }
     return v;
@@ -245,7 +239,7 @@ T DecodeDecimalImpl(size_t & cursor, const String & raw_value, PrecType prec, Sc
         bin_idx += i;
         value = x ^ mask;
     }
-    const int word_max = static_cast<int>(1e9);
+    const int word_max = int(1e9);
     for (int stop = bin_idx + words_int * wordSize + words_frac * wordSize; bin_idx < stop; bin_idx += wordSize)
     {
         UInt32 v = readWord(bin_idx, dec, 4) ^ mask;
@@ -345,44 +339,6 @@ Field DecodeDatumForCHRow(size_t & cursor, const String & raw_value, const TiDB:
     }
 }
 
-void EncodeVectorFloat32(const Array & val, WriteBuffer & ss)
-{
-    RUNTIME_CHECK(boost::endian::order::native == boost::endian::order::little);
-
-    writeIntBinary(static_cast<UInt32>(val.size()), ss);
-    for (const auto & s : val)
-        writeFloatBinary(static_cast<Float32>(s.safeGet<NearestFieldType<Float32>::Type>()), ss);
-}
-
-void SkipVectorFloat32(size_t & cursor, const String & raw_value)
-{
-    RUNTIME_CHECK(boost::endian::order::native == boost::endian::order::little);
-
-    auto elements_n = readLittleEndian<UInt32>(&raw_value[cursor]);
-    auto size = sizeof(elements_n) + elements_n * sizeof(Float32);
-    cursor += size;
-}
-
-Field DecodeVectorFloat32(size_t & cursor, const String & raw_value)
-{
-    RUNTIME_CHECK(boost::endian::order::native == boost::endian::order::little);
-
-    auto n = readLittleEndian<UInt32>(&raw_value[cursor]);
-    cursor += sizeof(UInt32);
-
-    Array res;
-    res.reserve(n);
-
-    for (size_t i = 0; i < n; i++)
-    {
-        auto v = readLittleEndian<Float32>(&raw_value[cursor]);
-        res.emplace_back(static_cast<Float64>(v));
-        cursor += sizeof(Float32);
-    }
-
-    return res;
-}
-
 Field DecodeDatum(size_t & cursor, const String & raw_value)
 {
     switch (raw_value[cursor++])
@@ -409,8 +365,6 @@ Field DecodeDatum(size_t & cursor, const String & raw_value)
         return DecodeDecimal(cursor, raw_value);
     case TiDB::CodecFlagJson:
         return JsonBinary::DecodeJsonAsBinary(cursor, raw_value);
-    case TiDB::CodecFlagVectorFloat32:
-        return DecodeVectorFloat32(cursor, raw_value);
     default:
         throw Exception("Unknown Type:" + std::to_string(raw_value[cursor - 1]), ErrorCodes::LOGICAL_ERROR);
     }
@@ -452,9 +406,6 @@ void SkipDatum(size_t & cursor, const String & raw_value)
     case TiDB::CodecFlagJson:
         JsonBinary::SkipJson(cursor, raw_value);
         return;
-    case TiDB::CodecFlagVectorFloat32:
-        SkipVectorFloat32(cursor, raw_value);
-        return;
     default:
         throw Exception("Unknown Type:" + std::to_string(raw_value[cursor - 1]), ErrorCodes::LOGICAL_ERROR);
     }
@@ -495,7 +446,7 @@ void EncodeBytes(const String & ori_str, WriteBuffer & ss)
 
 void EncodeCompactBytes(const String & str, WriteBuffer & ss)
 {
-    TiKV::writeVarInt(static_cast<Int64>(str.size()), ss);
+    TiKV::writeVarInt(Int64(str.size()), ss);
     ss.write(str.c_str(), str.size());
 }
 
@@ -520,22 +471,22 @@ inline void writeWord(String & buf, Int32 word, int size)
     switch (size)
     {
     case 1:
-        buf.push_back(static_cast<char>(word));
+        buf.push_back(char(word));
         break;
     case 2:
-        buf.push_back(static_cast<char>(word >> 8));
-        buf.push_back(static_cast<char>(word));
+        buf.push_back(char(word >> 8));
+        buf.push_back(char(word));
         break;
     case 3:
-        buf.push_back(static_cast<char>(word >> 16));
-        buf.push_back(static_cast<char>(word >> 8));
-        buf.push_back(static_cast<char>(word));
+        buf.push_back(char(word >> 16));
+        buf.push_back(char(word >> 8));
+        buf.push_back(char(word));
         break;
     case 4:
-        buf.push_back(static_cast<char>(word >> 24));
-        buf.push_back(static_cast<char>(word >> 16));
-        buf.push_back(static_cast<char>(word >> 8));
-        buf.push_back(static_cast<char>(word));
+        buf.push_back(char(word >> 24));
+        buf.push_back(char(word >> 16));
+        buf.push_back(char(word >> 8));
+        buf.push_back(char(word));
         break;
     }
 }
@@ -555,8 +506,8 @@ void EncodeDecimalImpl(const T & dec, PrecType prec, ScaleType frac, WriteBuffer
         prec = frac;
     }
     constexpr Int32 decimal_mod = powers10[digitsPerWord];
-    ss.write(static_cast<UInt8>(prec));
-    ss.write(static_cast<UInt8>(frac));
+    ss.write(UInt8(prec));
+    ss.write(UInt8(frac));
 
     int digits_int = prec - frac;
     int words_int = digits_int / digitsPerWord;
@@ -617,7 +568,7 @@ void EncodeDecimalImpl(const T & dec, PrecType prec, ScaleType frac, WriteBuffer
     ss.write(buf.c_str(), buf.size());
 }
 
-void EncodeDecimalForRow(const Field & field, WriteBuffer & ss, const TiDB::ColumnInfo & column_info)
+void EncodeDecimalForRow(const Field & field, WriteBuffer & ss, const ColumnInfo & column_info)
 {
     if (field.getType() == Field::Types::Decimal32)
     {
@@ -673,15 +624,11 @@ void EncodeDecimal(const Field & field, WriteBuffer & ss)
     }
 }
 
-void EncodeDatumForRow(
-    const Field & field,
-    TiDB::CodecFlag flag,
-    WriteBuffer & ss,
-    const TiDB::ColumnInfo & column_info)
+void EncodeDatumForRow(const Field & field, TiDB::CodecFlag flag, WriteBuffer & ss, const ColumnInfo & column_info)
 {
     if (flag == TiDB::CodecFlagDecimal && !field.isNull())
     {
-        EncodeUInt(static_cast<UInt8>(flag), ss);
+        EncodeUInt(UInt8(flag), ss);
         return EncodeDecimalForRow(field, ss, column_info);
     }
     return EncodeDatum(field, flag, ss);
@@ -691,7 +638,7 @@ void EncodeDatum(const Field & field, TiDB::CodecFlag flag, WriteBuffer & ss)
 {
     if (field.isNull())
         flag = TiDB::CodecFlagNil;
-    EncodeUInt(static_cast<UInt8>(flag), ss);
+    EncodeUInt(UInt8(flag), ss);
     switch (flag)
     {
     case TiDB::CodecFlagDecimal:
@@ -712,8 +659,6 @@ void EncodeDatum(const Field & field, TiDB::CodecFlag flag, WriteBuffer & ss)
         return EncodeInt64(field.safeGet<Int64>(), ss);
     case TiDB::CodecFlagJson:
         return EncodeJSON(field.safeGet<String>(), ss);
-    case TiDB::CodecFlagVectorFloat32:
-        return EncodeVectorFloat32(field.safeGet<Array>(), ss);
     case TiDB::CodecFlagNil:
         return;
     default:

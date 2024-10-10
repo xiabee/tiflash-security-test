@@ -19,7 +19,6 @@
 #include <Flash/Mpp/FineGrainedShuffleWriter.h>
 #include <Flash/Mpp/HashBaseWriterHelper.h>
 #include <Flash/Mpp/MPPTunnelSetWriter.h>
-#include <TiDB/Decode/TypeMapping.h>
 
 namespace DB
 {
@@ -90,42 +89,27 @@ void FineGrainedShuffleWriter<ExchangeWriterPtr>::prepare(const Block & sample_b
 }
 
 template <class ExchangeWriterPtr>
-bool FineGrainedShuffleWriter<ExchangeWriterPtr>::doFlush()
+void FineGrainedShuffleWriter<ExchangeWriterPtr>::flush()
 {
     if (rows_in_blocks > 0)
-    {
         batchWriteFineGrainedShuffle();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
-void FineGrainedShuffleWriter<ExchangeWriterPtr>::notifyNextPipelineWriter()
+bool FineGrainedShuffleWriter<ExchangeWriterPtr>::isWritable() const
 {
-    writer->notifyNextPipelineWriter();
+    return writer->isWritable();
 }
 
 template <class ExchangeWriterPtr>
-WaitResult FineGrainedShuffleWriter<ExchangeWriterPtr>::waitForWritable() const
-{
-    return writer->waitForWritable();
-}
-
-template <class ExchangeWriterPtr>
-bool FineGrainedShuffleWriter<ExchangeWriterPtr>::doWrite(const Block & block)
+void FineGrainedShuffleWriter<ExchangeWriterPtr>::write(const Block & block)
 {
     RUNTIME_CHECK_MSG(prepared, "FineGrainedShuffleWriter should be prepared before writing.");
     RUNTIME_CHECK_MSG(
         block.columns() == dag_context.result_field_types.size(),
         "Output column size mismatch with field type size");
 
-    size_t rows = 0;
-    if (block.info.selective)
-        rows = block.info.selective->size();
-    else
-        rows = block.rows();
-
+    size_t rows = block.rows();
     if (rows > 0)
     {
         rows_in_blocks += rows;
@@ -134,11 +118,7 @@ bool FineGrainedShuffleWriter<ExchangeWriterPtr>::doWrite(const Block & block)
 
     if (blocks.size() == fine_grained_shuffle_stream_count
         || static_cast<UInt64>(rows_in_blocks) >= batch_send_row_limit)
-    {
         batchWriteFineGrainedShuffle();
-        return true;
-    }
-    return false;
 }
 
 template <class ExchangeWriterPtr>
@@ -162,7 +142,8 @@ template <class ExchangeWriterPtr>
 template <MPPDataPacketVersion version>
 void FineGrainedShuffleWriter<ExchangeWriterPtr>::batchWriteFineGrainedShuffleImpl()
 {
-    assert(!blocks.empty());
+    if (blocks.empty())
+        return;
 
     {
         assert(rows_in_blocks > 0);
@@ -176,29 +157,16 @@ void FineGrainedShuffleWriter<ExchangeWriterPtr>::batchWriteFineGrainedShuffleIm
                 // check schema
                 assertBlockSchema(expected_types, block, FineGrainedShuffleWriterLabels[MPPDataPacketV1]);
             }
-
-            if (block.info.selective)
-                HashBaseWriterHelper::scatterColumnsForFineGrainedShuffleSelectiveBlock(
-                    block,
-                    partition_col_ids,
-                    collators,
-                    partition_key_containers_for_reuse,
-                    partition_num,
-                    fine_grained_shuffle_stream_count,
-                    hash,
-                    selector,
-                    scattered);
-            else
-                HashBaseWriterHelper::scatterColumnsForFineGrainedShuffle(
-                    block,
-                    partition_col_ids,
-                    collators,
-                    partition_key_containers_for_reuse,
-                    partition_num,
-                    fine_grained_shuffle_stream_count,
-                    hash,
-                    selector,
-                    scattered);
+            HashBaseWriterHelper::scatterColumnsForFineGrainedShuffle(
+                block,
+                partition_col_ids,
+                collators,
+                partition_key_containers_for_reuse,
+                partition_num,
+                fine_grained_shuffle_stream_count,
+                hash,
+                selector,
+                scattered);
             block.clear();
         }
         blocks.clear();

@@ -38,15 +38,14 @@ public:
         FLASHBACK,
         KEY_NOT_IN_REGION,
         TIKV_SERVER_ISSUE,
-        READ_INDEX_TIMEOUT,
         OTHER,
     };
 
     using UnavailableRegions = std::unordered_set<RegionID>;
 
 public:
-    RegionException(UnavailableRegions && unavailable_region_, RegionReadStatus status_, const char * extra_msg)
-        : Exception(fmt::format("Region error {}({})", magic_enum::enum_name(status_), extra_msg ? extra_msg : ""))
+    RegionException(UnavailableRegions && unavailable_region_, RegionReadStatus status_)
+        : Exception(fmt::format("Region error {}", magic_enum::enum_name(status_)))
         , unavailable_region(std::move(unavailable_region_))
         , status(status_)
     {}

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include <TiDB/Decode/Datum.h>
-#include <TiDB/Schema/TiDB.h>
 
 #include <ext/bit_cast.h>
 

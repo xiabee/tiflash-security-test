@@ -16,12 +16,9 @@
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/SharedContexts/Disagg.h>
 #include <Storages/KVStore/Decode/RegionTable.h>
 #include <Storages/KVStore/FFI/ProxyFFI.h>
 #include <Storages/KVStore/KVStore.h>
-#include <Storages/KVStore/MultiRaft/Disagg/CheckpointIngestInfo.h>
-#include <Storages/KVStore/MultiRaft/Disagg/FastAddPeerContext.h>
 #include <Storages/KVStore/Region.h>
 #include <Storages/KVStore/TMTContext.h>
 #include <Storages/StorageDeltaMerge.h>
@@ -80,10 +77,8 @@ void KVStore::checkAndApplyPreHandledSnapshot(const RegionPtrWrap & new_region, 
             // engine may delete data unsafely.
             auto region_lock = region_manager.genRegionTaskLock(old_region->id());
             old_region->setStateApplying();
-            // It is not worthy to call `tryWriteBlockByRegion` and `tryFlushRegionCacheInStorage` here,
-            // even if the written data is useful, it could be overwritten later in `onSnapshot`.
-            // Note that we must persistRegion. This is to ensure even if a restart happens before
-            // the apply snapshot is finished, TiFlash can correctly reject the read index requests
+            tmt.getRegionTable().tryWriteBlockByRegion(old_region);
+            tryFlushRegionCacheInStorage(tmt, *old_region, log);
             persistRegion(*old_region, region_lock, PersistRegionReason::ApplySnapshotPrevRegion, "");
         }
     }
@@ -97,73 +92,28 @@ void KVStore::checkAndApplyPreHandledSnapshot(const RegionPtrWrap & new_region, 
             if (overlapped_region.first != region_id)
             {
                 auto state = getProxyHelper()->getRegionLocalState(overlapped_region.first);
-                auto extra_msg = fmt::format(
-                    "state={}, tiflash_state={}, new_region_state={}",
-                    state.ShortDebugString(),
-                    overlapped_region.second->getMeta().getRegionState().getBase().ShortDebugString(),
-                    new_region->getMeta().getRegionState().getBase().ShortDebugString());
-                if (state.state() == raft_serverpb::PeerState::Tombstone)
-                {
-                    LOG_INFO(
-                        log,
-                        "range of region_id={} is overlapped with `Tombstone` region_id={}, {}",
-                        region_id,
-                        overlapped_region.first,
-                        extra_msg);
-                    handleDestroy(overlapped_region.first, tmt, task_lock);
-                }
-                else if (state.state() == raft_serverpb::PeerState::Applying)
-                {
-                    // In this case, the `overlapped_region` also has a snapshot applied in raftstore,
-                    // and is pending to be applied in TiFlash.
-                    auto r = RegionRangeKeys::makeComparableKeys(
-                        TiKVKey::copyFrom(state.region().start_key()),
-                        TiKVKey::copyFrom(state.region().end_key()));
-
-                    if (RegionRangeKeys::isRangeOverlapped(new_range->comparableKeys(), r))
-                    {
-                        // If the range is still overlapped after the snapshot, there is a hard error.
-                        throw Exception(
-                            ErrorCodes::LOGICAL_ERROR,
-                            "range of region_id={} is overlapped with `Applying` region_id={}, {}",
-                            region_id,
-                            overlapped_region.first,
-                            extra_msg);
-                    }
-                    else
-                    {
-                        LOG_INFO(
-                            log,
-                            "range of region_id={} is overlapped with `Applying` region_id={}, {}",
-                            region_id,
-                            overlapped_region.first,
-                            extra_msg);
-                    }
-                }
-                else
+                if (state.state() != raft_serverpb::PeerState::Tombstone)
                 {
                     throw Exception(
                         ErrorCodes::LOGICAL_ERROR,
-                        "range of region_id={} is overlapped with region_id={}, {}",
+                        "range of region_id={} is overlapped with region_id={}, state: {}",
                         region_id,
                         overlapped_region.first,
-                        extra_msg);
+                        state.ShortDebugString());
+                }
+                else
+                {
+                    LOG_INFO(
+                        log,
+                        "range of region_id={} is overlapped with `Tombstone` region_id={}",
+                        region_id,
+                        overlapped_region.first);
+                    handleDestroy(overlapped_region.first, tmt, task_lock);
                 }
             }
         }
     }
-    // NOTE Do NOT move it to prehandle stage!
-    // Otherwise a fap snapshot may be cleaned when prehandling after restarted.
-    if (tmt.getContext().getSharedContextDisagg()->isDisaggregatedStorageMode())
-    {
-        if constexpr (!std::is_same_v<RegionPtrWrap, RegionPtrWithCheckpointInfo>)
-        {
-            auto fap_ctx = tmt.getContext().getSharedContextDisagg()->fap_context;
-            auto region_id = new_region->id();
-            // Everytime we meet a regular snapshot, we try to clean obsolete fap ingest info.
-            fap_ctx->resolveFapSnapshotState(tmt, proxy_helper, region_id, true);
-        }
-    }
+
     onSnapshot(new_region, old_region, old_applied_index, tmt);
 }
 
@@ -176,18 +126,6 @@ std::pair<UInt64, bool> getTiFlashReplicaSyncInfo(StorageDeltaMergePtr & dm_stor
     return {replica_info.count, is_syncing};
 }
 
-static inline void maybeUpdateRU(StorageDeltaMergePtr & dm_storage, UInt64 keyspace_id, UInt64 ingested_bytes)
-{
-    if (auto [count, is_syncing] = getTiFlashReplicaSyncInfo(dm_storage); is_syncing)
-    {
-        // For write, 1 RU per KB. Reference: https://docs.pingcap.com/tidb/v7.0/tidb-resource-control
-        // Only calculate RU of one replica. So each replica reports 1/count consumptions.
-        TiFlashMetrics::instance().addReplicaSyncRU(
-            keyspace_id,
-            std::ceil(static_cast<double>(ingested_bytes) / 1024.0 / count));
-    }
-}
-
 template <typename RegionPtrWrap>
 void KVStore::onSnapshot(
     const RegionPtrWrap & new_region_wrap,
@@ -197,7 +135,6 @@ void KVStore::onSnapshot(
 {
     RegionID region_id = new_region_wrap->id();
 
-    // 1. Try to clean stale data.
     {
         auto keyspace_id = new_region_wrap->getKeyspaceID();
         auto table_id = new_region_wrap->getMappedTableID();
@@ -226,19 +163,16 @@ void KVStore::onSnapshot(
                     {
                         LOG_INFO(
                             log,
-                            "region range changed before apply snapshot, region_id={} old_range={} new_range={} "
-                            "keyspace={} table_id={}",
+                            "clear old range before apply snapshot, region_id={} old_range={} new_range={} "
+                            "keyspace_id={} table_id={}",
                             region_id,
                             old_key_range.toDebugString(),
                             new_key_range.toDebugString(),
                             keyspace_id,
                             table_id);
-                        /// Previously, we clean `old_key_range` here. However, we can only clean `new_key_range` here, if there is also an overlapped snapshot in region worker queue.
-                        /// Consider:
-                        /// 1. there exists a region A of range [0..100)
-                        /// 2. region A splitted into A' [0..50) and B [50..100)
-                        /// 3. snapshot of B is applied into tiflash storage first
-                        /// 4. when applying snapshot A -> A' of range [0..50), we should not clear the old range [0, 100) but only clean the new range
+                        dm_storage->deleteRange(old_key_range, context.getSettingsRef());
+                        // We must flush the deletion to the disk here, because we only flush new range when persisting this region later.
+                        dm_storage->flushCache(context, old_key_range, /*try_until_succeed*/ true);
                     }
                 }
                 if constexpr (std::is_same_v<RegionPtrWrap, RegionPtrWithSnapshotFiles>)
@@ -249,15 +183,21 @@ void KVStore::onSnapshot(
                         new_region_wrap.external_files,
                         /*clear_data_in_range=*/true,
                         context.getSettingsRef());
-                    maybeUpdateRU(dm_storage, keyspace_id, ingested_bytes);
+                    if (auto [count, is_syncing] = getTiFlashReplicaSyncInfo(dm_storage); is_syncing)
+                    {
+                        // For write, 1 RU per KB. Reference: https://docs.pingcap.com/tidb/v7.0/tidb-resource-control
+                        // Only calculate RU of one replica. So each replica reports 1/count consumptions.
+                        TiFlashMetrics::instance().addReplicaSyncRU(
+                            keyspace_id,
+                            std::ceil(static_cast<double>(ingested_bytes) / 1024.0 / count));
+                    }
                 }
                 else if constexpr (std::is_same_v<RegionPtrWrap, RegionPtrWithCheckpointInfo>)
                 {
-                    auto ingested_bytes = dm_storage->ingestSegmentsFromCheckpointInfo(
+                    dm_storage->ingestSegmentsFromCheckpointInfo(
                         new_key_range,
                         new_region_wrap.checkpoint_info,
                         context.getSettingsRef());
-                    maybeUpdateRU(dm_storage, keyspace_id, ingested_bytes);
                 }
                 else
                 {
@@ -265,7 +205,6 @@ void KVStore::onSnapshot(
                     static_assert(std::is_same_v<RegionPtrWrap, RegionPtrWithBlock>);
                     // Call `deleteRange` to delete data for range
                     dm_storage->deleteRange(new_key_range, context.getSettingsRef());
-                    // We don't flushCache here, but flush as a whole in stage 2 in `tryFlushRegionCacheInStorage`.
                 }
             }
             catch (DB::Exception & e)
@@ -277,7 +216,6 @@ void KVStore::onSnapshot(
         }
     }
 
-    // 2. Dump data to RegionTable.
     {
         const auto range = new_region_wrap->getRange();
         auto & region_table = tmt.getRegionTable();
@@ -303,7 +241,6 @@ void KVStore::onSnapshot(
         // For `RegionPtrWithSnapshotFiles`, don't need to flush cache.
     }
 
-    // Register the new Region.
     RegionPtr new_region = new_region_wrap.base;
     {
         auto task_lock = genTaskLock();
@@ -346,7 +283,6 @@ void KVStore::onSnapshot(
             manage_lock.index.add(new_region);
         }
 
-        GET_METRIC(tiflash_raft_write_flow_bytes, type_snapshot_uncommitted).Observe(new_region->dataSize());
         persistRegion(*new_region, region_lock, PersistRegionReason::ApplySnapshotCurRegion, "");
 
         tmt.getRegionTable().shrinkRegionRange(*new_region);
@@ -397,7 +333,7 @@ template void KVStore::onSnapshot<RegionPtrWithSnapshotFiles>(
     UInt64,
     TMTContext &);
 
-void KVStore::handleIngestCheckpoint(RegionPtr region, CheckpointIngestInfoPtr checkpoint_info, TMTContext & tmt)
+void KVStore::handleIngestCheckpoint(RegionPtr region, CheckpointInfoPtr checkpoint_info, TMTContext & tmt)
 {
     applyPreHandledSnapshot(RegionPtrWithCheckpointInfo{region, checkpoint_info}, tmt);
 }

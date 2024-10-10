@@ -1,5 +1,14 @@
 The executable files are located in `tiflash` dir.
 
-# Enviroument Requirements
+# Deploy Enviroument Requirements
 
-Check the MacOS part of [Prepare Prerequisites](/README.md#1-prepare-prerequisites) 
+Following OS are tested OK
+
+* MacOS Catalina 10.15.5+
+
+**NOTE** XCode version should be at least XCode 11
+
+Your system needs to install
+
+* python 3.7
+* openssl 1.1

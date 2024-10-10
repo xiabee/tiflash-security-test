@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,16 +11,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include <DataStreams/BlocksListBlockInputStream.h>
 #include <Storages/DeltaMerge/DMDecoratorStreams.h>
 #include <Storages/DeltaMerge/tests/DMTestEnv.h>
 #include <TestUtils/FunctionTestUtils.h>
 #include <TestUtils/InputStreamTestUtils.h>
 
-namespace DB::DM::tests
+namespace DB
 {
-
+namespace DM
+{
+namespace tests
+{
 namespace
 {
 constexpr const char * str_col_name = "col_a";
@@ -126,5 +128,6 @@ TEST(ColumnProjectionTest, NormalCase)
             createColumn<String>({"hello", "world", "", "TiFlash", "Storage"}, str_col_name),
         }));
 }
-
-} // namespace DB::DM::tests
+} // namespace tests
+} // namespace DM
+} // namespace DB

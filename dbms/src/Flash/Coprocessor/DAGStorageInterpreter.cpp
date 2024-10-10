@@ -51,7 +51,6 @@
 #include <Storages/KVStore/TMTContext.h>
 #include <Storages/KVStore/Types.h>
 #include <Storages/MutableSupport.h>
-#include <Storages/RegionQueryInfo.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/StorageDeltaMerge.h>
 #include <TiDB/Decode/TypeMapping.h>
@@ -250,7 +249,7 @@ void injectFailPointForLocalRead([[maybe_unused]] const SelectQueryInfo & query_
             "failpoint inject region_exception_after_read_from_storage_some_error, throw RegionException with "
             "region_ids={}",
             region_ids);
-        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::NOT_FOUND, nullptr);
+        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::NOT_FOUND);
     });
     fiu_do_on(FailPoints::region_exception_after_read_from_storage_all_error, {
         const auto & regions_info = query_info.mvcc_query_info->regions_query_info;
@@ -262,16 +261,27 @@ void injectFailPointForLocalRead([[maybe_unused]] const SelectQueryInfo & query_
             "failpoint inject region_exception_after_read_from_storage_all_error, throw RegionException with "
             "region_ids={}",
             region_ids);
-        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::NOT_FOUND, nullptr);
+        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::NOT_FOUND);
     });
 }
 
-String genErrMsgForLocalRead(const KeyspaceID keyspace_id, const TableID & table_id, const TableID & logical_table_id)
+String genErrMsgForLocalRead(
+    const ManageableStoragePtr & storage,
+    const KeyspaceID keyspace_id,
+    const TableID & table_id,
+    const TableID & logical_table_id)
 {
     return table_id == logical_table_id
-        ? fmt::format("(while creating read sources from storage, keyspace_id={} table_id={})", keyspace_id, table_id)
+        ? fmt::format(
+            "(while creating read sources from storage `{}`.`{}`, keyspace_id={} table_id={})",
+            storage->getDatabaseName(),
+            storage->getTableName(),
+            keyspace_id,
+            table_id)
         : fmt::format(
-            "(while creating read sources from storage, keyspace_id={} table_id={} logical_table_id={})",
+            "(while creating read sources from storage `{}`.`{}`, keyspace_id={} table_id={} logical_table_id={})",
+            storage->getDatabaseName(),
+            storage->getTableName(),
             keyspace_id,
             table_id,
             logical_table_id);
@@ -299,8 +309,6 @@ DAGStorageInterpreter::DAGStorageInterpreter(
             Errors::Coprocessor::BadRequest);
     }
 }
-
-DAGStorageInterpreter::~DAGStorageInterpreter() = default;
 
 void DAGStorageInterpreter::execute(DAGPipeline & pipeline)
 {
@@ -378,7 +386,7 @@ void DAGStorageInterpreter::executeImpl(
         for (const auto & info : context.getDAGContext()->retry_regions)
             region_ids.insert(info.region_id);
 
-        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::EPOCH_NOT_MATCH, "executeImpl");
+        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::EPOCH_NOT_MATCH);
     }
 
     // A failpoint to test pause before alter lock released
@@ -490,7 +498,7 @@ void DAGStorageInterpreter::executeImpl(DAGPipeline & pipeline)
         for (const auto & info : context.getDAGContext()->retry_regions)
             region_ids.insert(info.region_id);
 
-        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::EPOCH_NOT_MATCH, "executeImpl");
+        throw RegionException(std::move(region_ids), RegionException::RegionReadStatus::EPOCH_NOT_MATCH);
     }
 
     // A failpoint to test pause before alter lock released
@@ -711,8 +719,8 @@ std::vector<pingcap::coprocessor::CopTask> DAGStorageInterpreter::buildCopTasks(
             req,
             store_type,
             dagContext().getKeyspaceID(),
-            remote_request.connection_id,
-            remote_request.connection_alias,
+            0, // connection_id
+            "", // connection_alias
             &Poco::Logger::get("pingcap/coprocessor"),
             std::move(meta_data),
             [&] { GET_METRIC(tiflash_coprocessor_request_count, type_remote_read_sent).Increment(); });
@@ -823,7 +831,7 @@ LearnerReadSnapshot DAGStorageInterpreter::doCopLearnerRead()
     auto [info_retry, status] = MakeRegionQueryInfos(regions_for_local_read, {}, tmt, *mvcc_query_info, false);
 
     if (info_retry)
-        throw RegionException({info_retry->begin()->get().region_id}, status, "doCopLearnerRead");
+        throw RegionException({info_retry->begin()->get().region_id}, status);
 
     return doLearnerRead(logical_table_id, *mvcc_query_info, /*for_batch_cop=*/false, context, log);
 }
@@ -906,7 +914,6 @@ std::unordered_map<TableID, SelectQueryInfo> DAGStorageInterpreter::generateSele
         query_info.query = dagContext().dummy_ast;
         query_info.dag_query = std::make_unique<DAGQueryInfo>(
             filter_conditions.conditions,
-            table_scan.getANNQueryInfo(),
             table_scan.getPushedDownFilters(),
             table_scan.getColumns(),
             table_scan.getRuntimeFilterIDs(),
@@ -925,7 +932,7 @@ std::unordered_map<TableID, SelectQueryInfo> DAGStorageInterpreter::generateSele
             SelectQueryInfo query_info = create_query_info(physical_table_id);
             query_info.mvcc_query_info = std::make_unique<MvccQueryInfo>(
                 mvcc_query_info->resolve_locks,
-                mvcc_query_info->start_ts,
+                mvcc_query_info->read_tso,
                 mvcc_query_info->scan_context);
             ret.emplace(physical_table_id, std::move(query_info));
         }
@@ -1074,14 +1081,14 @@ DM::Remote::DisaggPhysicalTableReadSnapshotPtr DAGStorageInterpreter::buildLocal
             else
             {
                 // Throw an exception for TiDB / TiSpark to retry
-                e.addMessage(genErrMsgForLocalRead(keyspace_id, table_id, logical_table_id));
+                e.addMessage(genErrMsgForLocalRead(storage, keyspace_id, table_id, logical_table_id));
                 throw;
             }
         }
         catch (DB::Exception & e)
         {
             /// Other unknown exceptions
-            e.addMessage(genErrMsgForLocalRead(keyspace_id, table_id, logical_table_id));
+            e.addMessage(genErrMsgForLocalRead(storage, keyspace_id, table_id, logical_table_id));
             throw;
         }
     }
@@ -1157,14 +1164,14 @@ DM::Remote::DisaggPhysicalTableReadSnapshotPtr DAGStorageInterpreter::buildLocal
             else
             {
                 // Throw an exception for TiDB / TiSpark to retry
-                e.addMessage(genErrMsgForLocalRead(keyspace_id, table_id, logical_table_id));
+                e.addMessage(genErrMsgForLocalRead(storage, keyspace_id, table_id, logical_table_id));
                 throw;
             }
         }
         catch (DB::Exception & e)
         {
             /// Other unknown exceptions
-            e.addMessage(genErrMsgForLocalRead(keyspace_id, table_id, logical_table_id));
+            e.addMessage(genErrMsgForLocalRead(storage, keyspace_id, table_id, logical_table_id));
             throw;
         }
     }
@@ -1553,8 +1560,6 @@ std::vector<RemoteRequest> DAGStorageInterpreter::buildRemoteRequests(const DM::
         retry_regions_map[region_id_to_table_id_map[r.get().region_id]].emplace_back(r);
     }
 
-    UInt64 connection_id = dagContext().getConnectionID();
-    const String & connection_alias = dagContext().getConnectionAlias();
     for (const auto physical_table_id : table_scan.getPhysicalTableIDs())
     {
         const auto & retry_regions = retry_regions_map[physical_table_id];
@@ -1572,8 +1577,6 @@ std::vector<RemoteRequest> DAGStorageInterpreter::buildRemoteRequests(const DM::
             table_scan,
             storages_with_structure_lock[physical_table_id].storage->getTableInfo(),
             filter_conditions,
-            connection_id,
-            connection_alias,
             log));
     }
     LOG_DEBUG(log, "remote request size: {}", remote_requests.size());

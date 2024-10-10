@@ -57,13 +57,20 @@ public:
 
 #define WRAP_FOR_EXCUTION_SUMMARY_TEST_BEGIN                                      \
     std::vector<DAGRequestType> type{DAGRequestType::tree, DAGRequestType::list}; \
-    std::vector<bool> pipeline_bools{false, true};                                \
-    for (auto enable_pipeline : pipeline_bools)                                   \
+    std::vector<bool> planner_bools{false, true};                                 \
+    for (auto enable_planner : planner_bools)                                     \
     {                                                                             \
-        enablePipeline(enable_pipeline);                                          \
-        for (const auto t : type)                                                 \
-        {
+        enablePlanner(enable_planner);                                            \
+        std::vector<bool> pipeline_bools{false};                                  \
+        if (enable_planner)                                                       \
+            pipeline_bools.push_back(true);                                       \
+        for (auto enable_pipeline : pipeline_bools)                               \
+        {                                                                         \
+            enablePipeline(enable_pipeline);                                      \
+            for (const auto t : type)                                             \
+            {
 #define WRAP_FOR_EXCUTION_SUMMARY_TEST_END \
+    }                                      \
     }                                      \
     }
 };

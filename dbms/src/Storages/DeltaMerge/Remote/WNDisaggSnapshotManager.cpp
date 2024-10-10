@@ -48,25 +48,24 @@ bool WNDisaggSnapshotManager::unregisterSnapshotIfEmpty(const DisaggTaskId & tas
 
 void WNDisaggSnapshotManager::clearExpiredSnapshots()
 {
+    std::unique_lock lock(mtx);
     Timepoint now = Clock::now();
-    snapshots.withExclusive([&](auto & snapshots) {
-        for (auto iter = snapshots.begin(); iter != snapshots.end(); /*empty*/)
+    for (auto iter = snapshots.begin(); iter != snapshots.end(); /*empty*/)
+    {
+        if (iter->second.expired_at < now)
         {
-            if (iter->second.expired_at < now)
-            {
-                LOG_INFO(
-                    log,
-                    "Remove expired Disaggregated Snapshot, task_id={} expired_at={:%Y-%m-%d %H:%M:%S}",
-                    iter->first,
-                    iter->second.expired_at);
-                iter = snapshots.erase(iter);
-            }
-            else
-            {
-                ++iter;
-            }
+            LOG_INFO(
+                log,
+                "Remove expired Disaggregated Snapshot, task_id={} expired_at={:%Y-%m-%d %H:%M:%S}",
+                iter->first,
+                iter->second.expired_at);
+            iter = snapshots.erase(iter);
         }
-    });
+        else
+        {
+            ++iter;
+        }
+    }
 }
 
 } // namespace DB::DM::Remote

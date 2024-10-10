@@ -83,22 +83,10 @@ size_t IDataType::getSizeOfValueInMemory() const
 
 bool IDataType::isNullMap(const IDataType::SubstreamPath & path)
 {
-    for (const auto & elem : path)
+    for (const Substream & elem : path)
     {
         if (elem.type == Substream::NullMap)
             return true;
-    }
-    return false;
-}
-
-bool IDataType::isArraySizes(const SubstreamPath & path)
-{
-    for (const auto & elem : path)
-    {
-        if (elem.type == IDataType::Substream::ArraySizes)
-        {
-            return true;
-        }
     }
     return false;
 }

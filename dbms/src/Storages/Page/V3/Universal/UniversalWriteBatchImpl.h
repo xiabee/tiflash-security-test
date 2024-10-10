@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <IO/Buffer/ReadBufferFromString.h>
+#include <IO/ReadBufferFromString.h>
 #include <Storages/Page/PageDefinesBase.h>
 #include <Storages/Page/V3/PageEntryCheckpointInfo.h>
 #include <Storages/Page/V3/Universal/UniversalPageId.h>
@@ -27,11 +27,6 @@ namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
 } // namespace ErrorCodes
-
-namespace tests
-{
-class UniPageStorageIdTest;
-}
 
 class UniversalWriteBatch : private boost::noncopyable
 {
@@ -57,8 +52,6 @@ public:
     explicit UniversalWriteBatch(String prefix_ = "")
         : prefix(std::move(prefix_))
     {}
-
-    ~UniversalWriteBatch() { PS::PageStorageMemorySummary::universal_write_count.fetch_sub(writes.size()); }
 
     void putPage(
         PageIdU64 page_id,
@@ -133,7 +126,6 @@ public:
         Write w{WriteBatchWriteType::PUT, page_id, tag, read_buffer, size, "", std::move(offsets)};
         total_data_size += size;
         writes.emplace_back(std::move(w));
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     void putPage(
@@ -164,7 +156,6 @@ public:
             data_location};
         writes.emplace_back(std::move(w));
         has_writes_from_remote = true;
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     void updateRemotePage(const UniversalPageId & page_id, const ReadBufferPtr & read_buffer, PageSize size)
@@ -173,7 +164,6 @@ public:
         total_data_size += size;
         writes.emplace_back(std::move(w));
         // This is use for update local page data from remote, don't need to set `has_writes_from_remote`
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     void putExternal(const UniversalPageId & page_id, UInt64 tag)
@@ -181,7 +171,6 @@ public:
         // External page's data is not managed by PageStorage, which means data is empty.
         Write w{WriteBatchWriteType::PUT_EXTERNAL, page_id, tag, nullptr, 0, "", {}};
         writes.emplace_back(std::move(w));
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     void putRemoteExternal(const UniversalPageId & page_id, const PS::V3::CheckpointLocation & data_location)
@@ -190,7 +179,6 @@ public:
         Write w{WriteBatchWriteType::PUT_EXTERNAL, page_id, /*tag*/ 0, nullptr, 0, "", {}, data_location};
         writes.emplace_back(std::move(w));
         has_writes_from_remote = true;
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     // Add RefPage{ref_id} -> Page{page_id}
@@ -198,19 +186,15 @@ public:
     {
         Write w{WriteBatchWriteType::REF, ref_id, 0, nullptr, 0, page_id, {}};
         writes.emplace_back(std::move(w));
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     void delPage(const UniversalPageId & page_id)
     {
         Write w{WriteBatchWriteType::DEL, page_id, 0, nullptr, 0, "", {}};
         writes.emplace_back(std::move(w));
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(1);
     }
 
     bool empty() const { return writes.empty(); }
-
-    size_t size() const { return writes.size(); }
 
     const Writes & getWrites() const { return writes; }
     Writes & getMutWrites() { return writes; }
@@ -271,7 +255,6 @@ public:
     void merge(UniversalWriteBatch & rhs)
     {
         writes.reserve(writes.size() + rhs.writes.size());
-        PS::PageStorageMemorySummary::universal_write_count.fetch_add(rhs.writes.size());
         for (const auto & r : rhs.writes)
         {
             writes.emplace_back(r);
@@ -282,7 +265,6 @@ public:
 
     [[clang::reinitializes]] void clear()
     {
-        PS::PageStorageMemorySummary::universal_write_count.fetch_sub(writes.size());
         Writes tmp;
         writes.swap(tmp);
         total_data_size = 0;
@@ -292,13 +274,11 @@ public:
 
     UniversalWriteBatch(UniversalWriteBatch && rhs) noexcept
         : prefix(std::move(rhs.prefix))
+        , writes(std::move(rhs.writes))
         , total_data_size(rhs.total_data_size)
         , has_writes_from_remote(rhs.has_writes_from_remote)
         , remote_lock_disabled(rhs.remote_lock_disabled)
-    {
-        PS::PageStorageMemorySummary::universal_write_count.fetch_sub(writes.size());
-        writes = std::move(rhs.writes);
-    }
+    {}
 
     void swap(UniversalWriteBatch & o)
     {
@@ -308,9 +288,6 @@ public:
         std::swap(has_writes_from_remote, o.has_writes_from_remote);
         std::swap(remote_lock_disabled, o.remote_lock_disabled);
     }
-
-private:
-    friend class UniPageStorageIdTest;
 
 private:
     String prefix;

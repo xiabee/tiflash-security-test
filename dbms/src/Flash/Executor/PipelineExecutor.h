@@ -16,7 +16,7 @@
 
 #include <Flash/Executor/PipelineExecutorContext.h>
 #include <Flash/Executor/QueryExecutor.h>
-#include <Flash/Executor/ResultQueue_fwd.h>
+#include <Flash/Executor/ResultQueue.h>
 
 namespace DB
 {
@@ -67,7 +67,7 @@ public:
 
     int estimateNewThreadCount() override;
 
-    UInt64 collectCPUTimeNs() override;
+    RU collectRequestUnit() override;
 
     Block getSampleBlock() const override;
 

@@ -17,16 +17,18 @@
 #include <Common/Stopwatch.h>
 #include <Common/StringUtils/StringUtils.h>
 #include <Common/TiFlashMetrics.h>
-#include <IO/BaseFile/MemoryRandomAccessFile.h>
+#include <Encryption/RandomAccessFile.h>
 #include <Storages/DeltaMerge/ScanContext.h>
 #include <Storages/S3/FileCache.h>
+#include <Storages/S3/MemoryRandomAccessFile.h>
 #include <Storages/S3/S3Common.h>
 #include <Storages/S3/S3Filename.h>
 #include <Storages/S3/S3RandomAccessFile.h>
 #include <aws/s3/model/GetObjectRequest.h>
-#include <common/likely.h>
 
+#include <chrono>
 #include <optional>
+#include <thread>
 
 namespace ProfileEvents
 {
@@ -43,7 +45,6 @@ S3RandomAccessFile::S3RandomAccessFile(std::shared_ptr<TiFlashS3Client> client_p
     , cur_offset(0)
     , log(Logger::get(remote_fname))
 {
-    RUNTIME_CHECK(client_ptr != nullptr);
     RUNTIME_CHECK(initialize(), remote_fname);
 }
 
@@ -192,15 +193,7 @@ bool S3RandomAccessFile::initialize()
         auto outcome = client_ptr->GetObject(req);
         if (!outcome.IsSuccess())
         {
-            auto el = sw.elapsedSeconds();
-            LOG_ERROR(
-                log,
-                "S3 GetObject failed: {}, cur_retry={}, key={}, elapsed{}={:.3f}s",
-                S3::S3ErrorMessage(outcome.GetError()),
-                cur_retry,
-                req.GetKey(),
-                el > 60.0 ? "(long)" : "",
-                el);
+            LOG_ERROR(log, "S3 GetObject failed: {}, cur_retry={}", S3::S3ErrorMessage(outcome.GetError()), cur_retry);
             continue;
         }
 
@@ -213,17 +206,6 @@ bool S3RandomAccessFile::initialize()
         RUNTIME_CHECK(read_result.GetBody(), remote_fname, strerror(errno));
         GET_METRIC(tiflash_storage_s3_request_seconds, type_get_object).Observe(sw.elapsedSeconds());
         break;
-    }
-    if (cur_retry >= max_retry && !request_succ)
-    {
-        auto el = sw.elapsedSeconds();
-        LOG_INFO(
-            log,
-            "S3 GetObject timeout: max_retry={}, key={}, elapsed{}={:.3f}s",
-            max_retry,
-            req.GetKey(),
-            el > 60.0 ? "(long)" : "",
-            el);
     }
     return request_succ;
 }

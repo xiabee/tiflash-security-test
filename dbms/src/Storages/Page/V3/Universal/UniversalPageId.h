@@ -15,40 +15,32 @@
 #pragma once
 
 #include <Common/RedactHelpers.h>
-#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Storages/Page/PageDefinesBase.h>
-#include <Storages/Page/PageStorageMemorySummary.h>
 
 namespace DB
 {
 class UniversalPageId final
 {
 public:
-    UniversalPageId() { PS::PageStorageMemorySummary::uni_page_id_bytes.fetch_add(id.size()); }
-    UniversalPageId(const UniversalPageId & other);
-    UniversalPageId(UniversalPageId && other);
+    UniversalPageId() = default;
+
     UniversalPageId(String id_) // NOLINT(google-explicit-constructor)
         : id(std::move(id_))
-    {
-        PS::PageStorageMemorySummary::uni_page_id_bytes.fetch_add(id.size());
-    }
+    {}
     UniversalPageId(const char * id_) // NOLINT(google-explicit-constructor)
         : id(id_)
-    {
-        PS::PageStorageMemorySummary::uni_page_id_bytes.fetch_add(id.size());
-    }
+    {}
     UniversalPageId(const char * id_, size_t sz_)
         : id(id_, sz_)
+    {}
+
+    UniversalPageId & operator=(String && id_) noexcept
     {
-        PS::PageStorageMemorySummary::uni_page_id_bytes.fetch_add(id.size());
+        id.swap(id_);
+        return *this;
     }
-
-    ~UniversalPageId();
-
-    UniversalPageId & operator=(UniversalPageId && other) noexcept;
-    UniversalPageId & operator=(const UniversalPageId & other) noexcept;
-    UniversalPageId & operator=(String && id_) noexcept;
     bool operator==(const UniversalPageId & rhs) const noexcept { return id == rhs.id; }
     bool operator!=(const UniversalPageId & rhs) const noexcept { return id != rhs.id; }
     bool operator>=(const UniversalPageId & rhs) const noexcept { return id >= rhs.id; }
@@ -60,7 +52,6 @@ public:
     UniversalPageId substr(size_t pos, size_t npos) const { return id.substr(pos, npos); }
     bool operator<(const UniversalPageId & rhs) const { return id < rhs.id; }
     bool hasPrefix(const String & str) const { return startsWith(id, str); }
-    bool hasPrefix(const char * str) const { return startsWith(id, str); }
 
     String toStr() const { return id; }
     const String & asStr() const { return id; }
@@ -97,7 +88,7 @@ struct fmt::formatter<DB::UniversalPageId>
     template <typename FormatContext>
     auto format(const DB::UniversalPageId & value, FormatContext & ctx) const
     {
-        return fmt::format_to(ctx.out(), "{}", DB::details::UniversalPageIdFormatHelper::format(value));
+        return format_to(ctx.out(), "{}", DB::details::UniversalPageIdFormatHelper::format(value));
     }
 };
 

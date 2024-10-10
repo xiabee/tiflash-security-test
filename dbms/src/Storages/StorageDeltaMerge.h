@@ -22,17 +22,13 @@
 #include <Storages/DeltaMerge/DMChecksumConfig.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/DeltaMergeInterfaces.h>
-#include <Storages/DeltaMerge/DeltaMergeStore.h>
 #include <Storages/DeltaMerge/Filter/PushDownFilter.h>
-#include <Storages/DeltaMerge/Index/LocalIndexInfo.h>
 #include <Storages/DeltaMerge/Remote/DisaggSnapshot_fwd.h>
 #include <Storages/DeltaMerge/ScanContext_fwd.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/IManageableStorage.h>
 #include <Storages/IStorage.h>
 #include <Storages/KVStore/Decode/DecodingStorageSchemaSnapshot.h>
-#include <Storages/KVStore/StorageEngineType.h>
-#include <TiDB/Schema/TiDB_fwd.h>
+#include <TiDB/Schema/TiDB.h>
 
 #include <ext/shared_ptr_helper.h>
 
@@ -40,14 +36,14 @@ namespace DB
 {
 struct CheckpointInfo;
 using CheckpointInfoPtr = std::shared_ptr<CheckpointInfo>;
-struct CheckpointIngestInfo;
-using CheckpointIngestInfoPtr = std::shared_ptr<CheckpointIngestInfo>;
 class MockStorage;
 
 namespace DM
 {
 struct RowKeyRange;
 struct RowKeyValue;
+class DeltaMergeStore;
+using DeltaMergeStorePtr = std::shared_ptr<DeltaMergeStore>;
 using RowKeyRanges = std::vector<RowKeyRange>;
 struct ExternalDTFileInfo;
 struct GCOptions;
@@ -65,7 +61,6 @@ public:
     String getName() const override;
     String getTableName() const override;
     String getDatabaseName() const override;
-    KeyspaceID getKeyspaceID() const { return _store->getKeyspaceID(); }
 
     void clearData() override;
 
@@ -97,7 +92,7 @@ public:
     BlockOutputStreamPtr write(const ASTPtr & query, const Settings & settings) override;
 
     /// Write from raft layer.
-    DM::WriteResult write(Block & block, const Settings & settings, const RegionAppliedStatus & applied_status = {});
+    DM::WriteResult write(Block & block, const Settings & settings);
 
     void flushCache(const Context & context) override;
 
@@ -128,14 +123,9 @@ public:
         bool clear_data_in_range,
         const Settings & settings);
 
-    DM::Segments buildSegmentsFromCheckpointInfo(
+    void ingestSegmentsFromCheckpointInfo(
         const DM::RowKeyRange & range,
         CheckpointInfoPtr checkpoint_info,
-        const Settings & settings);
-
-    UInt64 ingestSegmentsFromCheckpointInfo(
-        const DM::RowKeyRange & range,
-        const CheckpointIngestInfoPtr & checkpoint_info,
         const Settings & settings);
 
     UInt64 onSyncGc(Int64, const DM::GCOptions &) override;
@@ -172,7 +162,7 @@ public:
 
     void setTableInfo(const TiDB::TableInfo & table_info_) override { tidb_table_info = table_info_; }
 
-    TiDB::StorageEngine engineType() const override { return TiDB::StorageEngine::DT; }
+    ::TiDB::StorageEngine engineType() const override { return ::TiDB::StorageEngine::DT; }
 
     const TiDB::TableInfo & getTableInfo() const override { return tidb_table_info; }
 
@@ -191,27 +181,31 @@ public:
     void checkStatus(const Context & context) override;
     void deleteRows(const Context &, size_t rows) override;
 
-    bool isCommonHandle() const override { return is_common_handle; }
-
-    size_t getRowKeyColumnSize() const override { return rowkey_column_size; }
-
-    DM::DMConfigurationOpt createChecksumConfig() const { return DM::DMChecksumConfig::fromDBContext(global_context); }
-
-public:
     const DM::DeltaMergeStorePtr & getStore() { return getAndMaybeInitStore(); }
 
     DM::DeltaMergeStorePtr getStoreIfInited() const;
 
-    bool initStoreIfDataDirExist(ThreadPool * thread_pool) override;
+    bool isCommonHandle() const override { return is_common_handle; }
 
-public:
-    /// decoding methods
+    size_t getRowKeyColumnSize() const override { return rowkey_column_size; }
+
     std::pair<DB::DecodingStorageSchemaSnapshotConstPtr, BlockUPtr> getSchemaSnapshotAndBlockForDecoding(
         const TableStructureLockHolder & table_structure_lock,
-        bool need_block,
-        bool with_version_column) override;
+        bool /* need_block */) override;
 
     void releaseDecodingBlock(Int64 block_decoding_schema_epoch, BlockUPtr block) override;
+
+    bool initStoreIfDataDirExist(ThreadPool * thread_pool) override;
+
+    DM::DMConfigurationOpt createChecksumConfig() const { return DM::DMChecksumConfig::fromDBContext(global_context); }
+
+    static DM::PushDownFilterPtr buildPushDownFilter(
+        const DM::RSOperatorPtr & rs_operator,
+        const ColumnInfos & table_scan_column_info,
+        const google::protobuf::RepeatedPtrField<tipb::Expr> & pushed_down_filters,
+        const DM::ColumnDefines & columns_to_read,
+        const Context & context,
+        const LoggerPtr & tracing_logger);
 
 #ifndef DBMS_PUBLIC_GTEST
 protected:
@@ -241,17 +235,33 @@ private:
 
     DataTypePtr getPKTypeImpl() const override;
 
-    // Return the DeltaMergeStore instance
-    // If the instance is not inited, this method will initialize the instance
-    // and return it.
     DM::DeltaMergeStorePtr & getAndMaybeInitStore(ThreadPool * thread_pool = nullptr);
     bool storeInited() const { return store_inited.load(std::memory_order_acquire); }
-
     void updateTableColumnInfo();
     ColumnsDescription getNewColumnsDescription(const TiDB::TableInfo & table_info);
     DM::ColumnDefines getStoreColumnDefines() const override;
     bool dataDirExist();
     void shutdownImpl();
+
+    DM::RSOperatorPtr buildRSOperator(
+        const std::unique_ptr<DAGQueryInfo> & dag_query,
+        const Context & context,
+        const LoggerPtr & tracing_logger);
+    /// Get filters from query to construct rough set operation and push down filters.
+    DM::PushDownFilterPtr parsePushDownFilter(
+        const SelectQueryInfo & query_info,
+        const DM::ColumnDefines & columns_to_read,
+        const Context & context,
+        const LoggerPtr & tracing_logger);
+
+    DM::RowKeyRanges parseMvccQueryInfo(
+        const DB::MvccQueryInfo & mvcc_query_info,
+        unsigned num_streams,
+        const Context & context,
+        const String & req_id,
+        const LoggerPtr & tracing_logger);
+
+    RuntimeFilteList parseRuntimeFilterList(const SelectQueryInfo & query_info, const Context & db_context) const;
 
 #ifndef DBMS_PUBLIC_GTEST
 private:
@@ -283,9 +293,6 @@ private:
     bool is_common_handle = false;
     bool pk_is_handle = false;
     size_t rowkey_column_size = 0;
-    /// The user-defined PK column. If multi-column PK, or no PK, it is 0.
-    /// Note that user-defined PK will never be _tidb_rowid.
-    ColumnID pk_col_id = 0;
     OrderedNameSet hidden_columns;
 
     // The table schema synced from TiDB
@@ -316,4 +323,6 @@ private:
 
     friend class MockStorage;
 };
+
+
 } // namespace DB

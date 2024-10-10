@@ -15,7 +15,6 @@
 #pragma once
 
 #include <Common/Exception.h>
-#include <Storages/Page/PageStorageMemorySummary.h>
 #include <Storages/Page/V3/PageDefines.h>
 #include <Storages/Page/V3/PageEntryCheckpointInfo.h>
 #include <fmt/format.h>
@@ -29,11 +28,6 @@ extern const int CHECKSUM_DOESNT_MATCH;
 } // namespace ErrorCodes
 namespace PS::V3
 {
-
-/** 
- * PageEntryV3 records the information of a page in BlobFile,
- * including the file_id, size, offset, checksum, etc.
- */
 struct PageEntryV3
 {
 public:
@@ -134,7 +128,7 @@ struct fmt::formatter<DB::PS::V3::PageEntryV3>
             [](const auto & offset_checksum, FmtBuffer & fb) { fb.fmtAppend("{}", offset_checksum.first); },
             ",");
 
-        return fmt::format_to(
+        return format_to(
             ctx.out(),
             "PageEntry{{file: {}, offset: 0x{:X}, size: {}, checksum: 0x{:X}, tag: {}, field_offsets: [{}], "
             "checkpoint_info: {}}}",

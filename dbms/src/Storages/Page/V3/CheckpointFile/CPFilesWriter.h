@@ -101,8 +101,6 @@ public:
      */
     [[nodiscard]] std::vector<String> writeSuffix();
 
-    void abort();
-
 #ifndef DBMS_PUBLIC_GTEST
 private:
 #else

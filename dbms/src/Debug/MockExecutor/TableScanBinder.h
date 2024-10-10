@@ -19,15 +19,11 @@
 
 namespace DB::mock
 {
-
+using TableInfo = TiDB::TableInfo;
 class TableScanBinder : public ExecutorBinder
 {
 public:
-    TableScanBinder(
-        size_t & index_,
-        const DAGSchema & output_schema_,
-        const TiDB::TableInfo & table_info_,
-        bool keep_order_)
+    TableScanBinder(size_t & index_, const DAGSchema & output_schema_, const TableInfo & table_info_, bool keep_order_)
         : ExecutorBinder(index_, "table_scan_" + std::to_string(index_), output_schema_)
         , table_info(table_info_)
         , keep_order(keep_order_)
@@ -51,7 +47,7 @@ public:
     TableID getTableId() const;
 
 private:
-    TiDB::TableInfo table_info; /// used by column pruner
+    TableInfo table_info; /// used by column pruner
     bool keep_order;
     std::vector<int> rf_ids;
 
@@ -63,7 +59,7 @@ private:
 
 ExecutorBinderPtr compileTableScan(
     size_t & executor_index,
-    TiDB::TableInfo & table_info,
+    TableInfo & table_info,
     const String & db,
     const String & table_name,
     bool append_pk_column,

@@ -25,7 +25,6 @@
 
 #include <memory>
 
-
 namespace DB
 {
 namespace DM
@@ -94,15 +93,6 @@ Columns ColumnFileTiny::readFromDisk(
 
     // Read the columns from disk and apply DDL cast if need
     Page page = data_provider->readTinyData(data_page_id, fields);
-    // use `unlikely` to reduce performance impact on keyspaces without enable encryption
-    if (unlikely(file_provider->isEncryptionEnabled(keyspace_id)))
-    {
-        // decrypt the page data in place
-        size_t data_size = page.data.size();
-        char * data = page.mem_holder.get();
-        file_provider->decryptPage(keyspace_id, data, data_size, data_page_id);
-    }
-
     for (size_t index = col_start; index < col_end; ++index)
     {
         const size_t index_in_read_columns = index - col_start;
@@ -163,40 +153,12 @@ void ColumnFileTiny::serializeMetadata(WriteBuffer & buf, bool save_schema) cons
     writeIntBinary(bytes, buf);
 }
 
-void ColumnFileTiny::serializeMetadata(dtpb::ColumnFilePersisted * cf_pb, bool save_schema) const
-{
-    dtpb::ColumnFileTiny * tiny_pb = cf_pb->mutable_tiny_file();
-    if (save_schema)
-        serializeSchema(tiny_pb, schema->getSchema());
-
-    tiny_pb->set_id(data_page_id);
-    tiny_pb->set_rows(rows);
-    tiny_pb->set_bytes(bytes);
-}
-
 ColumnFilePersistedPtr ColumnFileTiny::deserializeMetadata(
     const DMContext & context,
     ReadBuffer & buf,
     ColumnFileSchemaPtr & last_schema)
 {
     auto schema_block = deserializeSchema(buf);
-    auto schema = getSchema(context, schema_block, last_schema);
-
-    PageIdU64 data_page_id;
-    size_t rows, bytes;
-
-    readIntBinary(data_page_id, buf);
-    readIntBinary(rows, buf);
-    readIntBinary(bytes, buf);
-
-    return std::make_shared<ColumnFileTiny>(schema, rows, bytes, data_page_id, context);
-}
-
-std::shared_ptr<ColumnFileSchema> ColumnFileTiny::getSchema(
-    const DMContext & context,
-    BlockPtr schema_block,
-    ColumnFileSchemaPtr & last_schema)
-{
     std::shared_ptr<ColumnFileSchema> schema;
 
     if (!schema_block)
@@ -209,66 +171,18 @@ std::shared_ptr<ColumnFileSchema> ColumnFileTiny::getSchema(
 
     if (unlikely(!schema))
         throw Exception("Cannot deserialize DeltaPackBlock's schema", ErrorCodes::LOGICAL_ERROR);
-    return schema;
-}
 
-ColumnFilePersistedPtr ColumnFileTiny::deserializeMetadata(
-    const DMContext & context,
-    const dtpb::ColumnFileTiny & cf_pb,
-    ColumnFileSchemaPtr & last_schema)
-{
-    auto schema_block = deserializeSchema(cf_pb.columns());
-    auto schema = getSchema(context, schema_block, last_schema);
+    PageIdU64 data_page_id;
+    size_t rows, bytes;
 
-    PageIdU64 data_page_id = cf_pb.id();
-    size_t rows = cf_pb.rows();
-    size_t bytes = cf_pb.bytes();
+    readIntBinary(data_page_id, buf);
+    readIntBinary(rows, buf);
+    readIntBinary(bytes, buf);
 
-    return std::make_shared<ColumnFileTiny>(schema, rows, bytes, data_page_id, context);
-}
-
-ColumnFilePersistedPtr ColumnFileTiny::restoreFromCheckpoint(
-    const LoggerPtr & parent_log,
-    const DMContext & context,
-    UniversalPageStoragePtr temp_ps,
-    WriteBatches & wbs,
-    BlockPtr schema,
-    PageIdU64 data_page_id,
-    size_t rows,
-    size_t bytes)
-{
-    auto new_cf_id = context.storage_pool->newLogPageId();
-    /// Generate a new RemotePage with an entry with data location on S3
-    auto remote_page_id = UniversalPageIdFormat::toFullPageId(
-        UniversalPageIdFormat::toFullPrefix(context.keyspace_id, StorageType::Log, context.physical_table_id),
-        data_page_id);
-    // The `data_file_id` in temp_ps is lock key, we need convert it to data key before write to local ps
-    auto remote_data_location = temp_ps->getCheckpointLocation(remote_page_id);
-    RUNTIME_CHECK(remote_data_location.has_value());
-    auto remote_data_file_lock_key_view = S3::S3FilenameView::fromKey(*remote_data_location->data_file_id);
-    RUNTIME_CHECK(remote_data_file_lock_key_view.isLockFile());
-    auto remote_data_file_key = remote_data_file_lock_key_view.asDataFile().toFullKey();
-    PS::V3::CheckpointLocation new_remote_data_location{
-        .data_file_id = std::make_shared<String>(remote_data_file_key),
-        .offset_in_file = remote_data_location->offset_in_file,
-        .size_in_file = remote_data_location->size_in_file,
-    };
-    // TODO: merge the `getEntry` and `getCheckpointLocation`
-    auto entry = temp_ps->getEntry(remote_page_id);
-    LOG_DEBUG(
-        parent_log,
-        "Write remote page to local, page_id={} remote_location={} remote_page_id={}",
-        new_cf_id,
-        new_remote_data_location.toDebugString(),
-        remote_page_id);
-    wbs.log.putRemotePage(new_cf_id, 0, entry.size, new_remote_data_location, std::move(entry.field_offsets));
-
-    auto column_file_schema = std::make_shared<ColumnFileSchema>(*schema);
-    return std::make_shared<ColumnFileTiny>(column_file_schema, rows, bytes, new_cf_id, context);
+    return std::make_shared<ColumnFileTiny>(schema, rows, bytes, data_page_id);
 }
 
 std::tuple<ColumnFilePersistedPtr, BlockPtr> ColumnFileTiny::createFromCheckpoint(
-    const LoggerPtr & parent_log,
     const DMContext & context,
     ReadBuffer & buf,
     UniversalPageStoragePtr temp_ps,
@@ -286,34 +200,31 @@ std::tuple<ColumnFilePersistedPtr, BlockPtr> ColumnFileTiny::createFromCheckpoin
     readIntBinary(data_page_id, buf);
     readIntBinary(rows, buf);
     readIntBinary(bytes, buf);
+    auto new_cf_id = context.storage_pool->newLogPageId();
+    auto remote_page_id = UniversalPageIdFormat::toFullPageId(
+        UniversalPageIdFormat::toFullPrefix(context.keyspace_id, StorageType::Log, context.physical_table_id),
+        data_page_id);
+    // The `data_file_id` in temp_ps is lock key, we need convert it to data key before write to local ps
+    auto remote_data_location = temp_ps->getCheckpointLocation(remote_page_id);
+    RUNTIME_CHECK(remote_data_location.has_value());
+    auto remote_data_file_lock_key_view = S3::S3FilenameView::fromKey(*remote_data_location->data_file_id);
+    RUNTIME_CHECK(remote_data_file_lock_key_view.isLockFile());
+    auto remote_data_file_key = remote_data_file_lock_key_view.asDataFile().toFullKey();
+    PS::V3::CheckpointLocation new_remote_data_location{
+        .data_file_id = std::make_shared<String>(remote_data_file_key),
+        .offset_in_file = remote_data_location->offset_in_file,
+        .size_in_file = remote_data_location->size_in_file};
+    auto entry = temp_ps->getEntry(remote_page_id);
+    LOG_DEBUG(
+        Logger::get(),
+        "Write remote page[page_id={} remote_location={}] using local page id {}",
+        remote_page_id,
+        new_remote_data_location.toDebugString(),
+        new_cf_id);
+    wbs.log.putRemotePage(new_cf_id, 0, entry.size, new_remote_data_location, std::move(entry.field_offsets));
 
-    return {
-        restoreFromCheckpoint(parent_log, context, temp_ps, wbs, schema, data_page_id, rows, bytes),
-        schema,
-    };
-}
-
-std::tuple<ColumnFilePersistedPtr, BlockPtr> ColumnFileTiny::createFromCheckpoint(
-    const LoggerPtr & parent_log,
-    const DMContext & context,
-    const dtpb::ColumnFileTiny & cf_pb,
-    UniversalPageStoragePtr temp_ps,
-    const BlockPtr & last_schema,
-    WriteBatches & wbs)
-{
-    auto schema = deserializeSchema(cf_pb.columns());
-    if (!schema)
-        schema = last_schema;
-    RUNTIME_CHECK(schema != nullptr);
-
-    PageIdU64 data_page_id = cf_pb.id();
-    size_t rows = cf_pb.rows();
-    size_t bytes = cf_pb.bytes();
-
-    return {
-        restoreFromCheckpoint(parent_log, context, temp_ps, wbs, schema, data_page_id, rows, bytes),
-        schema,
-    };
+    auto column_file_schema = std::make_shared<ColumnFileSchema>(*schema);
+    return {std::make_shared<ColumnFileTiny>(column_file_schema, rows, bytes, new_cf_id), std::move(schema)};
 }
 
 Block ColumnFileTiny::readBlockForMinorCompaction(const PageReader & page_reader) const
@@ -362,17 +273,17 @@ ColumnFileTinyPtr ColumnFileTiny::writeColumnFile(
     auto schema = getSharedBlockSchemas(context)->getOrCreate(block);
 
     auto bytes = block.bytes(offset, limit);
-    return std::make_shared<ColumnFileTiny>(schema, limit, bytes, page_id, context, cache);
+    return std::make_shared<ColumnFileTiny>(schema, limit, bytes, page_id, cache);
 }
 
 PageIdU64 ColumnFileTiny::writeColumnFileData(
-    const DMContext & dm_context,
+    const DMContext & context,
     const Block & block,
     size_t offset,
     size_t limit,
     WriteBatches & wbs)
 {
-    auto page_id = dm_context.storage_pool->newLogPageId();
+    auto page_id = context.storage_pool->newLogPageId();
 
     MemoryWriteBuffer write_buf;
     PageFieldSizes col_data_sizes;
@@ -385,8 +296,8 @@ PageIdU64 ColumnFileTiny::writeColumnFileData(
             col.type,
             offset,
             limit,
-            dm_context.global_context.getSettingsRef().dt_compression_method,
-            dm_context.global_context.getSettingsRef().dt_compression_level);
+            context.db_context.getSettingsRef().dt_compression_method,
+            context.db_context.getSettingsRef().dt_compression_level);
         size_t serialized_size = write_buf.count() - last_buf_size;
         RUNTIME_CHECK_MSG(
             serialized_size != 0,
@@ -399,22 +310,6 @@ PageIdU64 ColumnFileTiny::writeColumnFileData(
 
     auto data_size = write_buf.count();
     auto buf = write_buf.tryGetReadBuffer();
-    if (const auto & file_provider = dm_context.global_context.getFileProvider();
-        unlikely(file_provider->isEncryptionEnabled(dm_context.keyspace_id)))
-    {
-        if (const auto ep = EncryptionPath("", "", dm_context.keyspace_id);
-            unlikely(!file_provider->isFileEncrypted(ep)))
-        {
-            file_provider->createEncryptionInfo(ep);
-        }
-
-        char page_data[data_size];
-        buf->readStrict(page_data, data_size);
-        // encrypt the page data in place
-        file_provider->encryptPage(dm_context.keyspace_id, page_data, data_size, page_id);
-        // ReadBufferFromOwnString will copy the data, and own the data.
-        buf = std::make_shared<ReadBufferFromOwnString>(std::string_view(page_data, data_size));
-    }
     wbs.log.putPage(page_id, 0, buf, data_size, col_data_sizes);
 
     return page_id;
@@ -476,22 +371,6 @@ ColumnFileReaderPtr ColumnFileTinyReader::createNewReader(const ColumnDefinesPtr
     // Reuse the cache data.
     return std::make_shared<ColumnFileTinyReader>(tiny_file, data_provider, new_col_defs, cols_data_cache);
 }
-
-ColumnFileTiny::ColumnFileTiny(
-    const ColumnFileSchemaPtr & schema_,
-    UInt64 rows_,
-    UInt64 bytes_,
-    PageIdU64 data_page_id_,
-    const DMContext & dm_context,
-    const CachePtr & cache_)
-    : schema(schema_)
-    , rows(rows_)
-    , bytes(bytes_)
-    , data_page_id(data_page_id_)
-    , keyspace_id(dm_context.keyspace_id)
-    , file_provider(dm_context.global_context.getFileProvider())
-    , cache(cache_)
-{}
 
 } // namespace DM
 } // namespace DB

@@ -99,24 +99,16 @@ void restoreConcurrency(
 {
     if (concurrency > 1 && group_builder.concurrency() == 1)
     {
-        // Doesn't use `auto [shared_queue_sink_holder, shared_queue_source_holder]` just to make c++ compiler happy.
-        SharedQueueSinkHolderPtr shared_queue_sink_holder;
-        SharedQueueSourceHolderPtr shared_queue_source_holder;
-        std::tie(shared_queue_sink_holder, shared_queue_source_holder)
-            = SharedQueue::build(exec_context, 1, concurrency, max_buffered_bytes);
+        auto shared_queue = SharedQueue::build(1, concurrency, max_buffered_bytes);
         // sink op of builder must be empty.
         group_builder.transform([&](auto & builder) {
-            builder.setSinkOp(
-                std::make_unique<SharedQueueSinkOp>(exec_context, log->identifier(), shared_queue_sink_holder));
+            builder.setSinkOp(std::make_unique<SharedQueueSinkOp>(exec_context, log->identifier(), shared_queue));
         });
         auto cur_header = group_builder.getCurrentHeader();
         group_builder.addGroup();
         for (size_t i = 0; i < concurrency; ++i)
-            group_builder.addConcurrency(std::make_unique<SharedQueueSourceOp>(
-                exec_context,
-                log->identifier(),
-                cur_header,
-                shared_queue_source_holder));
+            group_builder.addConcurrency(
+                std::make_unique<SharedQueueSourceOp>(exec_context, log->identifier(), cur_header, shared_queue));
     }
 }
 
@@ -128,22 +120,14 @@ void executeUnion(
 {
     if (group_builder.concurrency() > 1)
     {
-        // Doesn't use `auto [shared_queue_sink_holder, shared_queue_source_holder]` just to make c++ compiler happy.
-        SharedQueueSinkHolderPtr shared_queue_sink_holder;
-        SharedQueueSourceHolderPtr shared_queue_source_holder;
-        std::tie(shared_queue_sink_holder, shared_queue_source_holder)
-            = SharedQueue::build(exec_context, group_builder.concurrency(), 1, max_buffered_bytes);
+        auto shared_queue = SharedQueue::build(group_builder.concurrency(), 1, max_buffered_bytes);
         group_builder.transform([&](auto & builder) {
-            builder.setSinkOp(
-                std::make_unique<SharedQueueSinkOp>(exec_context, log->identifier(), shared_queue_sink_holder));
+            builder.setSinkOp(std::make_unique<SharedQueueSinkOp>(exec_context, log->identifier(), shared_queue));
         });
         auto cur_header = group_builder.getCurrentHeader();
         group_builder.addGroup();
-        group_builder.addConcurrency(std::make_unique<SharedQueueSourceOp>(
-            exec_context,
-            log->identifier(),
-            cur_header,
-            shared_queue_source_holder));
+        group_builder.addConcurrency(
+            std::make_unique<SharedQueueSourceOp>(exec_context, log->identifier(), cur_header, shared_queue));
     }
 }
 
@@ -223,7 +207,7 @@ void orderStreams(
                 getAverageThreshold(settings.max_bytes_before_external_sort, pipeline.streams.size()),
                 SpillConfig(
                     context.getTemporaryPath(),
-                    log->identifier(),
+                    fmt::format("{}_sort", log->identifier()),
                     settings.max_cached_data_bytes_in_spiller,
                     settings.max_spilled_rows_per_file,
                     settings.max_spilled_bytes_per_file,
@@ -255,7 +239,7 @@ void orderStreams(
             // todo use identifier_executor_id as the spill id
             SpillConfig(
                 context.getTemporaryPath(),
-                log->identifier(),
+                fmt::format("{}_sort", log->identifier()),
                 settings.max_cached_data_bytes_in_spiller,
                 settings.max_spilled_rows_per_file,
                 settings.max_spilled_bytes_per_file,
@@ -311,7 +295,7 @@ void executeLocalSort(
             fine_grained_spill_context = std::make_shared<FineGrainedOperatorSpillContext>("sort", log);
         SpillConfig spill_config{
             context.getTemporaryPath(),
-            log->identifier(),
+            fmt::format("{}_sort", log->identifier()),
             settings.max_cached_data_bytes_in_spiller,
             settings.max_spilled_rows_per_file,
             settings.max_spilled_bytes_per_file,
@@ -369,7 +353,7 @@ void executeFinalSort(
 
         SpillConfig spill_config{
             context.getTemporaryPath(),
-            log->identifier(),
+            fmt::format("{}_sort", log->identifier()),
             settings.max_cached_data_bytes_in_spiller,
             settings.max_spilled_rows_per_file,
             settings.max_spilled_bytes_per_file,
@@ -436,6 +420,31 @@ void executeCreatingSets(DAGPipeline & pipeline, const Context & context, size_t
     }
 }
 
+std::tuple<ExpressionActionsPtr, String, ExpressionActionsPtr> buildPushDownFilter(
+    const google::protobuf::RepeatedPtrField<tipb::Expr> & conditions,
+    DAGExpressionAnalyzer & analyzer)
+{
+    assert(!conditions.empty());
+
+    ExpressionActionsChain chain;
+    analyzer.initChain(chain);
+    String filter_column_name = analyzer.appendWhere(chain, conditions);
+    ExpressionActionsPtr before_where = chain.getLastActions();
+    chain.addStep();
+
+    // remove useless tmp column and keep the schema of local streams and remote streams the same.
+    for (const auto & col : analyzer.getCurrentInputColumns())
+    {
+        chain.getLastStep().required_output.push_back(col.name);
+    }
+    ExpressionActionsPtr project_after_where = chain.getLastActions();
+    chain.finalize();
+    chain.clear();
+
+    RUNTIME_CHECK(!project_after_where->getActions().empty());
+    return {before_where, filter_column_name, project_after_where};
+}
+
 void executePushedDownFilter(
     const FilterConditions & filter_conditions,
     DAGExpressionAnalyzer & analyzer,
@@ -443,7 +452,7 @@ void executePushedDownFilter(
     DAGPipeline & pipeline)
 {
     auto [before_where, filter_column_name, project_after_where]
-        = analyzer.buildPushDownFilter(filter_conditions.conditions);
+        = ::DB::buildPushDownFilter(filter_conditions.conditions, analyzer);
 
     for (auto & stream : pipeline.streams)
     {
@@ -464,7 +473,7 @@ void executePushedDownFilter(
     LoggerPtr log)
 {
     auto [before_where, filter_column_name, project_after_where]
-        = analyzer.buildPushDownFilter(filter_conditions.conditions);
+        = ::DB::buildPushDownFilter(filter_conditions.conditions, analyzer);
 
     auto input_header = group_builder.getCurrentHeader();
     for (size_t i = 0; i < group_builder.concurrency(); ++i)

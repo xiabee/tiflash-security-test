@@ -16,6 +16,7 @@
 
 #include <Columns/IColumn.h>
 #include <Interpreters/Set.h>
+#include <Storages/DeltaMerge/ColumnDefine_fwd.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Filter/RSOperator.h>
 #include <tipb/executor.pb.h>
@@ -77,8 +78,8 @@ public:
 
     bool await(int64_t ms_remaining);
 
-    void setTargetAttr(const TiDB::ColumnInfos & scan_column_infos, const DM::ColumnDefines & table_column_defines);
-    DM::RSOperatorPtr parseToRSOperator() const;
+    void setTargetAttr(const DM::ColumnInfos & scan_column_infos, const DM::ColumnDefines & table_column_defines);
+    DM::RSOperatorPtr parseToRSOperator();
 
     const int id;
 

@@ -20,7 +20,6 @@
 #include <Flash/Pipeline/Schedule/Tasks/Task.h>
 #include <Flash/Pipeline/Schedule/ThreadPool/TaskThreadPoolMetrics.h>
 
-#include <magic_enum.hpp>
 #include <thread>
 #include <vector>
 
@@ -42,11 +41,6 @@ struct ThreadPoolConfig
 
     size_t pool_size;
     TaskQueueType queue_type = TaskQueueType::DEFAULT;
-
-    String toString() const
-    {
-        return fmt::format("[pool_size: {}, queue_type: {}]", pool_size, magic_enum::enum_name(queue_type));
-    }
 };
 
 template <typename Impl>

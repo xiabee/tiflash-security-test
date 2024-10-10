@@ -13,14 +13,13 @@
 // limitations under the License.
 
 #include <Columns/ColumnArray.h>
-#include <Common/Exception.h>
 #include <Common/typeid_cast.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypesNumber.h>
-#include <IO/Buffer/ReadBufferFromString.h>
-#include <IO/Buffer/WriteBufferFromString.h>
+#include <IO/ReadBufferFromString.h>
 #include <IO/ReadHelpers.h>
+#include <IO/WriteBufferFromString.h>
 #include <IO/WriteHelpers.h>
 #include <Parsers/IAST.h>
 
@@ -42,11 +41,11 @@ DataTypeArray::DataTypeArray(const DataTypePtr & nested_)
 
 void DataTypeArray::serializeBinary(const Field & field, WriteBuffer & ostr) const
 {
-    const auto & a = get<const Array &>(field);
+    const Array & a = get<const Array &>(field);
     writeVarUInt(a.size(), ostr);
-    for (const auto & i : a)
+    for (size_t i = 0; i < a.size(); ++i)
     {
-        nested->serializeBinary(i, ostr);
+        nested->serializeBinary(a[i], ostr);
     }
 }
 
@@ -56,7 +55,7 @@ void DataTypeArray::deserializeBinary(Field & field, ReadBuffer & istr) const
     size_t size;
     readVarUInt(size, istr);
     field = Array(size);
-    auto & arr = get<Array &>(field);
+    Array & arr = get<Array &>(field);
     for (size_t i = 0; i < size; ++i)
         nested->deserializeBinary(arr[i], istr);
 }
@@ -64,7 +63,7 @@ void DataTypeArray::deserializeBinary(Field & field, ReadBuffer & istr) const
 
 void DataTypeArray::serializeBinary(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & column_array = static_cast<const ColumnArray &>(column);
+    const ColumnArray & column_array = static_cast<const ColumnArray &>(column);
     const ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     size_t offset = row_num == 0 ? 0 : offsets[row_num - 1];
@@ -81,7 +80,7 @@ void DataTypeArray::serializeBinary(const IColumn & column, size_t row_num, Writ
 
 void DataTypeArray::deserializeBinary(IColumn & column, ReadBuffer & istr) const
 {
-    auto & column_array = static_cast<ColumnArray &>(column);
+    ColumnArray & column_array = static_cast<ColumnArray &>(column);
     ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     size_t size;
@@ -112,12 +111,13 @@ void serializeArraySizesPositionIndependent(const IColumn & column, WriteBuffer 
 {
     const ColumnArray & column_array = typeid_cast<const ColumnArray &>(column);
     const ColumnArray::Offsets & offset_values = column_array.getOffsets();
-
     size_t size = offset_values.size();
-    if (size == 0)
+
+    if (!size)
         return;
 
     size_t end = limit && (offset + limit < size) ? offset + limit : size;
+
     ColumnArray::Offset prev_offset = offset == 0 ? 0 : offset_values[offset - 1];
     for (size_t i = offset; i < end; ++i)
     {
@@ -171,14 +171,8 @@ void DataTypeArray::serializeBinaryBulkWithMultipleStreams(
 
     /// First serialize array sizes.
     path.push_back(Substream::ArraySizes);
-    if (auto * stream = getter(path))
+    if (auto stream = getter(path))
     {
-        // `position_independent_encoding == false` indicates that the `column_array.offsets`
-        // is serialized as is, which can provide better performance but only supports
-        // deserialization into an empty column. Conversely, when `position_independent_encoding == true`,
-        // the `column_array.offsets` is encoded into a format that supports deserializing
-        // and appending data into a column containing existing data.
-        // If you are unsure, set position_independent_encoding to true.
         if (position_independent_encoding)
             serializeArraySizesPositionIndependent(column, *stream, offset, limit);
         else
@@ -228,25 +222,13 @@ void DataTypeArray::deserializeBinaryBulkWithMultipleStreams(
     ColumnArray & column_array = typeid_cast<ColumnArray &>(column);
 
     path.push_back(Substream::ArraySizes);
-    if (auto * stream = getter(path))
+    if (auto stream = getter(path))
     {
-        // `position_independent_encoding == false` indicates that the `column_array.offsets`
-        // is serialized as is, which can provide better performance but only supports
-        // deserialization into an empty column. Conversely, when `position_independent_encoding == true`,
-        // the `column_array.offsets` is encoded into a format that supports deserializing
-        // and appending data into a column containing existing data.
-        // If you are unsure, set position_independent_encoding to true.
         if (position_independent_encoding)
             deserializeArraySizesPositionIndependent(column, *stream, limit);
         else
-        {
-            RUNTIME_CHECK_MSG(
-                column_array.getOffsetsColumn().empty(),
-                "try to deserialize Array type to non-empty column without position idenpendent encoding, type_name={}",
-                getName());
             DataTypeNumber<ColumnArray::Offset>()
                 .deserializeBinaryBulk(column_array.getOffsetsColumn(), *stream, limit, 0);
-        }
     }
 
     path.back() = Substream::ArrayElements;
@@ -255,13 +237,9 @@ void DataTypeArray::deserializeBinaryBulkWithMultipleStreams(
     IColumn & nested_column = column_array.getData();
 
     /// Number of values corresponding with `offset_values` must be read.
-    const size_t last_offset = (offset_values.empty() ? 0 : offset_values.back());
+    size_t last_offset = (offset_values.empty() ? 0 : offset_values.back());
     if (last_offset < nested_column.size())
-        throw Exception(
-            ErrorCodes::LOGICAL_ERROR,
-            "Nested column is longer than last offset, last_offset={} nest_column_size={}",
-            last_offset,
-            nested_column.size());
+        throw Exception("Nested column is longer than last offset", ErrorCodes::LOGICAL_ERROR);
     size_t nested_limit = last_offset - nested_column.size();
     nested->deserializeBinaryBulkWithMultipleStreams(
         nested_column,
@@ -275,17 +253,16 @@ void DataTypeArray::deserializeBinaryBulkWithMultipleStreams(
     /// But if elements column is empty - it's ok for columns of Nested types that was added by ALTER.
     if (!nested_column.empty() && nested_column.size() != last_offset)
         throw Exception(
-            ErrorCodes::CANNOT_READ_ALL_DATA,
-            "Cannot read all array values: read just {} of {}",
-            nested_column.size(),
-            last_offset);
+            "Cannot read all array values: read just " + toString(nested_column.size()) + " of "
+                + toString(last_offset),
+            ErrorCodes::CANNOT_READ_ALL_DATA);
 }
 
 
 template <typename Writer>
 static void serializeTextImpl(const IColumn & column, size_t row_num, WriteBuffer & ostr, Writer && write_nested)
 {
-    const auto & column_array = static_cast<const ColumnArray &>(column);
+    const ColumnArray & column_array = static_cast<const ColumnArray &>(column);
     const ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     size_t offset = row_num == 0 ? 0 : offsets[row_num - 1];
@@ -307,7 +284,7 @@ static void serializeTextImpl(const IColumn & column, size_t row_num, WriteBuffe
 template <typename Reader>
 static void deserializeTextImpl(IColumn & column, ReadBuffer & istr, Reader && read_nested)
 {
-    auto & column_array = static_cast<ColumnArray &>(column);
+    ColumnArray & column_array = static_cast<ColumnArray &>(column);
     ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     IColumn & nested_column = column_array.getData();
@@ -399,7 +376,7 @@ void DataTypeArray::serializeTextJSON(
     WriteBuffer & ostr,
     const FormatSettingsJSON & settings) const
 {
-    const auto & column_array = static_cast<const ColumnArray &>(column);
+    const ColumnArray & column_array = static_cast<const ColumnArray &>(column);
     const ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     size_t offset = row_num == 0 ? 0 : offsets[row_num - 1];
@@ -428,7 +405,7 @@ void DataTypeArray::deserializeTextJSON(IColumn & column, ReadBuffer & istr) con
 
 void DataTypeArray::serializeTextXML(const IColumn & column, size_t row_num, WriteBuffer & ostr) const
 {
-    const auto & column_array = static_cast<const ColumnArray &>(column);
+    const ColumnArray & column_array = static_cast<const ColumnArray &>(column);
     const ColumnArray::Offsets & offsets = column_array.getOffsets();
 
     size_t offset = row_num == 0 ? 0 : offsets[row_num - 1];

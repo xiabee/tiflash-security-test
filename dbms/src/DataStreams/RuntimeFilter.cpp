@@ -75,7 +75,7 @@ void RuntimeFilter::build()
         throw TiFlashException(
             Errors::Coprocessor::BadRequest,
             "The source expr {} of rf {} should be column ref",
-            tipb::ExprType_Name(source_expr.tp()),
+            source_expr.tp(),
             id);
     }
 }
@@ -207,13 +207,13 @@ bool RuntimeFilter::updateStatus(RuntimeFilterStatus status_, const std::string 
 }
 
 void RuntimeFilter::setTargetAttr(
-    const TiDB::ColumnInfos & scan_column_infos,
+    const DM::ColumnInfos & scan_column_infos,
     const DM::ColumnDefines & table_column_defines)
 {
     target_attr = DM::FilterParser::createAttr(target_expr, scan_column_infos, table_column_defines);
 }
 
-DM::RSOperatorPtr RuntimeFilter::parseToRSOperator() const
+DM::RSOperatorPtr RuntimeFilter::parseToRSOperator()
 {
     switch (rf_type)
     {

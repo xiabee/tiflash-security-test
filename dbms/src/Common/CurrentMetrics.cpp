@@ -22,7 +22,6 @@
     M(OpenFileForReadWrite)                     \
     M(MemoryTracking)                           \
     M(MemoryTrackingInBackgroundProcessingPool) \
-    M(MemoryTrackingKVStore)                    \
     M(LogicalCPUCores)                          \
     M(MemoryCapacity)                           \
     M(PSMVCCNumSnapshots)                       \
@@ -49,15 +48,12 @@
     M(DT_DeltaIndexCacheSize)                   \
     M(RaftNumSnapshotsPendingApply)             \
     M(RaftNumPrehandlingSubTasks)               \
-    M(RaftNumParallelPrehandlingTasks)          \
-    M(RaftNumWaitedParallelPrehandlingTasks)    \
     M(RateLimiterPendingWriteRequest)           \
     M(DT_SegmentReadTasks)                      \
     M(DT_SnapshotOfRead)                        \
     M(DT_SnapshotOfReadRaw)                     \
     M(DT_SnapshotOfSegmentSplit)                \
     M(DT_SnapshotOfSegmentMerge)                \
-    M(DT_SnapshotOfSegmentIngestIndex)          \
     M(DT_SnapshotOfSegmentIngest)               \
     M(DT_SnapshotOfDeltaMerge)                  \
     M(DT_SnapshotOfDeltaCompact)                \

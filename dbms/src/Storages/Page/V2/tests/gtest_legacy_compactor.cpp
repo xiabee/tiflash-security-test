@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <Common/CurrentMetrics.h>
-#include <IO/Buffer/ReadBufferFromMemory.h>
+#include <IO/ReadBufferFromMemory.h>
 #include <Interpreters/Context.h>
 #include <Poco/AutoPtr.h>
 #include <Poco/ConsoleChannel.h>
@@ -37,7 +37,7 @@ TEST(LegacyCompactorTest, WriteMultipleBatchRead)
 try
 {
     PageStorageConfig config;
-    auto log = Logger::get("LegacyCompactor_test");
+    Poco::Logger * log = &Poco::Logger::get("LegacyCompactor_test");
 
     PageEntriesVersionSetWithDelta original_version("test", config.version_set_config, log);
 
@@ -174,8 +174,7 @@ try
     const FileProviderPtr file_provider = ctx->getFileProvider();
     StoragePathPool spool = ctx->getPathPool().withTable("test", "t", false);
     auto delegator = spool.getPSDiskDelegatorSingle("meta");
-    auto bkg_pool
-        = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-", std::make_shared<JointThreadInfoJeallocMap>());
+    auto bkg_pool = std::make_shared<DB::BackgroundProcessingPool>(4, "bg-page-");
     PageStorage storage("compact_test", delegator, PageStorageConfig{}, file_provider, *bkg_pool);
 
     PageStorage::ListPageFilesOption opt;

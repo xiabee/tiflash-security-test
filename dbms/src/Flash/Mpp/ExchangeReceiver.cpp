@@ -173,7 +173,7 @@ public:
                 LOG_WARNING(
                     log,
                     "Finish fail. err code: {}, err msg: {}, retry time {}",
-                    magic_enum::enum_name(finish_status.error_code()),
+                    finish_status.error_code(),
                     finish_status.error_message(),
                     retry_times);
                 retryOrDone(fmt::format("Exchange receiver meet error : {}", finish_status.error_message()));
@@ -318,11 +318,12 @@ ExchangeReceiverBase<RPCContext>::ExchangeReceiverBase(
     const String & req_id,
     const String & executor_id,
     uint64_t fine_grained_shuffle_stream_count_,
-    const Settings & settings)
+    const Settings & settings,
+    const std::vector<RequestAndRegionIDs> & disaggregated_dispatch_reqs_)
     : exc_log(Logger::get(req_id, executor_id))
     , rpc_context(std::move(rpc_context_))
     , source_num(source_num_)
-    , enable_fine_grained_shuffle_flag(fineGrainedShuffleEnabled(fine_grained_shuffle_stream_count_))
+    , enable_fine_grained_shuffle_flag(enableFineGrainedShuffle(fine_grained_shuffle_stream_count_))
     , output_stream_count(
           enable_fine_grained_shuffle_flag ? std::min(max_streams_, fine_grained_shuffle_stream_count_) : max_streams_)
     , max_buffer_size(getMaxBufferSize(source_num, settings.recv_queue_size))
@@ -341,9 +342,13 @@ ExchangeReceiverBase<RPCContext>::ExchangeReceiverBase(
     , local_tunnel_version(settings.local_tunnel_version)
     , async_recv_version(settings.async_recv_version)
     , data_size_in_queue(0)
+    , disaggregated_dispatch_reqs(disaggregated_dispatch_reqs_)
 {
     try
     {
+        if (isReceiverForTiFlashStorage())
+            rpc_context->sendMPPTaskToTiFlashStorageNode(exc_log, disaggregated_dispatch_reqs);
+
         rpc_context->fillSchema(schema);
         setUpConnection();
     }
@@ -439,7 +444,11 @@ void ExchangeReceiverBase<RPCContext>::waitAsyncConnectionDone()
 template <typename RPCContext>
 void ExchangeReceiverBase<RPCContext>::cancel()
 {
-    setEndState(ExchangeReceiverState::CANCELED);
+    if (setEndState(ExchangeReceiverState::CANCELED))
+    {
+        if (isReceiverForTiFlashStorage())
+            rpc_context->cancelMPPTaskOnTiFlashStorageNode(exc_log);
+    }
     cancelReceivedQueue();
 }
 
@@ -681,7 +690,7 @@ void ExchangeReceiverBase<RPCContext>::readLoop(const Request & req)
                 LOG_WARNING(
                     log,
                     "EstablishMPPConnectionRequest meets rpc fail. Err code = {}, err msg = {}, retriable = {}",
-                    magic_enum::enum_name(status.error_code()),
+                    status.error_code(),
                     status.error_message(),
                     retriable);
                 // if we have received some data, we should not retry.

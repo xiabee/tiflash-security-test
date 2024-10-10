@@ -14,8 +14,8 @@
 
 #include <Common/Logger.h>
 #include <Core/TaskOperatorSpillContexts.h>
-#include <IO/Encryption/MockKeyManager.h>
-#include <IO/FileProvider/FileProvider.h>
+#include <Encryption/FileProvider.h>
+#include <Encryption/MockKeyManager.h>
 #include <Interpreters/AggSpillContext.h>
 #include <Interpreters/HashJoinSpillContext.h>
 #include <Interpreters/SortSpillContext.h>

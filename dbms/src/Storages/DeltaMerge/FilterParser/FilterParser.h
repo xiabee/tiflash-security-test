@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <Interpreters/Set.h>
 #include <Storages/DeltaMerge/DeltaMergeDefines.h>
 #include <Storages/DeltaMerge/Index/RSResult.h>
 #include <Storages/KVStore/Types.h>
@@ -21,11 +22,14 @@
 #include <tipb/expression.pb.h>
 
 #include <functional>
+#include <memory>
 #include <unordered_map>
 
 
 namespace DB
 {
+class ASTSelectQuery;
+
 struct DAGQueryInfo;
 
 namespace DM
@@ -41,7 +45,7 @@ public:
     using AttrCreatorByColumnID = std::function<Attr(const DB::ColumnID)>;
     static RSOperatorPtr parseDAGQuery(
         const DAGQueryInfo & dag_info,
-        const TiDB::ColumnInfos & scan_column_infos,
+        const ColumnInfos & scan_column_infos,
         AttrCreatorByColumnID && creator,
         const LoggerPtr & log);
 
@@ -55,7 +59,7 @@ public:
 
     static std::optional<Attr> createAttr(
         const tipb::Expr & expr,
-        const TiDB::ColumnInfos & scan_column_infos,
+        const ColumnInfos & scan_column_infos,
         const ColumnDefines & table_column_defines);
 
     static bool isRSFilterSupportType(Int32 field_type);
@@ -79,10 +83,10 @@ public:
         LessEqual,
 
         In,
-        // NotIn, TiDB will convert it to Not(In）
+        NotIn,
 
         Like,
-        // NotLike, TiDB will convert it to Not(Like)
+        NotLike,
 
         IsNull,
     };

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <Flash/Executor/ResultHandler.h>
-#include <Flash/Executor/ResultQueue_fwd.h>
+#include <Flash/Executor/ResultQueue.h>
 #include <Flash/Pipeline/Exec/PipelineExec.h>
 
 #include <deque>
@@ -73,6 +73,8 @@ public:
     PipelineExecGroup buildExecGroup(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
 
     Events toEvents(PipelineExecutorContext & exec_context, Context & context, size_t concurrency);
+
+    static bool isSupported(const tipb::DAGRequest & dag_request, const Settings & settings);
 
     Block getSampleBlock() const;
 

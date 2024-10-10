@@ -16,7 +16,6 @@
 
 #include <Interpreters/Context_fwd.h>
 #include <Poco/Util/AbstractConfiguration.h>
-#include <Server/RaftConfigParser.h>
 #include <Storages/GCManager.h>
 #include <Storages/KVStore/Decode/RegionTable.h>
 #include <Storages/KVStore/StorageEngineType.h>
@@ -42,8 +41,6 @@ class GCManager;
 using GCManagerPtr = std::shared_ptr<GCManager>;
 
 struct TiFlashRaftConfig;
-
-struct TiFlashRaftProxyHelper;
 
 // We define a shared ptr here, because TMTContext / SchemaSyncer / IndexReader all need to
 // `share` the resource of cluster.
@@ -81,7 +78,7 @@ public:
 public:
     const KVStorePtr & getKVStore() const;
     KVStorePtr & getKVStore();
-    void debugSetKVStore(const KVStorePtr &);
+    void debugSetKVStore(const KVStorePtr & new_kvstore) { kvstore = new_kvstore; }
 
     const ManagedStorages & getStorages() const;
     ManagedStorages & getStorages();
@@ -126,6 +123,8 @@ public:
 
     const std::unordered_set<std::string> & getIgnoreDatabases() const;
 
+    ::TiDB::StorageEngine getEngineType() const { return engine; }
+
     void reloadConfig(const Poco::Util::AbstractConfiguration & config);
 
     bool isInitialized() const;
@@ -145,7 +144,6 @@ public:
     uint64_t readIndexWorkerTick() const;
 
     Etcd::ClientPtr getEtcdClient() const { return etcd_client; }
-    void initS3GCManager(const TiFlashRaftProxyHelper * proxy_helper);
 
 private:
     Context & context;
@@ -170,12 +168,12 @@ private:
     std::shared_ptr<TiDBSchemaSyncerManager> schema_sync_manager;
     MPPTaskManagerPtr mpp_task_manager;
 
+    ::TiDB::StorageEngine engine;
+
     std::atomic_uint64_t batch_read_index_timeout_ms;
     std::atomic_uint64_t wait_index_timeout_ms;
     std::atomic_uint64_t read_index_worker_tick_ms;
     std::atomic_int64_t wait_region_ready_timeout_sec;
-
-    TiFlashRaftConfig raftproxy_config;
 };
 
 const std::string & IntoStoreStatusName(TMTContext::StoreStatus status);

@@ -16,25 +16,11 @@
 #include <Storages/KVStore/MultiRaft/RegionsRangeIndex.h>
 #include <Storages/KVStore/tests/kvstore_helper.h>
 
-#include <regex>
-
 
 namespace DB::tests
 {
 
-class RegionKVStoreOldTest : public KVStoreTestBase
-{
-public:
-    void testRaftMerge(Context & ctx, KVStore & kvs, TMTContext & tmt);
-    static void testRaftMergeRollback(KVStore & kvs, TMTContext & tmt);
-    RegionKVStoreOldTest()
-    {
-        log = DB::Logger::get("RegionKVStoreOldTest");
-        test_path = TiFlashTestEnv::getTemporaryPath("/region_kvs_old_test");
-    }
-};
-
-TEST_F(RegionKVStoreOldTest, PersistenceV1)
+TEST_F(RegionKVStoreTest, PersistenceV1)
 try
 {
     auto ctx = TiFlashTestEnv::getGlobalContext();
@@ -68,15 +54,16 @@ try
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, ReadIndex)
+TEST_F(RegionKVStoreTest, ReadIndex)
 {
+    auto log = Logger::get();
+
     createDefaultRegions();
     auto ctx = TiFlashTestEnv::getGlobalContext();
-    auto log = Logger::get();
 
     // Start mock proxy in other thread
     std::atomic_bool over{false};
-    auto proxy_runner = std::thread([&]() { proxy_instance->testRunReadIndex(over); });
+    auto proxy_runner = std::thread([&]() { proxy_instance->testRunNormal(over); });
     KVStore & kvs = getKVS();
     ASSERT_EQ(kvs.getProxyHelper(), proxy_helper.get());
 
@@ -133,7 +120,7 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
             const std::atomic_size_t terminate_signals_counter{};
             std::thread t([&]() {
                 notifier.wake();
-                WaitCheckRegionReadyImpl(ctx.getTMTContext(), kvs, terminate_signals_counter, 1 / 1000.0, 20, 20 * 60);
+                WaitCheckRegionReady(ctx.getTMTContext(), kvs, terminate_signals_counter, 1 / 1000.0, 20, 20 * 60);
             });
             SCOPE_EXIT({
                 t.join();
@@ -153,7 +140,7 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
             {
                 ASSERT_EQ(proxy_instance->regions.at(tar_region_id)->getLatestCommitIndex(), 66);
                 proxy_instance->unsafeInvokeForTest([&](MockRaftStoreProxy & p) {
-                    p.mock_read_index.region_id_to_error.emplace(tar_region_id);
+                    p.region_id_to_error.emplace(tar_region_id);
                     p.regions.at(2)->updateCommitIndex(6);
                 });
             }
@@ -162,7 +149,7 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
             const std::atomic_size_t terminate_signals_counter{};
             std::thread t([&]() {
                 notifier.wake();
-                WaitCheckRegionReadyImpl(
+                WaitCheckRegionReady(
                     ctx.getTMTContext(),
                     kvs,
                     terminate_signals_counter,
@@ -184,9 +171,7 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
             auto region = kvs.getRegion(1);
             auto req = GenRegionReadIndexReq(*region, 8); // start_ts = 8
             auto resp = kvs.batchReadIndex({req}, 100);
-            auto proxy_region = proxy_instance->getRegion(1);
-            ASSERT_EQ(resp[0].first.read_index(), proxy_region->getLatestCommitIndex());
-            ASSERT_EQ(5, proxy_region->getLatestCommitIndex());
+            ASSERT_EQ(resp[0].first.read_index(), 5);
             {
                 auto r = region->waitIndex(
                     5,
@@ -218,13 +203,6 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
         {
             auto region = kvs.getRegion(1);
             auto req = GenRegionReadIndexReq(*region, 10);
-            auto resp = kvs.batchReadIndex({req}, 100);
-            ASSERT_EQ(resp[0].first.read_index(), 667);
-        }
-        {
-            // Found updated value in `history_success_tasks`
-            auto region = kvs.getRegion(1);
-            auto req = GenRegionReadIndexReq(*region, 8);
             auto resp = kvs.batchReadIndex({req}, 100);
             ASSERT_EQ(resp[0].first.read_index(), 667);
         }
@@ -265,13 +243,13 @@ TEST_F(RegionKVStoreOldTest, ReadIndex)
     kvs.stopReadIndexWorkers();
     kvs.releaseReadIndexWorkers();
     over = true;
-    proxy_instance->mock_read_index.wakeNotifier();
+    proxy_instance->wakeNotifier();
     proxy_runner.join();
     ASSERT(GCMonitor::instance().checkClean());
     ASSERT(!GCMonitor::instance().empty());
 }
 
-void RegionKVStoreOldTest::testRaftMergeRollback(KVStore & kvs, TMTContext & tmt)
+void RegionKVStoreTest::testRaftMergeRollback(KVStore & kvs, TMTContext & tmt)
 {
     uint64_t region_id = 7;
     {
@@ -355,7 +333,7 @@ static void testRaftSplit(KVStore & kvs, TMTContext & tmt, std::unique_ptr<MockR
     RegionID region_id = 1;
     RegionID region_id2 = 7;
     auto source_region = kvs.getRegion(region_id);
-    auto old_epoch = source_region->getMeta().getMetaRegion().region_epoch();
+    auto old_epoch = source_region->mutMeta().getMetaRegion().region_epoch();
     const auto & ori_source_range = source_region->getRange()->comparableKeys();
     RegionRangeKeys::RegionRange new_source_range = RegionRangeKeys::makeComparableKeys( //
         RecordKVFormat::genKey(table_id, 5),
@@ -437,7 +415,7 @@ static void testRaftSplit(KVStore & kvs, TMTContext & tmt, std::unique_ptr<MockR
     }
 }
 
-void RegionKVStoreOldTest::testRaftMerge(Context & ctx, KVStore & kvs, TMTContext & tmt)
+void RegionKVStoreTest::testRaftMerge(Context & ctx, KVStore & kvs, TMTContext & tmt)
 {
     const RegionID source_region_id = 7;
     const RegionID target_region_id = 1;
@@ -499,6 +477,7 @@ void RegionKVStoreOldTest::testRaftMerge(Context & ctx, KVStore & kvs, TMTContex
         auto && [request, response]
             = MockRaftStoreProxy::composeCommitMerge(source_region->cloneMetaRegion(), source_region->appliedIndex());
         source_region->setStateApplying();
+        source_region->makeRaftCommandDelegate(kvs.genTaskLock());
         const auto & source_region_meta_delegate = source_region->meta.makeRaftCommandDelegate();
         try
         {
@@ -606,7 +585,7 @@ void RegionKVStoreOldTest::testRaftMerge(Context & ctx, KVStore & kvs, TMTContex
     }
 }
 
-TEST_F(RegionKVStoreOldTest, RegionReadWrite)
+TEST_F(RegionKVStoreTest, RegionReadWrite)
 {
     auto ctx = TiFlashTestEnv::getGlobalContext();
     TableID table_id = 100;
@@ -733,7 +712,7 @@ TEST_F(RegionKVStoreOldTest, RegionReadWrite)
     }
 }
 
-TEST_F(RegionKVStoreOldTest, Writes)
+TEST_F(RegionKVStoreTest, Writes)
 {
     createDefaultRegions();
     auto ctx = TiFlashTestEnv::getGlobalContext();
@@ -919,8 +898,9 @@ TEST_F(RegionKVStoreOldTest, Writes)
 }
 
 
-TEST_F(RegionKVStoreOldTest, AdminSplit)
+TEST_F(RegionKVStoreTest, AdminSplit)
 {
+    createDefaultRegions();
     auto ctx = TiFlashTestEnv::getGlobalContext();
     KVStore & kvs = getKVS();
     proxy_instance->debugAddRegions(
@@ -942,8 +922,9 @@ TEST_F(RegionKVStoreOldTest, AdminSplit)
     }
 }
 
-TEST_F(RegionKVStoreOldTest, AdminMergeRollback)
+TEST_F(RegionKVStoreTest, AdminMergeRollback)
 {
+    createDefaultRegions();
     auto ctx = TiFlashTestEnv::getGlobalContext();
     KVStore & kvs = getKVS();
     proxy_instance->debugAddRegions(
@@ -955,7 +936,7 @@ TEST_F(RegionKVStoreOldTest, AdminMergeRollback)
     testRaftMergeRollback(kvs, ctx.getTMTContext());
 }
 
-TEST_F(RegionKVStoreOldTest, AdminMerge)
+TEST_F(RegionKVStoreTest, AdminMerge)
 try
 {
     auto ctx = TiFlashTestEnv::getGlobalContext();
@@ -964,7 +945,7 @@ try
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, AdminChangePeer)
+TEST_F(RegionKVStoreTest, AdminChangePeer)
 {
     UInt64 region_id = 88;
     auto ctx = TiFlashTestEnv::getGlobalContext();
@@ -993,7 +974,7 @@ TEST_F(RegionKVStoreOldTest, AdminChangePeer)
 // TODO Use test utils in new KVStore test for snapshot test.
 // Otherwise data will not actually be inserted.
 class ApplySnapshotTest
-    : public RegionKVStoreOldTest
+    : public RegionKVStoreTest
     , public testing::WithParamInterface<bool /* ingest_using_split */>
 {
 public:
@@ -1057,7 +1038,6 @@ try
             RecordKVFormat::genKey(table_id, 0),
             RecordKVFormat::genKey(table_id, 10000),
             kvs.getProxyHelper());
-        // Fill data from 20 to 100.
         GenMockSSTData(DMTestEnv::getMinimalTableInfo(table_id), table_id, region_id_str, 20, 100, 0);
         std::vector<SSTView> sst_views{
             SSTView{
@@ -1086,7 +1066,6 @@ try
         if (ingest_using_split)
         {
             auto stats = storage->getStore()->getStoreStats();
-            // Including 0..20, 20..100, 100..inf.
             ASSERT_EQ(3, stats.segment_count);
         }
 
@@ -1099,7 +1078,6 @@ try
             RecordKVFormat::genKey(table_id, 20000),
             RecordKVFormat::genKey(table_id, 50000),
             kvs.getProxyHelper());
-        // Fill data from 20100 to 20200.
         GenMockSSTData(DMTestEnv::getMinimalTableInfo(table_id), table_id, region_id_str, 20100, 20200, 0);
         std::vector<SSTView> sst_views{
             SSTView{
@@ -1151,27 +1129,15 @@ try
         ASSERT_EQ(0, gc_n);
 
         auto stats = storage->getStore()->getStoreStats();
-        // The data of [20, 100), is not reclaimed during Apply Snapshot.
-        if (ingest_using_split)
-        {
-            ASSERT_EQ(3, stats.segment_count);
-            ASSERT_NE(0, stats.total_stable_size_on_disk);
-            ASSERT_EQ(80, stats.total_rows);
-            ASSERT_NE(0, stats.total_size);
-        }
-        else
-        {
-            // The only segment is not reclaimed.
-            ASSERT_EQ(1, stats.segment_count);
-            ASSERT_NE(0, stats.total_stable_size_on_disk);
-            ASSERT_EQ(180, stats.total_rows);
-            ASSERT_NE(0, stats.total_size);
-        }
+        ASSERT_EQ(1, stats.segment_count);
+        ASSERT_EQ(0, stats.total_stable_size_on_disk);
+        ASSERT_EQ(0, stats.total_rows);
+        ASSERT_EQ(0, stats.total_size);
     }
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, ApplySnapshot)
+TEST_F(RegionKVStoreTest, ApplySnapshot)
 try
 {
     createDefaultRegions();
@@ -1267,7 +1233,7 @@ try
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, ApplySnapshotOverlap)
+TEST_F(RegionKVStoreTest, ApplySnapshotOverlap)
 try
 {
     createDefaultRegions();
@@ -1309,7 +1275,7 @@ try
         }
         catch (Exception & e)
         {
-            ASSERT_TRUE(e.message().rfind("range of region_id=20 is overlapped with region_id=22", 0) == 0);
+            ASSERT_EQ(e.message(), "range of region_id=20 is overlapped with region_id=22, state: region { id: 22 }");
         }
     }
 
@@ -1365,7 +1331,7 @@ try
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, IngestSST)
+TEST_F(RegionKVStoreTest, IngestSST)
 try
 {
     createDefaultRegions();
@@ -1441,7 +1407,7 @@ try
 }
 CATCH
 
-TEST_F(RegionKVStoreOldTest, Restore)
+TEST_F(RegionKVStoreTest, Restore)
 {
     auto ctx = TiFlashTestEnv::getGlobalContext();
     {
@@ -1468,7 +1434,7 @@ TEST_F(RegionKVStoreOldTest, Restore)
     }
 }
 
-TEST_F(RegionKVStoreOldTest, RegionRange)
+TEST_F(RegionKVStoreTest, RegionRange)
 {
     {
         // Test util functions.
@@ -1559,8 +1525,9 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
         catch (Exception & e)
         {
             const auto & res = e.message();
-            std::regex msg_reg(".*: not found region_id=1");
-            ASSERT_TRUE(std::regex_match(res, msg_reg));
+            ASSERT_EQ(
+                res,
+                "void DB::RegionsRangeIndex::remove(const DB::RegionRange &, DB::RegionID): not found region_id=1");
         }
 
         region_index.add(makeRegion(2, RecordKVFormat::genKey(1, 3), RecordKVFormat::genKey(1, 5)));
@@ -1574,8 +1541,9 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
         catch (Exception & e)
         {
             const auto & res = e.message();
-            std::regex msg_reg(".*: not found start key");
-            ASSERT_TRUE(std::regex_match(res, msg_reg));
+            ASSERT_EQ(
+                res,
+                "void DB::RegionsRangeIndex::remove(const DB::RegionRange &, DB::RegionID): not found start key");
         }
 
         try
@@ -1588,8 +1556,9 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
         catch (Exception & e)
         {
             const auto & res = e.message();
-            std::regex msg_reg(".*: not found end key");
-            ASSERT_TRUE(std::regex_match(res, msg_reg));
+            ASSERT_EQ(
+                res,
+                "void DB::RegionsRangeIndex::remove(const DB::RegionRange &, DB::RegionID): not found end key");
         }
 
         try
@@ -1602,8 +1571,10 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
         catch (Exception & e)
         {
             const auto & res = e.message();
-            std::regex msg_reg(".*: range of region_id=2 is empty");
-            ASSERT_TRUE(std::regex_match(res, msg_reg));
+            ASSERT_EQ(
+                res,
+                "void DB::RegionsRangeIndex::remove(const DB::RegionRange &, DB::RegionID): range of region_id=2 is "
+                "empty");
         }
 
         try
@@ -1614,8 +1585,9 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
         catch (Exception & e)
         {
             const auto & res = e.message();
-            std::regex msg_reg(".*: not found region_id=2");
-            ASSERT_TRUE(std::regex_match(res, msg_reg));
+            ASSERT_EQ(
+                res,
+                "void DB::RegionsRangeIndex::remove(const DB::RegionRange &, DB::RegionID): not found region_id=2");
         }
 
         region_index.clear();
@@ -1721,45 +1693,6 @@ TEST_F(RegionKVStoreOldTest, RegionRange)
             ASSERT_EQ(region_state.getRange()->comparableKeys().second.key, RecordKVFormat::genKey(2, 10));
         }
     }
-}
-
-TEST_F(RegionKVStoreOldTest, RegionRange2)
-{
-    auto mustOverlap = [](std::string s1, std::string e1, std::string s2, std::string e2) {
-        auto r1 = RegionRangeKeys::makeComparableKeys(TiKVKey::copyFrom(s1), TiKVKey::copyFrom(e1));
-        auto r2 = RegionRangeKeys::makeComparableKeys(TiKVKey::copyFrom(s2), TiKVKey::copyFrom(e2));
-        ASSERT_TRUE(RegionRangeKeys::isRangeOverlapped(r1, r2));
-        ASSERT_TRUE(RegionRangeKeys::isRangeOverlapped(r2, r1));
-    };
-    auto mustNotOverlap = [](std::string s1, std::string e1, std::string s2, std::string e2) {
-        auto r1 = RegionRangeKeys::makeComparableKeys(TiKVKey::copyFrom(s1), TiKVKey::copyFrom(e1));
-        auto r2 = RegionRangeKeys::makeComparableKeys(TiKVKey::copyFrom(s2), TiKVKey::copyFrom(e2));
-        ASSERT_FALSE(RegionRangeKeys::isRangeOverlapped(r1, r2));
-        ASSERT_FALSE(RegionRangeKeys::isRangeOverlapped(r2, r1));
-    };
-    mustOverlap("", "a", "", "b");
-    mustOverlap("a", "", "b", "");
-    mustOverlap("", "", "b", "");
-    mustOverlap("", "", "", "a");
-    mustOverlap("", "", "a", "b");
-    mustOverlap("", "", "", "");
-
-    mustOverlap("a", "e", "", "f");
-    mustOverlap("a", "e", "", "");
-    mustOverlap("b", "e", "a", "");
-
-    mustOverlap("a", "e", "a", "e");
-    mustOverlap("a", "f", "c", "d");
-    mustOverlap("a", "f", "c", "f");
-
-    mustNotOverlap("a", "e", "e", "f");
-    mustNotOverlap("a", "e", "f", "g");
-    mustNotOverlap("", "e", "e", "f");
-    mustNotOverlap("a", "e", "e", "");
-    mustNotOverlap("", "e", "f", "g");
-    mustNotOverlap("a", "e", "f", "");
-    mustNotOverlap("", "e", "f", "");
-    mustNotOverlap("", "e", "e", "");
 }
 
 } // namespace DB::tests

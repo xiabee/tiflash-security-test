@@ -15,7 +15,7 @@
 #pragma once
 
 #include <condition_variable>
-#include <exception>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <queue>

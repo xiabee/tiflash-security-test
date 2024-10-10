@@ -109,14 +109,15 @@ MonoSSTReader::MonoSSTReader(
     const TiFlashRaftProxyHelper * proxy_helper_,
     SSTView view,
     RegionRangeFilter range_,
-    const LoggerPtr & log_)
+    size_t split_id_)
     : proxy_helper(proxy_helper_)
     , inner(proxy_helper->sst_reader_interfaces.fn_get_sst_reader(view, proxy_helper->proxy_ptr))
     , type(view.type)
     , range(range_)
     , tail_checked(false)
-    , log(log_)
+    , split_id(split_id_)
 {
+    log = &Poco::Logger::get("MonoSSTReader");
     kind = proxy_helper->sst_reader_interfaces.fn_kind(inner, view.type);
     if (kind == SSTFormatKind::KIND_TABLET)
     {
@@ -125,15 +126,21 @@ MonoSSTReader::MonoSSTReader(
         // 'z' will be added in proxy.
         LOG_INFO(
             log,
-            "Seek cf {} to {}",
+            "Seek cf {} to {}, split_id={}",
             magic_enum::enum_name(type),
-            Redact::keyToDebugString(start.data(), start.size()));
+            Redact::keyToDebugString(start.data(), start.size()),
+            split_id);
         if (!start.empty())
         {
             proxy_helper->sst_reader_interfaces
                 .fn_seek(inner, view.type, EngineIteratorSeekType::Key, BaseBuffView{start.data(), start.size()});
         }
     }
+}
+
+size_t MonoSSTReader::getSplitId() const
+{
+    return split_id;
 }
 
 MonoSSTReader::~MonoSSTReader()

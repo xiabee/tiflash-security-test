@@ -17,6 +17,7 @@
 #include <Common/CurrentMetrics.h>
 #include <Common/Logger.h>
 #include <Common/nocopyable.h>
+#include <Encryption/FileProvider.h>
 #include <Poco/Ext/ThreadNumber.h>
 #include <Storages/Page/Snapshot.h>
 #include <Storages/Page/V3/BlobStore.h>
@@ -35,6 +36,7 @@
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 
 namespace CurrentMetrics
 {
@@ -77,8 +79,8 @@ private:
 };
 using PageDirectorySnapshotPtr = std::shared_ptr<PageDirectorySnapshot>;
 
-// MultiVersionRefCount store the ref count for each version of a page.
-// This is not a thread safe class, it must be used with outer synchronization.
+// This is not a thread safe class
+// It must be used with outer synchronization
 class MultiVersionRefCount
 {
 public:
@@ -161,22 +163,7 @@ public:
                 }
                 return;
             }
-            if unlikely (ref_count_delta_in_snap <= 0)
-            {
-                FmtBuffer buf;
-                for (const auto & [ver, ref_count_delta] : *versioned_ref_counts)
-                {
-                    buf.fmtAppend("{}|{},", ver.sequence, ref_count_delta);
-                }
-                throw Exception(
-                    ErrorCodes::LOGICAL_ERROR,
-                    "Check ref_count_delta_in_snap > 0 failed, deref_count_delta={}, ref_count_delta_in_snap={}, "
-                    "snap_seq={}, versions={}",
-                    deref_count_delta,
-                    ref_count_delta_in_snap,
-                    snap_seq,
-                    buf.toString());
-            }
+            RUNTIME_CHECK(ref_count_delta_in_snap > 0, deref_count_delta, ref_count_delta_in_snap);
             new_versioned_ref_counts->emplace_back(PageVersion(snap_seq, 0), ref_count_delta_in_snap);
             versioned_ref_counts.swap(new_versioned_ref_counts);
         }
@@ -219,56 +206,45 @@ private:
 
 struct EntryOrDelete
 {
+    bool is_delete = true;
     MultiVersionRefCount being_ref_count;
-    std::optional<PageEntryV3> entry;
+    PageEntryV3 entry;
 
-    EntryOrDelete(const EntryOrDelete & other)
-        : being_ref_count(other.being_ref_count)
-        , entry(other.entry)
+    static EntryOrDelete newDelete()
     {
-        PageStorageMemorySummary::versioned_entry_or_delete_count.fetch_add(1);
-        if (entry)
-            PageStorageMemorySummary::versioned_entry_or_delete_bytes.fetch_add(sizeof(PageEntryV3));
-    }
-    EntryOrDelete() { PageStorageMemorySummary::versioned_entry_or_delete_count.fetch_add(1); }
-    EntryOrDelete(std::optional<PageEntryV3> entry_)
-        : entry(std::move(entry_))
+        return EntryOrDelete{
+            .is_delete = true,
+            .entry = {}, // meaningless
+        };
+    };
+    static EntryOrDelete newNormalEntry(const PageEntryV3 & entry)
     {
-        PageStorageMemorySummary::versioned_entry_or_delete_count.fetch_add(1);
-        if (entry)
-            PageStorageMemorySummary::versioned_entry_or_delete_bytes.fetch_add(sizeof(PageEntryV3));
+        return EntryOrDelete{
+            .is_delete = false,
+            .entry = entry,
+        };
     }
-    EntryOrDelete(MultiVersionRefCount being_ref_count_, std::optional<PageEntryV3> entry_)
-        : being_ref_count(being_ref_count_)
-        , entry(std::move(entry_))
-    {
-        PageStorageMemorySummary::versioned_entry_or_delete_count.fetch_add(1);
-        if (entry)
-            PageStorageMemorySummary::versioned_entry_or_delete_bytes.fetch_add(sizeof(PageEntryV3));
-    }
-    ~EntryOrDelete()
-    {
-        PageStorageMemorySummary::versioned_entry_or_delete_count.fetch_sub(1);
-        if (entry)
-            PageStorageMemorySummary::versioned_entry_or_delete_bytes.fetch_sub(sizeof(PageEntryV3));
-    }
-
-    static EntryOrDelete newDelete() { return EntryOrDelete(std::nullopt); }
-    static EntryOrDelete newNormalEntry(const PageEntryV3 & entry) { return EntryOrDelete(entry); }
     static EntryOrDelete newReplacingEntry(const EntryOrDelete & ori_entry, const PageEntryV3 & entry)
     {
-        return EntryOrDelete(ori_entry.being_ref_count, entry);
+        return EntryOrDelete{
+            .is_delete = false,
+            .being_ref_count = ori_entry.being_ref_count,
+            .entry = entry,
+        };
     }
 
     static EntryOrDelete newFromRestored(PageEntryV3 entry, const PageVersion & ver, Int64 being_ref_count)
     {
-        auto result = EntryOrDelete(std::move(entry));
+        auto result = EntryOrDelete{
+            .is_delete = false,
+            .entry = entry,
+        };
         result.being_ref_count.restoreFrom(ver, being_ref_count);
         return result;
     }
 
-    bool isDelete() const { return !entry.has_value(); }
-    bool isEntry() const { return entry.has_value(); }
+    bool isDelete() const { return is_delete; }
+    bool isEntry() const { return !is_delete; }
 };
 
 using PageLock = std::lock_guard<std::mutex>;
@@ -280,7 +256,6 @@ enum class ResolveResult
     TO_NORMAL,
 };
 
-// VersionedPageEntries store multi-versions page entries for the same page id.
 template <typename Trait>
 class VersionedPageEntries
 {
@@ -302,7 +277,7 @@ public:
 
     bool isExternalPage() const { return type == EditRecordType::VAR_EXTERNAL; }
 
-    [[nodiscard]] PageLock acquireLock() const;
+    [[nodiscard]] PageLock acquireLock() const { return std::lock_guard(m); }
 
     void createNewEntry(const PageVersion & ver, const PageEntryV3 & entry);
 
@@ -320,7 +295,7 @@ public:
 
     // Update the local cache info for remote page,
     // Must a hold snap to prevent the page being deleted.
-    bool updateLocalCacheForRemotePage(const PageVersion & ver, const PageEntryV3 & entry, bool ignore_delete);
+    bool updateLocalCacheForRemotePage(const PageVersion & ver, const PageEntryV3 & entry);
 
     std::shared_ptr<PageId> fromRestored(const typename PageEntriesEdit::EditRecord & rec);
 
@@ -380,7 +355,11 @@ public:
 
     void collapseTo(UInt64 seq, const PageId & page_id, PageEntriesEdit & edit);
 
-    size_t size() const;
+    size_t size() const
+    {
+        auto lock = acquireLock();
+        return entries.size();
+    }
 
     String toDebugString() const
     {
@@ -426,8 +405,9 @@ private:
     std::shared_ptr<PageId> external_holder;
 };
 
-// `PageDirectory` store VersionedPageEntries for all pages.
-// User can acquire a snapshot from it and get a consist result by the snapshot.
+// `PageDirectory` store multi-versions entries for the same
+// page id. User can acquire a snapshot from it and get a
+// consist result by the snapshot.
 // All its functions are consider concurrent safe.
 // User should call `gc` periodic to remove outdated version
 // of entries in order to keep the memory consumption as well
@@ -701,10 +681,10 @@ struct fmt::formatter<DB::PS::V3::EntryOrDelete>
     template <typename FormatContext>
     auto format(const DB::PS::V3::EntryOrDelete & entry, FormatContext & ctx) const
     {
-        return fmt::format_to(
+        return format_to(
             ctx.out(),
             "{{is_delete:{}, entry:{}, being_ref_count:{}}}",
-            entry.isDelete(),
+            entry.is_delete,
             entry.entry,
             entry.being_ref_count.getLatestRefCount());
     }

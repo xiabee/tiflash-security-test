@@ -78,13 +78,7 @@ public:
     // run mpp tasks which are ready to cancel, the return value is the start_ts of query.
     BlockInputStreamPtr prepareMPPStreams(DAGRequestBuilder builder, const DAGProperties & properties);
 
-    // prepareMPPTasks is not thread safe, the builder's executor_index(which is ref to context's index) is updated during this process
     std::vector<QueryTask> prepareMPPTasks(DAGRequestBuilder builder, const DAGProperties & properties);
-
-    // prepareMPPTasks is thread safe
-    std::vector<QueryTask> prepareMPPTasks(
-        std::function<DAGRequestBuilder()> & gen_builder,
-        const DAGProperties & properties);
 
     static void setCancelTest();
 
@@ -106,29 +100,10 @@ public:
 
     static String queryInfo(size_t server_id);
 
-    static DB::ColumnsWithTypeAndName getResultBlocks(
-        MockDAGRequestContext & context,
-        DAGRequestBuilder & builder,
-        size_t server_num)
-    {
-        auto properties = DB::tests::getDAGPropertiesForTest(server_num);
-        for (int i = 0; i < TiFlashTestEnv::globalContextSize(); ++i)
-            TiFlashTestEnv::getGlobalContext(i).setMPPTest();
-
-        properties.mpp_partition_num = server_num;
-        MockComputeServerManager::instance().resetMockMPPServerInfo(server_num);
-        auto mpp_tasks = builder.buildMPPTasks(context, properties);
-
-        TiFlashTestEnv::getGlobalContext().setMPPTest();
-        MockComputeServerManager::instance().setMockStorage(context.mockStorage());
-        return executeMPPTasks(mpp_tasks, properties);
-    }
-
 protected:
     static LoggerPtr log_ptr;
     static size_t server_num;
     static MPPTestMeta test_meta;
-    std::mutex mu;
 };
 
 #define ASSERT_MPPTASK_EQUAL(tasks, properties, expected_cols)                      \
@@ -167,4 +142,5 @@ protected:
         }                                                                               \
         ASSERT_MPPTASK_EQUAL_WITH_SERVER_NUM((builder), (properties), (expected_cols)); \
     } while (0)
+
 } // namespace DB::tests

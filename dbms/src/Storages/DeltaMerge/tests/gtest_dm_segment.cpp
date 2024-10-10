@@ -22,7 +22,6 @@
 #include <Storages/DeltaMerge/Range.h>
 #include <Storages/DeltaMerge/RowKeyRange.h>
 #include <Storages/DeltaMerge/Segment.h>
-#include <Storages/DeltaMerge/Segment_fwd.h>
 #include <Storages/DeltaMerge/StoragePool/GlobalPageIdAllocator.h>
 #include <Storages/DeltaMerge/StoragePool/StoragePool.h>
 #include <Storages/DeltaMerge/WriteBatchesImpl.h>
@@ -113,14 +112,13 @@ protected:
     {
         *table_columns = *columns;
 
-        dm_context = DMContext::createUnique(
+        dm_context = std::make_unique<DMContext>(
             *db_context,
             storage_path_pool,
             storage_pool,
             /*min_version_*/ 0,
             NullspaceID,
             /*physical_table_id*/ 100,
-            /*pk_col_id*/ 0,
             false,
             1,
             db_context->getSettingsRef());
@@ -1150,7 +1148,7 @@ try
 
                 ASSERT_EQ(c1->size(), c2->size());
 
-                for (Int64 i = 0; i < static_cast<Int64>(c1->size()); i++)
+                for (Int64 i = 0; i < Int64(c1->size()); i++)
                 {
                     if (iter1->name == DMTestEnv::pk_name)
                     {
@@ -1206,7 +1204,7 @@ CATCH
 TEST_F(SegmentTest, MassiveSplit)
 try
 {
-    Settings settings = dmContext().global_context.getSettings();
+    Settings settings = dmContext().db_context.getSettings();
     settings.dt_segment_limit_rows = 11;
     settings.dt_segment_delta_limit_rows = 7;
 
@@ -1235,8 +1233,8 @@ try
             // if pk % 5 < 2, then the record would be deleted
             // if pk % 5 >= 2, then the record would be reserved
             HandleRange del{
-                static_cast<Int64>((num_batches_written - 1) * num_rows_per_write),
-                static_cast<Int64>((num_batches_written - 1) * num_rows_per_write + 2)};
+                Int64((num_batches_written - 1) * num_rows_per_write),
+                Int64((num_batches_written - 1) * num_rows_per_write + 2)};
             segment->write(dmContext(), {RowKeyRange::fromHandleRange(del)});
         }
 
@@ -1249,7 +1247,7 @@ try
              i < num_batches_written * num_rows_per_write;
              i++)
         {
-            temp.push_back(static_cast<Int64>(i));
+            temp.push_back(Int64(i));
         }
 
         {
@@ -1305,12 +1303,9 @@ class SegmentTest2
     : public SegmentTest
     , public testing::WithParamInterface<SegmentTestMode>
 {
-    const StorageFormatVersion current_version;
-
 public:
-    SegmentTest2()
-        : current_version(STORAGE_FORMAT_CURRENT)
-    {}
+    SegmentTest2() = default;
+
 
     void SetUp() override
     {
@@ -1332,8 +1327,6 @@ public:
 
         SegmentTest::SetUp();
     }
-
-    ~SegmentTest2() override { setStorageFormat(current_version); }
 
     std::pair<RowKeyRange, PageIdU64s> genDMFile(DMContext & context, const Block & block)
     {
@@ -1359,7 +1352,7 @@ public:
         return {RowKeyRange::fromHandleRange(range), {file_id}};
     }
 
-    SegmentTestMode mode{};
+    SegmentTestMode mode;
 };
 
 TEST_P(SegmentTest2, FlushDuringSplitAndMerge)
@@ -1382,12 +1375,12 @@ try
             case SegmentTestMode::V3_FileOnly:
             {
                 auto delegate = dmContext().path_pool->getStableDiskDelegator();
-                auto file_provider = dmContext().global_context.getFileProvider();
+                auto file_provider = dmContext().db_context.getFileProvider();
                 auto [range, file_ids] = genDMFile(dmContext(), block);
                 auto file_id = file_ids[0];
                 auto file_parent_path = delegate.getDTFilePath(file_id);
                 auto file
-                    = DMFile::restore(file_provider, file_id, file_id, file_parent_path, DMFileMeta::ReadMode::all());
+                    = DMFile::restore(file_provider, file_id, file_id, file_parent_path, DMFile::ReadMetaMode::all());
                 WriteBatches wbs(*storage_pool);
                 wbs.data.putExternal(file_id, 0);
                 wbs.writeLogAndData();
@@ -1773,7 +1766,7 @@ CATCH
 TEST_F(SegmentTest, CalculateDTFileProperty)
 try
 {
-    Settings settings = dmContext().global_context.getSettings();
+    Settings settings = dmContext().db_context.getSettings();
     settings.dt_segment_stable_pack_rows = 10;
 
     segment = buildFirstSegment(DMTestEnv::getDefaultColumns(), std::move(settings));
@@ -1814,7 +1807,7 @@ CATCH
 TEST_F(SegmentTest, CalculateDTFilePropertyWithPropertyFileDeleted)
 try
 {
-    Settings settings = dmContext().global_context.getSettings();
+    Settings settings = dmContext().db_context.getSettings();
     settings.dt_segment_stable_pack_rows = 10;
 
     segment = buildFirstSegment(DMTestEnv::getDefaultColumns(), std::move(settings));
@@ -1845,7 +1838,7 @@ try
             ASSERT_EQ(Poco::File(file_path + "/property").exists(), false);
         }
         // clear PackProperties to force it to calculate from scratch
-        dmfile->clearPackProperties();
+        dmfile->getPackProperties().clear_property();
         ASSERT_EQ(dmfile->getPackProperties().property_size(), 0);
         // caculate StableProperty
         ASSERT_EQ(stable->isStablePropertyCached(), false);

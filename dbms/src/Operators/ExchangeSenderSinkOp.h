@@ -26,14 +26,12 @@ public:
     ExchangeSenderSinkOp(
         PipelineExecutorContext & exec_context_,
         const String & req_id,
-        std::unique_ptr<DAGResponseWriter> && writer_)
+        std::unique_ptr<DAGResponseWriter> && writer)
         : SinkOp(exec_context_, req_id)
-        , writer(std::move(writer_))
+        , writer(std::move(writer))
     {}
 
     String getName() const override { return "ExchangeSenderSinkOp"; }
-
-    bool canHandleSelectiveBlock() const override { return true; }
 
 protected:
     void operatePrefixImpl() override;
@@ -44,9 +42,6 @@ protected:
     OperatorStatus prepareImpl() override;
 
     OperatorStatus awaitImpl() override;
-
-private:
-    OperatorStatus waitForWriter() const;
 
 private:
     std::unique_ptr<DAGResponseWriter> writer;

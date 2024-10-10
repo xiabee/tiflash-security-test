@@ -14,6 +14,7 @@
 
 #include <Common/FmtUtils.h>
 #include <Common/Stopwatch.h>
+#include <Common/SyncPoint/SyncPoint.h>
 #include <Common/TiFlashMetrics.h>
 #include <Common/setThreadName.h>
 #include <Interpreters/Context.h>
@@ -62,7 +63,7 @@ EngineStoreApplyRes KVStore::handleWriteRaftCmdInner(
 
         std::tie(apply_res, write_result) = region->handleWriteRaftCmd(cmds, index, term, tmt);
 
-        if unlikely (region->getClusterRaftstoreVer() == RaftstoreVer::V2)
+        if (region->getClusterRaftstoreVer() == RaftstoreVer::V2)
         {
             region->orphanKeysInfo().advanceAppliedIndex(index);
         }
@@ -109,7 +110,7 @@ EngineStoreApplyRes KVStore::handleUselessAdminRaftCmd(
         term,
         index);
 
-    if unlikely (curr_region.getClusterRaftstoreVer() == RaftstoreVer::V2)
+    if (curr_region.getClusterRaftstoreVer() == RaftstoreVer::V2)
     {
         curr_region.orphanKeysInfo().advanceAppliedIndex(index);
     }
@@ -134,7 +135,7 @@ EngineStoreApplyRes KVStore::handleUselessAdminRaftCmd(
             curr_region,
             region_task_lock,
             PersistRegionReason::UselessAdminCommand,
-            raft_cmdpb::AdminCmdType_Name(cmd_type).c_str());
+            fmt::format("{}", cmd_type).c_str());
         return EngineStoreApplyRes::Persist;
     }
     return EngineStoreApplyRes::None;
@@ -212,7 +213,7 @@ EngineStoreApplyRes KVStore::handleAdminRaftCmd(
         auto & curr_region = *curr_region_ptr;
 
         // Admin cmd contains no normal data, we can advance orphan keys info just before handling.
-        if unlikely (curr_region.getClusterRaftstoreVer() == RaftstoreVer::V2)
+        if (curr_region.getClusterRaftstoreVer() == RaftstoreVer::V2)
         {
             curr_region.orphanKeysInfo().advanceAppliedIndex(index);
         }

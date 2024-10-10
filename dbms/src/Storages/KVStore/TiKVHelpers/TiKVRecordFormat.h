@@ -16,8 +16,8 @@
 
 #include <Common/Exception.h>
 #include <Core/Types.h>
-#include <IO/Buffer/WriteBufferFromString.h>
 #include <IO/Endian.h>
+#include <IO/WriteBufferFromString.h>
 #include <Storages/KVStore/Decode/DecodedTiKVKeyValue.h>
 #include <Storages/KVStore/Decode/TiKVHandle.h>
 #include <Storages/KVStore/TiKVHelpers/TiKVVarInt.h>
@@ -26,12 +26,16 @@
 #include <TiDB/Decode/DatumCodec.h>
 #include <common/likely.h>
 
-namespace DB::ErrorCodes
+#include <sstream>
+
+namespace DB
+{
+namespace ErrorCodes
 {
 extern const int LOGICAL_ERROR;
 }
 
-namespace DB::RecordKVFormat
+namespace RecordKVFormat
 {
 enum CFModifyFlag : UInt8
 {
@@ -57,7 +61,6 @@ static const char SHORT_VALUE_PREFIX = 'v';
 static const char MIN_COMMIT_TS_PREFIX = 'c';
 static const char FOR_UPDATE_TS_PREFIX = 'f';
 static const char TXN_SIZE_PREFIX = 't';
-static const char IS_TXN_FILE_PREFIX = 'T';
 static const char ASYNC_COMMIT_PREFIX = 'a';
 static const char ROLLBACK_TS_PREFIX = 'r';
 static const char FLAG_OVERLAPPED_ROLLBACK = 'R';
@@ -66,7 +69,6 @@ static const char LAST_CHANGE_PREFIX = 'l';
 static const char TXN_SOURCE_PREFIX_FOR_WRITE = 'S';
 static const char TXN_SOURCE_PREFIX_FOR_LOCK = 's';
 static const char PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX = 'F';
-static const char GENERATION_PREFIX = 'g';
 
 static const size_t SHORT_VALUE_MAX_LEN = 64;
 
@@ -83,11 +85,6 @@ inline TiKVKey encodeAsTiKVKey(const String & ori_str)
 }
 
 inline UInt64 encodeUInt64(const UInt64 x)
-{
-    return toBigEndian(x);
-}
-
-inline UInt32 encodeUInt32(const UInt32 x)
 {
     return toBigEndian(x);
 }
@@ -152,7 +149,24 @@ inline TiKVKey genKey(const TableID tableId, const HandleID handleId)
     return encodeAsTiKVKey(genRawKey(tableId, handleId));
 }
 
-TiKVKey genKey(const TiDB::TableInfo & table_info, std::vector<Field> keys);
+inline TiKVKey genKey(const TiDB::TableInfo & table_info, std::vector<Field> keys)
+{
+    std::string key(RecordKVFormat::RAW_KEY_NO_HANDLE_SIZE, 0);
+    memcpy(key.data(), &RecordKVFormat::TABLE_PREFIX, 1);
+    auto big_endian_table_id = encodeInt64(table_info.id);
+    memcpy(key.data() + 1, reinterpret_cast<const char *>(&big_endian_table_id), 8);
+    memcpy(key.data() + 1 + 8, RecordKVFormat::RECORD_PREFIX_SEP, 2);
+    WriteBufferFromOwnString ss;
+
+    for (size_t i = 0; i < keys.size(); i++)
+    {
+        DB::EncodeDatum(
+            keys[i],
+            table_info.columns[table_info.getPrimaryIndexInfo().idx_cols[i].offset].getCodecFlag(),
+            ss);
+    }
+    return encodeAsTiKVKey(key + ss.releaseStr());
+}
 
 inline bool checkKeyPaddingValid(const char * ptr, const UInt8 pad_size)
 {
@@ -169,7 +183,7 @@ inline std::tuple<DecodedTiKVKey, size_t> decodeTiKVKeyFull(const TiKVKey & key)
     {
         if (ptr + chunk_len > key.dataSize() + key.data())
             throw Exception("Unexpected eof", ErrorCodes::LOGICAL_ERROR);
-        auto marker = static_cast<UInt8>(*(ptr + ENC_GROUP_SIZE));
+        auto marker = (UInt8) * (ptr + ENC_GROUP_SIZE);
         UInt8 pad_size = (ENC_MARKER - marker);
         if (pad_size == 0)
         {
@@ -286,13 +300,32 @@ inline TiKVValue encodeLockCfValue(
     return TiKVValue(res.releaseStr());
 }
 
+struct DecodedLockCFValue : boost::noncopyable
+{
+    DecodedLockCFValue(std::shared_ptr<const TiKVKey> key_, std::shared_ptr<const TiKVValue> val_);
+    std::unique_ptr<kvrpcpb::LockInfo> intoLockInfo() const;
+    void intoLockInfo(kvrpcpb::LockInfo &) const;
+
+    std::shared_ptr<const TiKVKey> key;
+    std::shared_ptr<const TiKVValue> val;
+    UInt64 lock_version{0};
+    UInt64 lock_ttl{0};
+    UInt64 txn_size{0};
+    UInt64 lock_for_update_ts{0};
+    kvrpcpb::Op lock_type{kvrpcpb::Op_MIN};
+    bool use_async_commit{0};
+    UInt64 min_commit_ts{0};
+    std::string_view secondaries;
+    std::string_view primary_lock;
+};
+
 template <typename R = Int64>
 inline R readVarInt(const char *& data, size_t & len)
 {
     static_assert(std::is_same_v<R, UInt64> || std::is_same_v<R, Int64>);
 
     R res = 0;
-    const auto * cur = data;
+    auto cur = data;
     if constexpr (std::is_same_v<R, UInt64>)
     {
         cur = TiKV::readVarUInt(res, data, len);
@@ -312,14 +345,14 @@ inline UInt64 readVarUInt(const char *& data, size_t & len)
 
 inline UInt8 readUInt8(const char *& data, size_t & len)
 {
-    auto res = static_cast<UInt8>(*data);
+    UInt8 res = static_cast<UInt8>(*data);
     data += sizeof(UInt8), len -= sizeof(UInt8);
     return res;
 }
 
 inline UInt64 readUInt64(const char *& data, size_t & len)
 {
-    auto res = readBigEndian<UInt64>(data);
+    UInt64 res = readBigEndian<UInt64>(data);
     data += sizeof(UInt64), len -= sizeof(UInt64);
     return res;
 }
@@ -358,7 +391,7 @@ struct InnerDecodedWriteCFValue
     std::shared_ptr<const TiKVValue> short_value;
 };
 
-using DecodedWriteCFValue = std::optional<InnerDecodedWriteCFValue>;
+typedef std::optional<InnerDecodedWriteCFValue> DecodedWriteCFValue;
 
 inline DecodedWriteCFValue decodeWriteCfValue(const TiKVValue & value)
 {
@@ -467,6 +500,7 @@ inline std::string DecodedTiKVKeyToDebugString(const DecodedTiKVKey & decoded_ke
         decoded_key.size() - RAW_KEY_NO_HANDLE_SIZE);
 }
 
+using DecodedTiKVKeyPtr = std::shared_ptr<DecodedTiKVKey>;
 inline std::string DecodedTiKVKeyRangeToDebugString(const std::pair<DecodedTiKVKeyPtr, DecodedTiKVKeyPtr> & key_range)
 {
     if (unlikely(*key_range.first >= *key_range.second))
@@ -478,5 +512,6 @@ inline std::string DecodedTiKVKeyRangeToDebugString(const std::pair<DecodedTiKVK
         + ")";
 }
 
+} // namespace RecordKVFormat
 
-} // namespace DB::RecordKVFormat
+} // namespace DB

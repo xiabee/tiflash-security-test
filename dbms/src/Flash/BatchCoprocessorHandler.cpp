@@ -16,6 +16,7 @@
 #include <Flash/BatchCoprocessorHandler.h>
 #include <Flash/Coprocessor/DAGContext.h>
 #include <Flash/Coprocessor/DAGDriver.h>
+#include <Flash/Coprocessor/InterpreterDAG.h>
 #include <Flash/Coprocessor/RequestUtils.h>
 #include <Flash/ServiceUtils.h>
 #include <Interpreters/Context.h>
@@ -83,8 +84,6 @@ grpc::Status BatchCoprocessorHandler::execute()
                 cop_context.db_context.getClientInfo().current_address.toString(),
                 DAGRequestKind::BatchCop,
                 resource_group_name,
-                cop_request->connection_id(),
-                cop_request->connection_alias(),
                 Logger::get(log->identifier()));
             cop_context.db_context.setDAGContext(&dag_context);
 

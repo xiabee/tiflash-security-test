@@ -18,15 +18,10 @@
 #include <TiDB/Decode/Datum.h>
 #include <TiDB/Decode/DatumCodec.h>
 #include <TiDB/Decode/RowCodec.h>
-#include <TiDB/Schema/TiDB.h>
 
 
 namespace DB
 {
-using TiDB::ColumnInfo;
-using TiDB::ColumnInfos;
-using TiDB::TableInfo;
-
 template <typename T>
 static T decodeUInt(size_t & cursor, const TiKVValue::Base & raw_value)
 {
@@ -128,9 +123,6 @@ TiKVValue::Base encodeNotNullColumn(const Field & field, const ColumnInfo & colu
     case TiDB::TypeLongBlob:
     case TiDB::TypeJSON:
         return field.safeGet<String>();
-    case TiDB::TypeTiDBVectorFloat32:
-        // unsupported, only used in tests.
-        throw Exception("unsupported encode TiDBVectorFloat32");
     case TiDB::TypeNewDecimal:
         EncodeDecimalForRow(field, ss, column_info);
         break;
@@ -187,7 +179,11 @@ struct RowEncoderV2
 
     void encode(WriteBuffer & ss) &&
     {
-        size_t column_in_key = table_info.numColumnsInKey();
+        size_t column_in_key = 0;
+        if (table_info.pk_is_handle)
+            column_in_key = 1;
+        else if (table_info.is_common_handle)
+            column_in_key = table_info.getPrimaryIndexInfo().idx_cols.size();
         if (table_info.columns.size() < fields.size() + column_in_key)
             throw Exception(
                 std::string("Encoding row has ") + std::to_string(table_info.columns.size()) + " columns but "

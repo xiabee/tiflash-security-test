@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <Common/Stopwatch.h>
-#include <Poco/File.h>
 #include <Storages/Page/V3/CheckpointFile/CPDumpStat.h>
 #include <Storages/Page/V3/CheckpointFile/CPFilesWriter.h>
 #include <Storages/Page/V3/PageEntriesEdit.h>
@@ -97,16 +95,9 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
     //    and collect the lock files from applied entries.
     auto & records = edits.getMutRecords();
     write_down_stats.num_records = records.size();
-    LOG_DEBUG(
-        log,
-        "Prepare to dump {} records, sequence={}, manifest_file_id={}",
-        write_down_stats.num_records,
-        sequence,
-        manifest_file_id);
     for (auto & rec_edit : records)
     {
         StorageType id_storage_type = StorageType::Unknown;
-
         {
             id_storage_type = UniversalPageIdFormat::getUniversalPageIdType(rec_edit.page_id);
             // all keys are included in the manifest
@@ -114,12 +105,6 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
             // this is the page data size of all latest version keys, including some uploaded in the
             // previous checkpoint
             write_down_stats.num_existing_bytes[static_cast<size_t>(id_storage_type)] += rec_edit.entry.size;
-
-            if (id_storage_type == StorageType::LocalKV)
-            {
-                // These pages only contains local data which will not be dumped into checkpoint.
-                continue;
-            }
         }
 
         if (rec_edit.type == EditRecordType::VAR_EXTERNAL)
@@ -188,15 +173,10 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
 
         // 2. For entry edits without the checkpoint info, or it is stored on an existing data file that needs compact,
         // write the entry data to the data file, and assign a new checkpoint info.
-        Stopwatch sw;
         try
         {
             auto page = data_source->read({rec_edit.page_id, rec_edit.entry});
-            RUNTIME_CHECK_MSG(
-                page.isValid(),
-                "failed to read page, record={} elapsed={:.3f}s",
-                rec_edit,
-                sw.elapsedSeconds());
+            RUNTIME_CHECK_MSG(page.isValid(), "failed to read page, record={}", rec_edit);
             auto data_location
                 = data_writer->write(rec_edit.page_id, rec_edit.version, page.data.begin(), page.data.size());
             // the page data size uploaded in this checkpoint
@@ -205,7 +185,11 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
             RUNTIME_CHECK(page.data.size() == rec_edit.entry.size, page.data.size(), rec_edit.entry.size);
             bool is_local_data_reclaimed
                 = rec_edit.entry.checkpoint_info.has_value() && rec_edit.entry.checkpoint_info.is_local_data_reclaimed;
-            rec_edit.entry.checkpoint_info = OptionalCheckpointInfo(data_location, true, is_local_data_reclaimed);
+            rec_edit.entry.checkpoint_info = OptionalCheckpointInfo{
+                .data_location = data_location,
+                .is_valid = true,
+                .is_local_data_reclaimed = is_local_data_reclaimed,
+            };
             locked_files.emplace(*data_location.data_file_id);
             if (is_compaction)
             {
@@ -220,7 +204,7 @@ CPDataDumpStats CPFilesWriter::writeEditsAndApplyCheckpointInfo(
         }
         catch (...)
         {
-            LOG_ERROR(log, "failed to read and write page, record={} elapsed={:.3f}s", rec_edit, sw.elapsedSeconds());
+            LOG_ERROR(log, "failed to read page, record={}", rec_edit);
             tryLogCurrentException(__PRETTY_FUNCTION__);
             throw;
         }
@@ -268,7 +252,6 @@ void CPFilesWriter::newDataWriter()
         fmt::runtime(data_file_path_pattern),
         fmt::arg("seq", sequence),
         fmt::arg("index", data_file_index)));
-
     data_writer = CPDataFileWriter::create({
         .file_path = data_file_paths.back(),
         .file_id = fmt::format(
@@ -280,21 +263,6 @@ void CPFilesWriter::newDataWriter()
     data_prefix.set_sub_file_index(data_file_index);
     data_writer->writePrefix(data_prefix);
     ++data_file_index;
-}
-
-void CPFilesWriter::abort()
-{
-    for (const auto & s : data_file_paths)
-    {
-        if (Poco::File f(s); f.exists())
-        {
-            f.remove();
-        }
-    }
-    if likely (manifest_writer != nullptr)
-    {
-        manifest_writer->abort();
-    }
 }
 
 } // namespace DB::PS::V3

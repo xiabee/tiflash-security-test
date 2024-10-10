@@ -18,6 +18,7 @@
 #include <Common/TargetSpecific.h>
 #include <Core/Types.h>
 #include <IO/WriteHelpers.h>
+#include <Storages/DeltaMerge/Tuple.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -959,10 +960,19 @@ public:
     explicit DeltaTree(const ValueSpacePtr & insert_value_space_) { init(insert_value_space_); }
     DeltaTree(const Self & o);
 
-    DeltaTree & operator=(const Self & o) = delete;
-    DeltaTree & operator=(Self && o) = delete;
+    DeltaTree & operator=(const Self & o)
+    {
+        Self tmp(o);
+        this->swap(tmp);
+        return *this;
+    }
 
-    // `swap` is for test cases only.
+    DeltaTree & operator=(Self && o) noexcept
+    {
+        this->swap(o);
+        return *this;
+    }
+
     void swap(Self & other)
     {
         std::swap(root, other.root);
@@ -974,7 +984,6 @@ public:
         std::swap(num_inserts, other.num_inserts);
         std::swap(num_deletes, other.num_deletes);
         std::swap(num_entries, other.num_entries);
-        std::swap(max_dup_tuple_id, other.max_dup_tuple_id);
 
         std::swap(allocator, allocator);
 

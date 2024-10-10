@@ -147,50 +147,26 @@ void ColumnFixedString::updateHashWithValues(IColumn::HashValues & hash_values, 
 
 void ColumnFixedString::updateWeakHash32(WeakHash32 & hash, const TiDB::TiDBCollatorPtr &, String &) const
 {
-    updateWeakHash32Impl<false>(hash, {});
-}
+    auto s = size();
 
-void ColumnFixedString::updateWeakHash32(
-    WeakHash32 & hash,
-    const TiDB::TiDBCollatorPtr &,
-    String &,
-    const BlockSelective & selective) const
-{
-    updateWeakHash32Impl<true>(hash, selective);
-}
+    if (hash.getData().size() != s)
+        throw Exception(
+            "Size of WeakHash32 does not match size of column: column size is " + std::to_string(s) + ", hash size is "
+                + std::to_string(hash.getData().size()),
+            ErrorCodes::LOGICAL_ERROR);
 
-template <bool selective_block>
-void ColumnFixedString::updateWeakHash32Impl(WeakHash32 & hash, const BlockSelective & selective) const
-{
-    size_t rows;
-    if constexpr (selective_block)
-    {
-        rows = selective.size();
-    }
-    else
-    {
-        rows = size();
-    }
-
-    RUNTIME_CHECK_MSG(
-        hash.getData().size() == rows,
-        "size of WeakHash32({}) doesn't match size of column({})",
-        hash.getData().size(),
-        rows);
-
-    const UInt8 * begin = chars.data();
+    const UInt8 * pos = chars.data();
     UInt32 * hash_data = hash.getData().data();
 
-    for (size_t i = 0; i < rows; ++i)
+    for (size_t row = 0; row < s; ++row)
     {
-        size_t row = i;
-        if constexpr (selective_block)
-            row = selective[i];
+        *hash_data = ::updateWeakHash32(pos, n, *hash_data);
 
-        *hash_data = ::updateWeakHash32(begin + n * row, n, *hash_data);
+        pos += n;
         ++hash_data;
     }
 }
+
 
 template <bool positive>
 struct ColumnFixedString::less
