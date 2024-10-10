@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,21 +11,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 #pragma once
 
-#include <vector>
+#include <functional>
 
 namespace DB
 {
-class Logger;
-using LoggerPtr = std::shared_ptr<Logger>;
+using CancellationHook = std::function<bool()>;
 } // namespace DB
-
-namespace DB::DM
-{
-// `getNumaNodes` returns cpus of each Numa node.
-std::vector<std::vector<int>> getNumaNodes(const LoggerPtr & log);
-
-// Bind the this thread to `cpus`.
-void setCPUAffinity(const std::vector<int> & cpus, const LoggerPtr & log);
-} // namespace DB::DM
